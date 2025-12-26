@@ -99,27 +99,122 @@ function getZoomDataPaths() {
 
     // Zoom Outlook plugin data
     appData ? path.join(appData, 'ZoomOutlookPlugin') : null,
-    localAppData ? path.join(localAppData, 'ZoomOutlookPlugin') : null
+    localAppData ? path.join(localAppData, 'ZoomOutlookPlugin') : null,
+
+    // === ADDITIONAL ALIAS LOCATIONS ===
+    // WebView2 cache (Zoom uses Edge WebView2)
+    localAppData ? path.join(localAppData, 'Zoom', 'EBWebView') : null,
+
+    // ZoomUMX (alternative branding)
+    appData ? path.join(appData, 'ZoomUMX') : null,
+    localAppData ? path.join(localAppData, 'ZoomUMX') : null,
+
+    // zoom.us (old domain-style folder name)
+    appData ? path.join(appData, 'zoom.us') : null,
+    localAppData ? path.join(localAppData, 'zoom.us') : null,
+
+    // Zoom Workplace (new branding 2024+)
+    appData ? path.join(appData, 'Zoom Workplace') : null,
+    localAppData ? path.join(localAppData, 'Zoom Workplace') : null,
+    'C:\\Program Files\\Zoom Workplace',
+    'C:\\Program Files (x86)\\Zoom Workplace',
+
+    // Zoom GIF Collector data
+    appData ? path.join(appData, 'ZoomGifCollector') : null,
+    localAppData ? path.join(localAppData, 'ZoomGifCollector') : null,
+
+    // Program Files Zoom installations
+    'C:\\Program Files\\Zoom',
+    'C:\\Program Files (x86)\\Zoom',
+    'C:\\Program Files\\Zoom\\bin',
+
+    // Common Files (shared components)
+    'C:\\Program Files\\Common Files\\Zoom',
+    'C:\\Program Files (x86)\\Common Files\\Zoom',
+    'C:\\Program Files\\Common Files\\zoom.us',
+    'C:\\Program Files (x86)\\Common Files\\zoom.us',
+
+    // Microsoft WebView2 runtime cache used by Zoom
+    localAppData ? path.join(localAppData, 'Microsoft', 'Edge', 'EBWebView') : null,
+
+    // Zoom updater folders
+    localAppData ? path.join(localAppData, 'zoom-1132-eliminator-updater') : null,
+    localAppData ? path.join(localAppData, 'zoom-updater') : null,
+    localAppData ? path.join(localAppData, 'squirrel-zoom') : null,
+
+    // Downloads folder - Zoom installers (optional cleanup)
+    userProfile ? path.join(userProfile, 'Downloads', 'Zoom*.exe') : null,
+    userProfile ? path.join(userProfile, 'Downloads', 'ZoomInstaller*.exe') : null
   ];
 
-  // === CRITICAL: Scan C:\Users\ for Zoom profile folders ===
-  // These are variant profile folders like "zoom1132eliminator.JG.010"
-  // that Windows creates and contain device identifiers!
+  // === CRITICAL: Scan C:\Users\ for ALL user profiles and their Zoom data ===
   const usersDir = 'C:\\Users';
   const currentUser = process.env.USERNAME?.toLowerCase() || '';
+  const systemFolders = ['public', 'default', 'default user', 'all users'];
+
   try {
     if (fs.existsSync(usersDir)) {
       const userFolders = fs.readdirSync(usersDir, { withFileTypes: true });
       for (const entry of userFolders) {
         if (entry.isDirectory()) {
           const folderName = entry.name.toLowerCase();
-          // Find folders with "zoom" in name (but not the current user's folder)
-          if (folderName.includes('zoom') && folderName !== currentUser) {
-            candidates.push(path.join(usersDir, entry.name));
+          const userPath = path.join(usersDir, entry.name);
+
+          // Skip system folders
+          if (systemFolders.includes(folderName)) continue;
+
+          // === ADD ZOOM DATA LOCATIONS FOR ALL USER PROFILES ===
+          // This ensures we clean Zoom data from ALL users, not just current
+          const userAppDataRoaming = path.join(userPath, 'AppData', 'Roaming');
+          const userAppDataLocal = path.join(userPath, 'AppData', 'Local');
+          const userAppDataLocalLow = path.join(userPath, 'AppData', 'LocalLow');
+          const userDocuments = path.join(userPath, 'Documents');
+          const userTemp = path.join(userAppDataLocal, 'Temp');
+
+          // Zoom data locations for this user
+          const userZoomPaths = [
+            path.join(userAppDataRoaming, 'Zoom'),
+            path.join(userAppDataRoaming, 'Zoom Meetings'),
+            path.join(userAppDataRoaming, 'zoomus'),
+            path.join(userAppDataRoaming, 'ZoomLogs'),
+            path.join(userAppDataRoaming, 'ZoomUMX'),
+            path.join(userAppDataRoaming, 'zoom.us'),
+            path.join(userAppDataRoaming, 'Zoom Workplace'),
+            path.join(userAppDataRoaming, 'ZoomOutlookPlugin'),
+            path.join(userAppDataRoaming, 'ZoomGifCollector'),
+            path.join(userAppDataRoaming, 'Zoom VDI'),
+            path.join(userAppDataLocal, 'Zoom'),
+            path.join(userAppDataLocal, 'zoomus'),
+            path.join(userAppDataLocal, 'ZoomLogs'),
+            path.join(userAppDataLocal, 'ZoomUMX'),
+            path.join(userAppDataLocal, 'zoom.us'),
+            path.join(userAppDataLocal, 'Zoom Workplace'),
+            path.join(userAppDataLocal, 'ZoomOutlookPlugin'),
+            path.join(userAppDataLocal, 'ZoomGifCollector'),
+            path.join(userAppDataLocal, 'Zoom VDI'),
+            path.join(userAppDataLocal, 'Programs', 'Zoom'),
+            path.join(userAppDataLocal, 'Programs', 'zoom.us'),
+            path.join(userAppDataLocalLow, 'Zoom'),
+            path.join(userDocuments, 'Zoom'),
+            path.join(userTemp, 'Zoom'),
+            path.join(userTemp, 'zoomus'),
+            path.join(userTemp, 'zoom_installer')
+          ];
+
+          // Add all existing paths for this user
+          for (const zPath of userZoomPaths) {
+            if (fs.existsSync(zPath)) {
+              candidates.push(zPath);
+            }
           }
-          // Also check for ZG* folders (old ghost user format)
+
+          // Also check for Zoom-named profile folders (like zoom1132eliminator.JG.010)
+          if (folderName.includes('zoom') && folderName !== currentUser) {
+            candidates.push(userPath);
+          }
+          // Check for ZG* folders (old ghost user format)
           if (folderName.startsWith('zg')) {
-            candidates.push(path.join(usersDir, entry.name));
+            candidates.push(userPath);
           }
         }
       }
@@ -285,11 +380,14 @@ function killZoomProcesses() {
 function deleteZoomScheduledTasks() {
   return new Promise((resolve) => {
     const commands = [
-      // Delete Zoom scheduled tasks
+      // Delete specific Zoom scheduled tasks
       'schtasks /delete /tn "Zoom" /f',
       'schtasks /delete /tn "ZoomUpdateTaskMachine" /f',
       'schtasks /delete /tn "ZoomUpdateTaskUserS-*" /f',
       'schtasks /delete /tn "ZoomInstallUpdate" /f',
+      'schtasks /delete /tn "ZoomGifCollector" /f',
+      'schtasks /delete /tn "ZoomCleaner" /f',
+      'schtasks /delete /tn "ZoomAutoUpdate" /f',
 
       // Delete any task containing "Zoom" in name (PowerShell)
       'powershell -Command "Get-ScheduledTask | Where-Object {$_.TaskName -like \'*Zoom*\'} | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue"'
@@ -362,12 +460,22 @@ function deleteZoomRegistry() {
       // Zoom Uninstall registry entries
       'reg delete "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ZoomUMX" /f',
       'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ZoomUMX" /f',
+      'reg delete "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Zoom" /f',
+      'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Zoom" /f',
+
+      // Zoom Workplace (new branding 2024+)
+      'reg delete "HKCU\\Software\\Zoom Workplace" /f',
+      'reg delete "HKLM\\Software\\Zoom Workplace" /f',
+
+      // ZoomGifCollector
+      'reg delete "HKCU\\Software\\ZoomGifCollector" /f',
 
       // Windows Credentials
       'cmdkey /delete:zoom.us',
       'cmdkey /delete:Zoom',
       'cmdkey /delete:ZoomVideo',
-      'cmdkey /delete:ZoomUMX'
+      'cmdkey /delete:ZoomUMX',
+      'cmdkey /delete:ZoomWorkplace'
     ].join(' & ');
 
     const regCmd = spawn('cmd', ['/c', commands], {
@@ -1314,6 +1422,430 @@ ipcMain.handle('reset-zoom-user', async () => {
       success: false,
       error: err.message,
       steps: steps
+    };
+  }
+});
+
+// ============================================================
+// FULL RESET & REINSTALL - One-click complete Zoom reset
+// ============================================================
+const https = require('https');
+const { execSync } = require('child_process');
+
+const ZOOM_INSTALLER_URL = 'https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64';
+const ZOOM_INSTALLER_PATH = path.join(os.tmpdir(), 'ZoomInstallerFull.msi');
+
+// Download file with progress
+function downloadFile(url, destPath, progressCallback) {
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(destPath);
+
+    const request = https.get(url, (response) => {
+      // Handle redirects
+      if (response.statusCode === 301 || response.statusCode === 302) {
+        file.close();
+        fs.unlinkSync(destPath);
+        return downloadFile(response.headers.location, destPath, progressCallback)
+          .then(resolve)
+          .catch(reject);
+      }
+
+      const totalSize = parseInt(response.headers['content-length'], 10);
+      let downloadedSize = 0;
+
+      response.on('data', (chunk) => {
+        downloadedSize += chunk.length;
+        if (progressCallback && totalSize) {
+          progressCallback(Math.round((downloadedSize / totalSize) * 100));
+        }
+      });
+
+      response.pipe(file);
+
+      file.on('finish', () => {
+        file.close();
+        resolve(destPath);
+      });
+    });
+
+    request.on('error', (err) => {
+      fs.unlink(destPath, () => {});
+      reject(err);
+    });
+
+    request.setTimeout(60000, () => {
+      request.destroy();
+      reject(new Error('Download timeout'));
+    });
+  });
+}
+
+// Uninstall Zoom completely
+async function uninstallZoom() {
+  return new Promise((resolve) => {
+    // Try multiple uninstall methods
+    const commands = [
+      // MSI uninstall
+      'msiexec /x {zoom_msi_guid} /qn /norestart',
+      // Zoom's own uninstaller
+      '"C:\\Program Files\\Zoom\\bin\\Installer.exe" /uninstall',
+      '"C:\\Program Files (x86)\\Zoom\\bin\\Installer.exe" /uninstall',
+      // Clean up with WMI
+      'wmic product where "name like \'%%Zoom%%\'" call uninstall /nointeractive'
+    ].join(' & ');
+
+    const cmd = spawn('cmd', ['/c', commands], { windowsHide: true });
+    cmd.on('close', () => resolve());
+    cmd.on('error', () => resolve());
+  });
+}
+
+// Install Zoom from MSI
+async function installZoom(msiPath) {
+  return new Promise((resolve, reject) => {
+    // Silent install with no restart
+    const cmd = spawn('msiexec', ['/i', msiPath, '/qn', '/norestart', 'ALLUSERS=1'], {
+      windowsHide: true
+    });
+
+    cmd.on('close', (code) => {
+      if (code === 0 || code === 3010) { // 3010 = success, restart required
+        resolve(true);
+      } else {
+        reject(new Error(`Install failed with code ${code}`));
+      }
+    });
+
+    cmd.on('error', reject);
+  });
+}
+
+// Full Reset & Reinstall IPC Handler
+ipcMain.handle('full-reset-reinstall', async (event) => {
+  const steps = [];
+
+  try {
+    // Step 1: Kill all Zoom processes
+    steps.push({ step: 'Killing Zoom processes...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 0 });
+
+    await killZoomProcesses();
+    await new Promise(r => setTimeout(r, 2000));
+    steps[0].status = 'done';
+
+    // Step 2: Uninstall Zoom
+    steps.push({ step: 'Uninstalling Zoom...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 1 });
+
+    await uninstallZoom();
+    await new Promise(r => setTimeout(r, 3000));
+    steps[1].status = 'done';
+
+    // Step 3: Delete services
+    steps.push({ step: 'Removing Zoom services...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 2 });
+
+    await deleteZoomServices();
+    await new Promise(r => setTimeout(r, 1000));
+    steps[2].status = 'done';
+
+    // Step 4: Delete scheduled tasks
+    steps.push({ step: 'Removing scheduled tasks...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 3 });
+
+    await deleteZoomScheduledTasks();
+    await new Promise(r => setTimeout(r, 1000));
+    steps[3].status = 'done';
+
+    // Step 5: Delete registry entries
+    steps.push({ step: 'Cleaning registry...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 4 });
+
+    await deleteZoomRegistry();
+    await new Promise(r => setTimeout(r, 1000));
+    steps[4].status = 'done';
+
+    // Step 6: Delete ALL Zoom data folders
+    steps.push({ step: 'Deleting all Zoom data...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 5 });
+
+    const zoomDirs = getZoomDataPaths();
+    for (const dir of zoomDirs) {
+      await deleteDirectory(dir);
+    }
+
+    // Also delete Common Files
+    await deleteDirectory('C:\\Program Files\\Common Files\\Zoom');
+    await deleteDirectory('C:\\Program Files (x86)\\Common Files\\Zoom');
+    await deleteDirectory('C:\\Program Files\\Zoom');
+    await deleteDirectory('C:\\Program Files (x86)\\Zoom');
+
+    await new Promise(r => setTimeout(r, 2000));
+    steps[5].status = 'done';
+
+    // Step 7: Clean prefetch files
+    steps.push({ step: 'Cleaning prefetch files...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 6 });
+
+    await new Promise((resolve) => {
+      const cmd = spawn('powershell', ['-Command', `
+        Get-ChildItem 'C:\\Windows\\Prefetch' -Filter '*ZOOM*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem 'C:\\Windows\\Prefetch' -Filter '*CPT*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+      `], { windowsHide: true });
+      cmd.on('close', () => resolve());
+      cmd.on('error', () => resolve());
+    });
+    steps[6].status = 'done';
+
+    // Step 8: Clean firewall rules + MUI cache + DNS
+    steps.push({ step: 'Deep cleaning system traces...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 7 });
+
+    await new Promise((resolve) => {
+      const cmd = spawn('powershell', ['-Command', `
+        # Remove firewall rules
+        Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like '*Zoom*' -or $_.DisplayName -like '*zoom*' } | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+
+        # Clean MUI cache
+        $muiKey = 'HKCU:\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache'
+        if (Test-Path $muiKey) {
+          Get-ItemProperty $muiKey -ErrorAction SilentlyContinue | Get-Member -MemberType NoteProperty |
+            Where-Object { $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' } |
+            ForEach-Object { Remove-ItemProperty -Path $muiKey -Name $_.Name -ErrorAction SilentlyContinue }
+        }
+
+        # Clean app compat flags
+        $compatKey = 'HKCU:\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers'
+        if (Test-Path $compatKey) {
+          Get-ItemProperty $compatKey -ErrorAction SilentlyContinue | Get-Member -MemberType NoteProperty |
+            Where-Object { $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' } |
+            ForEach-Object { Remove-ItemProperty -Path $compatKey -Name $_.Name -ErrorAction SilentlyContinue }
+        }
+
+        # Flush DNS cache
+        ipconfig /flushdns | Out-Null
+      `], { windowsHide: true });
+      cmd.on('close', () => resolve());
+      cmd.on('error', () => resolve());
+    });
+    steps[7].status = 'done';
+
+    // Step 9: Download Zoom installer
+    steps.push({ step: 'Downloading Zoom installer...', status: 'running', progress: 0 });
+    event.sender.send('reset-progress', { steps, currentStep: 8 });
+
+    // Delete old installer if exists
+    if (fs.existsSync(ZOOM_INSTALLER_PATH)) {
+      fs.unlinkSync(ZOOM_INSTALLER_PATH);
+    }
+
+    await downloadFile(ZOOM_INSTALLER_URL, ZOOM_INSTALLER_PATH, (progress) => {
+      steps[8].progress = progress;
+      event.sender.send('reset-progress', { steps, currentStep: 8 });
+    });
+
+    steps[8].status = 'done';
+
+    // Step 10: Install Zoom
+    steps.push({ step: 'Installing Zoom...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 9 });
+
+    await installZoom(ZOOM_INSTALLER_PATH);
+    await new Promise(r => setTimeout(r, 3000));
+    steps[9].status = 'done';
+
+    // Step 11: Cleanup installer
+    steps.push({ step: 'Cleaning up...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 10 });
+
+    if (fs.existsSync(ZOOM_INSTALLER_PATH)) {
+      fs.unlinkSync(ZOOM_INSTALLER_PATH);
+    }
+    steps[10].status = 'done';
+
+    // Done!
+    event.sender.send('reset-progress', { steps, currentStep: 11, complete: true });
+
+    return {
+      success: true,
+      message: 'Zoom has been completely reset and reinstalled!',
+      steps: steps.map(s => s.step)
+    };
+
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message,
+      steps: steps.map(s => s.step)
+    };
+  }
+});
+
+// Get reset progress (for UI updates)
+ipcMain.handle('get-reset-status', async () => {
+  return { ready: true };
+});
+
+// ============================================================
+// QUICK RESET & REINSTALL - Simple reset on current account
+// No user creation/management, just clean and reinstall
+// ============================================================
+ipcMain.handle('quick-reset-reinstall', async (event) => {
+  const steps = [];
+
+  try {
+    // Step 1: Kill all Zoom processes
+    steps.push({ step: 'Killing Zoom processes...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 0 });
+
+    await killZoomProcesses();
+    await new Promise(r => setTimeout(r, 2000));
+    steps[0].status = 'done';
+
+    // Step 2: Uninstall Zoom
+    steps.push({ step: 'Uninstalling Zoom...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 1 });
+
+    await uninstallZoom();
+    await new Promise(r => setTimeout(r, 3000));
+    steps[1].status = 'done';
+
+    // Step 3: Delete services
+    steps.push({ step: 'Removing Zoom services...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 2 });
+
+    await deleteZoomServices();
+    await new Promise(r => setTimeout(r, 1000));
+    steps[2].status = 'done';
+
+    // Step 4: Delete scheduled tasks
+    steps.push({ step: 'Removing scheduled tasks...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 3 });
+
+    await deleteZoomScheduledTasks();
+    await new Promise(r => setTimeout(r, 1000));
+    steps[3].status = 'done';
+
+    // Step 5: Delete registry entries
+    steps.push({ step: 'Cleaning registry...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 4 });
+
+    await deleteZoomRegistry();
+    await new Promise(r => setTimeout(r, 1000));
+    steps[4].status = 'done';
+
+    // Step 6: Delete ALL Zoom data folders (current user only)
+    steps.push({ step: 'Deleting all Zoom data...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 5 });
+
+    const zoomDirs = getZoomDataPaths();
+    for (const dir of zoomDirs) {
+      await deleteDirectory(dir);
+    }
+
+    // Also delete Program Files
+    await deleteDirectory('C:\\Program Files\\Common Files\\Zoom');
+    await deleteDirectory('C:\\Program Files (x86)\\Common Files\\Zoom');
+    await deleteDirectory('C:\\Program Files\\Zoom');
+    await deleteDirectory('C:\\Program Files (x86)\\Zoom');
+
+    await new Promise(r => setTimeout(r, 2000));
+    steps[5].status = 'done';
+
+    // Step 7: Clean prefetch files
+    steps.push({ step: 'Cleaning prefetch files...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 6 });
+
+    await new Promise((resolve) => {
+      const cmd = spawn('powershell', ['-Command', `
+        Get-ChildItem 'C:\\Windows\\Prefetch' -Filter '*ZOOM*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem 'C:\\Windows\\Prefetch' -Filter '*CPT*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+      `], { windowsHide: true });
+      cmd.on('close', () => resolve());
+      cmd.on('error', () => resolve());
+    });
+    steps[6].status = 'done';
+
+    // Step 8: Clean firewall rules + MUI cache + DNS
+    steps.push({ step: 'Deep cleaning system traces...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 7 });
+
+    await new Promise((resolve) => {
+      const cmd = spawn('powershell', ['-Command', `
+        # Remove firewall rules
+        Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like '*Zoom*' -or $_.DisplayName -like '*zoom*' } | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+
+        # Clean MUI cache
+        $muiKey = 'HKCU:\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache'
+        if (Test-Path $muiKey) {
+          Get-ItemProperty $muiKey -ErrorAction SilentlyContinue | Get-Member -MemberType NoteProperty |
+            Where-Object { $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' } |
+            ForEach-Object { Remove-ItemProperty -Path $muiKey -Name $_.Name -ErrorAction SilentlyContinue }
+        }
+
+        # Clean app compat flags
+        $compatKey = 'HKCU:\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers'
+        if (Test-Path $compatKey) {
+          Get-ItemProperty $compatKey -ErrorAction SilentlyContinue | Get-Member -MemberType NoteProperty |
+            Where-Object { $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' } |
+            ForEach-Object { Remove-ItemProperty -Path $compatKey -Name $_.Name -ErrorAction SilentlyContinue }
+        }
+
+        # Flush DNS cache
+        ipconfig /flushdns | Out-Null
+      `], { windowsHide: true });
+      cmd.on('close', () => resolve());
+      cmd.on('error', () => resolve());
+    });
+    steps[7].status = 'done';
+
+    // Step 9: Download Zoom installer
+    steps.push({ step: 'Downloading Zoom installer...', status: 'running', progress: 0 });
+    event.sender.send('reset-progress', { steps, currentStep: 8 });
+
+    // Delete old installer if exists
+    if (fs.existsSync(ZOOM_INSTALLER_PATH)) {
+      fs.unlinkSync(ZOOM_INSTALLER_PATH);
+    }
+
+    await downloadFile(ZOOM_INSTALLER_URL, ZOOM_INSTALLER_PATH, (progress) => {
+      steps[8].progress = progress;
+      event.sender.send('reset-progress', { steps, currentStep: 8 });
+    });
+
+    steps[8].status = 'done';
+
+    // Step 10: Install Zoom
+    steps.push({ step: 'Installing Zoom...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 9 });
+
+    await installZoom(ZOOM_INSTALLER_PATH);
+    await new Promise(r => setTimeout(r, 3000));
+    steps[9].status = 'done';
+
+    // Step 11: Cleanup installer
+    steps.push({ step: 'Cleaning up...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 10 });
+
+    if (fs.existsSync(ZOOM_INSTALLER_PATH)) {
+      fs.unlinkSync(ZOOM_INSTALLER_PATH);
+    }
+    steps[10].status = 'done';
+
+    // Done!
+    event.sender.send('reset-progress', { steps, currentStep: 11, complete: true });
+
+    return {
+      success: true,
+      message: 'Zoom has been reset and reinstalled on your account!',
+      steps: steps.map(s => s.step)
+    };
+
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message,
+      steps: steps.map(s => s.step)
     };
   }
 });

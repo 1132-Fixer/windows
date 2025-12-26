@@ -2,12 +2,188 @@ const fileList = document.getElementById('fileList');
 const createUserBtn = document.getElementById('createUserBtn');
 const launchBtn = document.getElementById('launchBtn');
 const resetBtn = document.getElementById('resetBtn');
+const fullResetBtn = document.getElementById('fullResetBtn');
+const quickResetBtn = document.getElementById('quickResetBtn');
 const statusText = document.getElementById('statusText');
 
 // Check zoom user status on load
 window.addEventListener('DOMContentLoaded', () => {
   checkUserStatus();
+  setupResetProgressListener();
 });
+
+// Setup listener for reset progress updates
+function setupResetProgressListener() {
+  window.electronAPI.onResetProgress((data) => {
+    updateResetProgress(data);
+  });
+}
+
+// Update the UI with reset progress
+function updateResetProgress(data) {
+  clearFileList();
+  addFileItem('=== FULL RESET & REINSTALL ===', 'header');
+  addFileItem('', '');
+
+  for (let i = 0; i < data.steps.length; i++) {
+    const step = data.steps[i];
+    let icon = '';
+    let className = '';
+
+    if (step.status === 'done') {
+      icon = '[OK]';
+      className = 'success';
+    } else if (step.status === 'running') {
+      icon = '[...]';
+      className = 'loading';
+    } else {
+      icon = '[ ]';
+      className = '';
+    }
+
+    let text = `${icon} ${step.step}`;
+    if (step.progress !== undefined && step.status === 'running') {
+      text += ` (${step.progress}%)`;
+    }
+
+    addFileItem(text, className);
+  }
+
+  // Calculate overall progress
+  const doneSteps = data.steps.filter(s => s.status === 'done').length;
+  const totalSteps = 11;
+  const progress = Math.round((doneSteps / totalSteps) * 100);
+  updateStatus(`Progress: ${progress}%`, 'loading');
+
+  if (data.complete) {
+    addFileItem('', '');
+    addFileItem('=== COMPLETE ===', 'header');
+    addFileItem('Zoom has been reset and reinstalled!', 'success');
+    updateStatus('Reset complete!', 'success');
+    fullResetBtn.textContent = 'FULL RESET & REINSTALL';
+    fullResetBtn.disabled = false;
+  }
+}
+
+// Quick Reset & Reinstall button (current account, no user management)
+quickResetBtn.addEventListener('click', async () => {
+  const confirmed = confirm(
+    'QUICK RESET & REINSTALL\n\n' +
+    'This will:\n' +
+    '1. Kill all Zoom processes\n' +
+    '2. Completely uninstall Zoom\n' +
+    '3. Delete ALL Zoom data (all users)\n' +
+    '4. Clean registry, services, tasks\n' +
+    '5. Download fresh Zoom installer\n' +
+    '6. Reinstall Zoom\n\n' +
+    'No Windows user accounts will be created or deleted.\n\n' +
+    'Continue?'
+  );
+
+  if (!confirmed) return;
+
+  disableAllButtons();
+  quickResetBtn.textContent = 'RESETTING...';
+  updateStatus('Starting quick reset...', 'loading');
+
+  clearFileList();
+  addFileItem('=== QUICK RESET & REINSTALL ===', 'header');
+  addFileItem('', '');
+  addFileItem('Starting...', 'loading');
+
+  try {
+    const result = await window.electronAPI.quickResetReinstall();
+
+    if (result.success) {
+      addFileItem('', '');
+      addFileItem('=== SUCCESS ===', 'header');
+      addFileItem(result.message, 'success');
+      updateStatus('Zoom reset complete!', 'success');
+    } else {
+      addFileItem('', '');
+      addFileItem('=== FAILED ===', 'header');
+      addFileItem(`Error: ${result.error}`, 'error');
+      updateStatus('Reset failed', 'error');
+    }
+  } catch (err) {
+    addFileItem('', '');
+    addFileItem('=== ERROR ===', 'header');
+    addFileItem(`Error: ${err.message}`, 'error');
+    updateStatus('Reset failed', 'error');
+  }
+
+  quickResetBtn.textContent = 'QUICK RESET & REINSTALL';
+  enableAllButtons();
+  checkUserStatus();
+});
+
+// Full Reset & Reinstall button (with user management)
+fullResetBtn.addEventListener('click', async () => {
+  const confirmed = confirm(
+    'FULL RESET (WITH USER)\n\n' +
+    'This will:\n' +
+    '1. Kill all Zoom processes\n' +
+    '2. Completely uninstall Zoom\n' +
+    '3. Delete ALL Zoom data (all users)\n' +
+    '4. Clean registry, services, tasks\n' +
+    '5. Download fresh Zoom installer\n' +
+    '6. Reinstall Zoom\n' +
+    '7. Create/reset Zoom user account\n\n' +
+    'Continue?'
+  );
+
+  if (!confirmed) return;
+
+  disableAllButtons();
+  fullResetBtn.textContent = 'RESETTING...';
+  updateStatus('Starting full reset...', 'loading');
+
+  clearFileList();
+  addFileItem('=== FULL RESET (WITH USER) ===', 'header');
+  addFileItem('', '');
+  addFileItem('Starting...', 'loading');
+
+  try {
+    const result = await window.electronAPI.fullResetReinstall();
+
+    if (result.success) {
+      addFileItem('', '');
+      addFileItem('=== SUCCESS ===', 'header');
+      addFileItem(result.message, 'success');
+      updateStatus('Zoom reset complete!', 'success');
+    } else {
+      addFileItem('', '');
+      addFileItem('=== FAILED ===', 'header');
+      addFileItem(`Error: ${result.error}`, 'error');
+      updateStatus('Reset failed', 'error');
+    }
+  } catch (err) {
+    addFileItem('', '');
+    addFileItem('=== ERROR ===', 'header');
+    addFileItem(`Error: ${err.message}`, 'error');
+    updateStatus('Reset failed', 'error');
+  }
+
+  fullResetBtn.textContent = 'FULL RESET (WITH USER)';
+  enableAllButtons();
+  checkUserStatus();
+});
+
+// Helper to disable all buttons during operation
+function disableAllButtons() {
+  quickResetBtn.disabled = true;
+  fullResetBtn.disabled = true;
+  createUserBtn.disabled = true;
+  launchBtn.disabled = true;
+  resetBtn.disabled = true;
+}
+
+// Helper to enable buttons after operation
+function enableAllButtons() {
+  quickResetBtn.disabled = false;
+  fullResetBtn.disabled = false;
+  // createUserBtn, launchBtn, resetBtn will be set by checkUserStatus()
+}
 
 // Check if zoom user exists
 async function checkUserStatus() {

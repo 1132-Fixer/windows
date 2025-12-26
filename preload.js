@@ -8,6 +8,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resetZoomUser: () => ipcRenderer.invoke('reset-zoom-user'),
   quitApp: () => ipcRenderer.invoke('quit-app'),
 
+  // Full Reset & Reinstall (with user management)
+  fullResetReinstall: () => ipcRenderer.invoke('full-reset-reinstall'),
+  // Quick Reset & Reinstall (current account, no user management)
+  quickResetReinstall: () => ipcRenderer.invoke('quick-reset-reinstall'),
+  onResetProgress: (callback) => ipcRenderer.on('reset-progress', (event, data) => callback(data)),
+
   // Legacy functions
   scanFiles: () => ipcRenderer.invoke('scan-files'),
   deleteFiles: (filePaths) => ipcRenderer.invoke('delete-files', filePaths),

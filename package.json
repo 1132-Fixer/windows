@@ -1,0 +1,49 @@
+{
+  "name": "1132-remover",
+  "version": "2.0.0",
+  "description": "Zoom Data Cleaner & System Reset Tool",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging",
+    "build": "electron-builder --win portable --x64",
+    "build:installer": "electron-builder --win nsis --x64",
+    "build:all": "electron-builder --win --x64",
+    "pack": "electron-builder --dir"
+  },
+  "author": "JG2547",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.jg2547.1132remover",
+    "productName": "1132 Remover",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "requestedExecutionLevel": "requireAdministrator",
+      "signAndEditExecutable": true
+    },
+    "portable": {
+      "artifactName": "${productName}.exe"
+    },
+    "files": [
+      "**/*",
+      "!dist/**",
+      "!node_modules/.cache/**",
+      "!*.ps1",
+      "!*.bat",
+      "!*.md"
+    ],
+    "extraResources": []
+  }
+}

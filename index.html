@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>1132 Remover - Zoom Data Cleaner</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f0f23 100%);
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+    }
+
+    .header {
+      padding: 20px;
+      text-align: center;
+      border-bottom: 1px solid #333;
+      background: rgba(0, 0, 0, 0.3);
+    }
+
+    .header h1 {
+      font-size: 24px;
+      font-weight: 600;
+      color: #00d4ff;
+      text-shadow: 0 0 10px rgba(0, 212, 255, 0.3);
+    }
+
+    .header p {
+      font-size: 12px;
+      color: #888;
+      margin-top: 5px;
+    }
+
+    .container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 20px;
+      gap: 15px;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 10px;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 15px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #0066cc 0%, #0052a3 100%);
+      color: white;
+      box-shadow: 0 4px 15px rgba(0, 102, 204, 0.3);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: linear-gradient(135deg, #0077ee 0%, #0066cc 100%);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0, 102, 204, 0.4);
+    }
+
+    .btn-success {
+      background: linear-gradient(135deg, #00cc66 0%, #00a352 100%);
+      color: white;
+      box-shadow: 0 4px 15px rgba(0, 204, 102, 0.3);
+    }
+
+    .btn-success:hover:not(:disabled) {
+      background: linear-gradient(135deg, #00ee77 0%, #00cc66 100%);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0, 204, 102, 0.4);
+    }
+
+    .btn-danger {
+      background: linear-gradient(135deg, #cc3300 0%, #a32900 100%);
+      color: white;
+      box-shadow: 0 4px 15px rgba(204, 51, 0, 0.3);
+    }
+
+    .btn-danger:hover:not(:disabled) {
+      background: linear-gradient(135deg, #ee4400 0%, #cc3300 100%);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(204, 51, 0, 0.4);
+    }
+
+    .btn-purple {
+      background: linear-gradient(135deg, #9933ff 0%, #7a29cc 100%);
+      color: white;
+      box-shadow: 0 4px 15px rgba(153, 51, 255, 0.3);
+    }
+
+    .btn-purple:hover:not(:disabled) {
+      background: linear-gradient(135deg, #aa44ff 0%, #9933ff 100%);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(153, 51, 255, 0.4);
+    }
+
+    .progress-container {
+      margin-top: 10px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 6px;
+      background: linear-gradient(90deg, #00d4ff, #00ff88);
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    .step-list {
+      margin-top: 10px;
+    }
+
+    .step-item {
+      padding: 6px 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .step-item.done {
+      color: #00ff88;
+    }
+
+    .step-item.running {
+      color: #ffaa00;
+    }
+
+    .step-item.pending {
+      color: #666;
+    }
+
+    .step-icon {
+      width: 16px;
+      text-align: center;
+    }
+
+    .file-list {
+      flex: 1;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 15px;
+      overflow-y: auto;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 13px;
+      min-height: 300px;
+    }
+
+    .file-item {
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .file-item:last-child {
+      border-bottom: none;
+    }
+
+    .file-item.success {
+      color: #00ff88;
+    }
+
+    .file-item.error {
+      color: #ff4444;
+    }
+
+    .file-item.loading {
+      color: #ffaa00;
+    }
+
+    .file-item.header {
+      color: #00d4ff;
+      font-weight: bold;
+      margin-top: 10px;
+    }
+
+    .status-bar {
+      padding: 15px 20px;
+      background: rgba(0, 0, 0, 0.4);
+      border-top: 1px solid #333;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .status-text {
+      font-size: 13px;
+      color: #888;
+    }
+
+    .status-text.success {
+      color: #00ff88;
+    }
+
+    .status-text.error {
+      color: #ff4444;
+    }
+
+    .status-text.loading {
+      color: #ffaa00;
+    }
+
+    /* Scrollbar styling */
+    .file-list::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .file-list::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 4px;
+    }
+
+    .file-list::-webkit-scrollbar-thumb {
+      background: #444;
+      border-radius: 4px;
+    }
+
+    .file-list::-webkit-scrollbar-thumb:hover {
+      background: #555;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>1132 REMOVER</h1>
+    <p>Zoom Data Cleaner &amp; System Reset Tool</p>
+  </div>
+
+  <div class="container">
+    <div class="button-row">
+      <button id="quickResetBtn" class="btn btn-purple">QUICK RESET &amp; REINSTALL</button>
+    </div>
+    <div class="button-row">
+      <button id="fullResetBtn" class="btn btn-primary">FULL RESET (WITH USER)</button>
+      <button id="createUserBtn" class="btn btn-primary">CREATE ZOOM USER</button>
+    </div>
+    <div class="button-row">
+      <button id="launchBtn" class="btn btn-success" disabled>LAUNCH ZOOM AS USER</button>
+      <button id="resetBtn" class="btn btn-danger" disabled>RESET &amp; RELAUNCH</button>
+    </div>
+    <div id="fileList" class="file-list">
+      <div class="file-item">Ready. Click a button to begin.</div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <span id="statusText" class="status-text">Waiting for action...</span>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
