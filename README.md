@@ -4,17 +4,24 @@
 
 A powerful Windows utility to completely reset Zoom, removing all traces and reinstalling fresh. Built with Electron.
 
+## Two Versions Available
+
+### 1132 Remover (Full Version)
+Full-featured app with multiple options:
+- **Quick Reset & Reinstall** - Reset on current account
+- **Full Reset (with User)** - Creates dedicated Windows user
+- **Create Zoom User** - User management options
+- **Launch Zoom as User** - Run Zoom in isolated environment
+
+### 1132 Quick Reset (Simple Version)
+Streamlined single-button app in `/simple` folder:
+- One button: "Reset & Reinstall Zoom"
+- Detects if Zoom is installed, prompts to install if not
+- Resets on current user account only
+- Auto-launches Zoom after reinstall
+- Auto-closes when complete
+
 ## Features
-
-### Quick Reset & Reinstall
-- Resets Zoom on current user account
-- No Windows user management
-- One-click complete reset
-
-### Full Reset (with User)
-- Creates dedicated Windows user for Zoom
-- Complete isolation of Zoom data
-- Advanced user management
 
 ### What It Does
 1. Kills all Zoom processes
@@ -53,6 +60,7 @@ A powerful Windows utility to completely reset Zoom, removing all traces and rei
 
 ## Building from Source
 
+### Full Version
 ```bash
 # Install dependencies
 npm install
@@ -67,12 +75,27 @@ npm run build:installer
 npm run build
 ```
 
+### Simple Version
+```bash
+cd simple
+
+# Install dependencies
+npm install
+
+# Run in development
+npm start
+
+# Build installer
+npm run build
+```
+
 ## Requirements
 - Windows 10/11 (64-bit)
 - Administrator privileges (required for full cleanup)
 
-## Version
-**v2.0.0**
+## Versions
+- **1132 Remover**: v2.0.0
+- **1132 Quick Reset**: v2.1.0
 
 ## Author
 High Texas
