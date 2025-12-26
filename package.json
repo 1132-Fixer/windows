@@ -11,7 +11,7 @@
     "build:all": "electron-builder --win --x64",
     "pack": "electron-builder --dir"
   },
-  "author": "JG2547",
+  "author": "High Texas",
   "license": "MIT",
   "devDependencies": {
     "electron": "^28.1.0",
@@ -26,12 +26,25 @@
     "win": {
       "target": [
         {
-          "target": "portable",
+          "target": "nsis",
           "arch": ["x64"]
         }
       ],
+      "icon": "assets/icon.ico",
       "requestedExecutionLevel": "requireAdministrator",
       "signAndEditExecutable": true
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "1132 Remover",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerSidebar": null,
+      "license": null,
+      "artifactName": "${productName} Setup.exe"
     },
     "portable": {
       "artifactName": "${productName}.exe"
@@ -42,7 +55,8 @@
       "!node_modules/.cache/**",
       "!*.ps1",
       "!*.bat",
-      "!*.md"
+      "!*.md",
+      "!assets/**"
     ],
     "extraResources": []
   }

@@ -17,14 +17,15 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true
     },
-    icon: path.join(__dirname, 'icon.ico')
+    icon: path.join(__dirname, 'assets', 'icon.ico')
   });
 
   mainWindow.loadFile('index.html');
 
-  // Prevent closing if files remain
-  mainWindow.on('close', (event) => {
-    // This will be handled by renderer
+  // Properly close and quit when window is closed
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    app.quit();
   });
 }
 
