@@ -551,6 +551,304 @@
       color: var(--shadow-gray);
     }
 
+    /* ==================== ZOOM PREFERENCES ==================== */
+    .zoom-prefs-panel {
+      background: var(--combat-gray);
+      border: 1px solid var(--steel-edge);
+      border-radius: 8px;
+      padding: 16px 20px;
+    }
+
+    .prefs-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .prefs-header-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .prefs-header-left svg {
+      color: var(--tactical-cyan);
+    }
+
+    .prefs-title {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--ghost-white);
+    }
+
+    .prefs-version {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 11px;
+      color: var(--shadow-gray);
+      background: var(--tactical-dark);
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .prefs-header-right {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn-prefs-action {
+      height: 28px;
+      padding: 0 12px;
+      background: var(--tactical-cyan);
+      border: none;
+      border-radius: 4px;
+      font-family: 'Inter', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--void-black);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-prefs-action:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 12px rgba(0, 240, 255, 0.4);
+    }
+
+    .btn-prefs-action.secondary {
+      background: transparent;
+      border: 1px solid var(--steel-edge);
+      color: var(--smoke-gray);
+    }
+
+    .btn-prefs-action.secondary:hover {
+      border-color: var(--smoke-gray);
+      color: var(--ghost-white);
+      box-shadow: none;
+      transform: none;
+    }
+
+    .prefs-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+      margin-bottom: 16px;
+    }
+
+    .prefs-category {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .prefs-category-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--smoke-gray);
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--steel-edge);
+    }
+
+    .prefs-category-title svg {
+      color: var(--tactical-cyan);
+    }
+
+    .pref-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .pref-item.select {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 6px;
+    }
+
+    .pref-toggle {
+      width: 36px;
+      height: 18px;
+      border-radius: 9px;
+      background: var(--steel-edge);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .pref-toggle.active {
+      background: var(--tactical-cyan);
+      box-shadow: 0 0 8px rgba(0, 240, 255, 0.3);
+    }
+
+    .pref-toggle::after {
+      content: '';
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--ghost-white);
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    .pref-toggle.active::after {
+      transform: translateX(18px);
+    }
+
+    .pref-label {
+      font-family: 'Inter', sans-serif;
+      font-size: 11px;
+      color: var(--smoke-gray);
+    }
+
+    .pref-select {
+      width: 100%;
+      height: 28px;
+      padding: 0 8px;
+      background: var(--tactical-dark);
+      border: 1px solid var(--steel-edge);
+      border-radius: 4px;
+      font-family: 'Inter', sans-serif;
+      font-size: 11px;
+      color: var(--ghost-white);
+      cursor: pointer;
+      outline: none;
+    }
+
+    .pref-select:focus {
+      border-color: var(--tactical-cyan);
+    }
+
+    .prefs-diff {
+      background: var(--tactical-dark);
+      border: 1px solid var(--steel-edge);
+      border-radius: 6px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+
+    .diff-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: 'Inter', sans-serif;
+      font-size: 11px;
+      color: var(--smoke-gray);
+      cursor: pointer;
+    }
+
+    .diff-header svg {
+      color: var(--shadow-gray);
+    }
+
+    .diff-summary {
+      margin-left: auto;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 11px;
+      color: var(--eliminated-green);
+    }
+
+    .diff-summary.has-changes {
+      color: var(--strike-orange);
+    }
+
+    .diff-details {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--steel-edge);
+    }
+
+    .diff-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+
+    .diff-item {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--smoke-gray);
+      padding: 2px 6px;
+      background: var(--combat-gray);
+      border-radius: 3px;
+    }
+
+    .diff-item .key {
+      color: var(--tactical-cyan);
+    }
+
+    .diff-item .from {
+      color: var(--kill-red);
+    }
+
+    .diff-item .to {
+      color: var(--eliminated-green);
+    }
+
+    .prefs-footer {
+      display: flex;
+      gap: 24px;
+    }
+
+    .checkbox-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: 'Inter', sans-serif;
+      font-size: 11px;
+      color: var(--smoke-gray);
+      cursor: pointer;
+    }
+
+    .checkbox-item input {
+      display: none;
+    }
+
+    .checkbox-item .checkmark {
+      width: 16px;
+      height: 16px;
+      border: 1px solid var(--steel-edge);
+      border-radius: 3px;
+      background: var(--tactical-dark);
+      position: relative;
+      transition: all 0.2s ease;
+    }
+
+    .checkbox-item input:checked + .checkmark {
+      background: var(--tactical-cyan);
+      border-color: var(--tactical-cyan);
+    }
+
+    .checkbox-item input:checked + .checkmark::after {
+      content: '';
+      position: absolute;
+      left: 5px;
+      top: 2px;
+      width: 4px;
+      height: 8px;
+      border: solid var(--void-black);
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+
     /* ==================== COMBAT LOG ==================== */
     .combat-log {
       background: var(--combat-gray);
@@ -1139,6 +1437,130 @@
                 <span class="option-desc">Extended fingerprint</span>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- ZOOM PREFERENCES -->
+        <div class="zoom-prefs-panel" id="prefsPanel">
+          <div class="prefs-header">
+            <div class="prefs-header-left">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+              </svg>
+              <span class="prefs-title">ZOOM DEFAULTS</span>
+              <span class="prefs-version" id="prefsZoomVersion">--</span>
+            </div>
+            <div class="prefs-header-right">
+              <button class="btn-prefs-action" id="btnApplyPrefs">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                APPLY
+              </button>
+              <button class="btn-prefs-action secondary" id="btnResetPrefs">RESET</button>
+            </div>
+          </div>
+
+          <div class="prefs-grid">
+            <!-- Audio -->
+            <div class="prefs-category">
+              <div class="prefs-category-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                AUDIO
+              </div>
+              <div class="pref-item">
+                <div class="pref-toggle" id="prefMuteOnJoin" data-pref="audio.muteOnJoin"></div>
+                <span class="pref-label">Mute on join</span>
+              </div>
+              <div class="pref-item">
+                <div class="pref-toggle" id="prefAutoMic" data-pref="audio.autoMic"></div>
+                <span class="pref-label">Auto-adjust mic</span>
+              </div>
+              <div class="pref-item">
+                <div class="pref-toggle" id="prefOriginalSound" data-pref="audio.originalSound"></div>
+                <span class="pref-label">Original sound</span>
+              </div>
+              <div class="pref-item select">
+                <span class="pref-label">Noise suppression</span>
+                <select class="pref-select" id="prefNoiseSuppression" data-pref="audio.noiseSuppression">
+                  <option value="off">Off</option>
+                  <option value="auto">Auto</option>
+                  <option value="high">High</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Video -->
+            <div class="prefs-category">
+              <div class="prefs-category-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                VIDEO
+              </div>
+              <div class="pref-item">
+                <div class="pref-toggle active" id="prefHD" data-pref="video.hd"></div>
+                <span class="pref-label">HD video</span>
+              </div>
+              <div class="pref-item">
+                <div class="pref-toggle" id="prefMirror" data-pref="video.mirror"></div>
+                <span class="pref-label">Mirror video</span>
+              </div>
+              <div class="pref-item">
+                <div class="pref-toggle" id="prefVideoOff" data-pref="video.turnOffOnJoin"></div>
+                <span class="pref-label">Video off on join</span>
+              </div>
+            </div>
+
+            <!-- Appearance -->
+            <div class="prefs-category">
+              <div class="prefs-category-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                APPEARANCE
+              </div>
+              <div class="pref-item">
+                <div class="pref-toggle active" id="prefDarkMode" data-pref="appearance.darkMode"></div>
+                <span class="pref-label">Dark mode</span>
+              </div>
+            </div>
+
+            <!-- Notifications -->
+            <div class="prefs-category">
+              <div class="prefs-category-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                NOTIFICATIONS
+              </div>
+              <div class="pref-item">
+                <div class="pref-toggle active" id="prefPlaySound" data-pref="notifications.playSound"></div>
+                <span class="pref-label">Play sounds</span>
+              </div>
+              <div class="pref-item">
+                <div class="pref-toggle active" id="prefShowToast" data-pref="notifications.showToast"></div>
+                <span class="pref-label">Show toasts</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Diff Results -->
+          <div class="prefs-diff" id="prefsDiff">
+            <div class="diff-header">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+              <span>LAST VERIFICATION</span>
+              <span class="diff-summary" id="diffSummary">No data</span>
+            </div>
+            <div class="diff-details hidden" id="diffDetails">
+              <div class="diff-list" id="diffList"></div>
+            </div>
+          </div>
+
+          <!-- Apply with reset option -->
+          <div class="prefs-footer">
+            <label class="checkbox-item">
+              <input type="checkbox" id="chkApplyAfterReset" checked>
+              <span class="checkmark"></span>
+              Apply preferences after reinstall
+            </label>
+            <label class="checkbox-item">
+              <input type="checkbox" id="chkVerifyPrefs" checked>
+              <span class="checkmark"></span>
+              Verify after first launch
+            </label>
           </div>
         </div>
 

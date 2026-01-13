@@ -66,7 +66,19 @@ const elements = {
   statusBarDot: document.getElementById('statusBarDot'),
   statusBarText: document.getElementById('statusBarText'),
   statusBarCenter: document.getElementById('statusBarCenter'),
-  adminBadge: document.getElementById('adminBadge')
+  adminBadge: document.getElementById('adminBadge'),
+
+  // Zoom Preferences
+  prefsPanel: document.getElementById('prefsPanel'),
+  prefsZoomVersion: document.getElementById('prefsZoomVersion'),
+  btnApplyPrefs: document.getElementById('btnApplyPrefs'),
+  btnResetPrefs: document.getElementById('btnResetPrefs'),
+  prefsDiff: document.getElementById('prefsDiff'),
+  diffSummary: document.getElementById('diffSummary'),
+  diffDetails: document.getElementById('diffDetails'),
+  diffList: document.getElementById('diffList'),
+  chkApplyAfterReset: document.getElementById('chkApplyAfterReset'),
+  chkVerifyPrefs: document.getElementById('chkVerifyPrefs')
 };
 
 // ==================== STATE ====================
@@ -79,7 +91,16 @@ let state = {
     reinstall: true,
     launch: false,
     deep: true
-  }
+  },
+  // Zoom preferences state
+  prefs: {
+    audio: { muteOnJoin: false, autoMic: false, originalSound: false, noiseSuppression: 'auto' },
+    video: { hd: true, mirror: false, turnOffOnJoin: false },
+    appearance: { darkMode: true },
+    notifications: { playSound: true, showToast: true }
+  },
+  zoomVersion: null,
+  lastDiff: null
 };
 
 // ==================== INITIALIZATION ====================
@@ -88,6 +109,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupToggles();
   setupButtons();
   setupEventListeners();
+  setupPrefsPanel();
   checkInitialState();
 });
 
@@ -305,7 +327,25 @@ async function handleExecutePurge() {
   state.elapsedTimer = setInterval(updateElapsedTime, 1000);
 
   try {
-    const result = await window.electronAPI.fullReset(state.options);
+    // Determine if we should apply preferences after reset
+    const applyPrefsAfterReset = elements.chkApplyAfterReset?.checked && state.options.reinstall;
+    const verifyPrefs = elements.chkVerifyPrefs?.checked;
+
+    let result;
+    if (applyPrefsAfterReset) {
+      // Use full reset with preferences
+      addLog('INIT', 'Preferences will be applied after reinstall');
+      const resetOptions = {
+        ...state.options,
+        applyPrefs: true,
+        verifyPrefs: verifyPrefs,
+        launchForVerification: verifyPrefs,
+        prefs: state.prefs
+      };
+      result = await window.electronAPI.fullResetWithPrefs(resetOptions);
+    } else {
+      result = await window.electronAPI.fullReset(state.options);
+    }
 
     clearInterval(state.elapsedTimer);
 
@@ -319,6 +359,28 @@ async function handleExecutePurge() {
         addLog('OK', 'All verifications passed - Target eliminated');
       } else {
         addLog('INIT', 'Some remnants may remain - Manual review recommended');
+      }
+
+      // Log preference results if applicable
+      if (result.prefResult) {
+        if (result.prefResult.success) {
+          addLog('OK', 'Zoom preferences applied successfully');
+        } else {
+          addLog('ERR', `Preference application failed: ${result.prefResult.error || 'Unknown error'}`);
+        }
+      }
+
+      if (result.verifyResult) {
+        if (result.verifyResult.success) {
+          const summary = result.verifyResult.summary || {};
+          addLog('OK', `Preference verification: ${summary.matched || 0}/${summary.total || 0} settings confirmed`);
+          if (result.verifyResult.diff) {
+            state.lastDiff = result.verifyResult.diff;
+            updateDiffDisplay(result.verifyResult.diff);
+          }
+        } else {
+          addLog('INIT', 'Preference verification incomplete - verify manually');
+        }
       }
 
       // Show mission complete
@@ -608,4 +670,234 @@ async function checkInitialState() {
 
   addLog('INIT', 'System initialized. Ready for operation.');
   setStatus('System Ready', 'ready');
+}
+
+// ==================== ZOOM PREFERENCES PANEL ====================
+function setupPrefsPanel() {
+  // Setup preference toggle clicks
+  document.querySelectorAll('.pref-toggle').forEach(toggle => {
+    toggle.addEventListener('click', handlePrefToggle);
+  });
+
+  // Setup preference select changes
+  document.querySelectorAll('.pref-select').forEach(select => {
+    select.addEventListener('change', handlePrefSelect);
+  });
+
+  // Setup Apply button
+  elements.btnApplyPrefs?.addEventListener('click', handleApplyPrefs);
+
+  // Setup Reset button
+  elements.btnResetPrefs?.addEventListener('click', handleResetPrefs);
+
+  // Setup diff header click to toggle details
+  const diffHeader = document.querySelector('.diff-header');
+  diffHeader?.addEventListener('click', () => {
+    elements.diffDetails?.classList.toggle('hidden');
+  });
+
+  // Load saved preferences and Zoom version
+  loadPrefsState();
+}
+
+async function loadPrefsState() {
+  try {
+    // Detect Zoom version
+    if (window.electronAPI?.detectZoomVersion) {
+      const versionResult = await window.electronAPI.detectZoomVersion();
+      if (versionResult.success && versionResult.version) {
+        state.zoomVersion = versionResult.version;
+        elements.prefsZoomVersion.textContent = `v${versionResult.version}`;
+      } else {
+        elements.prefsZoomVersion.textContent = 'Not installed';
+      }
+    }
+
+    // Load saved user preferences
+    if (window.electronAPI?.getUserPrefs) {
+      const savedPrefs = await window.electronAPI.getUserPrefs();
+      if (savedPrefs && savedPrefs.prefs) {
+        state.prefs = { ...state.prefs, ...savedPrefs.prefs };
+      }
+    }
+
+    // Update UI to match loaded state
+    syncPrefsToUI();
+
+    // Load last diff if available
+    if (window.electronAPI?.getLastPrefDiff) {
+      const diffResult = await window.electronAPI.getLastPrefDiff();
+      if (diffResult && diffResult.diff) {
+        state.lastDiff = diffResult.diff;
+        updateDiffDisplay(diffResult.diff);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load prefs state:', err);
+  }
+}
+
+function syncPrefsToUI() {
+  // Sync toggles
+  document.querySelectorAll('.pref-toggle').forEach(toggle => {
+    const prefPath = toggle.dataset.pref;
+    if (prefPath) {
+      const value = getPrefValue(prefPath);
+      toggle.classList.toggle('active', !!value);
+    }
+  });
+
+  // Sync selects
+  document.querySelectorAll('.pref-select').forEach(select => {
+    const prefPath = select.dataset.pref;
+    if (prefPath) {
+      const value = getPrefValue(prefPath);
+      if (value !== undefined) {
+        select.value = value;
+      }
+    }
+  });
+}
+
+function getPrefValue(path) {
+  const parts = path.split('.');
+  let obj = state.prefs;
+  for (const part of parts) {
+    if (obj === undefined) return undefined;
+    obj = obj[part];
+  }
+  return obj;
+}
+
+function setPrefValue(path, value) {
+  const parts = path.split('.');
+  let obj = state.prefs;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!obj[parts[i]]) obj[parts[i]] = {};
+    obj = obj[parts[i]];
+  }
+  obj[parts[parts.length - 1]] = value;
+}
+
+function handlePrefToggle(e) {
+  if (state.isOperating) return;
+
+  const toggle = e.currentTarget;
+  const prefPath = toggle.dataset.pref;
+  if (!prefPath) return;
+
+  // Toggle the active state
+  toggle.classList.toggle('active');
+  const newValue = toggle.classList.contains('active');
+  setPrefValue(prefPath, newValue);
+
+  addLog('INIT', `Preference ${prefPath} set to ${newValue}`);
+}
+
+function handlePrefSelect(e) {
+  if (state.isOperating) return;
+
+  const select = e.currentTarget;
+  const prefPath = select.dataset.pref;
+  if (!prefPath) return;
+
+  setPrefValue(prefPath, select.value);
+  addLog('INIT', `Preference ${prefPath} set to ${select.value}`);
+}
+
+async function handleApplyPrefs() {
+  if (state.isOperating) return;
+
+  addLog('INIT', 'Applying Zoom preferences...');
+  setStatus('Applying preferences...', 'operating');
+
+  try {
+    // Save user prefs first
+    if (window.electronAPI?.setUserPrefs) {
+      await window.electronAPI.setUserPrefs(state.prefs);
+    }
+
+    // Apply to Zoom config
+    const options = {
+      prefs: state.prefs,
+      verify: elements.chkVerifyPrefs?.checked
+    };
+
+    let result;
+    if (elements.chkVerifyPrefs?.checked && window.electronAPI?.applyAndVerify) {
+      result = await window.electronAPI.applyAndVerify(options);
+    } else if (window.electronAPI?.applyPrefs) {
+      result = await window.electronAPI.applyPrefs(options);
+    }
+
+    if (result?.success) {
+      addLog('OK', 'Preferences applied successfully');
+
+      if (result.diff) {
+        state.lastDiff = result.diff;
+        updateDiffDisplay(result.diff);
+      }
+
+      if (result.verification) {
+        const v = result.verification;
+        addLog('OK', `Verification: ${v.matched}/${v.total} settings match`);
+      }
+    } else {
+      addLog('ERR', `Failed to apply preferences: ${result?.error || 'Unknown error'}`);
+    }
+
+    setStatus('System Ready', 'ready');
+  } catch (err) {
+    addLog('ERR', `Error applying preferences: ${err.message}`);
+    setStatus('System Ready', 'ready');
+  }
+}
+
+async function handleResetPrefs() {
+  if (state.isOperating) return;
+
+  // Reset to defaults
+  state.prefs = {
+    audio: { muteOnJoin: false, autoMic: false, originalSound: false, noiseSuppression: 'auto' },
+    video: { hd: true, mirror: false, turnOffOnJoin: false },
+    appearance: { darkMode: true },
+    notifications: { playSound: true, showToast: true }
+  };
+
+  syncPrefsToUI();
+  addLog('INIT', 'Preferences reset to defaults');
+}
+
+function updateDiffDisplay(diff) {
+  if (!diff || !elements.diffSummary) return;
+
+  const changes = diff.changes || [];
+  const hasChanges = changes.length > 0;
+
+  // Update summary
+  elements.diffSummary.textContent = hasChanges
+    ? `${changes.length} change${changes.length !== 1 ? 's' : ''}`
+    : 'No changes';
+  elements.diffSummary.classList.toggle('has-changes', hasChanges);
+
+  // Update diff list
+  if (elements.diffList) {
+    elements.diffList.innerHTML = '';
+
+    if (changes.length === 0) {
+      const item = document.createElement('div');
+      item.className = 'diff-item';
+      item.textContent = 'All settings match expected values';
+      elements.diffList.appendChild(item);
+    } else {
+      changes.forEach(change => {
+        const item = document.createElement('div');
+        item.className = 'diff-item';
+        item.innerHTML = `<span class="key">${escapeHtml(change.key)}</span>: ` +
+          `<span class="from">${escapeHtml(String(change.from ?? 'unset'))}</span> → ` +
+          `<span class="to">${escapeHtml(String(change.to ?? 'unset'))}</span>`;
+        elements.diffList.appendChild(item);
+      });
+    }
+  }
 }
