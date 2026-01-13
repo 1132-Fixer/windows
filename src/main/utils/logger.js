@@ -13,6 +13,18 @@ const LOG_DIR = path.join(process.env.LOCALAPPDATA, '1132-Remover', 'logs');
 let currentLogFile = null;
 let mainWindow = null;
 
+// Session data for JSON export
+let sessionData = {
+  startTime: null,
+  endTime: null,
+  machine: null,
+  user: null,
+  steps: [],
+  verification: null,
+  options: null,
+  success: null
+};
+
 /**
  * Initialize the logger for a new session
  * @returns {string} Path to the log file
@@ -26,6 +38,18 @@ function initLogger() {
   // Create timestamped log file
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   currentLogFile = path.join(LOG_DIR, `reset-${timestamp}.log`);
+
+  // Initialize session data
+  sessionData = {
+    startTime: new Date().toISOString(),
+    endTime: null,
+    machine: process.env.COMPUTERNAME,
+    user: process.env.USERNAME,
+    steps: [],
+    verification: null,
+    options: null,
+    success: null
+  };
 
   // Write header
   const header = [
@@ -217,6 +241,8 @@ function cleanOldLogs(daysToKeep = 30) {
 function finalize() {
   if (!currentLogFile) return;
 
+  sessionData.endTime = new Date().toISOString();
+
   const footer = [
     '',
     '═'.repeat(60),
@@ -225,6 +251,72 @@ function finalize() {
   ].join('\n');
 
   fs.appendFileSync(currentLogFile, footer);
+}
+
+/**
+ * Record a step result for JSON export
+ * @param {string} name - Step name
+ * @param {Object} result - Step result object
+ */
+function recordStep(name, result) {
+  sessionData.steps.push({
+    name,
+    timestamp: new Date().toISOString(),
+    ...result
+  });
+}
+
+/**
+ * Set session options for JSON export
+ * @param {Object} options - Session options
+ */
+function setSessionOptions(options) {
+  sessionData.options = options;
+}
+
+/**
+ * Set verification results for JSON export
+ * @param {Object} verification - Verification results
+ */
+function setVerification(verification) {
+  sessionData.verification = verification;
+}
+
+/**
+ * Set session success status
+ * @param {boolean} success - Whether session succeeded
+ */
+function setSessionSuccess(success) {
+  sessionData.success = success;
+}
+
+/**
+ * Get session data for JSON export
+ * @returns {Object} Session data
+ */
+function getSessionData() {
+  return {
+    ...sessionData,
+    durationMs: sessionData.startTime && sessionData.endTime
+      ? new Date(sessionData.endTime) - new Date(sessionData.startTime)
+      : null
+  };
+}
+
+/**
+ * Export session as JSON file
+ * @returns {string} Path to JSON file
+ */
+function exportSessionJson() {
+  if (!currentLogFile) return null;
+
+  const jsonPath = currentLogFile.replace('.log', '.json');
+  const data = getSessionData();
+
+  fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2));
+  info('Session exported to JSON', { path: jsonPath });
+
+  return jsonPath;
 }
 
 module.exports = {
@@ -243,5 +335,12 @@ module.exports = {
   getAllLogFiles,
   cleanOldLogs,
   finalize,
-  LEVELS
+  LEVELS,
+  // JSON export
+  recordStep,
+  setSessionOptions,
+  setVerification,
+  setSessionSuccess,
+  getSessionData,
+  exportSessionJson
 };

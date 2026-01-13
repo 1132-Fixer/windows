@@ -2,6 +2,33 @@
 
 All notable changes to 1132 Remover will be documented in this file.
 
+## [1.0.1] - 2026-01-13
+
+### Added
+
+**JSON Session Export**
+- `--json` flag exports session summary as JSON file
+- Includes all step results, timing data, and verification status
+- Useful for support tickets and fleet tooling integration
+
+**Preset Profiles**
+- 5 built-in preset profiles for common use cases:
+  - `quiet-meetings` - Mute on join, no video, minimal notifications
+  - `studio-audio` - High quality audio for podcasting/streaming
+  - `low-bandwidth` - Optimized for slow connections
+  - `presentation` - Screen sharing optimized
+  - `privacy` - Maximum privacy settings
+- `--list-presets` to view available profiles
+- `--apply-preset <id>` to apply a profile
+
+**Self-Test Mode**
+- `--self-test` runs diagnostic check without making changes
+- Reports Zoom installation status, registry entries, data folders
+- Counts fingerprint files and running services
+- Exit code indicates if cleanup is needed
+
+---
+
 ## [1.0.0] - 2026-01-13
 
 First production-ready release with comprehensive testing and hardening.
