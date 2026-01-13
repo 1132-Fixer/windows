@@ -181,6 +181,10 @@ const REGISTRY_KEYS = {
     'HKCU\\Software\\Zoom Workplace',
     'HKCU\\Software\\ZoomGifCollector',
     'HKCU\\Software\\CptService',
+    // IM Provider registration
+    'HKCU\\Software\\IM Providers\\Zoom',
+    // Location consent (geolocation permission)
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\location\\NonPackaged\\Zoom',
     'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ZoomUMX',
     'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Zoom',
     // VirtualStore (UAC redirected writes)
@@ -203,6 +207,8 @@ const REGISTRY_KEYS = {
   // Local Machine
   HKLM: [
     'HKLM\\Software\\Zoom',
+    // CRITICAL: Cryptographic secrets/device identity
+    'HKLM\\Software\\Zoom\\Secrets',
     'HKLM\\Software\\ZoomUMX',
     'HKLM\\Software\\zoom.us',
     'HKLM\\Software\\Zoom Video Communications',
@@ -218,7 +224,13 @@ const REGISTRY_KEYS = {
     'HKLM\\Software\\Classes\\zoommtg',
     'HKLM\\Software\\Classes\\zoomphonecall',
     'HKLM\\Software\\Classes\\zoomus',
-    'HKLM\\Software\\Classes\\zoomrc'
+    'HKLM\\Software\\Classes\\zoomrc',
+    // Group Policy / Enterprise settings (CRITICAL for device fingerprinting)
+    'HKLM\\Software\\Policies\\Zoom',
+    'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings',
+    'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings\\General',
+    'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings\\Meetings',
+    'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings\\Chat'
   ],
 
   // WOW6432Node (32-bit on 64-bit)
@@ -228,7 +240,10 @@ const REGISTRY_KEYS = {
     'HKLM\\Software\\WOW6432Node\\zoom.us',
     'HKLM\\Software\\WOW6432Node\\Zoom Video Communications',
     'HKLM\\Software\\WOW6432Node\\Zoom Workplace',
-    'HKLM\\Software\\WOW6432Node\\CptService'
+    'HKLM\\Software\\WOW6432Node\\CptService',
+    // Group Policy WOW64
+    'HKLM\\Software\\WOW6432Node\\Policies\\Zoom',
+    'HKLM\\Software\\WOW6432Node\\Policies\\Zoom\\Zoom Meetings'
   ],
 
   // HKEY_CLASSES_ROOT (URL handlers & COM)
@@ -302,6 +317,7 @@ const ZOOM_SERVICES = [
 const ZOOM_SCHEDULED_TASKS = [
   'Zoom',
   'ZoomUpdateTaskMachine',
+  'ZoomUpdateTaskUser',
   'ZoomInstallUpdate',
   'ZoomGifCollector',
   'ZoomCleaner',

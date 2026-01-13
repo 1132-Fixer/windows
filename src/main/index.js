@@ -17,7 +17,10 @@
  * @version 1.0.0
  */
 
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, nativeTheme } = require('electron');
+
+// Force dark mode always
+nativeTheme.themeSource = 'dark';
 const path = require('path');
 const logger = require('./utils/logger');
 const ipcHandlers = require('./ipc-handlers');

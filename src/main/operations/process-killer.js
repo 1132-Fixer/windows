@@ -1,11 +1,104 @@
 /**
  * 1132 Remover - Process Killer
  * Kills all Zoom-related processes with verification
+ *
+ * CRITICAL: Must stop Windows SERVICES before killing processes,
+ * otherwise Windows will auto-restart service processes like CptService
  */
 
 const { spawnSafe, runPowerShell, isProcessRunning } = require('../utils/spawn-safe');
 const logger = require('../utils/logger');
-const { ZOOM_PROCESSES } = require('../../shared/constants');
+const { ZOOM_PROCESSES, ZOOM_SERVICES } = require('../../shared/constants');
+
+/**
+ * Stop all Zoom Windows services
+ * CRITICAL: Must be called BEFORE killing processes
+ * Otherwise Windows will auto-restart service processes
+ * @returns {Promise<{stopped: number, failed: number, services: Array}>}
+ */
+async function stopZoomServices() {
+  logger.info('Stopping Zoom Windows services...');
+
+  const results = [];
+  let stopped = 0;
+  let failed = 0;
+
+  for (const serviceName of ZOOM_SERVICES) {
+    try {
+      // Check if service exists and is running
+      const checkResult = await runPowerShell(
+        `$svc = Get-Service -Name '${serviceName}' -ErrorAction SilentlyContinue; if ($svc) { $svc.Status } else { 'NotFound' }`,
+        { timeout: 10000 }
+      );
+
+      const status = checkResult.stdout.trim();
+
+      if (status === 'NotFound') {
+        results.push({ name: serviceName, status: 'not_found' });
+        continue;
+      }
+
+      if (status !== 'Running') {
+        results.push({ name: serviceName, status: 'already_stopped' });
+        continue;
+      }
+
+      // Stop the service
+      logger.debug(`Stopping service: ${serviceName}`);
+      await runPowerShell(
+        `Stop-Service -Name '${serviceName}' -Force -ErrorAction SilentlyContinue`,
+        { timeout: 30000 }
+      );
+
+      // Verify it stopped
+      const verifyResult = await runPowerShell(
+        `(Get-Service -Name '${serviceName}' -ErrorAction SilentlyContinue).Status`,
+        { timeout: 5000 }
+      );
+
+      if (verifyResult.stdout.trim() === 'Stopped') {
+        stopped++;
+        logger.ok(`Stopped service: ${serviceName}`);
+        results.push({ name: serviceName, status: 'stopped' });
+      } else {
+        // Try sc.exe as backup
+        await spawnSafe('sc', ['stop', serviceName], { timeout: 10000 }).catch(() => {});
+        await new Promise(r => setTimeout(r, 2000));
+
+        const finalCheck = await runPowerShell(
+          `(Get-Service -Name '${serviceName}' -ErrorAction SilentlyContinue).Status`,
+          { timeout: 5000 }
+        );
+
+        if (finalCheck.stdout.trim() === 'Stopped') {
+          stopped++;
+          logger.ok(`Stopped service with sc.exe: ${serviceName}`);
+          results.push({ name: serviceName, status: 'stopped' });
+        } else {
+          failed++;
+          logger.warn(`Failed to stop service: ${serviceName}`);
+          results.push({ name: serviceName, status: 'failed' });
+        }
+      }
+    } catch (e) {
+      logger.debug(`Error stopping ${serviceName}: ${e.message}`);
+      results.push({ name: serviceName, status: 'error', error: e.message });
+    }
+  }
+
+  // Also try to stop any service with "zoom" in the name
+  try {
+    await runPowerShell(
+      `Get-Service | Where-Object { $_.Name -like '*zoom*' -or $_.Name -like '*cpt*' } | Stop-Service -Force -ErrorAction SilentlyContinue`,
+      { timeout: 30000 }
+    );
+  } catch (e) {
+    // Ignore
+  }
+
+  logger.logStep('Stop Zoom Services', failed === 0, { stopped, failed });
+  return { stopped, failed, services: results };
+}
 
 /**
  * Kill a single process using multiple methods
@@ -94,6 +187,22 @@ async function killProcess(processName) {
  */
 async function killAllZoomProcesses(onProgress = null) {
   logger.section('Killing Zoom Processes');
+
+  // CRITICAL: Stop Windows services FIRST
+  // Otherwise service processes like CptService will auto-restart
+  if (onProgress) {
+    onProgress({
+      step: 'kill',
+      current: 0,
+      total: 1,
+      message: 'Stopping Zoom services...'
+    });
+  }
+
+  const serviceResult = await stopZoomServices();
+
+  // Wait a moment for service processes to fully exit
+  await new Promise(r => setTimeout(r, 2000));
 
   const results = [];
   let killed = 0;
@@ -200,6 +309,7 @@ async function waitForZoomExit(timeoutMs = 10000) {
 }
 
 module.exports = {
+  stopZoomServices,
   killProcess,
   killAllZoomProcesses,
   findZoomProcesses,
