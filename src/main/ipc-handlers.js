@@ -14,6 +14,9 @@ const fingerprint = require('./operations/fingerprint');
 const folders = require('./operations/folders');
 const services = require('./operations/services');
 const installer = require('./operations/installer');
+const prefManager = require('./operations/pref-manager');
+const selfTest = require('./operations/self-test');
+const zoomPrefs = require('../shared/zoom-prefs');
 
 let mainWindow = null;
 
@@ -331,6 +334,217 @@ function registerHandlers() {
       }
     }
     return { success: false, error: 'Save cancelled' };
+  });
+
+  // ========================================
+  // ZOOM PREFERENCE MANAGEMENT
+  // ========================================
+
+  // Get preference options schema for UI
+  ipcMain.handle('get-zoom-pref-options', () => {
+    return prefManager.getPrefOptions();
+  });
+
+  // Get user's saved preferences
+  ipcMain.handle('get-user-zoom-prefs', () => {
+    return prefManager.loadUserPrefs();
+  });
+
+  // Save user preferences
+  ipcMain.handle('set-user-zoom-prefs', async (event, prefs) => {
+    const validation = zoomPrefs.validatePreferences(prefs);
+    if (!validation.valid) {
+      return { success: false, errors: validation.errors };
+    }
+    return prefManager.saveUserPrefs(prefs);
+  });
+
+  // Get current Zoom preferences (from zoomus.conf)
+  ipcMain.handle('get-current-zoom-prefs', () => {
+    return prefManager.getCurrentPrefs();
+  });
+
+  // Apply preferences to Zoom
+  ipcMain.handle('apply-zoom-prefs', async (event, options = {}) => {
+    return await prefManager.applyPreferences(options);
+  });
+
+  // Verify preferences after Zoom launch
+  ipcMain.handle('verify-zoom-prefs', async (event, options = {}) => {
+    return await prefManager.verifyPreferences(options);
+  });
+
+  // Apply and verify (full cycle)
+  ipcMain.handle('apply-and-verify-prefs', async (event, options = {}) => {
+    return await prefManager.applyAndVerify(options);
+  });
+
+  // Get last preference diff
+  ipcMain.handle('get-last-zoom-pref-diff', () => {
+    return prefManager.getLastDiff();
+  });
+
+  // Detect Zoom version
+  ipcMain.handle('detect-zoom-version', async () => {
+    return await zoomPrefs.detectZoomVersion();
+  });
+
+  // List available templates
+  ipcMain.handle('list-zoom-pref-templates', () => {
+    return zoomPrefs.listTemplates();
+  });
+
+  // ========================================
+  // SELF-TEST MODE
+  // ========================================
+
+  ipcMain.handle('run-self-test', async () => {
+    logger.initLogger();
+    const results = await selfTest.runSelfTest();
+    logger.finalize();
+    return results;
+  });
+
+  // ========================================
+  // RESET WITH PREFERENCES (ONE-CLICK MODE)
+  // ========================================
+
+  ipcMain.handle('full-reset-with-prefs', async (event, options = {}) => {
+    const sessionStart = Date.now();
+    logger.initLogger();
+    logger.section('FULL RESET WITH PREFERENCES');
+    logger.info('Options:', options);
+
+    // Default options for one-click mode
+    const resetOptions = {
+      uninstall: options.uninstall !== false,
+      reinstall: options.reinstall !== false,
+      applyPrefs: options.applyPrefs !== false,
+      verifyPrefs: options.verifyPrefs !== false,
+      launchForVerification: options.launchForVerification !== false
+    };
+
+    try {
+      // Run standard reset first (reuse full-reset logic)
+      sendProgress({ step: 'Running reset...', percent: 5 });
+
+      // Step 1-8: Standard reset operations
+      const killResult = await processKiller.killAllZoomProcesses();
+      sendProgress({ step: 'Stopped processes', percent: 10 });
+
+      if (resetOptions.uninstall) {
+        await uninstaller.uninstallZoom();
+        sendProgress({ step: 'Uninstalled Zoom', percent: 20 });
+      }
+
+      await services.cleanServicesAndTasks();
+      sendProgress({ step: 'Cleaned services', percent: 25 });
+
+      await registry.cleanRegistry();
+      sendProgress({ step: 'Cleaned registry', percent: 40 });
+
+      await fingerprint.wipeDeviceFingerprint();
+      sendProgress({ step: 'Wiped fingerprint', percent: 55 });
+
+      await folders.deleteAllZoomFolders();
+      sendProgress({ step: 'Deleted folders', percent: 65 });
+
+      await fingerprint.cleanRecycleBin();
+      sendProgress({ step: 'Cleaned recycle bin', percent: 70 });
+
+      await fingerprint.rebuildIconCache();
+      sendProgress({ step: 'Rebuilt icon cache', percent: 75 });
+
+      // Step 9: Reinstall
+      let installResult = null;
+      if (resetOptions.reinstall) {
+        sendProgress({ step: 'Downloading Zoom...', percent: 78 });
+        const downloadResult = await installer.downloadZoomInstaller((p) => {
+          sendProgress({ step: `Downloading: ${p.percent}%`, percent: 78 + (p.percent / 100) * 10 });
+        });
+
+        if (downloadResult.success) {
+          sendProgress({ step: 'Installing Zoom...', percent: 88 });
+          installResult = await installer.installZoom(downloadResult.path);
+          installer.cleanupInstaller(downloadResult.path);
+        }
+      }
+
+      // Step 10: Apply preferences (NEW)
+      let prefResult = null;
+      if (resetOptions.applyPrefs && resetOptions.reinstall) {
+        sendProgress({ step: 'Applying preferences...', percent: 92 });
+        prefResult = await prefManager.applyPreferences({ snapshot: true });
+        logger.ok('Preferences applied', prefResult);
+      }
+
+      // Step 11: Launch for verification (NEW)
+      let verifyResult = null;
+      if (resetOptions.verifyPrefs && resetOptions.launchForVerification && prefResult?.success) {
+        sendProgress({ step: 'Launching Zoom for verification...', percent: 94 });
+        await installer.launchZoom();
+
+        // Wait a bit then verify
+        await new Promise(r => setTimeout(r, 2000));
+        sendProgress({ step: 'Verifying preferences...', percent: 96 });
+        verifyResult = await prefManager.verifyPreferences();
+        logger.ok('Preference verification complete', verifyResult);
+      }
+
+      // Step 12: Final verification
+      sendProgress({ step: 'Verifying cleanup...', percent: 98 });
+      const verification = {
+        registry: await registry.verifyRegistryClean(),
+        fingerprint: await fingerprint.verifyFingerprintWipe(),
+        folders: resetOptions.reinstall
+          ? { clean: true, skipped: true, reason: 'Reinstall enabled' }
+          : await folders.verifyFoldersDeleted(),
+        processes: resetOptions.reinstall
+          ? { clean: true, skipped: true, reason: 'Reinstall enabled' }
+          : { clean: !(await processKiller.isZoomRunning()) },
+        preferences: prefResult ? { applied: true, ...prefResult } : null,
+        prefVerification: verifyResult
+      };
+
+      const allClean = verification.registry.clean &&
+                       verification.fingerprint.clean &&
+                       verification.folders.clean;
+
+      sendProgress({ step: 'Complete', percent: 100 });
+
+      const sessionDuration = Date.now() - sessionStart;
+      logger.section('RESET WITH PREFERENCES COMPLETE');
+      logger.ok('Session completed', {
+        success: true,
+        durationMs: sessionDuration,
+        allClean,
+        prefsApplied: prefResult?.success || false,
+        prefsVerified: verifyResult?.success || false,
+        zoomChangedKeys: verifyResult?.summary?.modified || 0
+      });
+
+      logger.finalize();
+
+      return {
+        success: true,
+        verification,
+        prefResult,
+        verifyResult,
+        allClean,
+        logPath: logger.getLogPath()
+      };
+
+    } catch (error) {
+      const sessionDuration = Date.now() - sessionStart;
+      logger.error('Reset with prefs failed', { error: error.message });
+      logger.finalize();
+
+      return {
+        success: false,
+        error: error.message,
+        logPath: logger.getLogPath()
+      };
+    }
   });
 }
 
