@@ -244,10 +244,16 @@ function setupButtons() {
 
   // Mission Complete actions
   elements.btnDeployZoom.addEventListener('click', async () => {
+    console.log('Deploy Zoom button clicked');
     addLog('OK', 'Deploying Zoom...');
     try {
-      await window.electronAPI.launchZoom();
-      window.electronAPI.quitApp();
+      const result = await window.electronAPI.launchZoom();
+      if (result.success) {
+        addLog('OK', 'Zoom launched successfully');
+        setTimeout(() => window.electronAPI.quitApp(), 1000);
+      } else {
+        addLog('ERR', `Failed to launch: ${result.error || 'Zoom not installed'}`);
+      }
     } catch (err) {
       addLog('ERR', `Error: ${err.message}`);
     }
@@ -256,8 +262,8 @@ function setupButtons() {
   elements.btnViewReport.addEventListener('click', async () => {
     addLog('OK', 'Opening operation report...');
     try {
-      const logPath = await window.electronAPI.getLogPath();
-      addLog('OK', `Report saved to: ${logPath}`);
+      await window.electronAPI.openLogFolder();
+      addLog('OK', 'Log folder opened');
     } catch (err) {
       addLog('ERR', `Error: ${err.message}`);
     }
@@ -444,15 +450,28 @@ function showMissionComplete(result) {
   elements.normalView.classList.add('hidden');
   elements.completeView.classList.add('active');
 
-  // Update stats
+  // Update stats - aggregate from all relevant steps
   const steps = result.steps || [];
+  console.log('Mission complete steps:', steps);
+
   const foldersStep = steps.find(s => s.name === 'folders');
   const registryStep = steps.find(s => s.name === 'registry');
   const killStep = steps.find(s => s.name === 'kill');
+  const fingerprintStep = steps.find(s => s.name === 'fingerprint');
+  const servicesStep = steps.find(s => s.name === 'services');
 
-  elements.statFolders.textContent = foldersStep?.deleted || 0;
-  elements.statRegistry.textContent = registryStep?.deleted || 0;
-  elements.statProcesses.textContent = killStep?.killed || 0;
+  // Sum folder deletions (data folders + fingerprint folders)
+  const folderCount = (foldersStep?.deleted || 0) + (fingerprintStep?.deleted || 0);
+
+  // Sum registry deletions + service deletions
+  const registryCount = (registryStep?.deleted || 0) + (servicesStep?.deleted || 0);
+
+  // Process/service kills
+  const processCount = (killStep?.killed || 0) + (killStep?.stopped || 0);
+
+  elements.statFolders.textContent = folderCount;
+  elements.statRegistry.textContent = registryCount;
+  elements.statProcesses.textContent = processCount;
 
   setStatus('Mission complete', 'complete');
   updateTargetAnalysis({ installed: false, threat: 'clear' });
