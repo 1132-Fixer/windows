@@ -3,9 +3,32 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
-  <title>1132 Remover - Zoom Data Cleaner</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://fonts.googleapis.com">
+  <title>1132 ELIMINATOR - Zoom Purge Protocol</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@400;600;700&family=Rajdhani:wght@600;700&family=Share+Tech+Mono&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
+    :root {
+      /* Backgrounds */
+      --void-black: #0A0A0F;
+      --combat-gray: #12141A;
+      --tactical-dark: #1A1D26;
+      /* Borders */
+      --steel-edge: #2D3139;
+      /* Primary Actions */
+      --kill-red: #FF2D2D;
+      --blood-red: #FF4444;
+      --strike-orange: #FF6B35;
+      /* Accents */
+      --tactical-cyan: #00F0FF;
+      --eliminated-green: #00FF88;
+      /* Text */
+      --ghost-white: #F0F0F5;
+      --smoke-gray: #8B9099;
+      --shadow-gray: #5A5F6A;
+    }
+
     * {
       margin: 0;
       padding: 0;
@@ -13,274 +36,1202 @@
     }
 
     body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f0f23 100%);
-      color: #e0e0e0;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      background: var(--void-black);
+      color: var(--ghost-white);
+      overflow: hidden;
       user-select: none;
     }
 
-    .header {
-      padding: 20px;
-      text-align: center;
-      border-bottom: 1px solid #333;
-      background: rgba(0, 0, 0, 0.3);
+    /* ==================== ANIMATIONS ==================== */
+    @keyframes threat-pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 10px rgba(255, 45, 45, 0.5); }
+      50% { opacity: 0.8; box-shadow: 0 0 25px rgba(255, 45, 45, 0.8); }
     }
 
-    .header h1 {
-      font-size: 24px;
-      font-weight: 600;
-      color: #00d4ff;
-      text-shadow: 0 0 10px rgba(0, 212, 255, 0.3);
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
     }
 
-    .header p {
-      font-size: 12px;
-      color: #888;
-      margin-top: 5px;
+    @keyframes slide-in {
+      from { opacity: 0; transform: translateX(-10px); }
+      to { opacity: 1; transform: translateX(0); }
     }
 
-    .version {
-      font-size: 11px;
-      color: #00d4ff;
-      opacity: 0.7;
-      margin-top: 3px;
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.05); }
     }
 
-    .container {
-      flex: 1;
+    @keyframes status-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ==================== SCROLLBAR ==================== */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: var(--combat-gray); }
+    ::-webkit-scrollbar-thumb { background: var(--steel-edge); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--shadow-gray); }
+    ::selection { background: var(--kill-red); color: var(--ghost-white); }
+
+    /* ==================== APP CONTAINER ==================== */
+    .app-container {
+      height: 100vh;
       display: flex;
       flex-direction: column;
-      padding: 20px;
-      gap: 15px;
+      background: var(--void-black);
     }
 
-    .button-row {
-      display: flex;
-      gap: 10px;
-    }
-
-    .btn {
-      flex: 1;
-      padding: 15px 20px;
-      border: none;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-    }
-
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    .btn-primary {
-      background: linear-gradient(135deg, #0066cc 0%, #0052a3 100%);
-      color: white;
-      box-shadow: 0 4px 15px rgba(0, 102, 204, 0.3);
-    }
-
-    .btn-primary:hover:not(:disabled) {
-      background: linear-gradient(135deg, #0077ee 0%, #0066cc 100%);
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(0, 102, 204, 0.4);
-    }
-
-    .btn-success {
-      background: linear-gradient(135deg, #00cc66 0%, #00a352 100%);
-      color: white;
-      box-shadow: 0 4px 15px rgba(0, 204, 102, 0.3);
-    }
-
-    .btn-success:hover:not(:disabled) {
-      background: linear-gradient(135deg, #00ee77 0%, #00cc66 100%);
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(0, 204, 102, 0.4);
-    }
-
-    .btn-danger {
-      background: linear-gradient(135deg, #cc3300 0%, #a32900 100%);
-      color: white;
-      box-shadow: 0 4px 15px rgba(204, 51, 0, 0.3);
-    }
-
-    .btn-danger:hover:not(:disabled) {
-      background: linear-gradient(135deg, #ee4400 0%, #cc3300 100%);
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(204, 51, 0, 0.4);
-    }
-
-    .btn-purple {
-      background: linear-gradient(135deg, #9933ff 0%, #7a29cc 100%);
-      color: white;
-      box-shadow: 0 4px 15px rgba(153, 51, 255, 0.3);
-    }
-
-    .btn-purple:hover:not(:disabled) {
-      background: linear-gradient(135deg, #aa44ff 0%, #9933ff 100%);
-      transform: translateY(-2px);
-      box-shadow: 0 6px 20px rgba(153, 51, 255, 0.4);
-    }
-
-    .progress-container {
-      margin-top: 10px;
-      background: rgba(0, 0, 0, 0.3);
-      border-radius: 4px;
-      overflow: hidden;
-    }
-
-    .progress-bar {
-      height: 6px;
-      background: linear-gradient(90deg, #00d4ff, #00ff88);
-      width: 0%;
-      transition: width 0.3s ease;
-    }
-
-    .step-list {
-      margin-top: 10px;
-    }
-
-    .step-item {
-      padding: 6px 0;
+    /* ==================== HEADER ==================== */
+    .header {
+      height: 56px;
+      background: var(--combat-gray);
+      border-bottom: 1px solid var(--steel-edge);
       display: flex;
       align-items: center;
-      gap: 10px;
+      justify-content: space-between;
+      padding: 0 24px;
+      position: relative;
+      z-index: 100;
+      -webkit-app-region: drag;
     }
 
-    .step-item.done {
-      color: #00ff88;
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 16px;
     }
 
-    .step-item.running {
-      color: #ffaa00;
-    }
-
-    .step-item.pending {
-      color: #666;
-    }
-
-    .step-icon {
-      width: 16px;
-      text-align: center;
-    }
-
-    .file-list {
-      flex: 1;
-      background: rgba(0, 0, 0, 0.4);
-      border: 1px solid #333;
-      border-radius: 8px;
-      padding: 15px;
-      overflow-y: auto;
-      font-family: 'Consolas', 'Monaco', monospace;
-      font-size: 13px;
-      min-height: 300px;
-    }
-
-    .file-item {
-      padding: 4px 0;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    }
-
-    .file-item:last-child {
-      border-bottom: none;
-    }
-
-    .file-item.success {
-      color: #00ff88;
-    }
-
-    .file-item.error {
-      color: #ff4444;
-    }
-
-    .file-item.loading {
-      color: #ffaa00;
-    }
-
-    .file-item.header {
-      color: #00d4ff;
-      font-weight: bold;
-      margin-top: 10px;
-    }
-
-    .status-bar {
-      padding: 15px 20px;
-      background: rgba(0, 0, 0, 0.4);
-      border-top: 1px solid #333;
+    .header-logo {
       display: flex;
       align-items: center;
       justify-content: center;
     }
 
-    .status-text {
+    .header-logo svg {
+      width: 32px;
+      height: 32px;
+      color: var(--kill-red);
+    }
+
+    .header-title {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .app-title {
+      font-family: 'Orbitron', monospace;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      color: var(--kill-red);
+      margin: 0;
+      line-height: 1;
+    }
+
+    .app-subtitle {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      color: var(--shadow-gray);
+      text-transform: uppercase;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+      -webkit-app-region: no-drag;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--tactical-cyan);
+      box-shadow: 0 0 10px currentColor;
+    }
+
+    .status-dot.operating {
+      background: var(--kill-red);
+      animation: status-pulse 1s infinite;
+    }
+
+    .status-dot.complete {
+      background: var(--eliminated-green);
+    }
+
+    .header-status-text {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--tactical-cyan);
+    }
+
+    .window-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .window-btn {
+      width: 36px;
+      height: 36px;
+      border: none;
+      background: transparent;
+      color: var(--smoke-gray);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      transition: all 0.2s ease;
+    }
+
+    .window-btn:hover {
+      background: var(--tactical-dark);
+      color: var(--ghost-white);
+    }
+
+    .window-btn-close:hover {
+      background: var(--kill-red);
+      color: var(--ghost-white);
+    }
+
+    /* ==================== MAIN CONTENT ==================== */
+    .main-content {
+      flex: 1;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      overflow-y: auto;
+    }
+
+    .top-section {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+    }
+
+    /* ==================== TARGET ANALYSIS PANEL ==================== */
+    .target-panel {
+      width: 280px;
+      flex-shrink: 0;
+      background: var(--combat-gray);
+      border: 1px solid var(--steel-edge);
+      border-radius: 8px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .panel-header svg {
+      color: var(--tactical-cyan);
+    }
+
+    .panel-title {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--ghost-white);
+      margin: 0;
+    }
+
+    .panel-divider {
+      height: 1px;
+      background: var(--steel-edge);
+    }
+
+    .target-data {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .data-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .data-label {
+      font-family: 'Inter', sans-serif;
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--smoke-gray);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .data-value {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ghost-white);
+    }
+
+    .data-value.danger { color: var(--kill-red); }
+    .data-value.safe { color: var(--eliminated-green); }
+
+    .threat-badge {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 16px;
+      border: 2px solid var(--kill-red);
+      border-radius: 6px;
+      text-align: center;
+      background: rgba(255, 45, 45, 0.15);
+    }
+
+    .threat-badge.critical {
+      animation: threat-pulse 2s infinite;
+    }
+
+    .threat-badge.clear {
+      border-color: var(--eliminated-green);
+      background: rgba(0, 255, 136, 0.1);
+    }
+
+    .threat-label {
+      font-family: 'Inter', sans-serif;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--smoke-gray);
+    }
+
+    .threat-level {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--kill-red);
+    }
+
+    .threat-badge.clear .threat-level {
+      color: var(--eliminated-green);
+    }
+
+    /* ==================== OPERATION CONTROLS ==================== */
+    .operation-controls {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .btn-execute {
+      width: 100%;
+      height: 64px;
+      background: linear-gradient(135deg, var(--kill-red), #CC0000);
+      border: none;
+      border-radius: 8px;
+      font-family: 'Inter', sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--ghost-white);
+      box-shadow: 0 4px 20px rgba(255, 45, 45, 0.3);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+    }
+
+    .btn-execute:hover:not(:disabled) {
+      transform: scale(1.02);
+      box-shadow: 0 8px 30px rgba(255, 45, 45, 0.5);
+    }
+
+    .btn-execute:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+
+    .btn-execute:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .secondary-actions {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .btn-secondary {
+      height: 48px;
+      background: transparent;
+      border: 1px solid var(--steel-edge);
+      border-radius: 6px;
+      font-family: 'Inter', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--strike-orange);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: rgba(255, 107, 53, 0.1);
+      border-color: var(--strike-orange);
+    }
+
+    .btn-secondary:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    .utility-actions {
+      display: flex;
+      gap: 12px;
+    }
+
+    .btn-utility {
+      flex: 1;
+      height: 36px;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      font-family: 'Inter', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--smoke-gray);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .btn-utility:hover:not(:disabled) {
+      background: var(--tactical-dark);
+      color: var(--ghost-white);
+    }
+
+    .btn-utility:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    /* ==================== TACTICAL OPTIONS ==================== */
+    .tactical-options {
+      background: var(--combat-gray);
+      border: 1px solid var(--steel-edge);
+      border-radius: 8px;
+      padding: 16px 20px;
+    }
+
+    .options-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .options-header svg {
+      color: var(--tactical-cyan);
+    }
+
+    .options-title {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--ghost-white);
+    }
+
+    .options-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+
+    .option-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .toggle {
+      width: 48px;
+      height: 24px;
+      border-radius: 12px;
+      background: var(--steel-edge);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .toggle.active {
+      background: var(--kill-red);
+      box-shadow: 0 0 12px rgba(255, 45, 45, 0.4);
+    }
+
+    .toggle::after {
+      content: '';
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--ghost-white);
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    .toggle.active::after {
+      transform: translateX(24px);
+    }
+
+    .toggle:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .option-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .option-label {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--ghost-white);
+    }
+
+    .option-desc {
+      font-family: 'Inter', sans-serif;
+      font-size: 10px;
+      color: var(--shadow-gray);
+    }
+
+    /* ==================== COMBAT LOG ==================== */
+    .combat-log {
+      background: var(--combat-gray);
+      border: 1px solid var(--steel-edge);
+      border-radius: 8px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 200px;
+    }
+
+    .log-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .log-header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .log-title {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--ghost-white);
+    }
+
+    .btn-abort {
+      height: 32px;
+      padding: 0 16px;
+      background: transparent;
+      border: 1px solid var(--kill-red);
+      border-radius: 4px;
+      font-family: 'Inter', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--kill-red);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-abort:hover {
+      background: rgba(255, 45, 45, 0.1);
+    }
+
+    .progress-section {
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .progress-section.active {
+      display: flex;
+    }
+
+    .progress-bar {
+      height: 8px;
+      border-radius: 4px;
+      background: var(--tactical-dark);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: 4px;
+      background: linear-gradient(90deg, var(--kill-red), var(--strike-orange), var(--tactical-cyan));
+      background-size: 200% 100%;
+      animation: shimmer 2s infinite linear;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+
+    .progress-info {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .progress-target {
+      font-family: 'Inter', sans-serif;
+      font-size: 12px;
+      color: var(--smoke-gray);
+    }
+
+    .progress-percent {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--tactical-cyan);
+    }
+
+    .operation-status {
+      display: flex;
+      gap: 24px;
+      margin-bottom: 16px;
+    }
+
+    .status-item {
+      display: flex;
+      gap: 8px;
+    }
+
+    .status-item-label {
+      font-family: 'Inter', sans-serif;
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--smoke-gray);
+    }
+
+    .status-item-value {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ghost-white);
+    }
+
+    .log-divider {
+      height: 1px;
+      background: var(--steel-edge);
+      margin-bottom: 16px;
+    }
+
+    .log-entries {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .log-empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--shadow-gray);
+      font-family: 'Inter', sans-serif;
       font-size: 13px;
-      color: #888;
     }
 
-    .status-text.success {
-      color: #00ff88;
+    .log-entry {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      display: flex;
+      gap: 8px;
+      animation: slide-in 0.3s ease forwards;
     }
 
-    .status-text.error {
-      color: #ff4444;
+    .log-timestamp {
+      color: var(--shadow-gray);
+      flex-shrink: 0;
     }
 
-    .status-text.loading {
-      color: #ffaa00;
+    .log-type {
+      font-weight: 600;
+      flex-shrink: 0;
     }
 
-    /* Scrollbar styling */
-    .file-list::-webkit-scrollbar {
+    .log-type.INIT { color: var(--tactical-cyan); }
+    .log-type.KILL { color: var(--kill-red); }
+    .log-type.DEL { color: var(--strike-orange); }
+    .log-type.REG { color: #FFD93D; }
+    .log-type.FP { color: #B366FF; }
+    .log-type.OK { color: var(--eliminated-green); }
+    .log-type.ERR { color: var(--kill-red); background: rgba(255, 45, 45, 0.2); padding: 0 4px; border-radius: 2px; }
+
+    .log-message {
+      color: var(--smoke-gray);
+    }
+
+    /* ==================== MISSION COMPLETE ==================== */
+    .mission-complete {
+      display: none;
+      background: var(--combat-gray);
+      border: 1px solid var(--steel-edge);
+      border-radius: 8px;
+      padding: 48px 32px;
+      flex-direction: column;
+      align-items: center;
+      gap: 24px;
+      flex: 1;
+      justify-content: center;
+    }
+
+    .mission-complete.active {
+      display: flex;
+    }
+
+    .success-icon {
+      animation: pulse-glow 2s ease infinite;
+    }
+
+    .success-icon svg {
+      width: 64px;
+      height: 64px;
+      color: var(--eliminated-green);
+    }
+
+    .success-title {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      color: var(--eliminated-green);
+      margin: 0;
+      text-align: center;
+    }
+
+    .success-message {
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+      font-weight: 400;
+      color: var(--smoke-gray);
+      text-align: center;
+      margin: 0;
+      max-width: 400px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+      width: 100%;
+      max-width: 500px;
+      margin: 8px 0;
+    }
+
+    .stat-card {
+      background: var(--tactical-dark);
+      border: 1px solid var(--steel-edge);
+      border-radius: 8px;
+      padding: 24px 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 0 20px rgba(0, 255, 136, 0.1);
+      transition: all 0.3s ease;
+    }
+
+    .stat-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 0 30px rgba(0, 255, 136, 0.2);
+    }
+
+    .stat-number {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 40px;
+      font-weight: 600;
+      color: var(--eliminated-green);
+      line-height: 1;
+    }
+
+    .stat-label {
+      font-family: 'Inter', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--smoke-gray);
+      text-align: center;
+      line-height: 1.3;
+    }
+
+    .action-buttons {
+      display: flex;
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .btn-action {
+      height: 48px;
+      padding: 0 32px;
+      border: none;
+      border-radius: 6px;
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn-action.primary {
+      background: var(--tactical-cyan);
+      color: var(--void-black);
+    }
+
+    .btn-action.primary:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 20px rgba(0, 240, 255, 0.4);
+    }
+
+    .btn-action.secondary {
+      background: transparent;
+      border: 1px solid var(--steel-edge);
+      color: var(--ghost-white);
+    }
+
+    .btn-action.secondary:hover {
+      background: var(--tactical-dark);
+      border-color: var(--smoke-gray);
+    }
+
+    .btn-reset {
+      height: 48px;
+      width: 100%;
+      background: transparent;
+      border: 1px solid var(--steel-edge);
+      border-radius: 6px;
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--smoke-gray);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      margin-top: 16px;
+    }
+
+    .btn-reset:hover {
+      background: var(--tactical-dark);
+      border-color: var(--tactical-cyan);
+      color: var(--tactical-cyan);
+    }
+
+    /* ==================== STATUS BAR ==================== */
+    .status-bar {
+      height: 32px;
+      background: var(--void-black);
+      border-top: 1px solid var(--steel-edge);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      font-family: 'Inter', sans-serif;
+      font-size: 11px;
+    }
+
+    .status-bar-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-bar-dot {
       width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--tactical-cyan);
     }
 
-    .file-list::-webkit-scrollbar-track {
-      background: rgba(0, 0, 0, 0.3);
-      border-radius: 4px;
+    .status-bar-dot.operating {
+      background: var(--kill-red);
+      animation: status-pulse 1s infinite;
     }
 
-    .file-list::-webkit-scrollbar-thumb {
-      background: #444;
-      border-radius: 4px;
+    .status-bar-dot.complete {
+      background: var(--eliminated-green);
     }
 
-    .file-list::-webkit-scrollbar-thumb:hover {
-      background: #555;
+    .status-bar-text {
+      color: var(--smoke-gray);
+    }
+
+    .status-bar-center {
+      color: var(--shadow-gray);
+    }
+
+    .status-bar-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      color: var(--shadow-gray);
+    }
+
+    .admin-badge {
+      color: var(--eliminated-green);
+    }
+
+    /* ==================== HIDDEN STATE ==================== */
+    .hidden {
+      display: none !important;
+    }
+
+    /* ==================== NORMAL VIEW ==================== */
+    .normal-view {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      flex: 1;
+    }
+
+    .normal-view.hidden {
+      display: none;
+    }
+
+    /* ==================== COMPLETE VIEW ==================== */
+    .complete-view {
+      display: none;
+      flex-direction: column;
+      gap: 20px;
+      flex: 1;
+    }
+
+    .complete-view.active {
+      display: flex;
     }
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1>1132 REMOVER</h1>
-    <p>Zoom Data Cleaner &amp; System Reset Tool</p>
-    <p class="version" id="versionText">v2.0.0</p>
-  </div>
+  <div class="app-container">
+    <!-- HEADER -->
+    <header class="header">
+      <div class="header-left">
+        <div class="header-logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+        </div>
+        <div class="header-title">
+          <h1 class="app-title">1132 ELIMINATOR</h1>
+          <span class="app-subtitle">ZOOM PURGE PROTOCOL</span>
+        </div>
+      </div>
 
-  <div class="container">
-    <div class="button-row">
-      <button id="quickResetBtn" class="btn btn-purple">QUICK RESET &amp; REINSTALL</button>
-    </div>
-    <div class="button-row">
-      <button id="fullResetBtn" class="btn btn-primary">FULL RESET (WITH USER)</button>
-      <button id="createUserBtn" class="btn btn-primary">CREATE ZOOM USER</button>
-    </div>
-    <div class="button-row">
-      <button id="launchBtn" class="btn btn-success" disabled>LAUNCH ZOOM AS USER</button>
-      <button id="resetBtn" class="btn btn-danger" disabled>RESET &amp; RELAUNCH</button>
-    </div>
-    <div id="fileList" class="file-list">
-      <div class="file-item">Ready. Click a button to begin.</div>
-    </div>
-  </div>
+      <div class="header-right">
+        <div class="status-indicator">
+          <div class="status-dot" id="headerStatusDot"></div>
+          <span class="header-status-text" id="headerStatusText">SYSTEM READY</span>
+        </div>
+        <div class="window-controls">
+          <button class="window-btn" id="btnMinimize">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+          <button class="window-btn" id="btnMaximize">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          </button>
+          <button class="window-btn window-btn-close" id="btnClose">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
 
-  <div class="status-bar">
-    <span id="statusText" class="status-text">Waiting for action...</span>
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+      <!-- NORMAL VIEW -->
+      <div class="normal-view" id="normalView">
+        <!-- TOP SECTION -->
+        <div class="top-section">
+          <!-- TARGET ANALYSIS PANEL -->
+          <div class="target-panel">
+            <div class="panel-header">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/>
+              </svg>
+              <h2 class="panel-title">TARGET ANALYSIS</h2>
+            </div>
+            <div class="panel-divider"></div>
+            <div class="target-data">
+              <div class="data-row">
+                <span class="data-label">ZOOM INSTALLED</span>
+                <span class="data-value danger" id="dataZoomInstalled">YES</span>
+              </div>
+              <div class="data-row">
+                <span class="data-label">PROCESSES ACTIVE</span>
+                <span class="data-value" id="dataProcesses">0</span>
+              </div>
+              <div class="data-row">
+                <span class="data-label">DATA LOCATIONS</span>
+                <span class="data-value" id="dataLocations">--</span>
+              </div>
+              <div class="data-row">
+                <span class="data-label">REGISTRY ENTRIES</span>
+                <span class="data-value" id="dataRegistry">--</span>
+              </div>
+              <div class="data-row">
+                <span class="data-label">FINGERPRINT DATA</span>
+                <span class="data-value danger" id="dataFingerprint">DETECTED</span>
+              </div>
+            </div>
+            <div class="panel-divider"></div>
+            <div class="threat-badge critical" id="threatBadge">
+              <span class="threat-label">THREAT LEVEL:</span>
+              <span class="threat-level" id="threatLevel">CRITICAL</span>
+            </div>
+          </div>
+
+          <!-- OPERATION CONTROLS -->
+          <div class="operation-controls">
+            <button class="btn-execute" id="btnExecute">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+              EXECUTE FULL PURGE
+            </button>
+
+            <div class="secondary-actions">
+              <button class="btn-secondary" id="btnTerminate">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6"/></svg>
+                TERMINATE
+              </button>
+              <button class="btn-secondary" id="btnPurgeData">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                PURGE DATA
+              </button>
+              <button class="btn-secondary" id="btnWipeFingerprint">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                FINGERPRINT
+              </button>
+            </div>
+
+            <div class="utility-actions">
+              <button class="btn-utility" id="btnStopZoom">STOP ZOOM</button>
+              <button class="btn-utility" id="btnLaunchZoom">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                LAUNCH ZOOM
+              </button>
+              <button class="btn-utility" id="btnOpenLogs">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                OPEN LOGS
+              </button>
+              <button class="btn-utility" id="btnSaveLog">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                SAVE LOG
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- TACTICAL OPTIONS -->
+        <div class="tactical-options">
+          <div class="options-header">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+            <span class="options-title">TACTICAL OPTIONS</span>
+          </div>
+          <div class="options-grid">
+            <div class="option-item">
+              <div class="toggle active" id="toggleDemolition" data-option="uninstall"></div>
+              <div class="option-info">
+                <span class="option-label">DEMOLITION</span>
+                <span class="option-desc">Uninstall Zoom first</span>
+              </div>
+            </div>
+            <div class="option-item">
+              <div class="toggle active" id="toggleRebuild" data-option="reinstall"></div>
+              <div class="option-info">
+                <span class="option-label">REBUILD</span>
+                <span class="option-desc">Reinstall after purge</span>
+              </div>
+            </div>
+            <div class="option-item">
+              <div class="toggle" id="toggleAutoDeploy" data-option="launch"></div>
+              <div class="option-info">
+                <span class="option-label">AUTO-DEPLOY</span>
+                <span class="option-desc">Launch when done</span>
+              </div>
+            </div>
+            <div class="option-item">
+              <div class="toggle active" id="toggleDeepSterilization" data-option="deep"></div>
+              <div class="option-info">
+                <span class="option-label">DEEP WIPE</span>
+                <span class="option-desc">Extended fingerprint</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- COMBAT LOG -->
+        <div class="combat-log">
+          <div class="log-header">
+            <div class="log-header-left">
+              <span class="log-title" id="logTitle">OPERATION LOG</span>
+            </div>
+            <button class="btn-abort hidden" id="btnAbort">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              ABORT
+            </button>
+          </div>
+
+          <div class="progress-section" id="progressSection">
+            <div class="progress-bar">
+              <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-info">
+              <span class="progress-target" id="progressTarget">Initializing...</span>
+              <span class="progress-percent" id="progressPercent">0%</span>
+            </div>
+            <div class="operation-status">
+              <div class="status-item">
+                <span class="status-item-label">Current Target:</span>
+                <span class="status-item-value" id="currentTarget">--</span>
+              </div>
+              <div class="status-item">
+                <span class="status-item-label">Elapsed:</span>
+                <span class="status-item-value" id="elapsedTime">00:00:00</span>
+              </div>
+            </div>
+            <div class="log-divider"></div>
+          </div>
+
+          <div class="log-entries" id="logEntries">
+            <div class="log-empty">No operations recorded. System ready.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- COMPLETE VIEW -->
+      <div class="complete-view" id="completeView">
+        <div class="mission-complete active">
+          <div class="success-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+          </div>
+          <h2 class="success-title">MISSION ACCOMPLISHED</h2>
+          <p class="success-message">Zoom has been completely eliminated from this device</p>
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-number" id="statFolders">0</div>
+              <div class="stat-label">FOLDERS<br>DESTROYED</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-number" id="statRegistry">0</div>
+              <div class="stat-label">REGISTRY<br>WIPED</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-number" id="statProcesses">0</div>
+              <div class="stat-label">PROCESSES<br>KILLED</div>
+            </div>
+          </div>
+          <div class="action-buttons">
+            <button class="btn-action primary" id="btnDeployZoom">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              DEPLOY ZOOM
+            </button>
+            <button class="btn-action secondary" id="btnViewReport">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              VIEW REPORT
+            </button>
+          </div>
+        </div>
+        <button class="btn-reset" id="btnResetApp">RESET & START OVER</button>
+      </div>
+    </main>
+
+    <!-- STATUS BAR -->
+    <footer class="status-bar">
+      <div class="status-bar-left">
+        <div class="status-bar-dot" id="statusBarDot"></div>
+        <span class="status-bar-text" id="statusBarText">System Ready</span>
+      </div>
+      <div class="status-bar-center" id="statusBarCenter"></div>
+      <div class="status-bar-right">
+        <span class="admin-badge" id="adminBadge">Admin: Checking...</span>
+        <span>v3.0.0</span>
+      </div>
+    </footer>
   </div>
 
   <script src="renderer.js"></script>

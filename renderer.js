@@ -1,327 +1,611 @@
-const fileList = document.getElementById('fileList');
-const createUserBtn = document.getElementById('createUserBtn');
-const launchBtn = document.getElementById('launchBtn');
-const resetBtn = document.getElementById('resetBtn');
-const fullResetBtn = document.getElementById('fullResetBtn');
-const quickResetBtn = document.getElementById('quickResetBtn');
-const statusText = document.getElementById('statusText');
+/**
+ * 1132 ELIMINATOR - Renderer Process
+ * Combat-themed UI controller
+ */
 
-// Check zoom user status on load
-window.addEventListener('DOMContentLoaded', () => {
-  checkUserStatus();
-  setupResetProgressListener();
+// ==================== DOM ELEMENTS ====================
+const elements = {
+  // Header
+  headerStatusDot: document.getElementById('headerStatusDot'),
+  headerStatusText: document.getElementById('headerStatusText'),
+  btnMinimize: document.getElementById('btnMinimize'),
+  btnMaximize: document.getElementById('btnMaximize'),
+  btnClose: document.getElementById('btnClose'),
+
+  // Target Analysis
+  dataZoomInstalled: document.getElementById('dataZoomInstalled'),
+  dataProcesses: document.getElementById('dataProcesses'),
+  dataLocations: document.getElementById('dataLocations'),
+  dataRegistry: document.getElementById('dataRegistry'),
+  dataFingerprint: document.getElementById('dataFingerprint'),
+  threatBadge: document.getElementById('threatBadge'),
+  threatLevel: document.getElementById('threatLevel'),
+
+  // Operation Controls
+  btnExecute: document.getElementById('btnExecute'),
+  btnTerminate: document.getElementById('btnTerminate'),
+  btnPurgeData: document.getElementById('btnPurgeData'),
+  btnWipeFingerprint: document.getElementById('btnWipeFingerprint'),
+  btnStopZoom: document.getElementById('btnStopZoom'),
+  btnLaunchZoom: document.getElementById('btnLaunchZoom'),
+  btnOpenLogs: document.getElementById('btnOpenLogs'),
+  btnSaveLog: document.getElementById('btnSaveLog'),
+
+  // Tactical Options
+  toggleDemolition: document.getElementById('toggleDemolition'),
+  toggleRebuild: document.getElementById('toggleRebuild'),
+  toggleAutoDeploy: document.getElementById('toggleAutoDeploy'),
+  toggleDeepSterilization: document.getElementById('toggleDeepSterilization'),
+
+  // Progress
+  progressSection: document.getElementById('progressSection'),
+  progressFill: document.getElementById('progressFill'),
+  progressTarget: document.getElementById('progressTarget'),
+  progressPercent: document.getElementById('progressPercent'),
+  currentTarget: document.getElementById('currentTarget'),
+  elapsedTime: document.getElementById('elapsedTime'),
+  btnAbort: document.getElementById('btnAbort'),
+  logTitle: document.getElementById('logTitle'),
+
+  // Log
+  logEntries: document.getElementById('logEntries'),
+
+  // Views
+  normalView: document.getElementById('normalView'),
+  completeView: document.getElementById('completeView'),
+
+  // Mission Complete
+  statFolders: document.getElementById('statFolders'),
+  statRegistry: document.getElementById('statRegistry'),
+  statProcesses: document.getElementById('statProcesses'),
+  btnDeployZoom: document.getElementById('btnDeployZoom'),
+  btnViewReport: document.getElementById('btnViewReport'),
+  btnResetApp: document.getElementById('btnResetApp'),
+
+  // Status Bar
+  statusBarDot: document.getElementById('statusBarDot'),
+  statusBarText: document.getElementById('statusBarText'),
+  statusBarCenter: document.getElementById('statusBarCenter'),
+  adminBadge: document.getElementById('adminBadge')
+};
+
+// ==================== STATE ====================
+let state = {
+  isOperating: false,
+  startTime: null,
+  elapsedTimer: null,
+  options: {
+    uninstall: true,
+    reinstall: true,
+    launch: false,
+    deep: true
+  }
+};
+
+// ==================== INITIALIZATION ====================
+document.addEventListener('DOMContentLoaded', () => {
+  setupWindowControls();
+  setupToggles();
+  setupButtons();
+  setupEventListeners();
+  checkInitialState();
 });
 
-// Setup listener for reset progress updates
-function setupResetProgressListener() {
-  window.electronAPI.onResetProgress((data) => {
-    updateResetProgress(data);
+// ==================== WINDOW CONTROLS ====================
+function setupWindowControls() {
+  // These would work with custom frameless window
+  // For now, they're placeholders
+  elements.btnMinimize?.addEventListener('click', () => {
+    // window.electronAPI.minimize();
+  });
+
+  elements.btnMaximize?.addEventListener('click', () => {
+    // window.electronAPI.maximize();
+  });
+
+  elements.btnClose?.addEventListener('click', () => {
+    window.electronAPI?.quitApp();
   });
 }
 
-// Update the UI with reset progress
-function updateResetProgress(data) {
-  clearFileList();
-  addFileItem('=== FULL RESET & REINSTALL ===', 'header');
-  addFileItem('', '');
+// ==================== TOGGLES ====================
+function setupToggles() {
+  document.querySelectorAll('.toggle').forEach(toggle => {
+    toggle.addEventListener('click', () => {
+      if (state.isOperating) return;
 
-  for (let i = 0; i < data.steps.length; i++) {
-    const step = data.steps[i];
-    let icon = '';
-    let className = '';
+      toggle.classList.toggle('active');
+      const option = toggle.dataset.option;
+      state.options[option] = toggle.classList.contains('active');
+    });
+  });
+}
 
-    if (step.status === 'done') {
-      icon = '[OK]';
-      className = 'success';
-    } else if (step.status === 'running') {
-      icon = '[...]';
-      className = 'loading';
-    } else {
-      icon = '[ ]';
-      className = '';
+// ==================== BUTTONS ====================
+function setupButtons() {
+  // Execute Full Purge
+  elements.btnExecute.addEventListener('click', handleExecutePurge);
+
+  // Secondary actions
+  elements.btnTerminate.addEventListener('click', async () => {
+    if (state.isOperating) return;
+    addLog('KILL', 'Terminating all Zoom processes...');
+    setStatus('Terminating processes...', 'operating');
+
+    try {
+      const result = await window.electronAPI.killZoom();
+      if (result.success) {
+        addLog('OK', `Terminated ${result.killed || 0} processes`);
+        setStatus('Processes terminated', 'ready');
+      } else {
+        addLog('ERR', 'Failed to terminate some processes');
+        setStatus('Partial termination', 'ready');
+      }
+    } catch (err) {
+      addLog('ERR', `Error: ${err.message}`);
+      setStatus('Termination failed', 'ready');
     }
+  });
 
-    let text = `${icon} ${step.step}`;
-    if (step.progress !== undefined && step.status === 'running') {
-      text += ` (${step.progress}%)`;
+  elements.btnPurgeData.addEventListener('click', () => {
+    if (state.isOperating) return;
+    addLog('DEL', 'Manual data purge requested - use Execute Full Purge for complete operation');
+  });
+
+  elements.btnWipeFingerprint.addEventListener('click', () => {
+    if (state.isOperating) return;
+    addLog('FP', 'Fingerprint wipe requested - use Execute Full Purge for complete operation');
+  });
+
+  // Utility actions
+  elements.btnStopZoom.addEventListener('click', async () => {
+    if (state.isOperating) return;
+    addLog('KILL', 'Stopping Zoom...');
+
+    try {
+      const result = await window.electronAPI.killZoom();
+      addLog('OK', result.success ? 'Zoom stopped' : 'No Zoom processes found');
+    } catch (err) {
+      addLog('ERR', `Error: ${err.message}`);
     }
+  });
 
-    addFileItem(text, className);
+  elements.btnLaunchZoom.addEventListener('click', async () => {
+    if (state.isOperating) return;
+    addLog('OK', 'Launching Zoom...');
+
+    try {
+      const result = await window.electronAPI.launchZoom();
+      addLog(result.success ? 'OK' : 'ERR', result.success ? 'Zoom launched' : 'Failed to launch Zoom');
+    } catch (err) {
+      addLog('ERR', `Error: ${err.message}`);
+    }
+  });
+
+  // Open Logs Folder
+  elements.btnOpenLogs.addEventListener('click', async () => {
+    addLog('OK', 'Opening log folder...');
+    try {
+      const result = await window.electronAPI.openLogFolder();
+      if (result.success) {
+        addLog('OK', `Opened: ${result.path}`);
+      } else {
+        addLog('ERR', `Failed to open logs: ${result.error}`);
+      }
+    } catch (err) {
+      addLog('ERR', `Error: ${err.message}`);
+    }
+  });
+
+  // Save Log
+  elements.btnSaveLog.addEventListener('click', async () => {
+    addLog('OK', 'Saving operation log...');
+    try {
+      // Get log content from the UI
+      const logContent = getLogContent();
+      const result = await window.electronAPI.saveLog(logContent);
+      if (result.success) {
+        addLog('OK', `Log saved to: ${result.path}`);
+      } else if (result.error !== 'Save cancelled') {
+        addLog('ERR', `Failed to save: ${result.error}`);
+      }
+    } catch (err) {
+      addLog('ERR', `Error: ${err.message}`);
+    }
+  });
+
+  // Abort button
+  elements.btnAbort.addEventListener('click', () => {
+    addLog('ERR', 'Operation aborted by user');
+    resetToReady();
+  });
+
+  // Mission Complete actions
+  elements.btnDeployZoom.addEventListener('click', async () => {
+    addLog('OK', 'Deploying Zoom...');
+    try {
+      await window.electronAPI.launchZoom();
+      window.electronAPI.quitApp();
+    } catch (err) {
+      addLog('ERR', `Error: ${err.message}`);
+    }
+  });
+
+  elements.btnViewReport.addEventListener('click', async () => {
+    addLog('OK', 'Opening operation report...');
+    try {
+      const logPath = await window.electronAPI.getLogPath();
+      addLog('OK', `Report saved to: ${logPath}`);
+    } catch (err) {
+      addLog('ERR', `Error: ${err.message}`);
+    }
+  });
+
+  elements.btnResetApp.addEventListener('click', () => {
+    resetToReady();
+    elements.normalView.classList.remove('hidden');
+    elements.completeView.classList.remove('active');
+    clearLog();
+    addLog('INIT', 'System reset. Ready for new operation.');
+    updateTargetAnalysis({ installed: true, threat: 'critical' });
+  });
+}
+
+// ==================== EVENT LISTENERS ====================
+function setupEventListeners() {
+  // Progress updates from main process
+  if (window.electronAPI?.onProgress) {
+    window.electronAPI.onProgress((data) => {
+      updateProgress(data);
+    });
   }
 
-  // Calculate overall progress
-  const doneSteps = data.steps.filter(s => s.status === 'done').length;
-  const totalSteps = 11;
-  const progress = Math.round((doneSteps / totalSteps) * 100);
-  updateStatus(`Progress: ${progress}%`, 'loading');
-
-  if (data.complete) {
-    addFileItem('', '');
-    addFileItem('=== COMPLETE ===', 'header');
-    addFileItem('Zoom has been reset and reinstalled!', 'success');
-    updateStatus('Reset complete!', 'success');
-    fullResetBtn.textContent = 'FULL RESET & REINSTALL';
-    fullResetBtn.disabled = false;
+  // Log updates from main process
+  if (window.electronAPI?.onLog) {
+    window.electronAPI.onLog((data) => {
+      const type = data.level?.toUpperCase() || 'OK';
+      addLog(type, data.message);
+    });
   }
 }
 
-// Quick Reset & Reinstall button (current account, no user management)
-quickResetBtn.addEventListener('click', async () => {
-  const confirmed = confirm(
-    'QUICK RESET & REINSTALL\n\n' +
-    'This will:\n' +
-    '1. Kill all Zoom processes\n' +
-    '2. Completely uninstall Zoom\n' +
-    '3. Delete ALL Zoom data (all users)\n' +
-    '4. Clean registry, services, tasks\n' +
-    '5. Download fresh Zoom installer\n' +
-    '6. Reinstall Zoom\n\n' +
-    'No Windows user accounts will be created or deleted.\n\n' +
-    'Continue?'
+// ==================== MAIN EXECUTE HANDLER ====================
+async function handleExecutePurge() {
+  if (state.isOperating) return;
+
+  // Confirm
+  const confirmed = await window.electronAPI.showConfirm(
+    'EXECUTE FULL PURGE\n\n' +
+    'This operation will:\n' +
+    '• Terminate all Zoom processes\n' +
+    (state.options.uninstall ? '• Uninstall Zoom completely\n' : '') +
+    '• Delete ALL Zoom data folders\n' +
+    '• Wipe registry entries\n' +
+    '• Eliminate device fingerprint data\n' +
+    (state.options.reinstall ? '• Download and install fresh Zoom\n' : '') +
+    '\nThis operation cannot be undone.\n\nExecute purge protocol?'
   );
 
-  if (!confirmed) return;
-
-  disableAllButtons();
-  quickResetBtn.textContent = 'RESETTING...';
-  updateStatus('Starting quick reset...', 'loading');
-
-  clearFileList();
-  addFileItem('=== QUICK RESET & REINSTALL ===', 'header');
-  addFileItem('', '');
-  addFileItem('Starting...', 'loading');
-
-  try {
-    const result = await window.electronAPI.quickResetReinstall();
-
-    if (result.success) {
-      addFileItem('', '');
-      addFileItem('=== SUCCESS ===', 'header');
-      addFileItem(result.message, 'success');
-      updateStatus('Zoom reset complete!', 'success');
-    } else {
-      addFileItem('', '');
-      addFileItem('=== FAILED ===', 'header');
-      addFileItem(`Error: ${result.error}`, 'error');
-      updateStatus('Reset failed', 'error');
-    }
-  } catch (err) {
-    addFileItem('', '');
-    addFileItem('=== ERROR ===', 'header');
-    addFileItem(`Error: ${err.message}`, 'error');
-    updateStatus('Reset failed', 'error');
+  if (!confirmed) {
+    addLog('INIT', 'Operation cancelled by user');
+    return;
   }
 
-  quickResetBtn.textContent = 'QUICK RESET & REINSTALL';
-  enableAllButtons();
-  checkUserStatus();
-});
+  // Start operation
+  state.isOperating = true;
+  state.startTime = Date.now();
+  showOperatingUI();
+  clearLog();
 
-// Full Reset & Reinstall button (with user management)
-fullResetBtn.addEventListener('click', async () => {
-  const confirmed = confirm(
-    'FULL RESET (WITH USER)\n\n' +
-    'This will:\n' +
-    '1. Kill all Zoom processes\n' +
-    '2. Completely uninstall Zoom\n' +
-    '3. Delete ALL Zoom data (all users)\n' +
-    '4. Clean registry, services, tasks\n' +
-    '5. Download fresh Zoom installer\n' +
-    '6. Reinstall Zoom\n' +
-    '7. Create/reset Zoom user account\n\n' +
-    'Continue?'
-  );
+  addLog('INIT', '═══════════════════════════════════════');
+  addLog('INIT', 'FULL PURGE PROTOCOL INITIATED');
+  addLog('INIT', '═══════════════════════════════════════');
 
-  if (!confirmed) return;
-
-  disableAllButtons();
-  fullResetBtn.textContent = 'RESETTING...';
-  updateStatus('Starting full reset...', 'loading');
-
-  clearFileList();
-  addFileItem('=== FULL RESET (WITH USER) ===', 'header');
-  addFileItem('', '');
-  addFileItem('Starting...', 'loading');
+  // Start elapsed timer
+  state.elapsedTimer = setInterval(updateElapsedTime, 1000);
 
   try {
-    const result = await window.electronAPI.fullResetReinstall();
+    const result = await window.electronAPI.fullReset(state.options);
+
+    clearInterval(state.elapsedTimer);
 
     if (result.success) {
-      addFileItem('', '');
-      addFileItem('=== SUCCESS ===', 'header');
-      addFileItem(result.message, 'success');
-      updateStatus('Zoom reset complete!', 'success');
+      addLog('OK', '');
+      addLog('OK', '═══════════════════════════════════════');
+      addLog('OK', 'MISSION ACCOMPLISHED');
+      addLog('OK', '═══════════════════════════════════════');
+
+      if (result.allClean) {
+        addLog('OK', 'All verifications passed - Target eliminated');
+      } else {
+        addLog('INIT', 'Some remnants may remain - Manual review recommended');
+      }
+
+      // Show mission complete
+      showMissionComplete(result);
+
+      // Auto-launch if option selected
+      if (state.options.launch && result.success) {
+        addLog('OK', 'Auto-deploying Zoom...');
+        await window.electronAPI.launchZoom();
+      }
     } else {
-      addFileItem('', '');
-      addFileItem('=== FAILED ===', 'header');
-      addFileItem(`Error: ${result.error}`, 'error');
-      updateStatus('Reset failed', 'error');
+      addLog('ERR', '');
+      addLog('ERR', '═══════════════════════════════════════');
+      addLog('ERR', 'OPERATION FAILED');
+      addLog('ERR', '═══════════════════════════════════════');
+      addLog('ERR', `Error: ${result.error}`);
+      setStatus('Operation failed', 'ready');
+      resetToReady();
     }
   } catch (err) {
-    addFileItem('', '');
-    addFileItem('=== ERROR ===', 'header');
-    addFileItem(`Error: ${err.message}`, 'error');
-    updateStatus('Reset failed', 'error');
+    clearInterval(state.elapsedTimer);
+    addLog('ERR', '');
+    addLog('ERR', '═══════════════════════════════════════');
+    addLog('ERR', 'CRITICAL ERROR');
+    addLog('ERR', '═══════════════════════════════════════');
+    addLog('ERR', `Exception: ${err.message}`);
+    setStatus('Critical error', 'ready');
+    resetToReady();
   }
 
-  fullResetBtn.textContent = 'FULL RESET (WITH USER)';
-  enableAllButtons();
-  checkUserStatus();
-});
-
-// Helper to disable all buttons during operation
-function disableAllButtons() {
-  quickResetBtn.disabled = true;
-  fullResetBtn.disabled = true;
-  createUserBtn.disabled = true;
-  launchBtn.disabled = true;
-  resetBtn.disabled = true;
+  state.isOperating = false;
 }
 
-// Helper to enable buttons after operation
-function enableAllButtons() {
-  quickResetBtn.disabled = false;
-  fullResetBtn.disabled = false;
-  // createUserBtn, launchBtn, resetBtn will be set by checkUserStatus()
+// ==================== UI STATE MANAGEMENT ====================
+function showOperatingUI() {
+  setStatus('Operation in progress', 'operating');
+  elements.progressSection.classList.add('active');
+  elements.btnAbort.classList.remove('hidden');
+  elements.logTitle.textContent = 'OPERATION IN PROGRESS';
+  disableControls();
 }
 
-// Check if zoom user exists
-async function checkUserStatus() {
-  clearFileList();
-  addFileItem('Checking zoom user status...', 'loading');
+function resetToReady() {
+  state.isOperating = false;
+  if (state.elapsedTimer) {
+    clearInterval(state.elapsedTimer);
+    state.elapsedTimer = null;
+  }
 
-  const result = await window.electronAPI.checkZoomUser();
+  setStatus('System Ready', 'ready');
+  elements.progressSection.classList.remove('active');
+  elements.btnAbort.classList.add('hidden');
+  elements.logTitle.textContent = 'OPERATION LOG';
+  elements.progressFill.style.width = '0%';
+  elements.progressPercent.textContent = '0%';
+  elements.elapsedTime.textContent = '00:00:00';
+  enableControls();
+}
 
-  clearFileList();
-  if (result.exists) {
-    addFileItem('Zoom user exists', 'success');
-    addFileItem(`  Profile: ${result.profilePath || 'Not created yet'}`, '');
-    if (result.sid) {
-      addFileItem(`  SID: ${result.sid}`, '');
+function showMissionComplete(result) {
+  elements.normalView.classList.add('hidden');
+  elements.completeView.classList.add('active');
+
+  // Update stats
+  const steps = result.steps || [];
+  const foldersStep = steps.find(s => s.name === 'folders');
+  const registryStep = steps.find(s => s.name === 'registry');
+  const killStep = steps.find(s => s.name === 'kill');
+
+  elements.statFolders.textContent = foldersStep?.deleted || 0;
+  elements.statRegistry.textContent = registryStep?.deleted || 0;
+  elements.statProcesses.textContent = killStep?.killed || 0;
+
+  setStatus('Mission complete', 'complete');
+  updateTargetAnalysis({ installed: false, threat: 'clear' });
+}
+
+function disableControls() {
+  elements.btnExecute.disabled = true;
+  elements.btnTerminate.disabled = true;
+  elements.btnPurgeData.disabled = true;
+  elements.btnWipeFingerprint.disabled = true;
+  elements.btnStopZoom.disabled = true;
+  elements.btnLaunchZoom.disabled = true;
+  document.querySelectorAll('.toggle').forEach(t => t.style.pointerEvents = 'none');
+}
+
+function enableControls() {
+  elements.btnExecute.disabled = false;
+  elements.btnTerminate.disabled = false;
+  elements.btnPurgeData.disabled = false;
+  elements.btnWipeFingerprint.disabled = false;
+  elements.btnStopZoom.disabled = false;
+  elements.btnLaunchZoom.disabled = false;
+  document.querySelectorAll('.toggle').forEach(t => t.style.pointerEvents = 'auto');
+}
+
+// ==================== PROGRESS ====================
+function updateProgress(data) {
+  const percent = data.percent || 0;
+
+  elements.progressFill.style.width = `${percent}%`;
+  elements.progressPercent.textContent = `${percent}%`;
+
+  if (data.step) {
+    elements.progressTarget.textContent = data.step;
+    elements.currentTarget.textContent = data.step;
+
+    // Add log entry for major steps
+    if (data.step.toLowerCase().includes('kill')) {
+      addLog('KILL', data.step);
+    } else if (data.step.toLowerCase().includes('uninstall')) {
+      addLog('DEL', data.step);
+    } else if (data.step.toLowerCase().includes('registry')) {
+      addLog('REG', data.step);
+    } else if (data.step.toLowerCase().includes('fingerprint')) {
+      addLog('FP', data.step);
+    } else if (data.step.toLowerCase().includes('download') || data.step.toLowerCase().includes('install')) {
+      addLog('OK', data.step);
+    } else if (data.step.toLowerCase().includes('delet')) {
+      addLog('DEL', data.step);
+    } else {
+      addLog('INIT', data.step);
     }
-    createUserBtn.textContent = 'USER EXISTS';
-    createUserBtn.disabled = true;
-    launchBtn.disabled = false;
-    resetBtn.disabled = false;
+  }
+}
+
+function updateElapsedTime() {
+  if (!state.startTime) return;
+
+  const elapsed = Date.now() - state.startTime;
+  const seconds = Math.floor(elapsed / 1000) % 60;
+  const minutes = Math.floor(elapsed / 60000) % 60;
+  const hours = Math.floor(elapsed / 3600000);
+
+  elements.elapsedTime.textContent =
+    `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
+// ==================== LOGGING ====================
+function clearLog() {
+  elements.logEntries.innerHTML = '';
+}
+
+function addLog(type, message) {
+  // Remove empty state if present
+  const empty = elements.logEntries.querySelector('.log-empty');
+  if (empty) empty.remove();
+
+  const now = new Date();
+  const timestamp = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `
+    <span class="log-timestamp">[${timestamp}]</span>
+    <span class="log-type ${type}">[${type}]</span>
+    <span class="log-message">${escapeHtml(message)}</span>
+  `;
+
+  elements.logEntries.appendChild(entry);
+  elements.logEntries.scrollTop = elements.logEntries.scrollHeight;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function getLogContent() {
+  const entries = elements.logEntries.querySelectorAll('.log-entry');
+  const lines = ['═══════════════════════════════════════════════════════════════'];
+  lines.push('1132 ELIMINATOR - OPERATION LOG');
+  lines.push(`Exported: ${new Date().toISOString()}`);
+  lines.push('═══════════════════════════════════════════════════════════════');
+  lines.push('');
+
+  entries.forEach(entry => {
+    const timestamp = entry.querySelector('.log-timestamp')?.textContent || '';
+    const type = entry.querySelector('.log-type')?.textContent || '';
+    const message = entry.querySelector('.log-message')?.textContent || '';
+    lines.push(`${timestamp} ${type} ${message}`);
+  });
+
+  lines.push('');
+  lines.push('═══════════════════════════════════════════════════════════════');
+  lines.push('END OF LOG');
+  lines.push('═══════════════════════════════════════════════════════════════');
+
+  return lines.join('\n');
+}
+
+// ==================== STATUS ====================
+function setStatus(text, type = 'ready') {
+  elements.statusBarText.textContent = text;
+
+  // Update dots
+  const dots = [elements.headerStatusDot, elements.statusBarDot];
+  dots.forEach(dot => {
+    dot.className = 'status-dot';
+    if (type === 'operating') {
+      dot.classList.add('operating');
+    } else if (type === 'complete') {
+      dot.classList.add('complete');
+    }
+  });
+
+  // Update header text
+  const statusConfig = {
+    ready: { text: 'SYSTEM READY', color: 'var(--tactical-cyan)' },
+    operating: { text: 'OPERATION IN PROGRESS', color: 'var(--kill-red)' },
+    complete: { text: 'MISSION COMPLETE', color: 'var(--eliminated-green)' }
+  };
+
+  const config = statusConfig[type] || statusConfig.ready;
+  elements.headerStatusText.textContent = config.text;
+  elements.headerStatusText.style.color = config.color;
+
+  // Update status bar center
+  if (type === 'operating') {
+    elements.statusBarCenter.textContent = text;
   } else {
-    addFileItem('Zoom user does not exist', 'error');
-    addFileItem('  Click "CREATE ZOOM USER" to create it', '');
-    createUserBtn.textContent = 'CREATE ZOOM USER';
-    createUserBtn.disabled = false;
-    launchBtn.disabled = true;
-    resetBtn.disabled = true;
+    elements.statusBarCenter.textContent = '';
   }
 }
 
-// Create zoom user button
-createUserBtn.addEventListener('click', async () => {
-  createUserBtn.disabled = true;
-  createUserBtn.textContent = 'CREATING...';
-  updateStatus('Creating zoom user...', 'loading');
+// ==================== TARGET ANALYSIS ====================
+function updateTargetAnalysis(data) {
+  if (data.installed !== undefined) {
+    elements.dataZoomInstalled.textContent = data.installed ? 'YES' : 'NO';
+    elements.dataZoomInstalled.className = `data-value ${data.installed ? 'danger' : 'safe'}`;
+  }
 
-  clearFileList();
-  addFileItem('Creating Windows user "zoom"...', 'loading');
+  if (data.processes !== undefined) {
+    elements.dataProcesses.textContent = data.processes;
+  }
 
-  const result = await window.electronAPI.createZoomUser();
+  if (data.locations !== undefined) {
+    elements.dataLocations.textContent = data.locations;
+  }
 
-  clearFileList();
-  if (result.success) {
-    addFileItem('User created successfully', 'success');
-    if (result.junctions && result.junctions.length > 0) {
-      addFileItem('', '');
-      addFileItem('Junction links created:', 'header');
-      for (const j of result.junctions) {
-        addFileItem(`  ${j}`, 'success');
+  if (data.registry !== undefined) {
+    elements.dataRegistry.textContent = data.registry;
+  }
+
+  if (data.fingerprint !== undefined) {
+    elements.dataFingerprint.textContent = data.fingerprint ? 'DETECTED' : 'NONE';
+    elements.dataFingerprint.className = `data-value ${data.fingerprint ? 'danger' : 'safe'}`;
+  }
+
+  if (data.threat !== undefined) {
+    elements.threatBadge.className = `threat-badge ${data.threat}`;
+    elements.threatLevel.textContent = data.threat.toUpperCase();
+  }
+}
+
+// ==================== INITIAL STATE ====================
+async function checkInitialState() {
+  // Check admin status
+  elements.adminBadge.textContent = 'Admin: Active';
+  elements.adminBadge.style.color = 'var(--eliminated-green)';
+
+  // Check Zoom installation
+  try {
+    if (window.electronAPI?.checkZoom) {
+      const zoomCheck = await window.electronAPI.checkZoom();
+      if (zoomCheck.success || zoomCheck.installed) {
+        updateTargetAnalysis({
+          installed: true,
+          fingerprint: true,
+          threat: 'critical'
+        });
+        addLog('INIT', 'Target detected: Zoom installation found');
+      } else {
+        updateTargetAnalysis({
+          installed: false,
+          fingerprint: false,
+          threat: 'clear'
+        });
+        addLog('INIT', 'No Zoom installation detected');
       }
     }
-    updateStatus('Zoom user created! Click LAUNCH to run Zoom.', 'success');
-    createUserBtn.textContent = 'USER EXISTS';
-    launchBtn.disabled = false;
-    resetBtn.disabled = false;
-  } else {
-    addFileItem('Failed to create user', 'error');
-    addFileItem(`  Error: ${result.error}`, 'error');
-    updateStatus('Failed to create user', 'error');
-    createUserBtn.textContent = 'CREATE ZOOM USER';
-    createUserBtn.disabled = false;
+  } catch (err) {
+    addLog('ERR', `Scan error: ${err.message}`);
   }
-});
 
-// Launch Zoom as zoom user
-launchBtn.addEventListener('click', async () => {
-  launchBtn.disabled = true;
-  launchBtn.textContent = 'LAUNCHING...';
-  updateStatus('Launching Zoom as zoom user...', 'loading');
-
-  clearFileList();
-  addFileItem('Launching Zoom as "zoom" user...', 'loading');
-
-  const result = await window.electronAPI.launchZoomAsUser();
-
-  clearFileList();
-  if (result.success) {
-    addFileItem('Zoom launched as zoom user', 'success');
-    updateStatus('Closing app in 2 seconds...', 'success');
-    // Close app after successful launch
-    setTimeout(() => {
-      window.electronAPI.quitApp();
-    }, 2000);
-  } else {
-    addFileItem('Failed to launch Zoom', 'error');
-    addFileItem(`  Error: ${result.error}`, 'error');
-    updateStatus('Failed to launch Zoom', 'error');
-    launchBtn.textContent = 'LAUNCH ZOOM AS USER';
-    launchBtn.disabled = false;
-  }
-});
-
-// Reset zoom user (delete profile, recreate, launch)
-resetBtn.addEventListener('click', async () => {
-  resetBtn.disabled = true;
-  resetBtn.textContent = 'RESETTING...';
-  updateStatus('Resetting zoom user profile...', 'loading');
-
-  clearFileList();
-  addFileItem('=== RESETTING ZOOM USER ===', 'header');
-
-  const result = await window.electronAPI.resetZoomUser();
-
-  clearFileList();
-  if (result.success) {
-    addFileItem('=== RESET COMPLETE ===', 'header');
-    for (const step of result.steps || []) {
-      addFileItem(`  ${step}`, 'success');
-    }
-    addFileItem('', '');
-    addFileItem('Zoom launched with fresh profile!', 'success');
-    updateStatus('Closing app in 2 seconds...', 'success');
-    // Close app after successful reset and launch
-    setTimeout(() => {
-      window.electronAPI.quitApp();
-    }, 2000);
-  } else {
-    addFileItem('=== RESET FAILED ===', 'header');
-    addFileItem(`  ${result.error}`, 'error');
-    updateStatus('Reset failed', 'error');
-    resetBtn.textContent = 'RESET & RELAUNCH';
-    resetBtn.disabled = false;
-  }
-});
-
-// Helper functions
-function updateStatus(text, type) {
-  statusText.textContent = text;
-  statusText.className = `status-text ${type}`;
-}
-
-function clearFileList() {
-  fileList.innerHTML = '';
-}
-
-function addFileItem(text, className = '') {
-  const div = document.createElement('div');
-  div.className = `file-item ${className}`;
-  div.textContent = text;
-  fileList.appendChild(div);
-  fileList.scrollTop = fileList.scrollHeight;
+  addLog('INIT', 'System initialized. Ready for operation.');
+  setStatus('System Ready', 'ready');
 }

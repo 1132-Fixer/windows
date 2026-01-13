@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1A1D26"/>
+      <stop offset="100%" style="stop-color:#0A0A0F"/>
+    </linearGradient>
+
+    <!-- Shield gradient -->
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF4444"/>
+      <stop offset="100%" style="stop-color:#CC0000"/>
+    </linearGradient>
+
+    <!-- Red glow filter -->
+    <filter id="redGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Inner shadow -->
+    <filter id="innerShadow">
+      <feOffset dx="0" dy="2"/>
+      <feGaussianBlur stdDeviation="3"/>
+      <feComposite operator="out" in="SourceGraphic"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0   0 0 0 0 0   0 0 0 0 0   0 0 0 0.5 0"/>
+      <feBlend mode="multiply" in2="SourceGraphic"/>
+    </filter>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="250" fill="url(#bgGrad)" stroke="#2D3139" stroke-width="4"/>
+
+  <!-- Shield shape -->
+  <path d="M256 56
+           L416 116
+           L416 256
+           C416 356 336 436 256 476
+           C176 436 96 356 96 256
+           L96 116
+           Z"
+        fill="url(#shieldGrad)"
+        filter="url(#redGlow)"
+        stroke="#FF6B35"
+        stroke-width="3"/>
+
+  <!-- Inner shield highlight -->
+  <path d="M256 80
+           L392 132
+           L392 256
+           C392 340 324 408 256 444
+           C188 408 120 340 120 256
+           L120 132
+           Z"
+        fill="none"
+        stroke="rgba(255,255,255,0.15)"
+        stroke-width="2"/>
+
+  <!-- Crosshairs - horizontal -->
+  <line x1="160" y1="256" x2="224" y2="256" stroke="#00F0FF" stroke-width="6" stroke-linecap="round" filter="url(#redGlow)"/>
+  <line x1="288" y1="256" x2="352" y2="256" stroke="#00F0FF" stroke-width="6" stroke-linecap="round" filter="url(#redGlow)"/>
+
+  <!-- Crosshairs - vertical -->
+  <line x1="256" y1="160" x2="256" y2="224" stroke="#00F0FF" stroke-width="6" stroke-linecap="round" filter="url(#redGlow)"/>
+  <line x1="256" y1="288" x2="256" y2="352" stroke="#00F0FF" stroke-width="6" stroke-linecap="round" filter="url(#redGlow)"/>
+
+  <!-- Center target circle -->
+  <circle cx="256" cy="256" r="24" fill="none" stroke="#00F0FF" stroke-width="4" filter="url(#redGlow)"/>
+  <circle cx="256" cy="256" r="8" fill="#00F0FF" filter="url(#redGlow)"/>
+
+  <!-- "1132" text -->
+  <text x="256" y="400"
+        text-anchor="middle"
+        font-family="Arial Black, sans-serif"
+        font-size="48"
+        font-weight="900"
+        fill="#F0F0F5"
+        filter="url(#innerShadow)">1132</text>
+
+  <!-- Diagonal strike through (X) representing elimination -->
+  <line x1="190" y1="190" x2="220" y2="220" stroke="#FF2D2D" stroke-width="8" stroke-linecap="round" opacity="0.9"/>
+  <line x1="220" y1="190" x2="190" y2="220" stroke="#FF2D2D" stroke-width="8" stroke-linecap="round" opacity="0.9"/>
+</svg>

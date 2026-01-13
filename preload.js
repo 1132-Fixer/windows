@@ -4,14 +4,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Zoom user management
   checkZoomUser: () => ipcRenderer.invoke('check-zoom-user'),
   createZoomUser: () => ipcRenderer.invoke('create-zoom-user'),
+  deleteZoomUser: () => ipcRenderer.invoke('delete-zoom-user'),
   launchZoomAsUser: () => ipcRenderer.invoke('launch-zoom-as-user'),
   resetZoomUser: () => ipcRenderer.invoke('reset-zoom-user'),
   quitApp: () => ipcRenderer.invoke('quit-app'),
 
-  // Full Reset & Reinstall (with user management)
-  fullResetReinstall: () => ipcRenderer.invoke('full-reset-reinstall'),
-  // Quick Reset & Reinstall (current account, no user management)
-  quickResetReinstall: () => ipcRenderer.invoke('quick-reset-reinstall'),
+  // Full Reset with options
+  fullReset: (options) => ipcRenderer.invoke('full-reset', options),
   onResetProgress: (callback) => ipcRenderer.on('reset-progress', (event, data) => callback(data)),
 
   // Legacy functions

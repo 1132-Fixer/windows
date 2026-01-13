@@ -1,11 +1,12 @@
 {
   "name": "1132-remover",
-  "version": "2.0.0",
-  "description": "Zoom Data Cleaner & System Reset Tool",
-  "main": "main.js",
+  "version": "3.0.0",
+  "description": "Zoom Data Cleaner & Device Fingerprint Reset Tool",
+  "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --enable-logging",
+    "start:old": "electron main.js",
+    "dev": "electron . --dev --enable-logging",
     "build": "electron-builder --win portable --x64",
     "build:installer": "electron-builder --win nsis --x64",
     "build:all": "electron-builder --win --x64",

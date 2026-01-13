@@ -333,47 +333,184 @@ function launchZoom() {
   }
 }
 
-// Kill all Zoom processes including services
+// Kill all Zoom processes including services - with verification (runs 3x minimum)
 function killZoomProcesses() {
-  return new Promise((resolve) => {
-    // Kill processes AND stop services - COMPREHENSIVE list
-    const killCommands = [
-      // Kill all Zoom processes
-      'taskkill /F /IM Zoom.exe',
-      'taskkill /F /IM ZoomWebHost.exe',
-      'taskkill /F /IM CptHost.exe',
-      'taskkill /F /IM CptService.exe',
-      'taskkill /F /IM zCrashReport.exe',
-      'taskkill /F /IM ZoomOutlookIMPlugin.exe',
-      'taskkill /F /IM ZoomInstaller.exe',
-      'taskkill /F /IM Zoomus.exe',
-      'taskkill /F /IM ZoomSDKMessenger.exe',
+  return new Promise(async (resolve) => {
+    // Complete list of ALL Zoom-related processes (from official Zoom documentation)
+    const zoomProcesses = [
+      // === MAIN ZOOM WORKPLACE PROCESSES ===
+      'Zoom.exe',
+      'Zoomus.exe',
+      'Zoom_launcher.exe',
+      'ZoomHybridConf.exe',
+      'zSafeChecker.exe',
 
-      // Stop Zoom services
-      'net stop "Zoom Sharing Service"',
-      'net stop "CptService"',
-      'net stop "ZoomCptService"',
-      'sc stop CptService',
-      'sc stop ZoomCptService',
+      // === SCREEN SHARING / COMPANION PROCESSES ===
+      'CptHost.exe',
+      'CptService.exe',
+      'CptControl.exe',
+      'CptInstall.exe',
 
-      // Kill with tree (child processes)
-      'taskkill /F /T /IM Zoom.exe',
-      'taskkill /F /T /IM CptService.exe',
-      'taskkill /F /T /IM CptHost.exe'
+      // === SDK RENAMED VARIANTS ===
+      'zcscpthost.exe',
+      'zCSCptService.exe',
+      'zcsairhost.exe',
+
+      // === AUDIO/VIDEO OPTIMIZATION ===
+      'aomhost.exe',
+      'aomhost64.exe',
+      'airhost.exe',
+
+      // === CRASH REPORTING ===
+      'zCrashReport.exe',
+      'zCrashReport64.exe',
+
+      // === OUTLOOK INTEGRATION ===
+      'ZoomOutlookIMPlugin.exe',
+      'ZoomOutlookMAPI.exe',
+      'ZoomOutlookMAPI64.exe',
+
+      // === DOCUMENT/MEDIA PROCESSING ===
+      'ZoomDocConverter.exe',
+      'zTscoder.exe',
+
+      // === UPDATER/INSTALLER ===
+      'zUpdater.exe',
+      'ZoomInstaller.exe',
+      'Installer.exe',
+
+      // === WEB/CEF COMPONENTS ===
+      'ZoomWebHost.exe',
+      'zWebview2Agent.exe',
+      'zCefAgent.exe',
+      'msedgewebview2.exe',
+
+      // === SDK/MESSENGER ===
+      'ZoomSDKMessenger.exe',
+
+      // === ZOOM ROOMS PROCESSES ===
+      'ZoomRooms.exe',
+      'zrshell.exe',
+      'Controller.exe',
+      'DigitalSignage.exe',
+      'zrairhost.exe',
+      'zrcpthost.exe',
+      'bcairhost.exe',
+      'conmon_server.exe',
+      'mDNSResponder.exe',
+      'ptp.exe',
+      'ZAAPI.exe',
+      'zCECHelper.exe',
+      'zJob.exe',
+      'zPrinterAgent.exe',
+      'ZR3rdHW.exe',
+      'zrusplayer.exe',
+      'apec3.exe',
+      'notification_helper.exe',
+
+      // === VDI PROCESSES ===
+      'ZoomVDITool.exe',
+      'zWspExtension.exe',
+      'ZoomVDIPluginManagement.exe'
+    ];
+
+    // All Zoom-related Windows services
+    const stopServicesCmd = [
+      'net stop "Zoom Sharing Service" 2>nul',
+      'net stop "CptService" 2>nul',
+      'net stop "ZoomCptService" 2>nul',
+      'net stop "zCSCptService" 2>nul',
+      'net stop "ZoomRooms" 2>nul',
+      'sc stop CptService 2>nul',
+      'sc stop ZoomCptService 2>nul',
+      'sc stop zCSCptService 2>nul',
+      'sc stop "Zoom Sharing Service" 2>nul',
+      'sc stop ZoomRooms 2>nul'
     ].join(' & ');
 
-    const killCmd = spawn('cmd', ['/c', killCommands], {
-      shell: false,
-      windowsHide: true
-    });
+    const killCommands = zoomProcesses.map(p => `taskkill /F /IM ${p} 2>nul`).join(' & ');
+    const treeKillCommands = zoomProcesses.map(p => `taskkill /F /T /IM ${p} 2>nul`).join(' & ');
 
-    killCmd.on('close', (code) => {
-      resolve({ killed: 1 });
-    });
+    // Run the full kill sequence 3 times minimum for thorough purging
+    for (let pass = 0; pass < 3; pass++) {
+      // Step 1: Stop services FIRST (they can hold file locks)
+      await new Promise((res) => {
+        const cmd = spawn('cmd', ['/c', stopServicesCmd], { shell: false, windowsHide: true });
+        cmd.on('close', () => res());
+        cmd.on('error', () => res());
+      });
 
-    killCmd.on('error', () => {
-      resolve({ killed: 0 });
-    });
+      // Step 2: Kill all processes (standard kill)
+      await new Promise((res) => {
+        const cmd = spawn('cmd', ['/c', killCommands], { shell: false, windowsHide: true });
+        cmd.on('close', () => res());
+        cmd.on('error', () => res());
+      });
+
+      // Step 3: Tree kill (kills child processes too)
+      await new Promise((res) => {
+        const cmd = spawn('cmd', ['/c', treeKillCommands], { shell: false, windowsHide: true });
+        cmd.on('close', () => res());
+        cmd.on('error', () => res());
+      });
+
+      // Step 4: PowerShell verification and force kill (catches any process with zoom/cpt/zr/aom in name)
+      await new Promise((res) => {
+        const checkCmd = spawn('powershell', ['-Command', `
+          $procs = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' -or
+            $_.Name -like '*cpt*' -or $_.Name -like '*Cpt*' -or
+            $_.Name -like 'zr*' -or $_.Name -like 'ZR*' -or
+            $_.Name -like 'aom*' -or $_.Name -like 'z[A-Z]*'
+          }
+          if ($procs) { $procs | Stop-Process -Force -ErrorAction SilentlyContinue }
+        `], { windowsHide: true });
+        checkCmd.on('close', () => res());
+        checkCmd.on('error', () => res());
+      });
+
+      // Step 5: WMIC aggressive cleanup (expanded patterns)
+      await new Promise((res) => {
+        const wmicCmd = spawn('cmd', ['/c',
+          'wmic process where "name like \'%zoom%\' or name like \'%Zoom%\' or name like \'%cpt%\' or name like \'%Cpt%\' or name like \'zr%\' or name like \'ZR%\' or name like \'aom%\'" delete 2>nul'
+        ], { shell: false, windowsHide: true });
+        wmicCmd.on('close', () => res());
+        wmicCmd.on('error', () => res());
+      });
+
+      // Brief delay between passes
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    // Final verification pass - ensure nothing is running
+    const finalCheck = () => {
+      return new Promise((res) => {
+        const checkCmd = spawn('powershell', ['-Command', `
+          $zoomProcs = @(${zoomProcesses.map(p => `'${p.replace('.exe', '')}'`).join(',')})
+          $running = Get-Process -Name $zoomProcs -ErrorAction SilentlyContinue
+          if ($running) {
+            $running | Stop-Process -Force -ErrorAction SilentlyContinue
+            Write-Output 'KILLED'
+          } else {
+            Write-Output 'CLEAR'
+          }
+        `], { windowsHide: true });
+
+        let output = '';
+        checkCmd.stdout.on('data', (data) => { output += data.toString(); });
+        checkCmd.on('close', () => res(output.trim()));
+        checkCmd.on('error', () => res('ERROR'));
+      });
+    };
+
+    // Run final check up to 3 more times if processes persist
+    for (let i = 0; i < 3; i++) {
+      const result = await finalCheck();
+      if (result === 'CLEAR') break;
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    resolve({ killed: 1 });
   });
 }
 
@@ -1199,6 +1336,48 @@ ipcMain.handle('create-zoom-user', async () => {
   }
 });
 
+// Delete Zoom user account
+ipcMain.handle('delete-zoom-user', async () => {
+  try {
+    // Kill any Zoom processes first
+    await killZoomProcesses();
+    await new Promise(r => setTimeout(r, 1000));
+
+    // Delete the user account
+    await new Promise((resolve, reject) => {
+      const cmd = spawn('cmd', ['/c', `net user ${ZOOM_USER} /delete`], {
+        windowsHide: true
+      });
+      let stderr = '';
+      cmd.stderr.on('data', (data) => { stderr += data.toString(); });
+      cmd.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(stderr || 'Failed to delete user'));
+      });
+      cmd.on('error', reject);
+    });
+
+    // Delete user profile folder
+    const zoomProfile = await findZoomUserProfile();
+    if (zoomProfile && fs.existsSync(zoomProfile)) {
+      await deleteDirectory(zoomProfile);
+    }
+
+    // Also try deleting standard profile path
+    const standardProfile = `C:\\Users\\${ZOOM_USER}`;
+    if (fs.existsSync(standardProfile)) {
+      await deleteDirectory(standardProfile);
+    }
+
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+});
+
 // Launch Zoom as the Zoom user
 ipcMain.handle('launch-zoom-as-user', async () => {
   try {
@@ -1433,7 +1612,7 @@ ipcMain.handle('reset-zoom-user', async () => {
 const https = require('https');
 const { execSync } = require('child_process');
 
-const ZOOM_INSTALLER_URL = 'https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64';
+const ZOOM_INSTALLER_URL = 'https://zoom.us/client/latest/ZoomInstallerFull.msi';
 const ZOOM_INSTALLER_PATH = path.join(os.tmpdir(), 'ZoomInstallerFull.msi');
 
 // Download file with progress
@@ -1839,6 +2018,186 @@ ipcMain.handle('quick-reset-reinstall', async (event) => {
     return {
       success: true,
       message: 'Zoom has been reset and reinstalled on your account!',
+      steps: steps.map(s => s.step)
+    };
+
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message,
+      steps: steps.map(s => s.step)
+    };
+  }
+});
+
+// ============================================================
+// FULL RESET WITH OPTIONS - Configurable reset
+// Options: { uninstall: boolean, reinstall: boolean }
+// ============================================================
+ipcMain.handle('full-reset', async (event, options = {}) => {
+  const { uninstall = true, reinstall = true } = options;
+  const steps = [];
+
+  try {
+    // Step 1: Kill all Zoom processes
+    steps.push({ step: 'Killing Zoom processes...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: 0 });
+
+    await killZoomProcesses();
+    await new Promise(r => setTimeout(r, 2000));
+    steps[0].status = 'done';
+
+    // Step 2: Uninstall Zoom (conditional)
+    if (uninstall) {
+      steps.push({ step: 'Uninstalling Zoom...', status: 'running' });
+      event.sender.send('reset-progress', { steps, currentStep: steps.length - 1 });
+
+      await uninstallZoom();
+      await new Promise(r => setTimeout(r, 3000));
+      steps[steps.length - 1].status = 'done';
+    } else {
+      steps.push({ step: 'Uninstalling Zoom...', status: 'skipped' });
+      event.sender.send('reset-progress', { steps, currentStep: steps.length - 1 });
+    }
+
+    // Step 3: Delete services
+    steps.push({ step: 'Removing Zoom services...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: steps.length - 1 });
+
+    await deleteZoomServices();
+    await new Promise(r => setTimeout(r, 1000));
+    steps[steps.length - 1].status = 'done';
+
+    // Step 4: Delete scheduled tasks
+    steps.push({ step: 'Removing scheduled tasks...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: steps.length - 1 });
+
+    await deleteZoomScheduledTasks();
+    await new Promise(r => setTimeout(r, 1000));
+    steps[steps.length - 1].status = 'done';
+
+    // Step 5: Delete registry entries
+    steps.push({ step: 'Cleaning registry...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: steps.length - 1 });
+
+    await deleteZoomRegistry();
+    await new Promise(r => setTimeout(r, 1000));
+    steps[steps.length - 1].status = 'done';
+
+    // Step 6: Delete ALL Zoom data folders
+    steps.push({ step: 'Deleting all Zoom data...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: steps.length - 1 });
+
+    const zoomDirs = getZoomDataPaths();
+    for (const dir of zoomDirs) {
+      await deleteDirectory(dir);
+    }
+
+    // Also delete Program Files
+    await deleteDirectory('C:\\Program Files\\Common Files\\Zoom');
+    await deleteDirectory('C:\\Program Files (x86)\\Common Files\\Zoom');
+    await deleteDirectory('C:\\Program Files\\Zoom');
+    await deleteDirectory('C:\\Program Files (x86)\\Zoom');
+
+    await new Promise(r => setTimeout(r, 2000));
+    steps[steps.length - 1].status = 'done';
+
+    // Step 7: Clean prefetch files
+    steps.push({ step: 'Cleaning prefetch files...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: steps.length - 1 });
+
+    await new Promise((resolve) => {
+      const cmd = spawn('powershell', ['-Command', `
+        Get-ChildItem 'C:\\Windows\\Prefetch' -Filter '*ZOOM*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem 'C:\\Windows\\Prefetch' -Filter '*CPT*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+      `], { windowsHide: true });
+      cmd.on('close', () => resolve());
+      cmd.on('error', () => resolve());
+    });
+    steps[steps.length - 1].status = 'done';
+
+    // Step 8: Deep clean system traces
+    steps.push({ step: 'Deep cleaning system traces...', status: 'running' });
+    event.sender.send('reset-progress', { steps, currentStep: steps.length - 1 });
+
+    await new Promise((resolve) => {
+      const cmd = spawn('powershell', ['-Command', `
+        # Remove firewall rules
+        Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like '*Zoom*' -or $_.DisplayName -like '*zoom*' } | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+
+        # Clean MUI cache
+        $muiKey = 'HKCU:\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache'
+        if (Test-Path $muiKey) {
+          Get-ItemProperty $muiKey -ErrorAction SilentlyContinue | Get-Member -MemberType NoteProperty |
+            Where-Object { $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' } |
+            ForEach-Object { Remove-ItemProperty -Path $muiKey -Name $_.Name -ErrorAction SilentlyContinue }
+        }
+
+        # Clean app compat flags
+        $compatKey = 'HKCU:\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers'
+        if (Test-Path $compatKey) {
+          Get-ItemProperty $compatKey -ErrorAction SilentlyContinue | Get-Member -MemberType NoteProperty |
+            Where-Object { $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' } |
+            ForEach-Object { Remove-ItemProperty -Path $compatKey -Name $_.Name -ErrorAction SilentlyContinue }
+        }
+
+        # Flush DNS cache
+        ipconfig /flushdns | Out-Null
+      `], { windowsHide: true });
+      cmd.on('close', () => resolve());
+      cmd.on('error', () => resolve());
+    });
+    steps[steps.length - 1].status = 'done';
+
+    // Step 9 & 10: Download and Install Zoom (conditional)
+    if (reinstall) {
+      steps.push({ step: 'Downloading Zoom installer...', status: 'running', progress: 0 });
+      event.sender.send('reset-progress', { steps, currentStep: steps.length - 1 });
+
+      // Delete old installer if exists
+      if (fs.existsSync(ZOOM_INSTALLER_PATH)) {
+        fs.unlinkSync(ZOOM_INSTALLER_PATH);
+      }
+
+      await downloadFile(ZOOM_INSTALLER_URL, ZOOM_INSTALLER_PATH, (progress) => {
+        steps[steps.length - 1].progress = progress;
+        event.sender.send('reset-progress', { steps, currentStep: steps.length - 1 });
+      });
+
+      steps[steps.length - 1].status = 'done';
+
+      // Install Zoom
+      steps.push({ step: 'Installing Zoom...', status: 'running' });
+      event.sender.send('reset-progress', { steps, currentStep: steps.length - 1 });
+
+      await installZoom(ZOOM_INSTALLER_PATH);
+      await new Promise(r => setTimeout(r, 3000));
+      steps[steps.length - 1].status = 'done';
+
+      // Cleanup installer
+      if (fs.existsSync(ZOOM_INSTALLER_PATH)) {
+        fs.unlinkSync(ZOOM_INSTALLER_PATH);
+      }
+    } else {
+      steps.push({ step: 'Downloading Zoom installer...', status: 'skipped' });
+      steps.push({ step: 'Installing Zoom...', status: 'skipped' });
+      event.sender.send('reset-progress', { steps, currentStep: steps.length - 1 });
+    }
+
+    // Final step: Complete
+    steps.push({ step: 'Finalizing...', status: 'done' });
+
+    // Done!
+    event.sender.send('reset-progress', { steps, currentStep: steps.length, complete: true });
+
+    let message = 'Zoom data has been reset!';
+    if (reinstall) {
+      message = 'Zoom has been reset and reinstalled!';
+    }
+
+    return {
+      success: true,
+      message: message,
       steps: steps.map(s => s.step)
     };
 

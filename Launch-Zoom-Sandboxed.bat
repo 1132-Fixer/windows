@@ -1,3 +1,0 @@
-@echo off
-echo Launching Zoom in Sandbox (spoofed identity)...
-"C:\Program Files\Sandboxie-Plus\Start.exe" /box:DefaultBox "C:\Program Files\Zoom\bin\Zoom.exe"

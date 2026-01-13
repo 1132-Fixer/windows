@@ -1,0 +1,296 @@
+/**
+ * 1132 Remover - Zoom Uninstaller
+ * Multiple uninstall methods with verification
+ */
+
+const fs = require('fs');
+const path = require('path');
+const { spawnSafe, runPowerShell } = require('../utils/spawn-safe');
+const logger = require('../utils/logger');
+const { ZOOM_UNINSTALLER_PATHS } = require('../../shared/constants');
+
+/**
+ * Check if Zoom is installed
+ * @returns {Promise<{installed: boolean, paths: string[]}>}
+ */
+async function isZoomInstalled() {
+  const existingPaths = [];
+
+  // Check for installer executables
+  for (const p of ZOOM_UNINSTALLER_PATHS) {
+    if (fs.existsSync(p)) {
+      existingPaths.push(p);
+    }
+  }
+
+  // Check for Zoom.exe
+  const zoomExePaths = [
+    'C:\\Program Files\\Zoom\\bin\\Zoom.exe',
+    'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe',
+    path.join(process.env.LOCALAPPDATA, 'Programs', 'Zoom', 'Zoom.exe'),
+    path.join(process.env.APPDATA, 'Zoom', 'bin', 'Zoom.exe')
+  ];
+
+  for (const p of zoomExePaths) {
+    if (fs.existsSync(p)) {
+      existingPaths.push(p);
+    }
+  }
+
+  // Check WMI for installed products
+  try {
+    const result = await runPowerShell(
+      `Get-CimInstance Win32_Product -Filter "Name like '%Zoom%'" | Select-Object -ExpandProperty Name`,
+      { timeout: 60000 }
+    );
+    if (result.stdout && result.stdout.trim()) {
+      existingPaths.push(`WMI: ${result.stdout.trim()}`);
+    }
+  } catch (e) {
+    // WMI might be slow or fail
+  }
+
+  return {
+    installed: existingPaths.length > 0,
+    paths: existingPaths
+  };
+}
+
+/**
+ * Uninstall Zoom using its own installer
+ * @returns {Promise<{success: boolean, method: string}>}
+ */
+async function uninstallWithOwnInstaller() {
+  logger.info('Trying Zoom built-in uninstaller...');
+
+  for (const installerPath of ZOOM_UNINSTALLER_PATHS) {
+    if (!fs.existsSync(installerPath)) continue;
+
+    try {
+      logger.debug(`Running: ${installerPath} /uninstall`);
+      const result = await spawnSafe(installerPath, ['/uninstall'], {
+        timeout: 120000,
+        shell: true
+      });
+
+      // Give it time to complete
+      await new Promise(r => setTimeout(r, 3000));
+
+      // Check if Zoom is still installed
+      const check = await isZoomInstalled();
+      if (!check.installed) {
+        logger.ok('Zoom uninstalled with built-in uninstaller');
+        return { success: true, method: 'builtin' };
+      }
+    } catch (e) {
+      logger.debug(`Built-in uninstaller failed: ${e.message}`);
+    }
+  }
+
+  return { success: false, method: 'builtin' };
+}
+
+/**
+ * Uninstall Zoom using WMI (Windows Management Instrumentation)
+ * @returns {Promise<{success: boolean, method: string}>}
+ */
+async function uninstallWithWMI() {
+  logger.info('Trying WMI uninstall...');
+
+  try {
+    // First try wmic command
+    const result = await spawnSafe(
+      'wmic',
+      ['product', 'where', 'name like "%Zoom%"', 'call', 'uninstall', '/nointeractive'],
+      { timeout: 180000, shell: true }
+    );
+
+    // Wait for uninstall to complete
+    await new Promise(r => setTimeout(r, 5000));
+
+    const check = await isZoomInstalled();
+    if (!check.installed) {
+      logger.ok('Zoom uninstalled with WMI');
+      return { success: true, method: 'wmi' };
+    }
+  } catch (e) {
+    logger.debug(`WMI uninstall failed: ${e.message}`);
+  }
+
+  return { success: false, method: 'wmi' };
+}
+
+/**
+ * Uninstall Zoom using PowerShell Get-Package
+ * @returns {Promise<{success: boolean, method: string}>}
+ */
+async function uninstallWithPowerShell() {
+  logger.info('Trying PowerShell package uninstall...');
+
+  try {
+    const script = `
+      $ErrorActionPreference = 'SilentlyContinue'
+
+      # Try Get-Package (modern method)
+      $packages = Get-Package -Name '*Zoom*' -ProviderName Programs, msi -ErrorAction SilentlyContinue
+      foreach ($pkg in $packages) {
+        Write-Host "Uninstalling: $($pkg.Name)"
+        Uninstall-Package $pkg -Force -ErrorAction SilentlyContinue
+      }
+
+      # Try Win32_Product (fallback)
+      $products = Get-CimInstance Win32_Product -Filter "Name like '%Zoom%'" -ErrorAction SilentlyContinue
+      foreach ($prod in $products) {
+        Write-Host "Uninstalling via CIM: $($prod.Name)"
+        $prod | Invoke-CimMethod -MethodName Uninstall -ErrorAction SilentlyContinue
+      }
+
+      # Try registry uninstall strings
+      $uninstallPaths = @(
+        'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+        'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+        'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+      )
+
+      foreach ($path in $uninstallPaths) {
+        Get-ItemProperty $path -ErrorAction SilentlyContinue |
+          Where-Object { $_.DisplayName -like '*Zoom*' } |
+          ForEach-Object {
+            if ($_.UninstallString) {
+              Write-Host "Running uninstall: $($_.UninstallString)"
+              $cmd = $_.UninstallString -replace '/I', '/X'
+              if ($cmd -notlike '*msiexec*') {
+                Start-Process cmd -ArgumentList "/c $cmd /S" -Wait -WindowStyle Hidden
+              } else {
+                Start-Process msiexec -ArgumentList ($cmd -replace 'msiexec.exe ', '' -split ' ') -Wait -WindowStyle Hidden
+              }
+            }
+          }
+      }
+    `;
+
+    await runPowerShell(script, { timeout: 180000 });
+
+    // Wait for uninstall
+    await new Promise(r => setTimeout(r, 5000));
+
+    const check = await isZoomInstalled();
+    if (!check.installed) {
+      logger.ok('Zoom uninstalled with PowerShell');
+      return { success: true, method: 'powershell' };
+    }
+  } catch (e) {
+    logger.debug(`PowerShell uninstall failed: ${e.message}`);
+  }
+
+  return { success: false, method: 'powershell' };
+}
+
+/**
+ * Force remove Zoom files (last resort)
+ * @returns {Promise<{success: boolean, method: string}>}
+ */
+async function forceRemoveFiles() {
+  logger.info('Force removing Zoom files...');
+
+  const zoomDirs = [
+    'C:\\Program Files\\Zoom',
+    'C:\\Program Files (x86)\\Zoom',
+    path.join(process.env.LOCALAPPDATA, 'Programs', 'Zoom')
+  ];
+
+  let removed = 0;
+
+  for (const dir of zoomDirs) {
+    if (fs.existsSync(dir)) {
+      try {
+        // First try to take ownership
+        await runPowerShell(
+          `takeown /F "${dir}" /R /A /D Y; icacls "${dir}" /grant Administrators:F /T /Q`,
+          { timeout: 30000 }
+        );
+
+        // Then remove
+        fs.rmSync(dir, { recursive: true, force: true });
+        removed++;
+        logger.ok(`Removed: ${dir}`);
+      } catch (e) {
+        logger.warn(`Failed to remove ${dir}: ${e.message}`);
+      }
+    }
+  }
+
+  return { success: removed > 0, method: 'force_remove', removed };
+}
+
+/**
+ * Uninstall Zoom using all available methods
+ * @param {Function} onProgress - Progress callback
+ * @returns {Promise<{success: boolean, method: string, details: Object}>}
+ */
+async function uninstallZoom(onProgress = null) {
+  logger.section('Uninstalling Zoom');
+
+  // First check if Zoom is even installed
+  const installCheck = await isZoomInstalled();
+  if (!installCheck.installed) {
+    logger.info('Zoom is not installed, skipping uninstall');
+    return { success: true, method: 'not_installed', alreadyUninstalled: true };
+  }
+
+  logger.info('Zoom found at:', { paths: installCheck.paths });
+
+  const methods = [
+    { name: 'Built-in Uninstaller', fn: uninstallWithOwnInstaller },
+    { name: 'WMI Uninstall', fn: uninstallWithWMI },
+    { name: 'PowerShell Uninstall', fn: uninstallWithPowerShell },
+    { name: 'Force Remove Files', fn: forceRemoveFiles }
+  ];
+
+  for (let i = 0; i < methods.length; i++) {
+    const method = methods[i];
+
+    if (onProgress) {
+      onProgress({
+        step: 'uninstall',
+        current: i + 1,
+        total: methods.length,
+        message: `Trying: ${method.name}...`
+      });
+    }
+
+    const result = await method.fn();
+
+    if (result.success) {
+      logger.logStep('Uninstall Zoom', true, { method: result.method });
+      return {
+        success: true,
+        method: result.method,
+        details: result
+      };
+    }
+  }
+
+  // Final check
+  const finalCheck = await isZoomInstalled();
+  if (!finalCheck.installed) {
+    logger.ok('Zoom uninstalled (verification passed)');
+    return { success: true, method: 'verified', details: {} };
+  }
+
+  logger.error('Failed to uninstall Zoom after all methods', { remaining: finalCheck.paths });
+  return {
+    success: false,
+    method: null,
+    remaining: finalCheck.paths
+  };
+}
+
+module.exports = {
+  isZoomInstalled,
+  uninstallZoom,
+  uninstallWithOwnInstaller,
+  uninstallWithWMI,
+  uninstallWithPowerShell,
+  forceRemoveFiles
+};

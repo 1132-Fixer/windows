@@ -155,26 +155,184 @@ function getZoomDataPaths() {
   return paths;
 }
 
-// Kill Zoom processes
+// Kill all Zoom processes including services - with verification (runs 3x minimum)
 function killZoomProcesses() {
-  return new Promise((resolve) => {
-    const commands = [
-      'taskkill /F /IM Zoom.exe',
-      'taskkill /F /IM ZoomWebHost.exe',
-      'taskkill /F /IM CptHost.exe',
-      'taskkill /F /IM CptService.exe',
-      'taskkill /F /IM zCrashReport.exe',
-      'taskkill /F /IM ZoomOutlookIMPlugin.exe',
-      'taskkill /F /IM ZoomInstaller.exe',
-      'taskkill /F /IM Zoomus.exe',
-      'net stop "Zoom Sharing Service"',
-      'net stop CptService',
-      'sc stop CptService'
+  return new Promise(async (resolve) => {
+    // Complete list of ALL Zoom-related processes (from official Zoom documentation)
+    const zoomProcesses = [
+      // === MAIN ZOOM WORKPLACE PROCESSES ===
+      'Zoom.exe',
+      'Zoomus.exe',
+      'Zoom_launcher.exe',
+      'ZoomHybridConf.exe',
+      'zSafeChecker.exe',
+
+      // === SCREEN SHARING / COMPANION PROCESSES ===
+      'CptHost.exe',
+      'CptService.exe',
+      'CptControl.exe',
+      'CptInstall.exe',
+
+      // === SDK RENAMED VARIANTS ===
+      'zcscpthost.exe',
+      'zCSCptService.exe',
+      'zcsairhost.exe',
+
+      // === AUDIO/VIDEO OPTIMIZATION ===
+      'aomhost.exe',
+      'aomhost64.exe',
+      'airhost.exe',
+
+      // === CRASH REPORTING ===
+      'zCrashReport.exe',
+      'zCrashReport64.exe',
+
+      // === OUTLOOK INTEGRATION ===
+      'ZoomOutlookIMPlugin.exe',
+      'ZoomOutlookMAPI.exe',
+      'ZoomOutlookMAPI64.exe',
+
+      // === DOCUMENT/MEDIA PROCESSING ===
+      'ZoomDocConverter.exe',
+      'zTscoder.exe',
+
+      // === UPDATER/INSTALLER ===
+      'zUpdater.exe',
+      'ZoomInstaller.exe',
+      'Installer.exe',
+
+      // === WEB/CEF COMPONENTS ===
+      'ZoomWebHost.exe',
+      'zWebview2Agent.exe',
+      'zCefAgent.exe',
+      'msedgewebview2.exe',
+
+      // === SDK/MESSENGER ===
+      'ZoomSDKMessenger.exe',
+
+      // === ZOOM ROOMS PROCESSES ===
+      'ZoomRooms.exe',
+      'zrshell.exe',
+      'Controller.exe',
+      'DigitalSignage.exe',
+      'zrairhost.exe',
+      'zrcpthost.exe',
+      'bcairhost.exe',
+      'conmon_server.exe',
+      'mDNSResponder.exe',
+      'ptp.exe',
+      'ZAAPI.exe',
+      'zCECHelper.exe',
+      'zJob.exe',
+      'zPrinterAgent.exe',
+      'ZR3rdHW.exe',
+      'zrusplayer.exe',
+      'apec3.exe',
+      'notification_helper.exe',
+
+      // === VDI PROCESSES ===
+      'ZoomVDITool.exe',
+      'zWspExtension.exe',
+      'ZoomVDIPluginManagement.exe'
+    ];
+
+    // All Zoom-related Windows services
+    const stopServicesCmd = [
+      'net stop "Zoom Sharing Service" 2>nul',
+      'net stop "CptService" 2>nul',
+      'net stop "ZoomCptService" 2>nul',
+      'net stop "zCSCptService" 2>nul',
+      'net stop "ZoomRooms" 2>nul',
+      'sc stop CptService 2>nul',
+      'sc stop ZoomCptService 2>nul',
+      'sc stop zCSCptService 2>nul',
+      'sc stop "Zoom Sharing Service" 2>nul',
+      'sc stop ZoomRooms 2>nul'
     ].join(' & ');
 
-    const cmd = spawn('cmd', ['/c', commands], { windowsHide: true });
-    cmd.on('close', () => resolve());
-    cmd.on('error', () => resolve());
+    const killCommands = zoomProcesses.map(p => `taskkill /F /IM ${p} 2>nul`).join(' & ');
+    const treeKillCommands = zoomProcesses.map(p => `taskkill /F /T /IM ${p} 2>nul`).join(' & ');
+
+    // Run the full kill sequence 3 times minimum for thorough purging
+    for (let pass = 0; pass < 3; pass++) {
+      // Step 1: Stop services FIRST (they can hold file locks)
+      await new Promise((res) => {
+        const cmd = spawn('cmd', ['/c', stopServicesCmd], { shell: false, windowsHide: true });
+        cmd.on('close', () => res());
+        cmd.on('error', () => res());
+      });
+
+      // Step 2: Kill all processes (standard kill)
+      await new Promise((res) => {
+        const cmd = spawn('cmd', ['/c', killCommands], { shell: false, windowsHide: true });
+        cmd.on('close', () => res());
+        cmd.on('error', () => res());
+      });
+
+      // Step 3: Tree kill (kills child processes too)
+      await new Promise((res) => {
+        const cmd = spawn('cmd', ['/c', treeKillCommands], { shell: false, windowsHide: true });
+        cmd.on('close', () => res());
+        cmd.on('error', () => res());
+      });
+
+      // Step 4: PowerShell verification and force kill (catches any process with zoom/cpt/zr/aom in name)
+      await new Promise((res) => {
+        const checkCmd = spawn('powershell', ['-Command', `
+          $procs = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' -or
+            $_.Name -like '*cpt*' -or $_.Name -like '*Cpt*' -or
+            $_.Name -like 'zr*' -or $_.Name -like 'ZR*' -or
+            $_.Name -like 'aom*' -or $_.Name -like 'z[A-Z]*'
+          }
+          if ($procs) { $procs | Stop-Process -Force -ErrorAction SilentlyContinue }
+        `], { windowsHide: true });
+        checkCmd.on('close', () => res());
+        checkCmd.on('error', () => res());
+      });
+
+      // Step 5: WMIC aggressive cleanup (expanded patterns)
+      await new Promise((res) => {
+        const wmicCmd = spawn('cmd', ['/c',
+          'wmic process where "name like \'%zoom%\' or name like \'%Zoom%\' or name like \'%cpt%\' or name like \'%Cpt%\' or name like \'zr%\' or name like \'ZR%\' or name like \'aom%\'" delete 2>nul'
+        ], { shell: false, windowsHide: true });
+        wmicCmd.on('close', () => res());
+        wmicCmd.on('error', () => res());
+      });
+
+      // Brief delay between passes
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    // Final verification pass - ensure nothing is running
+    const finalCheck = () => {
+      return new Promise((res) => {
+        const checkCmd = spawn('powershell', ['-Command', `
+          $zoomProcs = @(${zoomProcesses.map(p => `'${p.replace('.exe', '')}'`).join(',')})
+          $running = Get-Process -Name $zoomProcs -ErrorAction SilentlyContinue
+          if ($running) {
+            $running | Stop-Process -Force -ErrorAction SilentlyContinue
+            Write-Output 'KILLED'
+          } else {
+            Write-Output 'CLEAR'
+          }
+        `], { windowsHide: true });
+
+        let output = '';
+        checkCmd.stdout.on('data', (data) => { output += data.toString(); });
+        checkCmd.on('close', () => res(output.trim()));
+        checkCmd.on('error', () => res('ERROR'));
+      });
+    };
+
+    // Run final check up to 3 more times if processes persist
+    for (let i = 0; i < 3; i++) {
+      const result = await finalCheck();
+      if (result === 'CLEAR') break;
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    resolve();
   });
 }
 
@@ -256,7 +414,7 @@ function uninstallZoom() {
 }
 
 // Download file
-const ZOOM_INSTALLER_URL = 'https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64';
+const ZOOM_INSTALLER_URL = 'https://zoom.us/client/latest/ZoomInstallerFull.msi';
 const ZOOM_INSTALLER_PATH = path.join(os.tmpdir(), 'ZoomInstallerFull.msi');
 
 function downloadFile(url, destPath, progressCallback) {
