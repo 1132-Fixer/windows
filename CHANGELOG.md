@@ -2,6 +2,48 @@
 
 All notable changes to 1132 Remover will be documented in this file.
 
+## [1.1.0] - 2026-01-13
+
+### Added
+
+**Version-Aware Preference System**
+- Detect Zoom version from executable file properties
+- Template selection hierarchy: exact match → major.minor → major → base
+- Built-in templates for Zoom 6.5, 6.6, 6.7 and base fallback
+- Full zoomus.conf key mapping (audio, video, appearance, notifications)
+
+**Diff-Based Verification**
+- Snapshot system captures config at pre-write, post-write, post-launch
+- Compare what you applied vs what Zoom changed after launch
+- Per-build diff history saved to `%LOCALAPPDATA%\1132-Remover\zoom-pref-diffs\`
+- `waitForFileSettle()` detects when config file stops changing
+
+**Preference Manager**
+- Single source of truth for all UI-configurable preferences
+- Bidirectional UI ↔ conf key mapping with validation
+- `applyPreferences()` - write zoomus.conf with automatic snapshots
+- `verifyPreferences()` - compare state after Zoom launch
+- `applyAndVerify()` - full apply + launch + verify cycle
+
+**New IPC Handlers**
+- `get-zoom-pref-options` - preference schema for UI rendering
+- `get/set-user-zoom-prefs` - persist user preference choices
+- `apply-zoom-prefs` - write preferences to zoomus.conf
+- `verify-zoom-prefs` - diff after Zoom launch
+- `get-last-zoom-pref-diff` - retrieve last diff result
+- `detect-zoom-version` - get installed Zoom version info
+- `full-reset-with-prefs` - one-click reset + prefs mode
+
+**One-Click Mode**
+- `full-reset-with-prefs` IPC handler combines:
+  - Full reset (uninstall, wipe, reinstall)
+  - Apply user preferences before first launch
+  - Launch Zoom and verify what stuck
+  - Report what Zoom modified
+- Builds intelligence about "what sticks" per Zoom version
+
+---
+
 ## [1.0.1] - 2026-01-13
 
 ### Added
