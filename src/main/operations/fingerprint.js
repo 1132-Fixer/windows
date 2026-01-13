@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSafe, runPowerShell, deleteRegistryKey } = require('../utils/spawn-safe');
 const logger = require('../utils/logger');
-const { FINGERPRINT_LOCATIONS, ZOOM_CREDENTIALS } = require('../../shared/constants');
+const { FINGERPRINT_LOCATIONS, SYSTEM_TRACE_LOCATIONS, ZOOM_CREDENTIALS } = require('../../shared/constants');
 
 /**
  * Delete telemetry databases
@@ -238,6 +238,286 @@ async function removeFirewallRules() {
 }
 
 /**
+ * Clean Jump Lists (Recent items in taskbar)
+ * These contain shortcuts to Zoom files/meetings
+ * @returns {Promise<{success: boolean, deleted: number}>}
+ */
+async function cleanJumpLists() {
+  logger.info('Cleaning Jump Lists...');
+
+  let deleted = 0;
+
+  try {
+    const result = await runPowerShell(`
+      $count = 0
+      $recentPath = [Environment]::GetFolderPath('Recent')
+
+      # Clean .lnk files with zoom in name
+      Get-ChildItem "$recentPath" -Filter '*.lnk' -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -like '*zoom*'
+      } | ForEach-Object {
+        Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+        $count++
+      }
+
+      # Clean AutomaticDestinations (jumplist files)
+      $autoPath = Join-Path $recentPath 'AutomaticDestinations'
+      if (Test-Path $autoPath) {
+        Get-ChildItem $autoPath -Filter '*.automaticDestinations-ms' -ErrorAction SilentlyContinue | ForEach-Object {
+          $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+          if ($content -like '*zoom*' -or $content -like '*Zoom*') {
+            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+
+      # Clean CustomDestinations
+      $customPath = Join-Path $recentPath 'CustomDestinations'
+      if (Test-Path $customPath) {
+        Get-ChildItem $customPath -Filter '*.customDestinations-ms' -ErrorAction SilentlyContinue | ForEach-Object {
+          $content = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+          if ($content -like '*zoom*' -or $content -like '*Zoom*') {
+            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+
+      Write-Output $count
+    `, { timeout: 60000 });
+
+    deleted = parseInt(result.stdout, 10) || 0;
+    if (deleted > 0) {
+      logger.ok(`Cleaned ${deleted} jump list entries`);
+    }
+  } catch (e) {
+    logger.debug('Jump list cleanup failed', { error: e.message });
+  }
+
+  return { success: true, deleted };
+}
+
+/**
+ * Clean VirtualStore (UAC redirected writes)
+ * @returns {Promise<{success: boolean, deleted: number}>}
+ */
+async function cleanVirtualStore() {
+  logger.info('Cleaning VirtualStore...');
+
+  let deleted = 0;
+
+  if (SYSTEM_TRACE_LOCATIONS && SYSTEM_TRACE_LOCATIONS.virtualStore) {
+    for (const folder of SYSTEM_TRACE_LOCATIONS.virtualStore) {
+      if (fs.existsSync(folder)) {
+        try {
+          fs.rmSync(folder, { recursive: true, force: true });
+          deleted++;
+          logger.ok(`Deleted VirtualStore: ${folder}`);
+        } catch (e) {
+          logger.debug(`Could not delete: ${folder}`);
+        }
+      }
+    }
+  }
+
+  return { success: true, deleted };
+}
+
+/**
+ * Clean Windows Error Reporting crash dumps
+ * @returns {Promise<{success: boolean, deleted: number}>}
+ */
+async function cleanCrashDumps() {
+  logger.info('Cleaning crash dumps...');
+
+  let deleted = 0;
+
+  try {
+    const result = await runPowerShell(`
+      $count = 0
+
+      # Clean CrashDumps folder
+      $crashPath = Join-Path $env:LOCALAPPDATA 'CrashDumps'
+      if (Test-Path $crashPath) {
+        Get-ChildItem $crashPath -Filter '*zoom*.dmp' -ErrorAction SilentlyContinue | ForEach-Object {
+          Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+        Get-ChildItem $crashPath -Filter '*cpt*.dmp' -ErrorAction SilentlyContinue | ForEach-Object {
+          Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+        Get-ChildItem $crashPath -Filter '*zcs*.dmp' -ErrorAction SilentlyContinue | ForEach-Object {
+          Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+
+      # Clean WER folders
+      $werPaths = @(
+        (Join-Path $env:ProgramData 'Microsoft\\Windows\\WER\\ReportArchive'),
+        (Join-Path $env:ProgramData 'Microsoft\\Windows\\WER\\ReportQueue')
+      )
+      foreach ($werPath in $werPaths) {
+        if (Test-Path $werPath) {
+          Get-ChildItem $werPath -Directory -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -like '*zoom*' -or $_.Name -like '*cpt*'
+          } | ForEach-Object {
+            Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+
+      Write-Output $count
+    `, { timeout: 30000 });
+
+    deleted = parseInt(result.stdout, 10) || 0;
+    if (deleted > 0) {
+      logger.ok(`Cleaned ${deleted} crash dump entries`);
+    }
+  } catch (e) {
+    logger.debug('Crash dump cleanup failed', { error: e.message });
+  }
+
+  return { success: true, deleted };
+}
+
+/**
+ * Rebuild icon cache (removes Zoom icon traces)
+ * @returns {Promise<{success: boolean}>}
+ */
+async function rebuildIconCache() {
+  logger.info('Rebuilding icon cache...');
+
+  try {
+    await runPowerShell(`
+      # Stop Explorer
+      Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+
+      # Delete icon cache files
+      $explorerPath = Join-Path $env:LOCALAPPDATA 'Microsoft\\Windows\\Explorer'
+      Remove-Item "$explorerPath\\iconcache*.db" -Force -ErrorAction SilentlyContinue
+      Remove-Item "$explorerPath\\thumbcache*.db" -Force -ErrorAction SilentlyContinue
+      Remove-Item (Join-Path $env:LOCALAPPDATA 'IconCache.db') -Force -ErrorAction SilentlyContinue
+
+      # Restart Explorer
+      Start-Process explorer
+    `, { timeout: 30000 });
+
+    logger.ok('Icon cache rebuilt');
+    return { success: true };
+  } catch (e) {
+    logger.debug('Icon cache rebuild failed', { error: e.message });
+    return { success: false };
+  }
+}
+
+/**
+ * Clean Recycle Bin of Zoom files
+ * @returns {Promise<{success: boolean, deleted: number}>}
+ */
+async function cleanRecycleBin() {
+  logger.info('Cleaning Recycle Bin...');
+
+  let deleted = 0;
+
+  try {
+    const result = await runPowerShell(`
+      $count = 0
+      $shell = New-Object -ComObject Shell.Application
+      $recycleBin = $shell.NameSpace(0xA)
+
+      # Get items in recycle bin
+      $items = $recycleBin.Items()
+      foreach ($item in $items) {
+        $name = $item.Name
+        $path = $item.Path
+        if ($name -like '*zoom*' -or $path -like '*zoom*' -or $name -like '*cpt*') {
+          # Unfortunately can't selectively delete from recycle bin via COM
+          # Just count for now
+          $count++
+        }
+      }
+
+      # If there are zoom items, offer to empty specific items
+      # For full cleanup, we need to use Clear-RecycleBin for zoom items
+      if ($count -gt 0) {
+        # Use rd to forcefully clean recycle bin folders
+        Get-ChildItem 'C:\\$Recycle.Bin' -Force -ErrorAction SilentlyContinue | ForEach-Object {
+          Get-ChildItem $_.FullName -Force -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*'
+          } | ForEach-Object {
+            Remove-Item $_.FullName -Force -Recurse -ErrorAction SilentlyContinue
+          }
+        }
+      }
+
+      Write-Output $count
+    `, { timeout: 30000 });
+
+    deleted = parseInt(result.stdout, 10) || 0;
+    if (deleted > 0) {
+      logger.ok(`Found/cleaned ${deleted} Zoom items in Recycle Bin`);
+    }
+  } catch (e) {
+    logger.debug('Recycle Bin cleanup failed', { error: e.message });
+  }
+
+  return { success: true, deleted };
+}
+
+/**
+ * Clean Windows temp folders of Zoom files
+ * @returns {Promise<{success: boolean, deleted: number}>}
+ */
+async function cleanTempFiles() {
+  logger.info('Cleaning temp files...');
+
+  let deleted = 0;
+
+  try {
+    const result = await runPowerShell(`
+      $count = 0
+      $tempPaths = @(
+        $env:TEMP,
+        (Join-Path $env:LOCALAPPDATA 'Temp'),
+        'C:\\Windows\\Temp'
+      )
+
+      foreach ($tempPath in $tempPaths) {
+        if (Test-Path $tempPath) {
+          Get-ChildItem $tempPath -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' -or $_.Name -like '*cpt*' -or $_.Name -like '*zcs*'
+          } | ForEach-Object {
+            try {
+              if ($_.PSIsContainer) {
+                Remove-Item $_.FullName -Recurse -Force -ErrorAction Stop
+              } else {
+                Remove-Item $_.FullName -Force -ErrorAction Stop
+              }
+              $count++
+            } catch { }
+          }
+        }
+      }
+
+      Write-Output $count
+    `, { timeout: 60000 });
+
+    deleted = parseInt(result.stdout, 10) || 0;
+    if (deleted > 0) {
+      logger.ok(`Cleaned ${deleted} temp files`);
+    }
+  } catch (e) {
+    logger.debug('Temp file cleanup failed', { error: e.message });
+  }
+
+  return { success: true, deleted };
+}
+
+/**
  * Complete device fingerprint wipe
  * This is the CRITICAL function for 1132 bypass
  * @param {Function} onProgress - Progress callback
@@ -254,9 +534,25 @@ async function wipeDeviceFingerprint(onProgress = null) {
     credentials: null,
     prefetch: null,
     dns: null,
-    firewall: null
+    firewall: null,
+    jumpLists: null,
+    virtualStore: null,
+    crashDumps: null,
+    tempFiles: null,
+    recycleBin: null,
+    iconCache: null
   };
 
+  // CRITICAL: Order matters! Some steps depend on others
+  // NOTE: Recycle bin cleanup and icon cache rebuild are NOT included here
+  //       They must be called AFTER folder deletion by ipc-handlers.js
+  //       (folder deletion may send items to recycle bin)
+  //
+  // Order:
+  // 1. First clean active fingerprint data (telemetry, cpt, registry)
+  // 2. Then clean execution history (prefetch, credentials)
+  // 3. Then clean network traces (dns, firewall)
+  // 4. Then clean filesystem traces (jumpLists, virtualStore, crashDumps, temp)
   const stepList = [
     { id: 'telemetry', name: 'Telemetry Databases', fn: wipeTelemetryDatabases },
     { id: 'cptService', name: 'CptService Identifiers', fn: wipeCptServiceData },
@@ -264,7 +560,11 @@ async function wipeDeviceFingerprint(onProgress = null) {
     { id: 'credentials', name: 'Windows Credentials', fn: removeWindowsCredentials },
     { id: 'prefetch', name: 'Prefetch Files', fn: clearPrefetchFiles },
     { id: 'dns', name: 'DNS Cache', fn: flushDnsCache },
-    { id: 'firewall', name: 'Firewall Rules', fn: removeFirewallRules }
+    { id: 'firewall', name: 'Firewall Rules', fn: removeFirewallRules },
+    { id: 'jumpLists', name: 'Jump Lists & Recent Files', fn: cleanJumpLists },
+    { id: 'virtualStore', name: 'VirtualStore Files', fn: cleanVirtualStore },
+    { id: 'crashDumps', name: 'Crash Dumps & WER', fn: cleanCrashDumps },
+    { id: 'tempFiles', name: 'Temp Files', fn: cleanTempFiles }
   ];
 
   for (let i = 0; i < stepList.length; i++) {
@@ -333,6 +633,12 @@ module.exports = {
   clearPrefetchFiles,
   flushDnsCache,
   removeFirewallRules,
+  cleanJumpLists,
+  cleanVirtualStore,
+  cleanCrashDumps,
+  rebuildIconCache,
+  cleanRecycleBin,
+  cleanTempFiles,
   wipeDeviceFingerprint,
   verifyFingerprintWipe
 };

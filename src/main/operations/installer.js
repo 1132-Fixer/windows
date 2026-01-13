@@ -12,6 +12,20 @@ const logger = require('../utils/logger');
 const { ZOOM_INSTALLER, ZOOM_EXECUTABLE_PATHS } = require('../../shared/constants');
 
 /**
+ * Check if running as administrator
+ * Uses 'net session' which only succeeds with elevation
+ * @returns {Promise<boolean>}
+ */
+async function isAdmin() {
+  try {
+    const result = await spawnSafe('net', ['session'], { timeout: 5000 });
+    return result.exitCode === 0;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
  * Download a file from URL with progress tracking
  * @param {string} url - URL to download
  * @param {string} destPath - Destination file path
@@ -165,43 +179,82 @@ async function installZoom(installerPath, onProgress = null) {
 
     if (ext === '.msi') {
       // MSI silent install
-      logger.info('Running MSI installer...');
-      const result = await spawnSafe('msiexec', [
-        '/i', installerPath,
-        '/qn',
-        '/norestart',
-        'ALLUSERS=1'
-      ], { timeout: 300000 }); // 5 min timeout
+      const msiArgs = ['/i', installerPath, '/qn', '/norestart', 'ALLUSERS=1'];
 
-      if (result.exitCode !== 0) {
-        throw new Error(`MSI install failed with exit code ${result.exitCode}`);
+      // Admin guard: ALLUSERS=1 requires elevation
+      const elevated = await isAdmin();
+      if (!elevated) {
+        logger.warn('ALLUSERS=1 requested without elevation - MSI may fail with access denied');
       }
-    } else {
-      // EXE silent install
-      logger.info('Running EXE installer...');
-      const result = await spawnSafe(installerPath, ['/silent', '/install'], {
-        timeout: 300000
+
+      logger.info('Running MSI installer...', {
+        installerPath,
+        args: msiArgs.join(' '),
+        elevated
+      });
+
+      const startTime = Date.now();
+      const result = await spawnSafe('msiexec', msiArgs, { timeout: 300000 }); // 5 min timeout
+      const duration = Date.now() - startTime;
+
+      // ALWAYS log completion - this is critical for debugging
+      logger.info('MSI process completed', {
+        exitCode: result.exitCode,
+        durationMs: duration,
+        stdout: result.stdout?.slice(0, 500) || '(none)',
+        stderr: result.stderr?.slice(0, 500) || '(none)'
       });
 
       if (result.exitCode !== 0) {
-        throw new Error(`EXE install failed with exit code ${result.exitCode}`);
+        throw new Error(`MSI failed with exit code ${result.exitCode}: ${result.stderr || result.stdout || 'no output'}`);
+      }
+    } else {
+      // EXE silent install
+      logger.info('Running EXE installer...', { installerPath });
+
+      const startTime = Date.now();
+      const result = await spawnSafe(installerPath, ['/silent', '/install'], {
+        timeout: 300000
+      });
+      const duration = Date.now() - startTime;
+
+      // ALWAYS log completion
+      logger.info('EXE process completed', {
+        exitCode: result.exitCode,
+        durationMs: duration,
+        stdout: result.stdout?.slice(0, 500) || '(none)',
+        stderr: result.stderr?.slice(0, 500) || '(none)'
+      });
+
+      if (result.exitCode !== 0) {
+        throw new Error(`EXE failed with exit code ${result.exitCode}: ${result.stderr || result.stdout || 'no output'}`);
       }
     }
 
-    // Wait for installation to complete
+    logger.ok('Installer process completed without error');
+
+    // Wait for installation to settle (MSI may spawn background processes)
+    logger.info('Waiting for installation to settle...');
     await new Promise(r => setTimeout(r, 5000));
 
-    // Verify installation
+    // CRITICAL: Verify installation artifacts exist
+    // MSI can return exitCode 0 but fail to actually install (corrupt/truncated MSI)
+    logger.info('Verifying Zoom installation artifacts...');
     const installed = await isZoomInstalled();
-    if (installed.success) {
-      logger.ok('Zoom installed successfully', { path: installed.path });
-      return { success: true, zoomPath: installed.path };
-    } else {
-      throw new Error('Installation verification failed');
+
+    if (!installed.success) {
+      // This catches corrupt MSI that returns success but doesn't install
+      throw new Error('MSI completed without error, but Zoom.exe was not found - installer may be corrupt');
     }
+
+    logger.ok('Zoom install artifact verified', { path: installed.path });
+    logger.ok('Zoom installed successfully');
+    return { success: true, zoomPath: installed.path };
   } catch (e) {
     logger.error('Zoom installation failed', { error: e.message });
     return { success: false, error: e.message };
+  } finally {
+    logger.info('Installer function exiting (guaranteed)');
   }
 }
 

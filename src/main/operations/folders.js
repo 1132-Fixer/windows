@@ -16,10 +16,16 @@ const { ZOOM_DATA_PATHS } = require('../../shared/constants');
 async function scanZoomFolders() {
   const existingPaths = [];
   let totalSize = 0;
+  let checked = 0;
+  let found = 0;
 
+  // Check all predefined paths
   for (const p of ZOOM_DATA_PATHS) {
+    checked++;
     if (fs.existsSync(p)) {
+      found++;
       existingPaths.push(p);
+      logger.debug(`Found: ${p}`);
 
       // Calculate size
       try {
@@ -31,12 +37,17 @@ async function scanZoomFolders() {
     }
   }
 
-  // Also scan all user profiles
+  logger.debug(`Checked ${checked} predefined paths, found ${found}`);
+
+  // Also scan all user profiles (including current user)
   const userProfiles = await scanAllUserProfiles();
   existingPaths.push(...userProfiles.paths);
   totalSize += userProfiles.totalSize;
 
-  return { paths: existingPaths, totalSize };
+  // Deduplicate paths
+  const uniquePaths = [...new Set(existingPaths)];
+
+  return { paths: uniquePaths, totalSize };
 }
 
 /**
@@ -48,15 +59,13 @@ async function scanAllUserProfiles() {
   let totalSize = 0;
 
   const usersDir = 'C:\\Users';
-  const currentUser = process.env.USERNAME.toLowerCase();
 
   try {
     const users = fs.readdirSync(usersDir);
 
     for (const user of users) {
-      // Skip system folders and current user (already covered)
+      // Skip system folders only (scan ALL real user profiles including current)
       if (['Public', 'Default', 'Default User', 'All Users'].includes(user)) continue;
-      if (user.toLowerCase() === currentUser) continue;
 
       const userPath = path.join(usersDir, user);
 

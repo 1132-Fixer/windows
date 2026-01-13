@@ -42,6 +42,7 @@ function sendProgress(data) {
 function registerHandlers() {
   // === FULL RESET ===
   ipcMain.handle('full-reset', async (event, options = {}) => {
+    const sessionStart = Date.now();
     logger.initLogger();
     logger.section('FULL RESET STARTED');
     logger.info('Options:', options);
@@ -90,11 +91,22 @@ function registerHandlers() {
       // Step 6: Delete folders
       sendProgress({ step: 'Deleting Zoom data', percent: 65 });
       const foldersResult = await folders.deleteAllZoomFolders((p) => {
-        sendProgress({ step: p.message, percent: 65 + (p.current / p.total) * 15 });
+        sendProgress({ step: p.message, percent: 65 + (p.current / p.total) * 10 });
       });
       steps.push({ name: 'folders', ...foldersResult });
 
-      // Step 7: Reinstall (if option enabled)
+      // Step 7: Final cleanup (AFTER folder deletion)
+      // Recycle bin may contain items from folder deletion
+      sendProgress({ step: 'Cleaning Recycle Bin', percent: 76 });
+      const recycleBinResult = await fingerprint.cleanRecycleBin();
+      steps.push({ name: 'recycleBin', ...recycleBinResult });
+
+      // Step 8: Rebuild icon cache (restarts Explorer, do last before reinstall)
+      sendProgress({ step: 'Rebuilding icon cache', percent: 78 });
+      const iconCacheResult = await fingerprint.rebuildIconCache();
+      steps.push({ name: 'iconCache', ...iconCacheResult });
+
+      // Step 9: Reinstall (if option enabled)
       if (options.reinstall !== false) {
         // Download
         sendProgress({ step: 'Downloading Zoom', percent: 80 });
@@ -119,13 +131,18 @@ function registerHandlers() {
         }
       }
 
-      // Step 8: Verification
+      // Step 10: Verification
+      // Note: If reinstall was enabled, skip folder/process checks (Zoom will exist)
       sendProgress({ step: 'Verifying cleanup', percent: 98 });
       const verification = {
         registry: await registry.verifyRegistryClean(),
         fingerprint: await fingerprint.verifyFingerprintWipe(),
-        folders: await folders.verifyFoldersDeleted(),
-        processes: { clean: !(await processKiller.isZoomRunning()) }
+        folders: options.reinstall !== false
+          ? { clean: true, skipped: true, reason: 'Reinstall enabled' }
+          : await folders.verifyFoldersDeleted(),
+        processes: options.reinstall !== false
+          ? { clean: true, skipped: true, reason: 'Reinstall enabled' }
+          : { clean: !(await processKiller.isZoomRunning()) }
       };
 
       const allClean = verification.registry.clean &&
@@ -137,6 +154,19 @@ function registerHandlers() {
 
       logger.section('RESET COMPLETE');
       logger.info('Verification:', verification);
+
+      // Session summary - self-describing log footer
+      const sessionDuration = Date.now() - sessionStart;
+      logger.ok('Session completed', {
+        success: true,
+        durationMs: sessionDuration,
+        durationSec: Math.round(sessionDuration / 1000),
+        uninstall: options.uninstall !== false,
+        reinstall: options.reinstall !== false,
+        stepsCompleted: steps.length,
+        allClean
+      });
+
       logger.finalize();
 
       return {
@@ -148,7 +178,16 @@ function registerHandlers() {
       };
 
     } catch (error) {
+      // Session summary on failure
+      const sessionDuration = Date.now() - sessionStart;
       logger.error('Reset failed', { error: error.message, stack: error.stack });
+      logger.warn('Session ended with error', {
+        success: false,
+        durationMs: sessionDuration,
+        durationSec: Math.round(sessionDuration / 1000),
+        stepsCompleted: steps.length,
+        failedAt: steps.length > 0 ? steps[steps.length - 1].name : 'startup'
+      });
       logger.finalize();
 
       // Cleanup on error

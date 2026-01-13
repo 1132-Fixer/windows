@@ -78,25 +78,81 @@ function spawnSafe(command, args = [], options = {}) {
 
 /**
  * Run a PowerShell command with timeout
+ * Uses stdin to avoid escaping issues with complex scripts
  * @param {string} script - PowerShell script to run
  * @param {Object} options - Options
  * @returns {Promise<{exitCode: number, stdout: string, stderr: string}>}
  */
 async function runPowerShell(script, options = {}) {
   const timeout = options.timeout || 60000;
+  const rejectOnError = options.rejectOnError !== false;
 
-  // Escape the script for command line
-  const escapedScript = script.replace(/"/g, '\\"');
+  return new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
 
-  return spawnSafe('powershell', [
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy', 'Bypass',
-    '-Command',
-    escapedScript
-  ], {
-    timeout,
-    windowsHide: true
+    const proc = spawn('powershell', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-Command', '-'  // Read from stdin
+    ], {
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    // Timeout handler
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill('SIGKILL');
+    }, timeout);
+
+    // Capture stdout
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    // Capture stderr
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    // Write script to stdin and close
+    proc.stdin.write(script);
+    proc.stdin.end();
+
+    // Process completed
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+
+      if (timedOut) {
+        reject(new Error(`PowerShell timeout after ${timeout}ms`));
+        return;
+      }
+
+      const result = {
+        exitCode: code,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        success: code === 0
+      };
+
+      // Reject on non-zero exit code if option enabled
+      if (rejectOnError && code !== 0) {
+        const error = new Error(`PowerShell failed (exit ${code}): ${stderr || stdout || 'No output'}`);
+        error.result = result;
+        reject(error);
+        return;
+      }
+
+      resolve(result);
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      reject(new Error(`Failed to spawn PowerShell: ${err.message}`));
+    });
   });
 }
 

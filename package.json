@@ -1,6 +1,6 @@
 {
   "name": "1132-remover",
-  "version": "3.0.0",
+  "version": "1.0.0",
   "description": "Zoom Data Cleaner & Device Fingerprint Reset Tool",
   "main": "src/main/index.js",
   "scripts": {

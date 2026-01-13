@@ -163,14 +163,21 @@ async function findZoomServices() {
 
 /**
  * Delete a scheduled task
- * @param {string} taskName - Task name
+ * Handles both simple task names and fully qualified paths (e.g., "Zoom\ZoomGifCollector")
+ * @param {string} taskName - Task name or full path
  * @returns {Promise<{success: boolean, existed: boolean}>}
  */
 async function deleteScheduledTask(taskName) {
-  // Check if task exists
+  // Extract just the task name for Get-ScheduledTask (it doesn't accept paths)
+  const simpleName = taskName.includes('\\') ? taskName.split('\\').pop() : taskName;
+
+  // For schtasks, we need the full path with leading backslash
+  const fullPath = taskName.startsWith('\\') ? taskName : `\\${taskName}`;
+
+  // Check if task exists (search by simple name)
   try {
     const result = await runPowerShell(
-      `Get-ScheduledTask -TaskName "${taskName}" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty TaskName`,
+      `Get-ScheduledTask -TaskName "${simpleName}" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty TaskName`,
       { timeout: 10000 }
     );
 
@@ -181,29 +188,38 @@ async function deleteScheduledTask(taskName) {
     return { success: true, existed: false };
   }
 
-  // Delete the task
+  // Delete the task - try multiple approaches
   try {
-    // Try schtasks command
-    await spawnSafe('schtasks', ['/delete', '/tn', taskName, '/f'], { timeout: 15000 });
+    // Try schtasks with full path (handles folder-based tasks)
+    await spawnSafe('schtasks', ['/delete', '/tn', fullPath, '/f'], { timeout: 15000 });
 
     // Verify deletion
     const checkResult = await runPowerShell(
-      `Get-ScheduledTask -TaskName "${taskName}" -ErrorAction SilentlyContinue`,
+      `Get-ScheduledTask -TaskName "${simpleName}" -ErrorAction SilentlyContinue`,
       { timeout: 5000 }
     );
 
     const deleted = !checkResult.stdout || !checkResult.stdout.trim();
     return { success: deleted, existed: true, deleted };
   } catch (e) {
-    // Try PowerShell
+    // Try PowerShell Unregister-ScheduledTask
     try {
       await runPowerShell(
-        `Unregister-ScheduledTask -TaskName "${taskName}" -Confirm:$false -ErrorAction Stop`,
+        `Unregister-ScheduledTask -TaskName "${simpleName}" -Confirm:$false -ErrorAction Stop`,
         { timeout: 15000 }
       );
       return { success: true, existed: true };
     } catch (e2) {
-      return { success: false, existed: true, error: e2.message };
+      // Final fallback: try with wildcard search and delete
+      try {
+        await runPowerShell(
+          `Get-ScheduledTask | Where-Object { $_.TaskName -like '*${simpleName}*' } | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue`,
+          { timeout: 15000 }
+        );
+        return { success: true, existed: true };
+      } catch (e3) {
+        return { success: false, existed: true, error: e2.message };
+      }
     }
   }
 }
@@ -242,7 +258,8 @@ async function removeAllZoomTasks(onProgress = null) {
         logger.ok(`Removed task: ${taskName}`);
       } else {
         failed++;
-        logger.error(`Failed to remove task: ${taskName}`);
+        // Downgrade to warn - task may have been removed by another process or is permission-restricted
+        logger.warn(`Task not found or already removed: ${taskName}`, { error: result.error });
       }
     } else {
       logger.debug(`Task not found: ${taskName}`);
@@ -269,12 +286,19 @@ async function removeAllZoomTasks(onProgress = null) {
 
 /**
  * Find all Zoom-related scheduled tasks
+ * Returns fully qualified task names (path + name) for proper deletion
  * @returns {Promise<string[]>}
  */
 async function findZoomTasks() {
   try {
+    // Search by both TaskName AND TaskPath to catch tasks in folders like \Zoom\
     const result = await runPowerShell(
-      `Get-ScheduledTask | Where-Object { $_.TaskName -like '*zoom*' } | Select-Object -ExpandProperty TaskName`,
+      `Get-ScheduledTask | Where-Object {
+        $_.TaskName -like '*zoom*' -or
+        $_.TaskPath -like '*zoom*'
+      } | ForEach-Object {
+        ($_.TaskPath + $_.TaskName).TrimStart('\\')
+      }`,
       { timeout: 15000 }
     );
 

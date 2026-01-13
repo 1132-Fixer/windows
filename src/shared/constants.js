@@ -90,7 +90,22 @@ const ZOOM_PROCESSES = [
   // VDI
   'ZoomVDITool',
   'zWspExtension',
-  'ZoomVDIPluginManagement'
+  'ZoomVDIPluginManagement',
+
+  // Additional missing processes
+  'ZoomChat',
+  'ZoomNotes',
+  'ZoomPhone',
+  'ZoomWebexAgent',
+  'ZoomWorkspace',
+  'zTelemetry',
+  'ZoomPresence',
+  'ZoomClips',
+  'ZoomWhiteboard',
+  'ZoomMail',
+  'ZoomCalendar',
+  'ZoomScheduler',
+  'ZoomOneTouch'
 ];
 
 /**
@@ -167,7 +182,22 @@ const REGISTRY_KEYS = {
     'HKCU\\Software\\ZoomGifCollector',
     'HKCU\\Software\\CptService',
     'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ZoomUMX',
-    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Zoom'
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Zoom',
+    // VirtualStore (UAC redirected writes)
+    'HKCU\\Software\\Classes\\VirtualStore\\Machine\\Software\\Zoom',
+    'HKCU\\Software\\Classes\\VirtualStore\\Machine\\Software\\ZoomUMX',
+    'HKCU\\Software\\Classes\\VirtualStore\\Machine\\Software\\zoom.us',
+    'HKCU\\Software\\Classes\\VirtualStore\\Machine\\Software\\CptService',
+    // URL Protocol Handlers
+    'HKCU\\Software\\Classes\\zoom',
+    'HKCU\\Software\\Classes\\zoommtg',
+    'HKCU\\Software\\Classes\\zoomphonecall',
+    'HKCU\\Software\\Classes\\zoomus',
+    'HKCU\\Software\\Classes\\zoomrc',
+    'HKCU\\Software\\Classes\\zoomrc.rooms',
+    // Notification Settings
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\Zoom.Zoom',
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\zoom.us.Zoom'
   ],
 
   // Local Machine
@@ -181,15 +211,69 @@ const REGISTRY_KEYS = {
     'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ZoomUMX',
     'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Zoom',
     'HKLM\\SYSTEM\\CurrentControlSet\\Services\\CptService',
-    'HKLM\\SYSTEM\\CurrentControlSet\\Services\\ZoomCptService'
+    'HKLM\\SYSTEM\\CurrentControlSet\\Services\\ZoomCptService',
+    'HKLM\\SYSTEM\\CurrentControlSet\\Services\\zCSCptService',
+    // URL Protocol Handlers (system-wide)
+    'HKLM\\Software\\Classes\\zoom',
+    'HKLM\\Software\\Classes\\zoommtg',
+    'HKLM\\Software\\Classes\\zoomphonecall',
+    'HKLM\\Software\\Classes\\zoomus',
+    'HKLM\\Software\\Classes\\zoomrc'
   ],
 
   // WOW6432Node (32-bit on 64-bit)
   WOW64: [
     'HKLM\\Software\\WOW6432Node\\Zoom',
     'HKLM\\Software\\WOW6432Node\\ZoomUMX',
-    'HKLM\\Software\\WOW6432Node\\zoom.us'
+    'HKLM\\Software\\WOW6432Node\\zoom.us',
+    'HKLM\\Software\\WOW6432Node\\Zoom Video Communications',
+    'HKLM\\Software\\WOW6432Node\\Zoom Workplace',
+    'HKLM\\Software\\WOW6432Node\\CptService'
+  ],
+
+  // HKEY_CLASSES_ROOT (URL handlers & COM)
+  HKCR: [
+    'HKCR\\zoom',
+    'HKCR\\zoommtg',
+    'HKCR\\zoomphonecall',
+    'HKCR\\zoomus',
+    'HKCR\\zoomrc',
+    'HKCR\\zoomrc.rooms'
   ]
+};
+
+/**
+ * Registry paths that need value-by-value cleanup (search for zoom entries)
+ * These contain mixed data - only remove zoom-related values
+ */
+const REGISTRY_CLEANUP_PATHS = {
+  // User activity tracking - contains execution history
+  userAssist: [
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count',
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{F4E57C4B-2036-45F0-A9AB-443BCFE33D9F}\\Count'
+  ],
+  // Background/Desktop Activity Moderator - tracks EXE launches
+  activityModerator: [
+    'HKLM\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings',
+    'HKLM\\SYSTEM\\CurrentControlSet\\Services\\dam\\State\\UserSettings'
+  ],
+  // Shell history - folder access, file dialogs
+  shellHistory: [
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs',
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU',
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\LastVisitedPidlMRU',
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\LastVisitedPidlMRULegacy',
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\TypedPaths'
+  ],
+  // MUI Cache - display names of executed programs
+  muiCache: 'HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache',
+  // App Compatibility
+  appCompat: [
+    'HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers',
+    'HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store'
+  ],
+  // FeatureUsage - tracks feature usage per app
+  featureUsage: 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppSwitched'
 };
 
 /**
@@ -206,7 +290,10 @@ const REGISTRY_RUN_VALUES = [
 const ZOOM_SERVICES = [
   'CptService',
   'ZoomCptService',
-  'Zoom Sharing Service'
+  'zCSCptService',
+  'Zoom Sharing Service',
+  'ZoomRooms',
+  'ZoomPresence'
 ];
 
 /**
@@ -242,27 +329,100 @@ const FINGERPRINT_LOCATIONS = {
     path.join(APPDATA, 'Zoom', 'data', 'telemetrydata.db'),
     path.join(LOCALAPPDATA, 'Zoom', 'data', 'telemetrydata.db'),
     path.join(APPDATA, 'Zoom', 'telemetrydata.db'),
-    path.join(LOCALAPPDATA, 'Zoom', 'telemetrydata.db')
+    path.join(LOCALAPPDATA, 'Zoom', 'telemetrydata.db'),
+    path.join(APPDATA, 'Zoom', 'data', 'zoomus.db'),
+    path.join(LOCALAPPDATA, 'Zoom', 'data', 'zoomus.db'),
+    path.join(APPDATA, 'Zoom', 'data', 'zoom.db'),
+    path.join(LOCALAPPDATA, 'Zoom', 'data', 'zoom.db')
   ],
 
   // CptService - Screen sharing service with device ID
   cptServiceFolders: [
     path.join(PROGRAMDATA, 'CptService'),
     path.join(PROGRAMDATA, 'CptHost'),
-    path.join(PROGRAMDATA, 'Zoom CptService')
+    path.join(PROGRAMDATA, 'Zoom CptService'),
+    path.join(PROGRAMDATA, 'zCSCptService')
   ],
 
   // Registry fingerprints
   registryFingerprints: [
     'HKLM\\SYSTEM\\CurrentControlSet\\Services\\CptService',
     'HKLM\\SYSTEM\\CurrentControlSet\\Services\\ZoomCptService',
-    'HKCU\\Software\\CptService'
+    'HKLM\\SYSTEM\\CurrentControlSet\\Services\\zCSCptService',
+    'HKCU\\Software\\CptService',
+    'HKLM\\Software\\CptService'
   ],
 
   // Prefetch files (Windows execution history)
   prefetchPatterns: [
     'C:\\Windows\\Prefetch\\*ZOOM*.pf',
-    'C:\\Windows\\Prefetch\\*CPT*.pf'
+    'C:\\Windows\\Prefetch\\*CPT*.pf',
+    'C:\\Windows\\Prefetch\\*ZOOMUS*.pf',
+    'C:\\Windows\\Prefetch\\*ZCS*.pf'
+  ],
+
+  // Amcache - Windows program execution history database
+  amcache: [
+    'C:\\Windows\\AppCompat\\Programs\\Amcache.hve',
+    'C:\\Windows\\AppCompat\\Programs\\RecentFileCache.bcf'
+  ],
+
+  // SRUM - System Resource Usage Monitor (tracks app usage)
+  srum: 'C:\\Windows\\System32\\sru\\SRUDB.dat'
+};
+
+/**
+ * Additional system trace locations (deep clean)
+ * These contain evidence of Zoom being run
+ */
+const SYSTEM_TRACE_LOCATIONS = {
+  // Jump Lists - Recent items in taskbar
+  jumpLists: [
+    path.join(APPDATA, 'Microsoft', 'Windows', 'Recent'),
+    path.join(APPDATA, 'Microsoft', 'Windows', 'Recent', 'AutomaticDestinations'),
+    path.join(APPDATA, 'Microsoft', 'Windows', 'Recent', 'CustomDestinations')
+  ],
+
+  // VirtualStore - UAC redirected file writes
+  virtualStore: [
+    path.join(LOCALAPPDATA, 'VirtualStore', 'Program Files', 'Zoom'),
+    path.join(LOCALAPPDATA, 'VirtualStore', 'Program Files (x86)', 'Zoom'),
+    path.join(LOCALAPPDATA, 'VirtualStore', 'ProgramData', 'Zoom'),
+    path.join(LOCALAPPDATA, 'VirtualStore', 'ProgramData', 'CptService')
+  ],
+
+  // Windows Error Reporting - Crash dumps
+  crashDumps: [
+    path.join(LOCALAPPDATA, 'CrashDumps'),
+    path.join(PROGRAMDATA, 'Microsoft', 'Windows', 'WER', 'ReportArchive'),
+    path.join(PROGRAMDATA, 'Microsoft', 'Windows', 'WER', 'ReportQueue')
+  ],
+
+  // Icon & Thumbnail Cache
+  iconCache: [
+    path.join(LOCALAPPDATA, 'IconCache.db'),
+    path.join(LOCALAPPDATA, 'Microsoft', 'Windows', 'Explorer')
+  ],
+
+  // Windows Notifications database
+  notifications: path.join(LOCALAPPDATA, 'Microsoft', 'Windows', 'Notifications'),
+
+  // Additional temp locations
+  tempLocations: [
+    path.join(LOCALAPPDATA, 'Temp'),
+    path.join(TEMP, 'Zoom'),
+    path.join(TEMP, 'zoomus'),
+    path.join(TEMP, 'zoom_installer'),
+    path.join(TEMP, 'ZoomInstaller'),
+    'C:\\Windows\\Temp'
+  ],
+
+  // Recycle bin pattern
+  recycleBin: 'C:\\$Recycle.Bin',
+
+  // Outlook integration cache
+  outlookCache: [
+    path.join(LOCALAPPDATA, 'Microsoft', 'Outlook', 'RoamCache')
   ]
 };
 
@@ -302,11 +462,13 @@ module.exports = {
   ZOOM_PROCESSES,
   ZOOM_DATA_PATHS,
   REGISTRY_KEYS,
+  REGISTRY_CLEANUP_PATHS,
   REGISTRY_RUN_VALUES,
   ZOOM_SERVICES,
   ZOOM_SCHEDULED_TASKS,
   ZOOM_CREDENTIALS,
   FINGERPRINT_LOCATIONS,
+  SYSTEM_TRACE_LOCATIONS,
   ZOOM_INSTALLER,
   ZOOM_EXECUTABLE_PATHS,
   ZOOM_UNINSTALLER_PATHS

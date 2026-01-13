@@ -94,7 +94,7 @@ npm run build
 - Administrator privileges (required for full cleanup)
 
 ## Versions
-- **1132 Remover**: v2.0.0
+- **1132 Remover**: v1.0.0
 - **1132 Quick Reset**: v2.1.0
 
 ## Author
