@@ -1,0 +1,168 @@
+# Zoom Product Definition
+# Vendor-scoped paths and registry keys for safe remediation
+
+id: zoom
+vendor: Zoom Video Communications
+displayName: Zoom Meetings
+version: "*"  # All versions
+
+# ============================================================================
+# File System Paths (vendor-owned only)
+# ============================================================================
+paths:
+  install:
+    - "%PROGRAMFILES%\\Zoom"
+    - "%PROGRAMFILES(X86)%\\Zoom"
+    - "%LOCALAPPDATA%\\Programs\\Zoom"
+    - "%PROGRAMFILES%\\Common Files\\Zoom"
+
+  appData:
+    - "%APPDATA%\\Zoom"
+    - "%APPDATA%\\Zoom Meetings"
+    - "%APPDATA%\\zoomus"
+    - "%APPDATA%\\ZoomLogs"
+    - "%APPDATA%\\Zoom Workplace"
+    - "%APPDATA%\\ZoomUMX"
+    - "%LOCALAPPDATA%\\Zoom"
+    - "%LOCALAPPDATA%\\zoomus"
+    - "%LOCALAPPDATA%\\ZoomLogs"
+
+  programData:
+    - "%PROGRAMDATA%\\Zoom"
+    - "%PROGRAMDATA%\\Zoom Video Communications"
+    - "%PROGRAMDATA%\\CptService"
+    - "%PROGRAMDATA%\\Zoom CptService"
+
+  logs:
+    - "%APPDATA%\\ZoomLogs"
+    - "%LOCALAPPDATA%\\ZoomLogs"
+
+  temp:
+    - "%TEMP%\\Zoom"
+    - "%TEMP%\\ZoomInstaller"
+
+# ============================================================================
+# Registry Keys (vendor namespaces only)
+# ============================================================================
+registry:
+  software:
+    # HKCU Software
+    - "HKCU\\Software\\Zoom"
+    - "HKCU\\Software\\ZoomUMX"
+    - "HKCU\\Software\\zoom.us"
+    - "HKCU\\Software\\IM Providers\\Zoom"
+    - "HKCU\\Software\\Classes\\zoommtg"
+    - "HKCU\\Software\\Classes\\zoomrc"
+    - "HKCU\\Software\\Classes\\zoomus"
+    - "HKCU\\Software\\Classes\\zoomphonecall"
+
+    # HKLM Software
+    - "HKLM\\Software\\Zoom"
+    - "HKLM\\Software\\ZoomUMX"
+    - "HKLM\\Software\\zoom.us"
+    - "HKLM\\Software\\WOW6432Node\\Zoom"
+    - "HKLM\\Software\\WOW6432Node\\ZoomUMX"
+    - "HKLM\\Software\\WOW6432Node\\zoom.us"
+
+    # HKCR Protocol Handlers
+    - "HKCR\\zoom"
+    - "HKCR\\zoommtg"
+    - "HKCR\\zoomrc"
+    - "HKCR\\zoomus"
+    - "HKCR\\zoomphonecall"
+
+  uninstall:
+    - "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Zoom"
+    - "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ZoomUMX"
+    - "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{49B2F992-FF87-4B44-A21D-F88A6E7D6E83}"
+    - "HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Zoom"
+    - "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Zoom"
+
+  services:
+    - "HKLM\\SYSTEM\\CurrentControlSet\\Services\\CptService"
+    - "HKLM\\SYSTEM\\CurrentControlSet\\Services\\ZoomCptService"
+    - "HKLM\\SYSTEM\\CurrentControlSet\\Services\\zCSCptService"
+    - "HKLM\\SYSTEM\\CurrentControlSet\\Services\\ZoomPresence"
+
+  other:
+    # Run keys (autostart)
+    - "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Zoom"
+    - "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Zoom"
+
+# ============================================================================
+# Processes (to stop before remediation)
+# ============================================================================
+processes:
+  # Main application
+  - "Zoom.exe"
+  - "Zoomus.exe"
+  - "ZoomHybridConf.exe"
+  - "ZoomWebHost.exe"
+
+  # Screen sharing / CptService
+  - "CptHost.exe"
+  - "CptService.exe"
+  - "CptControl.exe"
+  - "zSafeChecker.exe"
+
+  # Support processes
+  - "aomhost64.exe"
+  - "aomhost.exe"
+  - "airhost.exe"
+  - "zCrashReport.exe"
+  - "zCrashReport64.exe"
+
+  # Updater
+  - "ZoomInstaller.exe"
+
+  # Outlook integration
+  - "ZoomOutlookIMPlugin.exe"
+  - "ZoomOutlookMAPI.exe"
+
+# ============================================================================
+# Services (to stop/remove)
+# ============================================================================
+services:
+  - "CptService"
+  - "ZoomCptService"
+  - "zCSCptService"
+  - "ZoomPresence"
+  - "Zoom Sharing Service"
+
+# ============================================================================
+# Scheduled Tasks (to remove)
+# ============================================================================
+tasks:
+  - "\\Zoom"
+  - "\\ZoomUpdateTaskMachine"
+  - "\\ZoomUpdateTaskUser"
+  - "\\ZoomInstallUpdate"
+  - "\\ZoomGifCollector"
+
+# ============================================================================
+# Uninstaller
+# ============================================================================
+uninstaller:
+  path: "%APPDATA%\\Zoom\\bin\\Installer.exe"
+  args:
+    - "/uninstall"
+    - "/silent"
+  msiProductCode: "{49B2F992-FF87-4B44-A21D-F88A6E7D6E83}"
+
+# ============================================================================
+# Installer (for reinstall mode)
+# ============================================================================
+installer:
+  downloadUrl: "https://zoom.us/client/latest/ZoomInstallerFull.msi"
+  filename: "ZoomInstallerFull.msi"
+  silentArgs:
+    - "/qn"
+    - "/norestart"
+    - "ALLUSERS=1"
+
+# ============================================================================
+# Preservable Settings (optional, for clean mode)
+# ============================================================================
+preservableSettings:
+  - "%APPDATA%\\Zoom\\data\\zoomus.conf"
+  - "%APPDATA%\\Zoom\\data\\Zoom.us.ini"

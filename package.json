@@ -1,7 +1,7 @@
 {
-  "name": "1132-remover",
-  "version": "1.1.0",
-  "description": "Zoom Data Cleaner & Device Fingerprint Reset Tool",
+  "name": "cleanstate-sentinel",
+  "version": "2.0.0",
+  "description": "Forensic-grade software remediation platform with attestation reporting",
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
@@ -10,7 +10,9 @@
     "build": "electron-builder --win portable --x64",
     "build:installer": "electron-builder --win nsis --x64",
     "build:all": "electron-builder --win --x64",
-    "pack": "electron-builder --dir"
+    "pack": "electron-builder --dir",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "author": "High Texas",
   "license": "MIT",
@@ -19,46 +21,78 @@
     "electron-builder": "^24.9.1"
   },
   "build": {
-    "appId": "com.jg2547.1132remover",
-    "productName": "1132 Remover",
+    "appId": "com.cleanstate.sentinel",
+    "productName": "CleanState Sentinel",
+    "copyright": "Copyright (c) 2024-2026 High Texas",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
     "win": {
       "target": [
         {
           "target": "nsis",
           "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
         }
       ],
       "icon": "assets/icon.ico",
-      "requestedExecutionLevel": "requireAdministrator",
-      "signAndEditExecutable": true
+      "requestedExecutionLevel": "asInvoker",
+      "signAndEditExecutable": true,
+      "publisherName": "High Texas"
     },
     "nsis": {
       "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
+      "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,
-      "shortcutName": "1132 Remover",
+      "shortcutName": "CleanState Sentinel",
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
-      "installerSidebar": null,
-      "license": null,
-      "artifactName": "${productName} Setup.exe"
+      "installerHeaderIcon": "assets/icon.ico",
+      "include": "build/installer.nsh",
+      "license": "build/license.txt",
+      "artifactName": "${productName} Setup ${version}.exe",
+      "uninstallDisplayName": "CleanState Sentinel",
+      "deleteAppDataOnUninstall": false,
+      "menuCategory": "CleanState Sentinel"
     },
     "portable": {
-      "artifactName": "${productName}.exe"
+      "artifactName": "${productName} Portable ${version}.exe",
+      "requestExecutionLevel": "user"
     },
     "files": [
       "**/*",
       "!dist/**",
+      "!build/**",
       "!node_modules/.cache/**",
       "!*.ps1",
       "!*.bat",
       "!*.md",
-      "!assets/**"
+      "!test-*/**",
+      "!*.zip",
+      "!v2/**",
+      "!CleanZoom*/**"
     ],
-    "extraResources": []
+    "extraResources": [
+      {
+        "from": "assets/icon.ico",
+        "to": "icon.ico"
+      }
+    ],
+    "fileAssociations": [
+      {
+        "ext": "cssr",
+        "name": "CleanState Sentinel Report",
+        "description": "CleanState Sentinel Attestation Report",
+        "icon": "assets/icon.ico",
+        "role": "Viewer"
+      }
+    ]
   }
 }

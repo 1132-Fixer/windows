@@ -1,5 +1,5 @@
 /**
- * 1132 Remover - IPC Handlers
+ * CleanState Sentinel - IPC Handlers
  * All Electron IPC handlers for renderer communication
  */
 
@@ -54,49 +54,56 @@ function registerHandlers() {
     let installerPath = null;
 
     try {
-      // Step 1: Kill processes
+      // Step 1: Kill processes (includes stopping services first)
       sendProgress({ step: 'Stopping Zoom processes', percent: 5 });
       const killResult = await processKiller.killAllZoomProcesses((p) => {
-        sendProgress({ step: p.message, percent: 5 + (p.current / p.total) * 10 });
+        sendProgress({ step: p.message, percent: 5 + (p.current / p.total) * 8 });
       });
       steps.push({ name: 'kill', ...killResult });
 
-      // Step 2: Uninstall (if option enabled)
+      // Step 2: DELETE services and tasks IMMEDIATELY (prevents auto-restart)
+      // CRITICAL: Must happen right after process kill, before any other operations
+      sendProgress({ step: 'Removing services', percent: 13 });
+      const servicesResult = await services.cleanServicesAndTasks((p) => {
+        sendProgress({ step: p.message, percent: 13 + (p.current / p.total) * 5 });
+      });
+      steps.push({ name: 'services', ...servicesResult });
+
+      // Step 2b: Second process sweep - catch any processes that respawned during service deletion
+      sendProgress({ step: 'Final process sweep', percent: 18 });
+      await processKiller.killAllZoomProcesses();
+
+      // Step 3: Uninstall (if option enabled)
       if (options.uninstall !== false) {
-        sendProgress({ step: 'Uninstalling Zoom', percent: 15 });
+        sendProgress({ step: 'Uninstalling Zoom', percent: 20 });
         const uninstallResult = await uninstaller.uninstallZoom((p) => {
-          sendProgress({ step: p.message, percent: 15 + (p.current / p.total) * 10 });
+          sendProgress({ step: p.message, percent: 20 + (p.current / p.total) * 10 });
         });
         steps.push({ name: 'uninstall', ...uninstallResult });
       }
 
-      // Step 3: Remove services and tasks
-      sendProgress({ step: 'Removing services', percent: 25 });
-      const servicesResult = await services.cleanServicesAndTasks((p) => {
-        sendProgress({ step: p.message, percent: 25 + (p.current / p.total) * 5 });
+      // Step 4: Delete ALL folders FIRST (includes fingerprint data folders)
+      // CRITICAL: Delete data before fingerprint wipe - folders contain the DBs
+      sendProgress({ step: 'Deleting Zoom data', percent: 30 });
+      const foldersResult = await folders.deleteAllZoomFolders((p) => {
+        sendProgress({ step: p.message, percent: 30 + (p.current / p.total) * 15 });
       });
-      steps.push({ name: 'services', ...servicesResult });
+      steps.push({ name: 'folders', ...foldersResult });
 
-      // Step 4: Clean registry
-      sendProgress({ step: 'Cleaning registry', percent: 35 });
+      // Step 5: Clean registry (after folders to ensure no regeneration)
+      sendProgress({ step: 'Cleaning registry', percent: 45 });
       const registryResult = await registry.cleanRegistry((p) => {
-        sendProgress({ step: p.message, percent: 35 + (p.current / p.total) * 15 });
+        sendProgress({ step: p.message, percent: 45 + (p.current / p.total) * 15 });
       });
       steps.push({ name: 'registry', ...registryResult });
 
-      // Step 5: Wipe device fingerprint (CRITICAL)
-      sendProgress({ step: 'Wiping device fingerprint', percent: 50 });
+      // Step 6: Wipe system fingerprints (Amcache, SRUM, Prefetch, etc.)
+      // These are Windows-level traces, not Zoom folder data
+      sendProgress({ step: 'Wiping system fingerprints', percent: 60 });
       const fingerprintResult = await fingerprint.wipeDeviceFingerprint((p) => {
-        sendProgress({ step: p.message, percent: 50 + (p.current / p.total) * 15 });
+        sendProgress({ step: p.message, percent: 60 + (p.current / p.total) * 15 });
       });
       steps.push({ name: 'fingerprint', ...fingerprintResult });
-
-      // Step 6: Delete folders
-      sendProgress({ step: 'Deleting Zoom data', percent: 65 });
-      const foldersResult = await folders.deleteAllZoomFolders((p) => {
-        sendProgress({ step: p.message, percent: 65 + (p.current / p.total) * 10 });
-      });
-      steps.push({ name: 'folders', ...foldersResult });
 
       // Step 7: Final cleanup (AFTER folder deletion)
       // Recycle bin may contain items from folder deletion
@@ -428,30 +435,42 @@ function registerHandlers() {
       // Run standard reset first (reuse full-reset logic)
       sendProgress({ step: 'Running reset...', percent: 5 });
 
-      // Step 1-8: Standard reset operations
+      // Step 1-8: Standard reset operations (CORRECT ORDER)
+      // 1. Kill processes (stops services first)
       const killResult = await processKiller.killAllZoomProcesses();
       sendProgress({ step: 'Stopped processes', percent: 10 });
 
+      // 2. DELETE services immediately (prevents auto-restart)
+      await services.cleanServicesAndTasks();
+      sendProgress({ step: 'Removed services', percent: 15 });
+
+      // 2b. Second process sweep - catch any respawned processes
+      await processKiller.killAllZoomProcesses();
+      sendProgress({ step: 'Final process sweep', percent: 18 });
+
+      // 3. Uninstall
       if (resetOptions.uninstall) {
         await uninstaller.uninstallZoom();
-        sendProgress({ step: 'Uninstalled Zoom', percent: 20 });
+        sendProgress({ step: 'Uninstalled Zoom', percent: 28 });
       }
 
-      await services.cleanServicesAndTasks();
-      sendProgress({ step: 'Cleaned services', percent: 25 });
-
-      await registry.cleanRegistry();
-      sendProgress({ step: 'Cleaned registry', percent: 40 });
-
-      await fingerprint.wipeDeviceFingerprint();
-      sendProgress({ step: 'Wiped fingerprint', percent: 55 });
-
+      // 4. Delete ALL folders first (contains fingerprint data)
       await folders.deleteAllZoomFolders();
-      sendProgress({ step: 'Deleted folders', percent: 65 });
+      sendProgress({ step: 'Deleted folders', percent: 42 });
 
+      // 5. Clean registry (after folders deleted)
+      await registry.cleanRegistry();
+      sendProgress({ step: 'Cleaned registry', percent: 55 });
+
+      // 6. Wipe system fingerprints (Amcache, SRUM, etc.)
+      await fingerprint.wipeDeviceFingerprint();
+      sendProgress({ step: 'Wiped fingerprint', percent: 68 });
+
+      // 7. Clean recycle bin (after folder deletion)
       await fingerprint.cleanRecycleBin();
-      sendProgress({ step: 'Cleaned recycle bin', percent: 70 });
+      sendProgress({ step: 'Cleaned recycle bin', percent: 72 });
 
+      // 8. Rebuild icon cache
       await fingerprint.rebuildIconCache();
       sendProgress({ step: 'Rebuilt icon cache', percent: 75 });
 

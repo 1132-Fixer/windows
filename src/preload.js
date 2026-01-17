@@ -1,5 +1,5 @@
 /**
- * 1132 Remover - Preload Script
+ * CleanState Sentinel - Preload Script
  * Exposes safe IPC methods to renderer
  */
 

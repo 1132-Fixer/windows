@@ -1,6 +1,6 @@
 /**
- * 1132 Remover - Main Process Entry Point
- * Electron app for complete Zoom reset and device fingerprint wipe
+ * CleanState Sentinel - Main Process Entry Point
+ * Forensic-grade software remediation platform
  *
  * CLI Mode: Run with --cli flag for headless operation
  *   --cli             Run in CLI mode (no GUI)
@@ -14,7 +14,7 @@
  *   --list-presets    List available preset profiles
  *   --apply-preset X  Apply a preset profile (e.g., quiet-meetings)
  *
- * @version 1.0.0
+ * @version 2.0.0
  */
 
 const { app, BrowserWindow, dialog, nativeTheme } = require('electron');
@@ -54,7 +54,7 @@ async function createWindow() {
   if (!admin) {
     const result = await dialog.showMessageBox({
       type: 'warning',
-      title: '1132 Remover',
+      title: 'CleanState Sentinel',
       message: 'Administrator privileges required',
       detail: 'This application requires administrator privileges to fully clean Zoom data. Some operations may fail without elevation.',
       buttons: ['Continue Anyway', 'Exit'],
@@ -73,7 +73,7 @@ async function createWindow() {
     height: 700,
     minWidth: 800,
     minHeight: 600,
-    title: '1132 Remover',
+    title: 'CleanState Sentinel',
     icon: path.join(__dirname, '../../assets/icon.ico'),
     backgroundColor: '#0D1117',
     show: false, // Don't show until ready
@@ -431,7 +431,7 @@ process.on('uncaughtException', (error) => {
   logger.error('Uncaught exception', { error: error.message, stack: error.stack });
 
   dialog.showErrorBox(
-    '1132 Remover - Error',
+    'CleanState Sentinel - Error',
     `An unexpected error occurred:\n\n${error.message}\n\nCheck the log file for details.`
   );
 });

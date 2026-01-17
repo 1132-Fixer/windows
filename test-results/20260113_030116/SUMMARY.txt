@@ -1,0 +1,12 @@
+﻿1132 REMOVER - TEST MATRIX RESULTS
+==================================
+Timestamp: 20260113_030116
+Results: 6 / 6 tests passed
+
+Individual Results:
+  [PASS] test1-no-reinstall
+  [PASS] test2-full-reinstall
+  [PASS] test3-foldered-task
+  [PASS] test4-double-run
+  [PASS] test5-no-uninstall
+  [PASS] test6-download-resilience

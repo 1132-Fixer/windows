@@ -1,23 +1,32 @@
 /**
- * 1132 Remover - Process Killer
+ * CleanState Sentinel - Process Killer
  * Kills all Zoom-related processes with verification
  *
  * CRITICAL: Must stop Windows SERVICES before killing processes,
  * otherwise Windows will auto-restart service processes like CptService
+ *
+ * ELEVATION: Service operations may require elevation.
+ * Process killing typically works without elevation.
  */
 
 const { spawnSafe, runPowerShell, isProcessRunning } = require('../utils/spawn-safe');
 const logger = require('../utils/logger');
 const { ZOOM_PROCESSES, ZOOM_SERVICES } = require('../../shared/constants');
+const { isElevated } = require('../utils/elevation');
 
 /**
  * Stop all Zoom Windows services
  * CRITICAL: Must be called BEFORE killing processes
  * Otherwise Windows will auto-restart service processes
- * @returns {Promise<{stopped: number, failed: number, services: Array}>}
+ *
+ * NOTE: This operation may require elevation for some services.
+ * If not elevated, some services may fail to stop.
+ *
+ * @returns {Promise<{stopped: number, failed: number, services: Array, elevated: boolean}>}
  */
 async function stopZoomServices() {
-  logger.info('Stopping Zoom Windows services...');
+  const elevated = await isElevated();
+  logger.info(`Stopping Zoom Windows services... (elevated: ${elevated})`);
 
   const results = [];
   let stopped = 0;
@@ -96,8 +105,8 @@ async function stopZoomServices() {
     // Ignore
   }
 
-  logger.logStep('Stop Zoom Services', failed === 0, { stopped, failed });
-  return { stopped, failed, services: results };
+  logger.logStep('Stop Zoom Services', failed === 0, { stopped, failed, elevated });
+  return { stopped, failed, services: results, elevated };
 }
 
 /**
@@ -201,8 +210,9 @@ async function killAllZoomProcesses(onProgress = null) {
 
   const serviceResult = await stopZoomServices();
 
-  // Wait a moment for service processes to fully exit
-  await new Promise(r => setTimeout(r, 2000));
+  // Wait for service processes to fully exit and release file handles
+  // 5 seconds is needed for Windows to fully release DB file locks
+  await new Promise(r => setTimeout(r, 5000));
 
   const results = [];
   let killed = 0;

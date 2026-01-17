@@ -1,5 +1,5 @@
 /**
- * 1132 Remover - Shared Constants
+ * CleanState Sentinel - Shared Constants
  * All Zoom-related paths, processes, registry keys, and fingerprint locations
  */
 
@@ -62,7 +62,7 @@ const ZOOM_PROCESSES = [
   'ZoomWebHost',
   'zWebview2Agent',
   'zCefAgent',
-  'msedgewebview2',
+  // Note: msedgewebview2 removed - it's used by this app (Electron) and many other apps
 
   // SDK/Messenger
   'ZoomSDKMessenger',
@@ -145,6 +145,7 @@ const ZOOM_DATA_PATHS = [
   path.join(PROGRAMDATA, 'CptService'),
   path.join(PROGRAMDATA, 'CptHost'),
   path.join(PROGRAMDATA, 'Zoom CptService'),
+  path.join(PROGRAMDATA, 'zCSCptService'),
   path.join(PROGRAMDATA, 'Zoom VDI'),
 
   // User profile locations

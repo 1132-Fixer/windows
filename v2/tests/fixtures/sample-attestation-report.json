@@ -1,0 +1,276 @@
+{
+  "reportId": "rep_2026-01-16T21:04:12Z_7f3a",
+  "productId": "zoom",
+  "generatedAt": 1768607052000,
+  "environment": {
+    "osVersion": "Windows 11 23H2",
+    "osBuild": "22631.3085",
+    "arch": "x64",
+    "elevated": true,
+    "hostname": "DESKTOP-USER123",
+    "username": "[REDACTED]"
+  },
+  "plan": {
+    "id": "plan_8c21",
+    "productId": "zoom",
+    "mode": "uninstall",
+    "createdAt": 1768606900000,
+    "dryRun": false,
+    "boundaries": {
+      "allowedPaths": [
+        "%APPDATA%\\Zoom",
+        "%APPDATA%\\zoomus",
+        "%LOCALAPPDATA%\\Zoom",
+        "%PROGRAMFILES%\\Zoom",
+        "%PROGRAMDATA%\\Zoom",
+        "%PROGRAMDATA%\\CptService"
+      ],
+      "allowedRegistryPrefixes": [
+        "HKCU\\Software\\Zoom",
+        "HKCU\\Software\\zoom.us",
+        "HKLM\\Software\\Zoom",
+        "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Zoom",
+        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\CptService"
+      ],
+      "allowedServices": [
+        "CptService",
+        "ZoomCptService"
+      ],
+      "allowedTasks": [
+        "\\Zoom",
+        "\\ZoomUpdateTaskMachine",
+        "\\ZoomUpdateTaskUser"
+      ]
+    },
+    "steps": [
+      {
+        "id": "s1",
+        "action": "StopProcess",
+        "target": "Zoom.exe",
+        "requiresAdmin": false,
+        "risk": "low",
+        "reason": "Process holds locks on application files."
+      },
+      {
+        "id": "s2",
+        "action": "StopProcess",
+        "target": "CptHost.exe",
+        "requiresAdmin": false,
+        "risk": "low",
+        "reason": "Screen sharing service process must be stopped."
+      },
+      {
+        "id": "s3",
+        "action": "StopService",
+        "target": "CptService",
+        "requiresAdmin": true,
+        "risk": "low",
+        "reason": "Service must be stopped before file removal."
+      },
+      {
+        "id": "s4",
+        "action": "RunUninstaller",
+        "target": "Zoom",
+        "requiresAdmin": true,
+        "risk": "medium",
+        "reason": "Use official uninstaller to remove registered components."
+      },
+      {
+        "id": "s5",
+        "action": "RemoveFolder",
+        "target": "%APPDATA%\\Zoom",
+        "requiresAdmin": false,
+        "risk": "medium",
+        "reason": "Remove user application data."
+      },
+      {
+        "id": "s6",
+        "action": "RemoveFolder",
+        "target": "%LOCALAPPDATA%\\Zoom",
+        "requiresAdmin": false,
+        "risk": "medium",
+        "reason": "Remove local application data."
+      },
+      {
+        "id": "s7",
+        "action": "DeleteRegistryKey",
+        "target": "HKCU\\Software\\Zoom",
+        "requiresAdmin": false,
+        "risk": "medium",
+        "reason": "Remove user preferences and settings."
+      },
+      {
+        "id": "s8",
+        "action": "DeleteScheduledTask",
+        "target": "\\ZoomUpdateTaskMachine",
+        "requiresAdmin": true,
+        "risk": "low",
+        "reason": "Remove auto-update scheduled task."
+      }
+    ]
+  },
+  "results": [
+    {
+      "stepId": "s1",
+      "status": "success",
+      "before": {
+        "runningPids": [4420, 9184]
+      },
+      "after": {
+        "runningPids": []
+      },
+      "durationMs": 1250
+    },
+    {
+      "stepId": "s2",
+      "status": "success",
+      "before": {
+        "runningPids": [2156]
+      },
+      "after": {
+        "runningPids": []
+      },
+      "durationMs": 890
+    },
+    {
+      "stepId": "s3",
+      "status": "success",
+      "before": {
+        "serviceState": "Running"
+      },
+      "after": {
+        "serviceState": "Stopped"
+      },
+      "durationMs": 2100
+    },
+    {
+      "stepId": "s4",
+      "status": "success",
+      "before": {
+        "uninstallEntry": "Zoom (x64) 5.17.11"
+      },
+      "after": {
+        "uninstallEntry": null
+      },
+      "durationMs": 15420
+    },
+    {
+      "stepId": "s5",
+      "status": "success",
+      "before": {
+        "exists": true,
+        "fileCount": 147,
+        "totalSize": 89456000
+      },
+      "after": {
+        "exists": false
+      },
+      "durationMs": 3200
+    },
+    {
+      "stepId": "s6",
+      "status": "success",
+      "before": {
+        "exists": true,
+        "fileCount": 52,
+        "totalSize": 23100000
+      },
+      "after": {
+        "exists": false
+      },
+      "durationMs": 1800
+    },
+    {
+      "stepId": "s7",
+      "status": "success",
+      "before": {
+        "exists": true,
+        "subkeyCount": 12,
+        "valueCount": 45
+      },
+      "after": {
+        "exists": false
+      },
+      "durationMs": 450
+    },
+    {
+      "stepId": "s8",
+      "status": "success",
+      "before": {
+        "exists": true,
+        "enabled": true,
+        "lastRun": "2026-01-15T10:00:00Z"
+      },
+      "after": {
+        "exists": false
+      },
+      "durationMs": 320
+    }
+  ],
+  "verification": {
+    "status": "pass",
+    "checks": [
+      {
+        "name": "no_vendor_processes",
+        "status": "pass",
+        "details": "No Zoom processes detected"
+      },
+      {
+        "name": "no_vendor_services",
+        "status": "pass",
+        "details": "No Zoom services remain"
+      },
+      {
+        "name": "files_removed",
+        "status": "pass",
+        "details": "All target folders removed (199 files, 112 MB)"
+      },
+      {
+        "name": "registry_keys_removed",
+        "status": "pass",
+        "details": "All target registry keys removed"
+      },
+      {
+        "name": "uninstall_entry_removed",
+        "status": "pass",
+        "details": "Uninstall entry no longer present"
+      },
+      {
+        "name": "tasks_removed",
+        "status": "pass",
+        "details": "Scheduled tasks removed"
+      },
+      {
+        "name": "no_orphan_references",
+        "status": "pass",
+        "details": "No orphaned registry references detected"
+      }
+    ],
+    "diff": {
+      "added": [],
+      "removed": [
+        {
+          "id": "art_file_001",
+          "type": "file",
+          "path": "C:\\Users\\[REDACTED]\\AppData\\Roaming\\Zoom"
+        },
+        {
+          "id": "art_reg_001",
+          "type": "registry",
+          "path": "HKCU\\Software\\Zoom"
+        }
+      ],
+      "changed": []
+    },
+    "verifiedAt": 1768607040000
+  },
+  "postRebootVerification": null,
+  "hashes": {
+    "reportSha256": "a3f2b8c9d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1",
+    "logChainHead": "b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5"
+  },
+  "advisories": [
+    "Zoom has been completely removed from this system.",
+    "If you continue to experience issues, this report can be shared with technical support."
+  ]
+}
