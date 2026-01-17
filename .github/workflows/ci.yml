@@ -1,0 +1,78 @@
+# CleanState Sentinel - Continuous Integration
+# Runs on every push and PR to validate builds
+
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+        continue-on-error: true  # Tests may not exist yet
+
+      - name: Build portable executable
+        run: npm run build
+
+      - name: Build NSIS installer
+        run: npm run build:installer
+
+      - name: List build artifacts
+        run: |
+          echo "=== Build Output ==="
+          dir dist
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CleanState-Sentinel-Portable
+          path: dist/*Portable*.exe
+          retention-days: 7
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CleanState-Sentinel-Installer
+          path: dist/*Setup*.exe
+          retention-days: 7
+
+  lint:
+    name: Code Quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check for security issues in dependencies
+        run: npm audit --audit-level=high
+        continue-on-error: true  # Advisory only

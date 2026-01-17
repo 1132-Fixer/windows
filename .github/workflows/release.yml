@@ -1,0 +1,100 @@
+# CleanState Sentinel - Automated Release Pipeline
+# Triggered when a version tag is pushed (e.g., v2.0.1)
+#
+# SETUP REQUIRED:
+# 1. Code Signing (optional but recommended):
+#    - CSC_LINK: Base64-encoded .pfx certificate
+#    - CSC_KEY_PASSWORD: Certificate password
+#    Add these as repository secrets in GitHub Settings > Secrets
+#
+# 2. For EV certificates with hardware tokens:
+#    - Use a self-hosted runner with the token attached
+#    - Configure CSC_LINK to point to the certificate store
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  # Disable code signing if secrets not configured
+  CSC_IDENTITY_AUTO_DISCOVERY: false
+
+jobs:
+  build-and-release:
+    name: Build & Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+        continue-on-error: true
+
+      - name: Build all targets (unsigned)
+        if: ${{ !env.CSC_LINK }}
+        run: npm run build:all
+
+      - name: Build all targets (signed)
+        if: ${{ env.CSC_LINK }}
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: npm run build:all
+
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path dist -Filter "*.exe"
+          $checksums = @()
+          foreach ($file in $files) {
+            $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash.ToLower()
+            $checksums += "$hash  $($file.Name)"
+            Write-Host "$hash  $($file.Name)"
+          }
+          $checksums | Out-File -FilePath dist/checksums-sha256.txt -Encoding utf8
+
+      - name: List release artifacts
+        run: |
+          echo "=== Release Artifacts ==="
+          dir dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: CleanState Sentinel v${{ steps.version.outputs.VERSION }}
+          draft: true
+          generate_release_notes: true
+          files: |
+            dist/*Setup*.exe
+            dist/*Portable*.exe
+            dist/checksums-sha256.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-v${{ steps.version.outputs.VERSION }}
+          path: |
+            dist/*.exe
+            dist/checksums-sha256.txt
+          retention-days: 90
