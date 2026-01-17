@@ -18,8 +18,13 @@ on:
     tags:
       - 'v*'
 
+# Prevent concurrent releases from racing
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
-  # Disable code signing if secrets not configured
+  # Disable code signing auto-discovery (we control this explicitly)
   CSC_IDENTITY_AUTO_DISCOVERY: false
 
 jobs:
@@ -28,11 +33,21 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      - name: Validate tag format
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Invalid tag format '$TAG'. Expected: v1.2.3 or v1.2.3-rc.1"
+            exit 1
+          fi
+          echo "Tag format valid: $TAG"
+
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.1.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v4.0.2
         with:
           node-version: '20'
           cache: 'npm'
@@ -44,21 +59,59 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+        env:
+          # Reduce flakiness on Windows runners
+          npm_config_prefer_offline: true
+
+      - name: Install dependencies (retry on failure)
+        if: failure()
+        run: |
+          npm cache clean --force
+          npm ci
 
       - name: Run tests
         run: npm test
         continue-on-error: true
 
       - name: Build all targets (unsigned)
-        if: ${{ !env.CSC_LINK }}
+        if: ${{ secrets.CSC_LINK == '' }}
         run: npm run build:all
 
       - name: Build all targets (signed)
-        if: ${{ env.CSC_LINK }}
+        if: ${{ secrets.CSC_LINK != '' }}
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: npm run build:all
+
+      - name: Verify build artifacts exist
+        shell: pwsh
+        run: |
+          $exeFiles = Get-ChildItem -Path dist -Filter "*.exe" -ErrorAction SilentlyContinue
+          $exeCount = ($exeFiles | Measure-Object).Count
+
+          Write-Host "Found $exeCount executable(s) in dist/"
+          $exeFiles | ForEach-Object { Write-Host "  - $($_.Name)" }
+
+          if ($exeCount -lt 2) {
+            Write-Error "Build verification failed: Expected at least 2 .exe files (installer + portable), found $exeCount"
+            exit 1
+          }
+
+          # Verify expected files exist
+          $hasInstaller = $exeFiles | Where-Object { $_.Name -like "*Setup*" }
+          $hasPortable = $exeFiles | Where-Object { $_.Name -like "*Portable*" }
+
+          if (-not $hasInstaller) {
+            Write-Error "Missing installer executable (*Setup*.exe)"
+            exit 1
+          }
+          if (-not $hasPortable) {
+            Write-Error "Missing portable executable (*Portable*.exe)"
+            exit 1
+          }
+
+          Write-Host "Build verification passed"
 
       - name: Generate checksums
         shell: pwsh
@@ -73,12 +126,13 @@ jobs:
           $checksums | Out-File -FilePath dist/checksums-sha256.txt -Encoding utf8
 
       - name: List release artifacts
+        shell: pwsh
         run: |
-          echo "=== Release Artifacts ==="
-          dir dist
+          Write-Host "=== Release Artifacts ==="
+          Get-ChildItem -Path dist | Format-Table Name, Length, LastWriteTime
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2.0.8
         with:
           name: CleanState Sentinel v${{ steps.version.outputs.VERSION }}
           draft: true
@@ -91,7 +145,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.3.1
         with:
           name: release-v${{ steps.version.outputs.VERSION }}
           path: |
