@@ -1,0 +1,49 @@
+CleanState Sentinel - End User License Agreement
+
+Copyright (c) 2024-2026 High Texas. All rights reserved.
+
+TERMS AND CONDITIONS
+
+1. LICENSE GRANT
+   You are granted a non-exclusive, non-transferable license to use
+   CleanState Sentinel ("the Software") for personal or commercial purposes.
+
+2. PERMITTED USE
+   - Install and run the Software on your own Windows systems
+   - Use the Software to inspect, remediate, and verify software installations
+   - Generate and export attestation reports for your own records
+
+3. RESTRICTIONS
+   - You may not modify, reverse engineer, or decompile the Software
+   - You may not redistribute the Software without written permission
+   - You may not use the Software for malicious purposes
+
+4. DATA PRIVACY
+   CleanState Sentinel operates entirely locally on your device.
+   No system data, scan results, or reports are transmitted to any
+   external servers. All analysis and remediation occurs on your machine.
+
+5. DISCLAIMER
+   THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND.
+   THE AUTHORS ARE NOT LIABLE FOR ANY DAMAGES ARISING FROM USE OF
+   THE SOFTWARE.
+
+   This software modifies system files and registry entries as part of
+   its remediation functions. Always review proposed changes before
+   execution and maintain current backups of important data.
+
+6. ADMINISTRATOR PRIVILEGES
+   Some features of the Software require administrative privileges:
+   - Stopping system services
+   - Modifying protected registry keys
+   - Creating scheduled tasks for post-reboot verification
+
+   The Software will always request explicit user consent before
+   performing any privileged operations.
+
+7. ACCEPTANCE
+   By installing this Software, you agree to these terms.
+
+---
+CleanState Sentinel v2.0.0
+High Texas

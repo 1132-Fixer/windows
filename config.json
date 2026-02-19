@@ -1,0 +1,45 @@
+{
+  "StartingPaths": [
+    "C:\\Users\\justy\\Documents\\Bot\\Local Files\\1132-Remover",
+    "C:\\Users\\justy\\Documents\\Bot\\Local Files\\1132-Remover-Simple",
+    "C:\\Users\\Public\\Desktop\\1132 Remover.lnk",
+    "C:\\Users\\justy\\Desktop\\1132 Quick Reset Setup.lnk"
+  ],
+  "FinalRoot": "C:\\Users\\justy\\Documents\\Bot\\Local Files\\1132-Remover",
+  "ConsolidatedSubdir": "_consolidated",
+  "LogRoot": "C:\\Temp\\1132_Audit",
+  "QuarantineRoot": "C:\\Temp\\1132_Quarantine",
+  "ExcludeRoots": [
+    "C:\\Windows",
+    "C:\\Program Files",
+    "C:\\Program Files (x86)"
+  ],
+  "AllowlistPaths": [
+    "C:\\Program Files\\1132 Remover"
+  ],
+  "Keywords": [
+    "1132",
+    "1132 remover",
+    "quick reset",
+    "zoom"
+  ],
+  "Extensions": [
+    ".exe",
+    ".msi",
+    ".bat",
+    ".cmd",
+    ".ps1",
+    ".dll",
+    ".sys",
+    ".lnk",
+    ".log",
+    ".json",
+    ".xml",
+    ".ini",
+    ".cfg",
+    ".dat",
+    ".tmp",
+    ".zip",
+    ".7z"
+  ]
+}

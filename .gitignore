@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.exe
+nul
+.claude/
+tmpclaude-*
+tauri/src-tauri/target/
