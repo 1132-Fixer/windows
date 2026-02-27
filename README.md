@@ -7,12 +7,12 @@ A Windows utility that resolves Zoom Error 1132 (device bans) by performing a fo
 ## Installation
 
 ### Installer (Recommended)
-1. Download **1132 Eliminator Setup 3.2.0.exe** from [Releases](../../releases)
+1. Download the latest **1132 Eliminator Setup** from [Releases](../../releases)
 2. Run the installer — UAC will prompt for admin automatically
 3. Desktop shortcut is created — launch from your desktop
 
 ### Portable
-1. Download **1132 Eliminator Portable 3.2.0.exe** from [Releases](../../releases)
+1. Download the latest **1132 Eliminator Portable** from [Releases](../../releases)
 2. Run directly (no installation needed)
 
 ## What It Does
@@ -93,14 +93,19 @@ npm install
 # Run in development
 npm start
 
-# Build installer
+# Build installer (auto-bumps patch version)
 npm run build:installer
 
-# Build portable
+# Build portable (auto-bumps patch version)
 npm run build
 
 # Build both
 npm run build:all
+
+# Manual version bump
+npm run bump          # patch (3.2.1 → 3.2.2)
+npm run bump:minor    # minor (3.2.x → 3.3.0)
+npm run bump:major    # major (3.x.x → 4.0.0)
 ```
 
 ## Requirements
@@ -108,7 +113,7 @@ npm run build:all
 - Administrator privileges (UAC prompt on launch via Windows manifest)
 
 ## Version
-**v3.2.0** — 1132 Eliminator
+**v3.2.2** — 1132 Eliminator
 
 ## Author
 High Texas
