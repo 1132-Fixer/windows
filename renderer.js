@@ -1,5 +1,5 @@
 /**
- * 1132 Remover - Renderer
+ * 1132 Eliminator - Renderer
  */
 
 const $ = id => document.getElementById(id);
@@ -53,8 +53,8 @@ function init() {
     completeView.classList.remove('active');
     normalView.style.display = '';
     clearLog();
-    addLog('info', 'Ready for another reset.');
-    setStatus('Ready');
+    addLog('info', 'System reset. Awaiting new target.');
+    setStatus('Standing By');
   });
 
   // Progress updates from main process
@@ -78,7 +78,10 @@ function init() {
   // Check admin status
   adminStatus.textContent = 'Administrator';
 
-  addLog('info', 'System ready.');
+  addLog('info', 'System armed. Awaiting target.');
+
+  // Wire up alert bar
+  window._alertBar = document.getElementById('alertBar');
 }
 
 async function handleReset() {
@@ -86,42 +89,43 @@ async function handleReset() {
 
   // Confirm
   const confirmed = await window.electronAPI?.showConfirm(
-    'This will completely reset Zoom and remove device fingerprints.\n\n' +
+    'ELIMINATION PROTOCOL\n\nThis will purge all Zoom traces from this device:\n\n' +
     (options.uninstall ? '• Uninstall Zoom\n' : '') +
-    '• Delete all Zoom data & registry entries\n' +
-    '• Wipe device fingerprints\n' +
-    (options.reinstall ? '• Download and reinstall Zoom\n' : '') +
-    '\nContinue?'
+    '• Eliminate all registry entries & data\n' +
+    '• Purge device fingerprints\n' +
+    (options.reinstall ? '• Download clean Zoom install\n' : '') +
+    '\nInitiate purge?'
   );
 
   if (!confirmed) {
-    addLog('info', 'Cancelled by user.');
+    addLog('info', 'Operation aborted.');
     return;
   }
 
   // Start
   isRunning = true;
-  setStatus('Running...', true);
+  setStatus('Purging...', true);
   btnReset.disabled = true;
   progressSection.classList.add('active');
   progressFill.style.width = '0%';
   progressPercent.textContent = '0%';
+  if (window._alertBar) window._alertBar.classList.add('active');
   clearLog();
-  addLog('info', 'Starting Zoom reset...');
+  addLog('info', 'Elimination protocol initiated...');
 
   try {
     const result = await window.electronAPI.fullReset(options);
 
     if (result.success) {
-      setStatus('Complete');
-      addLog('ok', 'Reset completed successfully!');
+      setStatus('Eliminated');
+      addLog('ok', 'Target eliminated. All traces purged.');
 
       // Show complete view
       normalView.style.display = 'none';
       completeView.classList.add('active');
       completeMsg.textContent = options.reinstall
-        ? 'Zoom has been reset and reinstalled successfully.'
-        : 'Zoom has been completely removed from this device.';
+        ? 'All Zoom artifacts purged. Clean install complete.'
+        : 'All Zoom traces have been eliminated from this device.';
 
       // Auto-launch if selected
       if (options.launch && options.reinstall) {
@@ -130,7 +134,7 @@ async function handleReset() {
       }
     } else {
       setStatus('Failed');
-      addLog('err', 'Reset failed: ' + (result.error || 'Unknown error'));
+      addLog('err', 'Purge failed: ' + (result.error || 'Unknown error'));
     }
   } catch (err) {
     setStatus('Error');
@@ -140,6 +144,7 @@ async function handleReset() {
   isRunning = false;
   btnReset.disabled = false;
   progressSection.classList.remove('active');
+  if (window._alertBar) window._alertBar.classList.remove('active');
 }
 
 function setStatus(text, running = false) {

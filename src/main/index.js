@@ -1,6 +1,6 @@
 /**
- * CleanState Sentinel - Main Process Entry Point
- * Forensic-grade software remediation platform
+ * 1132 Eliminator - Main Process Entry Point
+ * Zoom Error 1132 elimination tool - forensic device fingerprint purge
  *
  * CLI Mode: Run with --cli flag for headless operation
  *   --cli             Run in CLI mode (no GUI)
@@ -14,7 +14,7 @@
  *   --list-presets    List available preset profiles
  *   --apply-preset X  Apply a preset profile (e.g., quiet-meetings)
  *
- * @version 2.0.0
+ * @version 3.0.0
  */
 
 const { app, BrowserWindow, dialog, nativeTheme } = require('electron');
@@ -41,7 +41,7 @@ async function createWindow() {
   if (!admin) {
     const result = await dialog.showMessageBox({
       type: 'warning',
-      title: 'CleanState Sentinel',
+      title: '1132 Eliminator',
       message: 'Administrator privileges required',
       detail: 'This application requires administrator privileges to fully clean Zoom data. Some operations may fail without elevation.',
       buttons: ['Continue Anyway', 'Exit'],
@@ -60,9 +60,9 @@ async function createWindow() {
     height: 700,
     minWidth: 800,
     minHeight: 600,
-    title: 'CleanState Sentinel',
+    title: '1132 Eliminator',
     icon: path.join(__dirname, '../../assets/icon.ico'),
-    backgroundColor: '#0D1117',
+    backgroundColor: '#0a0a0a',
     show: false, // Don't show until ready
     webPreferences: {
       preload: path.join(__dirname, '../preload.js'),
@@ -418,7 +418,7 @@ process.on('uncaughtException', (error) => {
   logger.error('Uncaught exception', { error: error.message, stack: error.stack });
 
   dialog.showErrorBox(
-    'CleanState Sentinel - Error',
+    '1132 Eliminator - Error',
     `An unexpected error occurred:\n\n${error.message}\n\nCheck the log file for details.`
   );
 });

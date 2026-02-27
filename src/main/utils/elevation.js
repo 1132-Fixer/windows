@@ -1,5 +1,5 @@
 /**
- * CleanState Sentinel - Elevation Helper
+ * 1132 Eliminator - Elevation Helper
  *
  * Handles requesting elevation for privileged operations.
  * The app runs as normal user by default and requests elevation

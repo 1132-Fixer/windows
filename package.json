@@ -1,7 +1,7 @@
 {
-  "name": "cleanstate-sentinel",
-  "version": "2.1.0",
-  "description": "Forensic-grade software remediation platform with attestation reporting",
+  "name": "1132-eliminator",
+  "version": "3.0.0",
+  "description": "Zoom Error 1132 elimination tool - forensic device fingerprint purge and reset",
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
@@ -20,9 +20,9 @@
     "electron-builder": "^24.9.1"
   },
   "build": {
-    "appId": "com.cleanstate.sentinel",
+    "appId": "com.hightexas.1132eliminator",
     "publish": null,
-    "productName": "CleanState Sentinel",
+    "productName": "1132 Eliminator",
     "copyright": "Copyright (c) 2024-2026 High Texas",
     "directories": {
       "output": "dist",
@@ -51,16 +51,16 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,
-      "shortcutName": "CleanState Sentinel",
+      "shortcutName": "1132 Eliminator",
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
       "installerHeaderIcon": "assets/icon.ico",
       "include": "build/installer.nsh",
       "license": "build/license.txt",
       "artifactName": "${productName} Setup ${version}.exe",
-      "uninstallDisplayName": "CleanState Sentinel",
+      "uninstallDisplayName": "1132 Eliminator",
       "deleteAppDataOnUninstall": false,
-      "menuCategory": "CleanState Sentinel"
+      "menuCategory": "1132 Eliminator"
     },
     "portable": {
       "artifactName": "${productName} Portable ${version}.exe",
@@ -88,8 +88,8 @@
     "fileAssociations": [
       {
         "ext": "cssr",
-        "name": "CleanState Sentinel Report",
-        "description": "CleanState Sentinel Attestation Report",
+        "name": "1132 Eliminator Report",
+        "description": "1132 Eliminator Attestation Report",
         "icon": "assets/icon.ico",
         "role": "Viewer"
       }

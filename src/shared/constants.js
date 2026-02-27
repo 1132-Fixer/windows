@@ -1,5 +1,5 @@
 /**
- * CleanState Sentinel - Shared Constants
+ * 1132 Eliminator - Shared Constants
  * All Zoom-related paths, processes, registry keys, and fingerprint locations
  */
 

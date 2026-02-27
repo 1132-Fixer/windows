@@ -25,7 +25,7 @@ const {
 // Snapshot storage directory (inside user's appdata for the app)
 const SNAPSHOT_DIR = path.join(
   process.env.APPDATA || process.env.LOCALAPPDATA,
-  'CleanState Sentinel',
+  '1132 Eliminator',
   'Snapshots'
 );
 
@@ -95,9 +95,10 @@ async function takeSnapshot(label = 'Snapshot') {
 
   // --- Services ---
   try {
+    const svcList = ZOOM_SERVICES.map(s => "'" + s + "'").join(',');
     const result = await runPowerShell(`
       $out = @()
-      $names = @(${ZOOM_SERVICES.map(s => `'${s}'`).join(',')})
+      $names = @(${svcList})
       foreach ($n in $names) {
         $svc = Get-Service -Name $n -ErrorAction SilentlyContinue
         if ($svc) { $out += "$($svc.Name)|$($svc.DisplayName)|$($svc.Status)" }
@@ -106,7 +107,7 @@ async function takeSnapshot(label = 'Snapshot') {
       Get-Service | Where-Object { $_.Name -like '*zoom*' -or $_.Name -like '*cpt*' } | ForEach-Object {
         if ($_.Name -notin $names) { $out += "$($_.Name)|$($_.DisplayName)|$($_.Status)" }
       }
-      $out -join "`n"
+      $out -join [char]10
     `, { timeout: 15000 });
 
     if (result.stdout && result.stdout.trim()) {
@@ -424,7 +425,7 @@ async function checkPersistence() {
       $fw = Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like '*Zoom*' }
       foreach ($r in $fw) { $alerts += "FW|$($r.DisplayName)" }
 
-      $alerts -join "`n"
+      $alerts -join [char]10
     `, { timeout: 30000 });
 
     if (result.stdout && result.stdout.trim()) {

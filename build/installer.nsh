@@ -1,5 +1,5 @@
-; CleanState Sentinel - Custom NSIS Installer Script
-; This script provides custom installation options and professional UX
+; 1132 Eliminator - Custom NSIS Installer Script
+; Zoom Error 1132 elimination tool
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
@@ -8,15 +8,15 @@
 ; Custom Welcome Text
 ; ============================================================================
 
-!define MUI_WELCOMEPAGE_TITLE "Welcome to CleanState Sentinel"
-!define MUI_WELCOMEPAGE_TEXT "CleanState Sentinel is a forensic-grade software remediation platform for inspecting, cleaning, and verifying Windows systems.$\r$\n$\r$\nKey Features:$\r$\n• Read-only system discovery$\r$\n• Auditable remediation with rollback$\r$\n• Post-reboot verification$\r$\n• Attestation reporting$\r$\n$\r$\nNo system data is transmitted. All analysis and remediation occurs locally on your device.$\r$\n$\r$\nClick Next to continue."
+!define MUI_WELCOMEPAGE_TITLE "Welcome to 1132 Eliminator"
+!define MUI_WELCOMEPAGE_TEXT "1132 Eliminator is a forensic-grade Zoom error elimination tool that purges all device fingerprints and Zoom artifacts to resolve Error 1132 device bans.$\r$\n$\r$\nKey Features:$\r$\n• Complete Zoom fingerprint purge$\r$\n• Registry and artifact elimination$\r$\n• Clean reinstall with hardened settings$\r$\n• Persistence monitoring$\r$\n$\r$\nAll operations occur locally on your device.$\r$\n$\r$\nClick Next to continue."
 
 ; ============================================================================
 ; Custom Finish Text
 ; ============================================================================
 
 !define MUI_FINISHPAGE_TITLE "Installation Complete"
-!define MUI_FINISHPAGE_TEXT "CleanState Sentinel has been installed successfully.$\r$\n$\r$\nImportant: Some remediation and verification features require administrative privileges when used. CleanState Sentinel will always request explicit consent before performing such actions.$\r$\n$\r$\nClick Finish to exit the installer."
+!define MUI_FINISHPAGE_TEXT "1132 Eliminator has been installed successfully.$\r$\n$\r$\nImportant: Some operations require administrative privileges. 1132 Eliminator will always request explicit consent before performing privileged actions.$\r$\n$\r$\nClick Finish to exit the installer."
 
 ; ============================================================================
 ; Macro: Custom Installation Section
@@ -24,8 +24,8 @@
 
 !macro customInstall
   ; Write install location for app reference
-  WriteRegStr HKCU "Software\CleanStateSentinel" "InstallPath" "$INSTDIR"
-  WriteRegDWORD HKCU "Software\CleanStateSentinel" "PostRebootEnabled" 0
+  WriteRegStr HKCU "Software\1132Eliminator" "InstallPath" "$INSTDIR"
+  WriteRegDWORD HKCU "Software\1132Eliminator" "PostRebootEnabled" 0
 !macroend
 
 ; ============================================================================
@@ -34,15 +34,15 @@
 
 !macro customUnInstall
   ; Remove scheduled tasks created by the app
-  nsExec::ExecToLog 'schtasks /Delete /TN "\CleanStateSentinel\CleanStateSentinel_PostRebootVerify_*" /F'
-  nsExec::ExecToLog 'schtasks /Delete /TN "\CleanStateSentinel\CleanStateSentinel_Monitor" /F'
+  nsExec::ExecToLog 'schtasks /Delete /TN "\1132Eliminator\1132Eliminator_PostRebootVerify_*" /F'
+  nsExec::ExecToLog 'schtasks /Delete /TN "\1132Eliminator\1132Eliminator_Monitor" /F'
 
   ; Remove task folder if empty
-  nsExec::ExecToLog 'schtasks /Delete /TN "\CleanStateSentinel" /F'
+  nsExec::ExecToLog 'schtasks /Delete /TN "\1132Eliminator" /F'
 
   ; Remove registry keys (not app data - user may want to preserve reports)
-  DeleteRegKey HKCU "Software\CleanStateSentinel"
+  DeleteRegKey HKCU "Software\1132Eliminator"
 
-  ; Note: We deliberately do NOT delete %LOCALAPPDATA%\CleanStateSentinel
+  ; Note: We deliberately do NOT delete %LOCALAPPDATA%\1132Eliminator
   ; User's reports and session data should be preserved
 !macroend

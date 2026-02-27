@@ -1,5 +1,5 @@
 /**
- * CleanState Sentinel - IPC Handlers
+ * 1132 Eliminator - IPC Handlers
  * All Electron IPC handlers for renderer communication
  */
 

@@ -1,5 +1,5 @@
 /**
- * CleanState Sentinel - Process Killer
+ * 1132 Eliminator - Process Killer
  * Kills all Zoom-related processes with verification
  */
 

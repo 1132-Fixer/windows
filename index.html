@@ -4,25 +4,35 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
-  <title>1132 Remover</title>
+  <title>1132 Eliminator</title>
   <style>
     :root {
-      --bg: #0f0f0f;
-      --card: #1a1a1a;
-      --card-hover: #222;
-      --border: #2a2a2a;
-      --accent: #e53935;
-      --accent-hover: #f44336;
-      --success: #4caf50;
-      --text: #fafafa;
-      --text-secondary: #888;
+      --bg: #0a0a0a;
+      --card: #111111;
+      --card-hover: #1a1a1a;
+      --border: #2a0000;
+      --border-glow: #4a0000;
+      --accent: #dc1414;
+      --accent-hover: #ff1a1a;
+      --accent-dim: #8b0000;
+      --accent-glow: rgba(220, 20, 20, 0.3);
+      --success: #22c55e;
+      --text: #f0f0f0;
+      --text-secondary: #999;
       --text-muted: #555;
+      --danger-stripe: repeating-linear-gradient(
+        -45deg,
+        transparent,
+        transparent 10px,
+        rgba(220, 20, 20, 0.03) 10px,
+        rgba(220, 20, 20, 0.03) 20px
+      );
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
       background: var(--bg);
       color: var(--text);
       height: 100vh;
@@ -31,53 +41,80 @@
       overflow: hidden;
     }
 
-    /* Header - Draggable */
+    /* === HEADER === */
     .header {
-      background: var(--card);
-      padding: 16px 24px;
+      background: linear-gradient(180deg, #141414 0%, #0e0e0e 100%);
+      padding: 14px 24px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 2px solid var(--accent-dim);
       -webkit-app-region: drag;
+      position: relative;
+    }
+
+    .header::after {
+      content: '';
+      position: absolute;
+      bottom: -2px;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      opacity: 0.6;
     }
 
     .logo {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 14px;
     }
 
     .logo-icon {
-      width: 32px;
-      height: 32px;
-      background: var(--accent);
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: bold;
-      font-size: 14px;
+      width: 36px;
+      height: 36px;
+      position: relative;
+    }
+
+    .logo-icon svg {
+      width: 36px;
+      height: 36px;
     }
 
     .logo-text {
-      font-size: 18px;
-      font-weight: 600;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
     }
 
-    .logo-text span {
+    .logo-text .num {
       color: var(--accent);
+      font-weight: 900;
+      text-shadow: 0 0 20px var(--accent-glow);
+    }
+
+    .logo-text .label {
+      color: var(--text);
+      font-weight: 300;
+      margin-left: 4px;
+      letter-spacing: 3px;
+      font-size: 16px;
     }
 
     .status-badge {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 6px 12px;
-      background: var(--bg);
+      padding: 6px 14px;
+      background: rgba(220, 20, 20, 0.06);
+      border: 1px solid var(--border);
       border-radius: 20px;
       font-size: 12px;
+      font-weight: 600;
       color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 1px;
       -webkit-app-region: no-drag;
     }
 
@@ -86,34 +123,77 @@
       height: 8px;
       border-radius: 50%;
       background: var(--success);
+      box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
     }
 
     .status-dot.running {
       background: var(--accent);
-      animation: pulse 1s infinite;
+      box-shadow: 0 0 12px var(--accent-glow);
+      animation: siren 0.8s infinite;
     }
 
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.5; transform: scale(1.2); }
+    @keyframes siren {
+      0%, 100% { opacity: 1; box-shadow: 0 0 12px var(--accent-glow); }
+      50% { opacity: 0.3; box-shadow: 0 0 4px var(--accent-glow); }
     }
 
-    /* Main Content */
+    /* Red alert bar animation */
+    .alert-bar {
+      height: 2px;
+      background: transparent;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .alert-bar.active {
+      background: var(--accent-dim);
+    }
+
+    .alert-bar.active::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 60%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      animation: scan 1.5s linear infinite;
+    }
+
+    @keyframes scan {
+      0% { left: -60%; }
+      100% { left: 100%; }
+    }
+
+    /* === MAIN CONTENT === */
     .main {
       flex: 1;
       display: flex;
       flex-direction: column;
+      padding: 20px 24px;
+      gap: 16px;
+      overflow: hidden;
+      background: var(--danger-stripe);
+    }
+
+    /* === ACTION CARD === */
+    .action-card {
+      background: var(--card);
+      border-radius: 12px;
       padding: 24px;
-      gap: 20px;
+      border: 1px solid var(--border);
+      position: relative;
       overflow: hidden;
     }
 
-    /* Action Card */
-    .action-card {
-      background: var(--card);
-      border-radius: 16px;
-      padding: 24px;
-      border: 1px solid var(--border);
+    .action-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent-dim), transparent);
     }
 
     .action-header {
@@ -124,51 +204,95 @@
     }
 
     .action-title {
-      font-size: 14px;
-      font-weight: 500;
-      color: var(--text-secondary);
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent);
       text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 4px;
-    }
-
-    .action-desc {
-      font-size: 13px;
-      color: var(--text-muted);
-    }
-
-    .btn-reset {
-      padding: 14px 32px;
-      background: var(--accent);
-      border: none;
-      border-radius: 10px;
-      font-size: 14px;
-      font-weight: 600;
-      color: white;
-      cursor: pointer;
-      transition: all 0.2s;
+      letter-spacing: 2px;
+      margin-bottom: 6px;
       display: flex;
       align-items: center;
       gap: 8px;
     }
 
+    .action-title::before {
+      content: '';
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      background: var(--accent);
+      clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+    }
+
+    .action-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    /* === PURGE BUTTON === */
+    .btn-reset {
+      padding: 16px 36px;
+      background: linear-gradient(135deg, #b91c1c, #dc2626, #ef4444);
+      border: 1px solid rgba(255, 50, 50, 0.3);
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 800;
+      color: white;
+      cursor: pointer;
+      transition: all 0.25s;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      box-shadow: 0 0 20px rgba(220, 20, 20, 0.2),
+                  inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .btn-reset::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      left: -50%;
+      width: 200%;
+      height: 200%;
+      background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 60%);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .btn-reset:hover:not(:disabled)::before {
+      opacity: 1;
+    }
+
     .btn-reset:hover:not(:disabled) {
-      background: var(--accent-hover);
-      transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(229, 57, 53, 0.3);
+      background: linear-gradient(135deg, #dc2626, #ef4444, #f87171);
+      transform: translateY(-2px);
+      box-shadow: 0 0 40px rgba(220, 20, 20, 0.4),
+                  0 8px 20px rgba(220, 20, 20, 0.3),
+                  inset 0 1px 0 rgba(255, 255, 255, 0.15);
+      border-color: rgba(255, 80, 80, 0.5);
+    }
+
+    .btn-reset:active:not(:disabled) {
+      transform: translateY(0);
     }
 
     .btn-reset:disabled {
-      opacity: 0.5;
+      opacity: 0.4;
       cursor: not-allowed;
+      filter: grayscale(0.3);
     }
 
     .btn-reset svg {
-      width: 18px;
-      height: 18px;
+      width: 20px;
+      height: 20px;
     }
 
-    /* Options Grid */
+    /* === OPTIONS === */
     .options-grid {
       display: flex;
       gap: 24px;
@@ -185,13 +309,14 @@
 
     .option-item:hover .option-checkbox {
       border-color: var(--accent);
+      box-shadow: 0 0 8px rgba(220, 20, 20, 0.15);
     }
 
     .option-checkbox {
       width: 20px;
       height: 20px;
-      border: 2px solid var(--border);
-      border-radius: 5px;
+      border: 2px solid var(--border-glow);
+      border-radius: 4px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -202,6 +327,7 @@
     .option-checkbox.checked {
       background: var(--accent);
       border-color: var(--accent);
+      box-shadow: 0 0 8px var(--accent-glow);
     }
 
     .option-checkbox svg {
@@ -216,16 +342,17 @@
     }
 
     .option-label {
-      font-size: 14px;
+      font-size: 13px;
+      font-weight: 600;
       color: var(--text);
     }
 
     .option-hint {
-      font-size: 12px;
+      font-size: 11px;
       color: var(--text-muted);
     }
 
-    /* Progress Section */
+    /* === PROGRESS === */
     .progress-section {
       display: none;
       margin-top: 20px;
@@ -241,36 +368,42 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 12px;
+      margin-bottom: 10px;
     }
 
     .progress-label {
-      font-size: 13px;
+      font-size: 12px;
+      font-weight: 600;
       color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 1px;
     }
 
     .progress-percent {
-      font-size: 13px;
-      font-weight: 600;
+      font-size: 14px;
+      font-weight: 800;
       color: var(--accent);
+      font-variant-numeric: tabular-nums;
     }
 
     .progress-bar {
       height: 6px;
-      background: var(--bg);
+      background: rgba(220, 20, 20, 0.1);
       border-radius: 3px;
       overflow: hidden;
+      border: 1px solid var(--border);
     }
 
     .progress-fill {
       height: 100%;
-      background: linear-gradient(90deg, var(--accent), #ff7043);
+      background: linear-gradient(90deg, var(--accent-dim), var(--accent), #ff4444);
       border-radius: 3px;
       width: 0%;
       transition: width 0.3s ease;
+      box-shadow: 0 0 10px var(--accent-glow);
     }
 
-    /* Log Section */
+    /* === LOG SECTION === */
     .log-section {
       flex: 1;
       display: flex;
@@ -283,20 +416,30 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 12px;
+      margin-bottom: 10px;
     }
 
     .log-title {
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent-dim);
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 2px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .log-title::before {
+      content: '>';
+      color: var(--accent);
+      font-family: monospace;
+      font-size: 14px;
     }
 
     .log-actions {
       display: flex;
-      gap: 8px;
+      gap: 6px;
     }
 
     .btn-icon {
@@ -304,8 +447,8 @@
       height: 28px;
       background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text-secondary);
+      border-radius: 4px;
+      color: var(--text-muted);
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -315,8 +458,8 @@
 
     .btn-icon:hover {
       background: var(--card-hover);
-      color: var(--text);
-      border-color: var(--text-muted);
+      color: var(--accent);
+      border-color: var(--accent-dim);
     }
 
     .btn-icon svg {
@@ -326,25 +469,37 @@
 
     .log-container {
       flex: 1;
-      background: var(--card);
+      background: #080808;
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 6px;
       overflow: hidden;
+      position: relative;
+    }
+
+    .log-container::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent-dim), transparent);
+      z-index: 1;
     }
 
     .log-content {
       height: 100%;
       overflow-y: auto;
       padding: 12px 16px;
-      font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-      font-size: 12px;
-      line-height: 1.7;
+      font-family: 'Cascadia Code', 'Consolas', 'Monaco', 'Courier New', monospace;
+      font-size: 11.5px;
+      line-height: 1.8;
       user-select: text;
       cursor: text;
     }
 
     .log-content::-webkit-scrollbar {
-      width: 8px;
+      width: 6px;
     }
 
     .log-content::-webkit-scrollbar-track {
@@ -353,15 +508,15 @@
 
     .log-content::-webkit-scrollbar-thumb {
       background: var(--border);
-      border-radius: 4px;
+      border-radius: 3px;
     }
 
     .log-content::-webkit-scrollbar-thumb:hover {
-      background: var(--text-muted);
+      background: var(--accent-dim);
     }
 
     .log-entry {
-      padding: 2px 0;
+      padding: 1px 0;
       display: flex;
       gap: 8px;
     }
@@ -369,19 +524,21 @@
     .log-time {
       color: var(--text-muted);
       flex-shrink: 0;
+      font-size: 11px;
     }
 
     .log-msg { color: var(--text-secondary); }
     .log-msg.ok { color: var(--success); }
-    .log-msg.err { color: var(--accent); }
-    .log-msg.info { color: #64b5f6; }
+    .log-msg.err { color: var(--accent); font-weight: 600; }
+    .log-msg.info { color: #60a5fa; }
 
     .log-empty {
       color: var(--text-muted);
       font-style: italic;
+      font-size: 12px;
     }
 
-    /* Complete View */
+    /* === COMPLETE VIEW === */
     .complete-view {
       display: none;
       flex-direction: column;
@@ -399,7 +556,8 @@
     .complete-icon {
       width: 80px;
       height: 80px;
-      background: rgba(76, 175, 80, 0.1);
+      background: rgba(34, 197, 94, 0.08);
+      border: 2px solid rgba(34, 197, 94, 0.2);
       border-radius: 50%;
       display: flex;
       align-items: center;
@@ -414,10 +572,12 @@
     }
 
     .complete-title {
-      font-size: 24px;
-      font-weight: 600;
+      font-size: 22px;
+      font-weight: 800;
       margin-bottom: 8px;
       color: var(--success);
+      text-transform: uppercase;
+      letter-spacing: 2px;
     }
 
     .complete-msg {
@@ -435,12 +595,14 @@
       padding: 12px 24px;
       background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 500;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
       color: var(--text);
       cursor: pointer;
       transition: all 0.2s;
+      text-transform: uppercase;
+      letter-spacing: 1px;
     }
 
     .btn-secondary:hover {
@@ -452,36 +614,37 @@
       padding: 12px 24px;
       background: var(--success);
       border: none;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 500;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
       color: white;
       cursor: pointer;
       transition: all 0.2s;
+      text-transform: uppercase;
+      letter-spacing: 1px;
     }
 
     .btn-primary:hover {
-      filter: brightness(1.1);
+      filter: brightness(1.15);
+      box-shadow: 0 0 15px rgba(34, 197, 94, 0.3);
     }
 
-    /* Footer */
+    /* === FOOTER === */
     .footer {
-      padding: 12px 24px;
-      background: var(--card);
+      padding: 10px 24px;
+      background: #080808;
       border-top: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
-      font-size: 11px;
+      font-size: 10px;
+      font-weight: 600;
       color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
     }
 
-    .footer a {
-      color: var(--text-secondary);
-      text-decoration: none;
-    }
-
-    .footer a:hover {
-      color: var(--text);
+    .footer .version {
+      color: var(--accent-dim);
     }
 
     .hidden { display: none !important; }
@@ -490,14 +653,33 @@
 <body>
   <header class="header">
     <div class="logo">
-      <div class="logo-icon">Z</div>
-      <div class="logo-text"><span>1132</span> Remover</div>
+      <div class="logo-icon">
+        <svg viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- Outer ring -->
+          <circle cx="128" cy="128" r="110" stroke="#dc1414" stroke-width="5" fill="none" opacity="0.7"/>
+          <!-- Inner ring -->
+          <circle cx="128" cy="128" r="90" stroke="#dc1414" stroke-width="3" fill="rgba(139,0,0,0.15)" opacity="0.9"/>
+          <!-- Crosshair lines -->
+          <line x1="8" y1="128" x2="90" y2="128" stroke="#ff3333" stroke-width="2" opacity="0.6"/>
+          <line x1="166" y1="128" x2="248" y2="128" stroke="#ff3333" stroke-width="2" opacity="0.6"/>
+          <line x1="128" y1="8" x2="128" y2="80" stroke="#ff3333" stroke-width="2" opacity="0.6"/>
+          <line x1="128" y1="176" x2="128" y2="248" stroke="#ff3333" stroke-width="2" opacity="0.6"/>
+          <!-- X strike -->
+          <line x1="75" y1="75" x2="181" y2="181" stroke="#ff2020" stroke-width="10" stroke-linecap="round"/>
+          <line x1="181" y1="75" x2="75" y2="181" stroke="#ff2020" stroke-width="10" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="logo-text">
+        <span class="num">1132</span><span class="label">Eliminator</span>
+      </div>
     </div>
     <div class="status-badge">
       <div class="status-dot" id="statusDot"></div>
-      <span id="statusText">Ready</span>
+      <span id="statusText">Standing By</span>
     </div>
   </header>
+
+  <div class="alert-bar" id="alertBar"></div>
 
   <main class="main">
     <div id="normalView">
@@ -505,15 +687,16 @@
       <div class="action-card">
         <div class="action-header">
           <div>
-            <div class="action-title">Zoom Reset Tool</div>
-            <div class="action-desc">Removes Zoom completely and wipes device fingerprint to fix Error 1132</div>
+            <div class="action-title">Elimination Protocol</div>
+            <div class="action-desc">Purges all Zoom artifacts, device fingerprints, and registry traces to eliminate Error 1132</div>
           </div>
           <button class="btn-reset" id="btnReset">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-              <path d="M3 3v5h5"/>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="15" y1="9" x2="9" y2="15"/>
+              <line x1="9" y1="9" x2="15" y2="15"/>
             </svg>
-            Reset Zoom
+            Purge
           </button>
         </div>
 
@@ -526,7 +709,7 @@
             </div>
             <div>
               <div class="option-label">Uninstall Zoom first</div>
-              <div class="option-hint">Run official uninstaller before cleanup</div>
+              <div class="option-hint">Run official uninstaller before purge</div>
             </div>
           </label>
 
@@ -538,7 +721,7 @@
             </div>
             <div>
               <div class="option-label">Reinstall after</div>
-              <div class="option-hint">Download fresh copy from zoom.us</div>
+              <div class="option-hint">Download clean copy from zoom.us</div>
             </div>
           </label>
 
@@ -557,7 +740,7 @@
 
         <div class="progress-section" id="progressSection">
           <div class="progress-header">
-            <span class="progress-label" id="progressLabel">Starting...</span>
+            <span class="progress-label" id="progressLabel">Initializing...</span>
             <span class="progress-percent" id="progressPercent">0%</span>
           </div>
           <div class="progress-bar">
@@ -569,7 +752,7 @@
       <!-- Log Section -->
       <div class="log-section">
         <div class="log-header">
-          <span class="log-title">Activity Log</span>
+          <span class="log-title">Operations Log</span>
           <div class="log-actions">
             <button class="btn-icon" id="btnCopyLog" title="Copy log">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -593,7 +776,7 @@
         </div>
         <div class="log-container">
           <div class="log-content" id="logContent">
-            <div class="log-empty">Ready to start. Select options above and click Reset Zoom.</div>
+            <div class="log-empty">Awaiting orders. Configure targets and initiate purge.</div>
           </div>
         </div>
       </div>
@@ -607,17 +790,17 @@
           <polyline points="22 4 12 14.01 9 11.01"/>
         </svg>
       </div>
-      <h2 class="complete-title">Reset Complete</h2>
-      <p class="complete-msg" id="completeMsg">Zoom has been reset and reinstalled successfully.</p>
+      <h2 class="complete-title">Target Eliminated</h2>
+      <p class="complete-msg" id="completeMsg">All Zoom artifacts have been purged. Device is clean.</p>
       <div class="complete-actions">
-        <button class="btn-secondary" id="btnStartOver">Start Over</button>
+        <button class="btn-secondary" id="btnStartOver">New Operation</button>
         <button class="btn-primary" id="btnLaunchZoom">Launch Zoom</button>
       </div>
     </div>
   </main>
 
   <footer class="footer">
-    <span>v2.0.0</span>
+    <span class="version">v3.0.0</span>
     <span id="adminStatus">Checking privileges...</span>
   </footer>
 
