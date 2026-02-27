@@ -36,7 +36,6 @@ const ZOOM_POLICIES = {
     SetUseSystemDefaultMicForVOIP: 1,     // Use Windows default mic
 
     // Video
-    TurnOffVideoCameraOnJoin: 1,       // Camera OFF on join
     EnableMirrorEffect: 0,             // Mirror video preview OFF
     AutoEnableDualMonitor: 0,          // Dual monitors OFF
     DisableReceiveVideo: 1,            // Stop incoming video

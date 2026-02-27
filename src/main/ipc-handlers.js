@@ -41,9 +41,6 @@ function sendProgress(data) {
 }
 
 /**
- * Register all IPC handlers
- */
-/**
  * Core full-reset logic (extracted so quick-reset can reuse it)
  */
 async function performFullReset(options = {}) {

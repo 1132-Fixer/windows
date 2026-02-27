@@ -58,13 +58,14 @@ function init() {
   });
 
   $('btnLaunchSandbox')?.addEventListener('click', async () => {
-    addLog('info', 'Launching Windows Sandbox...');
+    addLog('info', 'Checking sandbox availability...');
     const result = await window.electronAPI?.launchSandbox();
     if (result?.success) {
-      addLog('ok', 'Sandbox launched. Zoom will install automatically inside.');
+      const method = result.method === 'sandboxie' ? 'Sandboxie-Plus' : 'Windows Sandbox';
+      addLog('ok', `Zoom launched in ${method}. Fingerprints isolated.`);
     } else {
       addLog('err', 'Sandbox failed: ' + (result?.error || 'Unknown'));
-      await window.electronAPI?.showError('Windows Sandbox is not available.\n\n' + (result?.error || 'Enable it in Windows Features (requires Pro/Enterprise).'));
+      await window.electronAPI?.showError('No sandbox method available.\n\n' + (result?.error || 'Install Sandboxie-Plus (free) from sandboxie-plus.com.'));
     }
   });
 
@@ -140,10 +141,11 @@ async function handleReset() {
 
       // Auto-launch if selected
       if (options.sandbox) {
-        addLog('info', 'Launching Zoom in Windows Sandbox...');
+        addLog('info', 'Launching Zoom in sandbox...');
         const sbResult = await window.electronAPI.launchSandbox();
         if (sbResult?.success) {
-          addLog('ok', 'Sandbox launched with Zoom.');
+          const method = sbResult.method === 'sandboxie' ? 'Sandboxie-Plus' : 'Windows Sandbox';
+          addLog('ok', `Zoom launched in ${method}.`);
         } else {
           addLog('err', 'Sandbox unavailable: ' + (sbResult?.error || 'Unknown'));
         }
