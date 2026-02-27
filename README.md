@@ -31,6 +31,9 @@ The elimination protocol runs a 9-step purge sequence:
 | 8 | **Rebuild Icon Cache** | Clears cached Zoom icons from the shell |
 | 9 | **Reinstall Zoom** | Downloads and installs a fresh copy with hardened settings |
 
+### Settings Preservation
+Your Zoom preferences (theme, audio devices, meeting options, video settings) are automatically backed up before each purge and restored after reinstall. No need to reconfigure Zoom after every reset.
+
 ### Fingerprint Targets
 The core of Error 1132 resolution — these device identifiers cause the ban:
 - Telemetry databases (telemetrydata.db, zoomus.db, zoom.db)
