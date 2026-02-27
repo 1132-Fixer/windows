@@ -31,11 +31,15 @@ const ZOOM_POLICIES = {
     // Audio
     MuteVoIPWhenJoinMeeting: 1,       // Mute mic on join
     AudioAutoAdjust: 1,                // Auto-adjust mic volume
-    EnableOriginalSound: 1,            // Original sound for musicians
+    EnableOriginalSound: 1,            // Original sound (enables hi-fi, stereo, echo sub-toggles)
+    SetUseSystemDefaultSpeakerForVOIP: 1, // Use Windows default speaker
+    SetUseSystemDefaultMicForVOIP: 1,     // Use Windows default mic
 
     // Video
+    TurnOffVideoCameraOnJoin: 1,       // Camera OFF on join
     EnableMirrorEffect: 0,             // Mirror video preview OFF
     AutoEnableDualMonitor: 0,          // Dual monitors OFF
+    DisableReceiveVideo: 1,            // Stop incoming video
 
     // Meeting behavior
     EnterFullScreenWhenJoinMeeting: 0, // No auto fullscreen

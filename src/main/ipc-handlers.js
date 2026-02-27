@@ -17,6 +17,7 @@ const installer = require('./operations/installer');
 const settingsBackup = require('./operations/settings-backup');
 const selfTest = require('./operations/self-test');
 const snapshot = require('./operations/snapshot');
+const sandbox = require('./operations/sandbox');
 
 let mainWindow = null;
 
@@ -451,6 +452,18 @@ function registerHandlers() {
   ipcMain.handle('full-reset-with-prefs', async (event, options = {}) => {
     // Settings backup/restore is now handled inside performFullReset
     return await performFullReset(options);
+  });
+
+  // ========================================
+  // WINDOWS SANDBOX
+  // ========================================
+
+  ipcMain.handle('check-sandbox', async () => {
+    return await sandbox.isSandboxAvailable();
+  });
+
+  ipcMain.handle('launch-sandbox', async () => {
+    return await sandbox.launchSandbox();
   });
 }
 

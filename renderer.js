@@ -6,7 +6,7 @@ const $ = id => document.getElementById(id);
 
 // State
 let isRunning = false;
-let options = { uninstall: true, reinstall: true, launch: false };
+let options = { uninstall: true, reinstall: true, launch: false, sandbox: false };
 
 // Elements
 const statusDot = $('statusDot');
@@ -55,6 +55,17 @@ function init() {
     clearLog();
     addLog('info', 'System reset. Awaiting new target.');
     setStatus('Standing By');
+  });
+
+  $('btnLaunchSandbox')?.addEventListener('click', async () => {
+    addLog('info', 'Launching Windows Sandbox...');
+    const result = await window.electronAPI?.launchSandbox();
+    if (result?.success) {
+      addLog('ok', 'Sandbox launched. Zoom will install automatically inside.');
+    } else {
+      addLog('err', 'Sandbox failed: ' + (result?.error || 'Unknown'));
+      await window.electronAPI?.showError('Windows Sandbox is not available.\n\n' + (result?.error || 'Enable it in Windows Features (requires Pro/Enterprise).'));
+    }
   });
 
   // Progress updates from main process
@@ -128,7 +139,15 @@ async function handleReset() {
         : 'All Zoom traces have been eliminated from this device.';
 
       // Auto-launch if selected
-      if (options.launch && options.reinstall) {
+      if (options.sandbox) {
+        addLog('info', 'Launching Zoom in Windows Sandbox...');
+        const sbResult = await window.electronAPI.launchSandbox();
+        if (sbResult?.success) {
+          addLog('ok', 'Sandbox launched with Zoom.');
+        } else {
+          addLog('err', 'Sandbox unavailable: ' + (sbResult?.error || 'Unknown'));
+        }
+      } else if (options.launch && options.reinstall) {
         addLog('info', 'Launching Zoom...');
         await window.electronAPI.launchZoom();
       }

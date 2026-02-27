@@ -28,17 +28,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openLogFolder: () => ipcRenderer.invoke('open-log-folder'),
   saveLog: (content) => ipcRenderer.invoke('save-log', content),
 
-  // === ZOOM PREFERENCES ===
-  getPrefOptions: () => ipcRenderer.invoke('get-zoom-pref-options'),
-  getUserPrefs: () => ipcRenderer.invoke('get-user-zoom-prefs'),
-  setUserPrefs: (prefs) => ipcRenderer.invoke('set-user-zoom-prefs', prefs),
-  getCurrentPrefs: () => ipcRenderer.invoke('get-current-zoom-prefs'),
-  applyPrefs: (options) => ipcRenderer.invoke('apply-zoom-prefs', options),
-  verifyPrefs: (options) => ipcRenderer.invoke('verify-zoom-prefs', options),
-  applyAndVerify: (options) => ipcRenderer.invoke('apply-and-verify-prefs', options),
-  getLastPrefDiff: () => ipcRenderer.invoke('get-last-zoom-pref-diff'),
-  detectZoomVersion: () => ipcRenderer.invoke('detect-zoom-version'),
-  listPrefTemplates: () => ipcRenderer.invoke('list-zoom-pref-templates'),
+  // === WINDOWS SANDBOX ===
+  checkSandbox: () => ipcRenderer.invoke('check-sandbox'),
+  launchSandbox: () => ipcRenderer.invoke('launch-sandbox'),
 
   // === SELF-TEST ===
   runSelfTest: () => ipcRenderer.invoke('run-self-test'),

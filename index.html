@@ -736,6 +736,18 @@
               <div class="option-hint">Open Zoom after installation</div>
             </div>
           </label>
+
+          <label class="option-item">
+            <div class="option-checkbox" id="chkSandbox" data-option="sandbox">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </div>
+            <div>
+              <div class="option-label">Sandbox mode</div>
+              <div class="option-hint">Launch Zoom in Windows Sandbox</div>
+            </div>
+          </label>
         </div>
 
         <div class="progress-section" id="progressSection">
@@ -795,12 +807,13 @@
       <div class="complete-actions">
         <button class="btn-secondary" id="btnStartOver">New Operation</button>
         <button class="btn-primary" id="btnLaunchZoom">Launch Zoom</button>
+        <button class="btn-secondary" id="btnLaunchSandbox" title="Launch Zoom in Windows Sandbox (isolated, no fingerprints)">Sandbox</button>
       </div>
     </div>
   </main>
 
   <footer class="footer">
-    <span class="version">v3.2.4</span>
+    <span class="version">v3.2.5</span>
     <span id="adminStatus">Checking privileges...</span>
   </footer>
 
