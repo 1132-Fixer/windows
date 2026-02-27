@@ -181,6 +181,14 @@ async function runCliMode() {
   let installerPath = null;
 
   try {
+    // Step 0: Save Zoom settings before purge
+    if (options.reinstall) {
+      console.log('Saving Zoom settings...');
+      const settingsBackup = require('./operations/settings-backup');
+      const backupResult = settingsBackup.saveZoomSettings();
+      logger.info('Settings backup', backupResult);
+    }
+
     // Step 1: Kill processes
     console.log('[1/9] Stopping Zoom processes...');
     const killResult = await processKiller.killAllZoomProcesses();
@@ -244,6 +252,15 @@ async function runCliMode() {
         const installResult = await installer.installZoom(installerPath);
         steps.push({ name: 'install', ...installResult });
         logger.recordStep('install', installResult);
+
+        // Restore saved settings after install
+        if (installResult.success) {
+          console.log('Restoring Zoom settings...');
+          const settingsBackup = require('./operations/settings-backup');
+          const restoreResult = settingsBackup.restoreZoomSettings();
+          logger.info('Settings restore', restoreResult);
+        }
+
         installer.cleanupInstaller(installerPath);
       } else {
         steps.push({ name: 'download', success: false, error: downloadResult.error });

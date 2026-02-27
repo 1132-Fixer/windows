@@ -14,10 +14,9 @@ const fingerprint = require('./operations/fingerprint');
 const folders = require('./operations/folders');
 const services = require('./operations/services');
 const installer = require('./operations/installer');
-const prefManager = require('./operations/pref-manager');
+const settingsBackup = require('./operations/settings-backup');
 const selfTest = require('./operations/self-test');
 const snapshot = require('./operations/snapshot');
-const zoomPrefs = require('../shared/zoom-prefs');
 
 let mainWindow = null;
 
@@ -56,6 +55,13 @@ async function performFullReset(options = {}) {
     let installerPath = null;
 
     try {
+      // Step 0: Save Zoom settings before purge (for restore after reinstall)
+      if (options.reinstall !== false) {
+        sendProgress({ step: 'Saving Zoom settings...', percent: 2 });
+        const backupResult = settingsBackup.saveZoomSettings();
+        logger.info('Settings backup', backupResult);
+      }
+
       // Step 1: Kill processes (includes stopping services first)
       sendProgress({ step: 'Stopping Zoom processes', percent: 5 });
       const killResult = await processKiller.killAllZoomProcesses((p) => {
@@ -143,7 +149,13 @@ async function performFullReset(options = {}) {
 
             if (installResult.success) {
               logger.ok('Zoom installed successfully');
-              sendProgress({ step: 'Zoom installed successfully', percent: 95 });
+
+              // Restore saved settings before Zoom launches
+              sendProgress({ step: 'Restoring Zoom settings...', percent: 94 });
+              const restoreResult = settingsBackup.restoreZoomSettings();
+              logger.info('Settings restore', restoreResult);
+
+              sendProgress({ step: 'Zoom installed with settings restored', percent: 95 });
             } else {
               logger.error('Zoom installation failed', { error: installResult.error });
               sendProgress({ step: 'Installation failed: ' + (installResult.error || 'Unknown error'), percent: 95 });
@@ -374,61 +386,19 @@ function registerHandlers() {
   });
 
   // ========================================
-  // ZOOM PREFERENCE MANAGEMENT
+  // ZOOM SETTINGS BACKUP
   // ========================================
 
-  // Get preference options schema for UI
-  ipcMain.handle('get-zoom-pref-options', () => {
-    return prefManager.getPrefOptions();
+  ipcMain.handle('has-settings-backup', () => {
+    return settingsBackup.hasBackup();
   });
 
-  // Get user's saved preferences
-  ipcMain.handle('get-user-zoom-prefs', () => {
-    return prefManager.loadUserPrefs();
+  ipcMain.handle('save-zoom-settings', () => {
+    return settingsBackup.saveZoomSettings();
   });
 
-  // Save user preferences
-  ipcMain.handle('set-user-zoom-prefs', async (event, prefs) => {
-    const validation = zoomPrefs.validatePreferences(prefs);
-    if (!validation.valid) {
-      return { success: false, errors: validation.errors };
-    }
-    return prefManager.saveUserPrefs(prefs);
-  });
-
-  // Get current Zoom preferences (from zoomus.conf)
-  ipcMain.handle('get-current-zoom-prefs', () => {
-    return prefManager.getCurrentPrefs();
-  });
-
-  // Apply preferences to Zoom
-  ipcMain.handle('apply-zoom-prefs', async (event, options = {}) => {
-    return await prefManager.applyPreferences(options);
-  });
-
-  // Verify preferences after Zoom launch
-  ipcMain.handle('verify-zoom-prefs', async (event, options = {}) => {
-    return await prefManager.verifyPreferences(options);
-  });
-
-  // Apply and verify (full cycle)
-  ipcMain.handle('apply-and-verify-prefs', async (event, options = {}) => {
-    return await prefManager.applyAndVerify(options);
-  });
-
-  // Get last preference diff
-  ipcMain.handle('get-last-zoom-pref-diff', () => {
-    return prefManager.getLastDiff();
-  });
-
-  // Detect Zoom version
-  ipcMain.handle('detect-zoom-version', async () => {
-    return await zoomPrefs.detectZoomVersion();
-  });
-
-  // List available templates
-  ipcMain.handle('list-zoom-pref-templates', () => {
-    return zoomPrefs.listTemplates();
+  ipcMain.handle('restore-zoom-settings', () => {
+    return settingsBackup.restoreZoomSettings();
   });
 
   // ========================================
@@ -475,52 +445,12 @@ function registerHandlers() {
   });
 
   // ========================================
-  // RESET WITH PREFERENCES (ONE-CLICK MODE)
+  // RESET WITH SETTINGS RESTORE (ONE-CLICK MODE)
   // ========================================
 
   ipcMain.handle('full-reset-with-prefs', async (event, options = {}) => {
-    const applyPrefs = options.applyPrefs !== false;
-    const verifyPrefs = options.verifyPrefs !== false;
-    const launchForVerification = options.launchForVerification !== false;
-
-    // Delegate the core reset to performFullReset
-    const resetResult = await performFullReset(options);
-
-    if (!resetResult.success) return resetResult;
-
-    // Pref-specific steps (only if reset succeeded and reinstall was enabled)
-    let prefResult = null;
-    let verifyResult = null;
-
-    try {
-      if (applyPrefs && options.reinstall !== false) {
-        sendProgress({ step: 'Applying preferences...', percent: 92 });
-        prefResult = await prefManager.applyPreferences({ snapshot: true });
-        logger.ok('Preferences applied', prefResult);
-      }
-
-      if (verifyPrefs && launchForVerification && prefResult?.success) {
-        sendProgress({ step: 'Launching Zoom for verification...', percent: 94 });
-        await installer.launchZoom();
-        await new Promise(r => setTimeout(r, 2000));
-        sendProgress({ step: 'Verifying preferences...', percent: 96 });
-        verifyResult = await prefManager.verifyPreferences();
-        logger.ok('Preference verification complete', verifyResult);
-      }
-    } catch (error) {
-      logger.error('Preference steps failed', { error: error.message });
-    }
-
-    return {
-      ...resetResult,
-      prefResult,
-      verifyResult,
-      verification: {
-        ...resetResult.verification,
-        preferences: prefResult ? { applied: true, ...prefResult } : null,
-        prefVerification: verifyResult
-      }
-    };
+    // Settings backup/restore is now handled inside performFullReset
+    return await performFullReset(options);
   });
 }
 
