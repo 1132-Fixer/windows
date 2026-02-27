@@ -279,56 +279,7 @@ async function cleanRegistryBatchHKLM() {
         }
       }
 
-      # --- COM/CLSID/TypeLib ---
-      $hives = @('HKCR:', 'HKLM:\\Software\\Classes', 'HKCU:\\Software\\Classes')
-      foreach ($hive in $hives) {
-        $clsidPath = "$hive\\CLSID"
-        if (Test-Path $clsidPath) {
-          Get-ChildItem $clsidPath -ErrorAction SilentlyContinue | ForEach-Object {
-            $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
-            $name = $props.'(default)' -as [string]
-            $server = ''
-            $serverPath = Join-Path $_.PSPath 'InprocServer32'
-            if (Test-Path $serverPath) {
-              $server = (Get-ItemProperty $serverPath -ErrorAction SilentlyContinue).'(default)' -as [string]
-            }
-            $serverPath2 = Join-Path $_.PSPath 'LocalServer32'
-            if (Test-Path $serverPath2) {
-              $server += (Get-ItemProperty $serverPath2 -ErrorAction SilentlyContinue).'(default)' -as [string]
-            }
-            if ($name -like '*zoom*' -or $name -like '*cpt*' -or $server -like '*zoom*' -or $server -like '*cpt*') {
-              Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
-              $totalRemoved++
-            }
-          }
-        }
-
-        $typelibPath = "$hive\\TypeLib"
-        if (Test-Path $typelibPath) {
-          Get-ChildItem $typelibPath -ErrorAction SilentlyContinue | ForEach-Object {
-            $content = Get-ChildItem $_.PSPath -Recurse -ErrorAction SilentlyContinue | Get-ItemProperty -ErrorAction SilentlyContinue
-            $allText = ($content | ForEach-Object { $_.'(default)' }) -join ' '
-            if ($allText -like '*zoom*' -or $allText -like '*cpt*') {
-              Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
-              $totalRemoved++
-            }
-          }
-        }
-      }
-
-      # --- Windows Installer product registry ---
-      $userDataPath = 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData'
-      if (Test-Path $userDataPath) {
-        Get-ChildItem $userDataPath -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-          $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
-          $allText = ($props.PSObject.Properties | ForEach-Object { $_.Value }) -join ' '
-          if ($allText -like '*zoom*' -or $allText -like '*Zoom Video*') {
-            Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
-            $totalRemoved++
-          }
-        }
-      }
-
+      # --- Uninstall entries (targeted, fast) ---
       $uninstallPaths = @(
         'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
         'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
@@ -361,7 +312,7 @@ async function cleanRegistryBatchHKLM() {
       Write-Output $totalRemoved
     `;
 
-    const result = await runPowerShell(script, { timeout: 120000 });
+    const result = await runPowerShell(script, { timeout: 30000 });
     const removed = parseInt(result.stdout, 10) || 0;
     if (removed > 0) {
       logger.ok(`HKLM batch cleanup: ${removed} entries removed`);

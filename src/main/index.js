@@ -14,7 +14,7 @@
  *   --list-presets    List available preset profiles
  *   --apply-preset X  Apply a preset profile (e.g., quiet-meetings)
  *
- * @version 3.1.0
+ * @version 3.2.0
  */
 
 const { app, BrowserWindow, dialog, nativeTheme } = require('electron');
@@ -26,6 +26,19 @@ const logger = require('./utils/logger');
 const ipcHandlers = require('./ipc-handlers');
 const { isElevated } = require('./utils/elevation');
 
+// Single instance lock - prevent multiple windows
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
 // Keep reference to prevent garbage collection
 let mainWindow = null;
 
@@ -36,24 +49,8 @@ const cliMode = process.argv.includes('--cli');
  * Create the main application window
  */
 async function createWindow() {
-  // Check for admin privileges - auto-elevate if not admin
+  // Check admin status (Windows manifest requires admin via UAC)
   const admin = await isElevated();
-  if (!admin && !process.argv.includes('--no-elevate')) {
-    // Relaunch as admin via PowerShell Start-Process -Verb RunAs
-    const { spawn } = require('child_process');
-    const exePath = process.argv[0];
-    const args = process.argv.slice(1).concat('--no-elevate');
-    const psCmd = `Start-Process -FilePath '${exePath}' -ArgumentList '${args.join("' '")}' -Verb RunAs`;
-
-    const ps = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCmd], {
-      windowsHide: true,
-      detached: true,
-      stdio: 'ignore'
-    });
-    ps.unref();
-    app.quit();
-    return;
-  }
 
   // Create the browser window
   mainWindow = new BrowserWindow({
