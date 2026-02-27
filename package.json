@@ -1,11 +1,17 @@
 {
   "name": "1132-eliminator",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "Zoom Error 1132 elimination tool - forensic device fingerprint purge and reset",
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev --enable-logging",
+    "bump": "node scripts/bump-version.js",
+    "bump:minor": "node scripts/bump-version.js minor",
+    "bump:major": "node scripts/bump-version.js major",
+    "prebuild": "node scripts/bump-version.js",
+    "prebuild:installer": "node scripts/bump-version.js",
+    "prebuild:all": "node scripts/bump-version.js",
     "build": "electron-builder --win portable --x64",
     "build:installer": "electron-builder --win nsis --x64",
     "build:all": "electron-builder --win --x64",
