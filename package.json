@@ -1,6 +1,6 @@
 {
   "name": "1132-eliminator",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Zoom Error 1132 elimination tool - forensic device fingerprint purge and reset",
   "main": "src/main/index.js",
   "scripts": {

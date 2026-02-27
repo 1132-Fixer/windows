@@ -45,5 +45,5 @@ TERMS AND CONDITIONS
    By installing this Software, you agree to these terms.
 
 ---
-1132 Eliminator v3.0.0
+1132 Eliminator v3.1.0
 High Texas
