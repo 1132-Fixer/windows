@@ -121,27 +121,17 @@ async function downloadZoomInstaller(onProgress = null) {
       throw new Error('Downloaded file too small, may be corrupted');
     }
 
-    logger.ok(`Zoom installer ready: ${destPath}`);
+    logger.ok(`Zoom MSI installer ready: ${destPath}`);
     return { success: true, path: destPath };
   } catch (e) {
-    logger.error('Failed to download Zoom installer', { error: e.message });
-
-    // Try fallback URL
-    logger.info('Trying fallback URL...');
-    try {
-      const fallbackDest = destPath.replace('.msi', '.exe');
-      await downloadFile(ZOOM_INSTALLER.fallbackUrl, fallbackDest, onProgress);
-      return { success: true, path: fallbackDest };
-    } catch (e2) {
-      logger.error('Fallback download also failed', { error: e2.message });
-      return { success: false, error: e.message };
-    }
+    logger.error('Failed to download Zoom MSI installer', { error: e.message });
+    return { success: false, error: e.message };
   }
 }
 
 /**
- * Install Zoom from MSI or EXE
- * @param {string} installerPath - Path to installer
+ * Install Zoom from MSI via msiexec
+ * @param {string} installerPath - Path to MSI installer
  * @param {Function} onProgress - Progress callback
  * @returns {Promise<{success: boolean}>}
  */
@@ -161,62 +151,37 @@ async function installZoom(installerPath, onProgress = null) {
   }
 
   const elevated = await isElevated();
-  const ext = path.extname(installerPath).toLowerCase();
 
   try {
-    if (ext === '.msi') {
-      // MSI install - try per-user first if not elevated
-      let msiArgs;
-      if (elevated) {
-        msiArgs = ['/i', installerPath, '/qn', '/norestart', 'ALLUSERS=1', 'AutoStartAfterReboot=0'];
-        logger.info('Running MSI installer (elevated, all users, hardened)...');
-      } else {
-        // Per-user install doesn't require elevation
-        msiArgs = ['/i', installerPath, '/qn', '/norestart', 'AutoStartAfterReboot=0'];
-        logger.info('Running MSI installer (per-user, hardened)...');
-      }
-
-      const startTime = Date.now();
-      let result = await spawnSafe('msiexec', msiArgs, { timeout: 300000 });
-      const duration = Date.now() - startTime;
-
-      logger.info('MSI process completed', {
-        exitCode: result.exitCode,
-        durationMs: duration
-      });
-
-      // If per-user install failed, try with basic UI to trigger UAC
-      if (result.exitCode !== 0 && !elevated) {
-        logger.warn('Per-user install failed, trying with UI for elevation...');
-
-        // Use /qb (basic UI) which can show UAC prompt
-        const uacArgs = ['/i', installerPath, '/qb', '/norestart', 'AutoStartAfterReboot=0'];
-        result = await spawnSafe('msiexec', uacArgs, { timeout: 300000 });
-
-        logger.info('MSI with UI completed', { exitCode: result.exitCode });
-      }
-
-      if (result.exitCode !== 0) {
-        throw new Error(`MSI failed with exit code ${result.exitCode}`);
-      }
+    // MSI install via msiexec
+    let msiArgs;
+    if (elevated) {
+      msiArgs = ['/i', installerPath, '/qn', '/norestart', 'ALLUSERS=1', 'AutoStartAfterReboot=0'];
+      logger.info('Running MSI installer (elevated, all users)...');
     } else {
-      // EXE installer - handles elevation itself
-      logger.info('Running EXE installer...');
+      msiArgs = ['/i', installerPath, '/qn', '/norestart', 'AutoStartAfterReboot=0'];
+      logger.info('Running MSI installer (per-user)...');
+    }
 
-      const startTime = Date.now();
-      const result = await spawnSafe(installerPath, ['/silent', '/install'], {
-        timeout: 300000
-      });
-      const duration = Date.now() - startTime;
+    const startTime = Date.now();
+    let result = await spawnSafe('msiexec', msiArgs, { timeout: 300000 });
+    const duration = Date.now() - startTime;
 
-      logger.info('EXE process completed', {
-        exitCode: result.exitCode,
-        durationMs: duration
-      });
+    logger.info('MSI process completed', {
+      exitCode: result.exitCode,
+      durationMs: duration
+    });
 
-      if (result.exitCode !== 0) {
-        throw new Error(`EXE failed with exit code ${result.exitCode}`);
-      }
+    // If per-user install failed, try with basic UI to trigger UAC
+    if (result.exitCode !== 0 && !elevated) {
+      logger.warn('Per-user install failed, trying with UI for elevation...');
+      const uacArgs = ['/i', installerPath, '/qb', '/norestart', 'AutoStartAfterReboot=0'];
+      result = await spawnSafe('msiexec', uacArgs, { timeout: 300000 });
+      logger.info('MSI with UI completed', { exitCode: result.exitCode });
+    }
+
+    if (result.exitCode !== 0) {
+      throw new Error(`MSI install failed with exit code ${result.exitCode}`);
     }
 
     logger.ok('Installer process completed');

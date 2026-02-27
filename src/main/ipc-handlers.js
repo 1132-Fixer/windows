@@ -152,7 +152,7 @@ async function performFullReset(options = {}) {
 
               // Restore saved settings before Zoom launches
               sendProgress({ step: 'Restoring Zoom settings...', percent: 94 });
-              const restoreResult = settingsBackup.restoreZoomSettings();
+              const restoreResult = await settingsBackup.restoreZoomSettings();
               logger.info('Settings restore', restoreResult);
 
               sendProgress({ step: 'Zoom installed with settings restored', percent: 95 });
@@ -397,8 +397,8 @@ function registerHandlers() {
     return settingsBackup.saveZoomSettings();
   });
 
-  ipcMain.handle('restore-zoom-settings', () => {
-    return settingsBackup.restoreZoomSettings();
+  ipcMain.handle('restore-zoom-settings', async () => {
+    return await settingsBackup.restoreZoomSettings();
   });
 
   // ========================================

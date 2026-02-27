@@ -14,7 +14,7 @@
  *   --list-presets    List available preset profiles
  *   --apply-preset X  Apply a preset profile (e.g., quiet-meetings)
  *
- * @version 3.2.2
+ * @version 3.2.3
  */
 
 const { app, BrowserWindow, dialog, nativeTheme } = require('electron');
@@ -257,7 +257,7 @@ async function runCliMode() {
         if (installResult.success) {
           console.log('Restoring Zoom settings...');
           const settingsBackup = require('./operations/settings-backup');
-          const restoreResult = settingsBackup.restoreZoomSettings();
+          const restoreResult = await settingsBackup.restoreZoomSettings();
           logger.info('Settings restore', restoreResult);
         }
 

@@ -502,10 +502,9 @@ const SYSTEM_TRACE_LOCATIONS = {
  * Zoom installer configuration
  */
 const ZOOM_INSTALLER = {
-  // Use 64-bit EXE installer - it handles elevation itself
-  url: 'https://zoom.us/client/latest/ZoomInstaller.exe?archType=x64',
-  fallbackUrl: 'https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64',
-  downloadPath: path.join(TEMP, 'ZoomInstaller.exe'),
+  // MSI installer - silent install via msiexec, supports ALLUSERS=1
+  url: 'https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64',
+  downloadPath: path.join(TEMP, 'ZoomInstallerFull.msi'),
   timeout: 300000 // 5 minutes
 };
 
