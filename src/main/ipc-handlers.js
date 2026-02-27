@@ -16,6 +16,7 @@ const services = require('./operations/services');
 const installer = require('./operations/installer');
 const prefManager = require('./operations/pref-manager');
 const selfTest = require('./operations/self-test');
+const snapshot = require('./operations/snapshot');
 const zoomPrefs = require('../shared/zoom-prefs');
 
 let mainWindow = null;
@@ -439,6 +440,38 @@ function registerHandlers() {
     const results = await selfTest.runSelfTest();
     logger.finalize();
     return results;
+  });
+
+  // ========================================
+  // PERSISTENCE SNAPSHOTS & MONITORING
+  // ========================================
+
+  // Take a persistence snapshot (before/after comparison)
+  ipcMain.handle('take-snapshot', async (event, label = 'Snapshot') => {
+    return await snapshot.takeSnapshot(label);
+  });
+
+  // List all saved snapshots
+  ipcMain.handle('list-snapshots', () => {
+    return snapshot.listSnapshots();
+  });
+
+  // Compare two snapshots (before/after diff)
+  ipcMain.handle('compare-snapshots', async (event, { beforePath, afterPath }) => {
+    const before = snapshot.loadSnapshot(beforePath);
+    const after = snapshot.loadSnapshot(afterPath);
+
+    if (!before || !after) {
+      return { success: false, error: 'Failed to load one or both snapshots' };
+    }
+
+    const result = snapshot.compareSnapshots(before, after);
+    return { success: true, ...result };
+  });
+
+  // Quick persistence check (are any Zoom artifacts present?)
+  ipcMain.handle('check-persistence', async () => {
+    return await snapshot.checkPersistence();
   });
 
   // ========================================

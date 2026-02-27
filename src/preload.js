@@ -43,6 +43,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // === SELF-TEST ===
   runSelfTest: () => ipcRenderer.invoke('run-self-test'),
 
+  // === PERSISTENCE SNAPSHOTS & MONITORING ===
+  takeSnapshot: (label) => ipcRenderer.invoke('take-snapshot', label),
+  listSnapshots: () => ipcRenderer.invoke('list-snapshots'),
+  compareSnapshots: (beforePath, afterPath) => ipcRenderer.invoke('compare-snapshots', { beforePath, afterPath }),
+  checkPersistence: () => ipcRenderer.invoke('check-persistence'),
+
   // === ONE-CLICK MODE ===
   fullResetWithPrefs: (options) => ipcRenderer.invoke('full-reset-with-prefs', options),
 

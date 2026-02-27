@@ -182,7 +182,12 @@ const ZOOM_DATA_PATHS = [
 
   // Windows Installer cached MSIs
   path.join('C:\\Windows', 'Installer', 'Zoom'),
-  path.join(LOCALAPPDATA, 'Package Cache')
+  path.join(LOCALAPPDATA, 'Package Cache'),
+
+  // Squirrel / auto-updater leftovers
+  path.join(LOCALAPPDATA, 'zoom-1132-eliminator-updater'),
+  path.join(LOCALAPPDATA, 'zoom-updater'),
+  path.join(LOCALAPPDATA, 'squirrel-zoom')
 ];
 
 /**
@@ -248,7 +253,9 @@ const REGISTRY_KEYS = {
     'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings',
     'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings\\General',
     'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings\\Meetings',
-    'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings\\Chat'
+    'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings\\Chat',
+    // AU2 = auto-update policy (hardened install sets AU2_EnableAutoUpdate=0)
+    'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings\\AU2'
   ],
 
   // WOW6432Node (32-bit on 64-bit)

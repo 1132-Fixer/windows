@@ -168,12 +168,12 @@ async function installZoom(installerPath, onProgress = null) {
       // MSI install - try per-user first if not elevated
       let msiArgs;
       if (elevated) {
-        msiArgs = ['/i', installerPath, '/qn', '/norestart', 'ALLUSERS=1'];
-        logger.info('Running MSI installer (elevated, all users)...');
+        msiArgs = ['/i', installerPath, '/qn', '/norestart', 'ALLUSERS=1', 'AutoStartAfterReboot=0'];
+        logger.info('Running MSI installer (elevated, all users, hardened)...');
       } else {
         // Per-user install doesn't require elevation
-        msiArgs = ['/i', installerPath, '/qn', '/norestart'];
-        logger.info('Running MSI installer (per-user)...');
+        msiArgs = ['/i', installerPath, '/qn', '/norestart', 'AutoStartAfterReboot=0'];
+        logger.info('Running MSI installer (per-user, hardened)...');
       }
 
       const startTime = Date.now();
@@ -190,7 +190,7 @@ async function installZoom(installerPath, onProgress = null) {
         logger.warn('Per-user install failed, trying with UI for elevation...');
 
         // Use /qb (basic UI) which can show UAC prompt
-        const uacArgs = ['/i', installerPath, '/qb', '/norestart'];
+        const uacArgs = ['/i', installerPath, '/qb', '/norestart', 'AutoStartAfterReboot=0'];
         result = await spawnSafe('msiexec', uacArgs, { timeout: 300000 });
 
         logger.info('MSI with UI completed', { exitCode: result.exitCode });
@@ -234,11 +234,65 @@ async function installZoom(installerPath, onProgress = null) {
     }
 
     logger.ok('Zoom installed successfully', { path: installed.path });
+
+    // Post-install hardening
+    await hardenZoomInstall();
+
     return { success: true, zoomPath: installed.path };
   } catch (e) {
     logger.error('Zoom installation failed', { error: e.message });
     return { success: false, error: e.message };
   }
+}
+
+/**
+ * Post-install hardening: disable auto-update, remove Run entries, set AU2 policy
+ * Reduces persistence so Zoom doesn't re-create startup entries or auto-update
+ * @returns {Promise<{success: boolean, details: Object}>}
+ */
+async function hardenZoomInstall() {
+  logger.info('Applying post-install hardening...');
+
+  const details = { au2Policy: false, runEntriesRemoved: 0 };
+
+  try {
+    const result = await runPowerShell(`
+      $count = 0
+
+      # Set AU2 policy: disable client auto-update
+      $au2Key = 'HKLM:\\SOFTWARE\\Policies\\Zoom\\Zoom Meetings\\AU2'
+      New-Item -Path $au2Key -Force -ErrorAction SilentlyContinue | Out-Null
+      New-ItemProperty -Path $au2Key -Name 'AU2_EnableAutoUpdate' -PropertyType DWord -Value 0 -Force -ErrorAction SilentlyContinue | Out-Null
+
+      # Remove HKCU Run entries (prevent auto-start with Windows)
+      $runKey = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+      foreach ($v in @('Zoom','ZoomUMX','ZoomWorkplace')) {
+        if (Get-ItemProperty -Path $runKey -Name $v -ErrorAction SilentlyContinue) {
+          Remove-ItemProperty -Path $runKey -Name $v -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+
+      # Also remove HKLM Run entries
+      $runKeyLM = 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+      foreach ($v in @('Zoom','ZoomCptService')) {
+        if (Get-ItemProperty -Path $runKeyLM -Name $v -ErrorAction SilentlyContinue) {
+          Remove-ItemProperty -Path $runKeyLM -Name $v -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+
+      Write-Output $count
+    `, { timeout: 15000 });
+
+    details.au2Policy = true;
+    details.runEntriesRemoved = parseInt(result.stdout, 10) || 0;
+    logger.ok('Post-install hardening applied', details);
+  } catch (e) {
+    logger.debug('Post-install hardening partially failed', { error: e.message });
+  }
+
+  return { success: true, details };
 }
 
 /**
@@ -348,6 +402,7 @@ module.exports = {
   downloadFile,
   downloadZoomInstaller,
   installZoom,
+  hardenZoomInstall,
   isZoomInstalled,
   launchZoom,
   cleanupInstaller

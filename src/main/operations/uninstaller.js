@@ -91,6 +91,97 @@ async function uninstallWithOwnInstaller() {
 }
 
 /**
+ * Find Zoom MSI product GUIDs from registry uninstall keys
+ * Faster and more reliable than WMI Win32_Product enumeration
+ * @returns {Promise<Array<{displayName: string, version: string, guid: string, uninstallString: string}>>}
+ */
+async function findZoomMsiGuids() {
+  try {
+    const result = await runPowerShell(`
+      $roots = @(
+        'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+        'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+        'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall'
+      )
+      foreach ($root in $roots) {
+        if (-not (Test-Path $root)) { continue }
+        Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
+          $p = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue
+          if (-not $p -or -not $p.DisplayName -or $p.DisplayName -notmatch 'Zoom') { return }
+          $u = $p.UninstallString
+          if (-not $u) { return }
+          $m = [regex]::Match($u, '\\{[0-9A-Fa-f\\-]{36}\\}')
+          if ($m.Success) {
+            Write-Output "$($p.DisplayName)|$($p.DisplayVersion)|$($m.Value)|$u"
+          }
+        }
+      }
+    `, { timeout: 30000 });
+
+    if (!result.stdout || !result.stdout.trim()) return [];
+
+    const items = [];
+    const seen = new Set();
+    for (const line of result.stdout.trim().split('\n')) {
+      const parts = line.trim().split('|');
+      if (parts.length >= 3 && !seen.has(parts[2])) {
+        seen.add(parts[2]);
+        items.push({
+          displayName: parts[0],
+          version: parts[1] || '',
+          guid: parts[2],
+          uninstallString: parts[3] || ''
+        });
+      }
+    }
+    return items;
+  } catch (e) {
+    logger.debug('MSI GUID enumeration failed', { error: e.message });
+    return [];
+  }
+}
+
+/**
+ * Uninstall Zoom using MSI product GUIDs from registry
+ * Much faster than WMI Win32_Product (which triggers a full MSI reconfiguration scan)
+ * @returns {Promise<{success: boolean, method: string, products: number}>}
+ */
+async function uninstallWithMsiGuids() {
+  logger.info('Trying MSI GUID-based uninstall...');
+
+  const items = await findZoomMsiGuids();
+  if (items.length === 0) {
+    logger.debug('No Zoom MSI products found in registry');
+    return { success: false, method: 'msi_guid', products: 0 };
+  }
+
+  logger.info(`Found ${items.length} Zoom MSI product(s)`, { items });
+
+  for (const item of items) {
+    try {
+      logger.debug(`Uninstalling MSI: ${item.displayName} (${item.guid})`);
+      await spawnSafe('msiexec', ['/x', item.guid, '/qn', '/norestart'], {
+        timeout: 120000,
+        shell: true
+      });
+    } catch (e) {
+      logger.debug(`MSI uninstall failed for ${item.guid}: ${e.message}`);
+    }
+  }
+
+  // Wait for uninstall to complete
+  await new Promise(r => setTimeout(r, 3000));
+
+  const check = await isZoomInstalled();
+  if (!check.installed) {
+    logger.ok(`Zoom uninstalled via MSI GUID (${items.length} product(s))`);
+    return { success: true, method: 'msi_guid', products: items.length };
+  }
+
+  return { success: false, method: 'msi_guid', products: items.length };
+}
+
+/**
  * Uninstall Zoom using WMI (Windows Management Instrumentation)
  * @returns {Promise<{success: boolean, method: string}>}
  */
@@ -242,6 +333,7 @@ async function uninstallZoom(onProgress = null) {
 
   const methods = [
     { name: 'Built-in Uninstaller', fn: uninstallWithOwnInstaller },
+    { name: 'MSI GUID Uninstall', fn: uninstallWithMsiGuids },
     { name: 'WMI Uninstall', fn: uninstallWithWMI },
     { name: 'PowerShell Uninstall', fn: uninstallWithPowerShell },
     { name: 'Force Remove Files', fn: forceRemoveFiles }
@@ -290,6 +382,8 @@ module.exports = {
   isZoomInstalled,
   uninstallZoom,
   uninstallWithOwnInstaller,
+  findZoomMsiGuids,
+  uninstallWithMsiGuids,
   uninstallWithWMI,
   uninstallWithPowerShell,
   forceRemoveFiles

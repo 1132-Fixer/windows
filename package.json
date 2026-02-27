@@ -1,6 +1,6 @@
 {
   "name": "cleanstate-sentinel",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Forensic-grade software remediation platform with attestation reporting",
   "main": "src/main/index.js",
   "scripts": {
