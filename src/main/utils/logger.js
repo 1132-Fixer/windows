@@ -35,6 +35,9 @@ function initLogger() {
     fs.mkdirSync(LOG_DIR, { recursive: true });
   }
 
+  // Auto-prune logs older than 7 days
+  cleanOldLogs(7);
+
   // Create timestamped log file
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   currentLogFile = path.join(LOG_DIR, `reset-${timestamp}.log`);
@@ -219,7 +222,7 @@ function getAllLogFiles() {
  * Clean old log files (keep last N days)
  * @param {number} daysToKeep - Number of days to keep
  */
-function cleanOldLogs(daysToKeep = 30) {
+function cleanOldLogs(daysToKeep = 7) {
   const cutoff = Date.now() - (daysToKeep * 24 * 60 * 60 * 1000);
 
   getAllLogFiles().forEach(logFile => {
