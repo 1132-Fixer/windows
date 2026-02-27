@@ -7,12 +7,12 @@ A Windows utility that resolves Zoom Error 1132 (device bans) by performing a fo
 ## Installation
 
 ### Installer (Recommended)
-1. Download **1132 Eliminator Setup 3.1.0.exe** from [Releases](../../releases)
-2. Run the installer — desktop shortcut is created automatically
-3. Launch from your desktop
+1. Download **1132 Eliminator Setup 3.2.0.exe** from [Releases](../../releases)
+2. Run the installer — UAC will prompt for admin automatically
+3. Desktop shortcut is created — launch from your desktop
 
 ### Portable
-1. Download **1132 Eliminator Portable 3.1.0.exe** from [Releases](../../releases)
+1. Download **1132 Eliminator Portable 3.2.0.exe** from [Releases](../../releases)
 2. Run directly (no installation needed)
 
 ## What It Does
@@ -102,10 +102,10 @@ npm run build:all
 
 ## Requirements
 - Windows 10/11 (64-bit)
-- Administrator privileges (app auto-elevates at startup)
+- Administrator privileges (UAC prompt on launch via Windows manifest)
 
 ## Version
-**v3.1.0** — 1132 Eliminator
+**v3.2.0** — 1132 Eliminator
 
 ## Author
 High Texas
