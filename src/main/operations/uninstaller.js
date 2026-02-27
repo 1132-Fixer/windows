@@ -37,17 +37,23 @@ async function isZoomInstalled() {
     }
   }
 
-  // Check WMI for installed products
+  // Check registry for installed products (fast, no WMI)
   try {
-    const result = await runPowerShell(
-      `Get-CimInstance Win32_Product -Filter "Name like '%Zoom%'" | Select-Object -ExpandProperty Name`,
-      { timeout: 60000 }
-    );
+    const result = await runPowerShell(`
+      @('HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+        'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+        'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*') |
+        ForEach-Object { Get-ItemProperty $_ -ErrorAction SilentlyContinue } |
+        Where-Object { $_.DisplayName -like '*Zoom*' } |
+        Select-Object -ExpandProperty DisplayName
+    `, { timeout: 10000 });
     if (result.stdout && result.stdout.trim()) {
-      existingPaths.push(`WMI: ${result.stdout.trim()}`);
+      for (const name of result.stdout.trim().split('\n')) {
+        existingPaths.push(`Registry: ${name.trim()}`);
+      }
     }
   } catch (e) {
-    // WMI might be slow or fail
+    // Registry check failed
   }
 
   return {
@@ -189,19 +195,29 @@ async function uninstallWithWMI() {
   logger.info('Trying WMI uninstall...');
 
   try {
-    // First try wmic command
-    const result = await spawnSafe(
-      'wmic',
-      ['product', 'where', 'name like "%Zoom%"', 'call', 'uninstall', '/nointeractive'],
-      { timeout: 180000, shell: true }
-    );
+    // Use msiexec directly with GUIDs from registry (avoid slow Win32_Product)
+    const guids = await findZoomMsiGuids();
+    if (guids.length === 0) {
+      logger.debug('No Zoom products found for WMI uninstall');
+      return { success: false, method: 'wmi' };
+    }
 
-    // Wait for uninstall to complete
-    await new Promise(r => setTimeout(r, 5000));
+    for (const item of guids) {
+      try {
+        await spawnSafe('msiexec', ['/x', item.guid, '/qn', '/norestart', 'REBOOT=ReallySuppress'], {
+          timeout: 60000,
+          shell: true
+        });
+      } catch (e) {
+        logger.debug(`WMI-style uninstall failed for ${item.guid}: ${e.message}`);
+      }
+    }
+
+    await new Promise(r => setTimeout(r, 3000));
 
     const check = await isZoomInstalled();
     if (!check.installed) {
-      logger.ok('Zoom uninstalled with WMI');
+      logger.ok('Zoom uninstalled with WMI-style msiexec');
       return { success: true, method: 'wmi' };
     }
   } catch (e) {
@@ -222,45 +238,39 @@ async function uninstallWithPowerShell() {
     const script = `
       $ErrorActionPreference = 'SilentlyContinue'
 
-      # Try Get-Package (modern method)
+      # Try Get-Package (modern method, fast)
       $packages = Get-Package -Name '*Zoom*' -ProviderName Programs, msi -ErrorAction SilentlyContinue
       foreach ($pkg in $packages) {
         Write-Host "Uninstalling: $($pkg.Name)"
         Uninstall-Package $pkg -Force -ErrorAction SilentlyContinue
       }
 
-      # Try Win32_Product (fallback)
-      $products = Get-CimInstance Win32_Product -Filter "Name like '%Zoom%'" -ErrorAction SilentlyContinue
-      foreach ($prod in $products) {
-        Write-Host "Uninstalling via CIM: $($prod.Name)"
-        $prod | Invoke-CimMethod -MethodName Uninstall -ErrorAction SilentlyContinue
-      }
-
-      # Try registry uninstall strings
+      # Try registry uninstall strings (fast, no WMI)
       $uninstallPaths = @(
         'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
         'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
         'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
       )
 
-      foreach ($path in $uninstallPaths) {
-        Get-ItemProperty $path -ErrorAction SilentlyContinue |
+      foreach ($regPath in $uninstallPaths) {
+        Get-ItemProperty $regPath -ErrorAction SilentlyContinue |
           Where-Object { $_.DisplayName -like '*Zoom*' } |
           ForEach-Object {
             if ($_.UninstallString) {
               Write-Host "Running uninstall: $($_.UninstallString)"
               $cmd = $_.UninstallString -replace '/I', '/X'
               if ($cmd -notlike '*msiexec*') {
-                Start-Process cmd -ArgumentList "/c $cmd /S" -Wait -WindowStyle Hidden
+                Start-Process cmd -ArgumentList "/c $cmd /S" -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
               } else {
-                Start-Process msiexec -ArgumentList ($cmd -replace 'msiexec.exe ', '' -split ' ') -Wait -WindowStyle Hidden
+                $args = ($cmd -replace 'msiexec(.exe)?\\s*', '') + ' /qn /norestart'
+                Start-Process msiexec -ArgumentList $args -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
               }
             }
           }
       }
     `;
 
-    await runPowerShell(script, { timeout: 180000 });
+    await runPowerShell(script, { timeout: 60000 });
 
     // Wait for uninstall
     await new Promise(r => setTimeout(r, 5000));

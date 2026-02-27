@@ -36,22 +36,23 @@ const cliMode = process.argv.includes('--cli');
  * Create the main application window
  */
 async function createWindow() {
-  // Check for admin privileges
+  // Check for admin privileges - auto-elevate if not admin
   const admin = await isElevated();
-  if (!admin) {
-    const result = await dialog.showMessageBox({
-      type: 'warning',
-      title: '1132 Eliminator',
-      message: 'Administrator privileges required',
-      detail: 'This application requires administrator privileges to fully clean Zoom data. Some operations may fail without elevation.',
-      buttons: ['Continue Anyway', 'Exit'],
-      defaultId: 1
-    });
+  if (!admin && !process.argv.includes('--no-elevate')) {
+    // Relaunch as admin via PowerShell Start-Process -Verb RunAs
+    const { spawn } = require('child_process');
+    const exePath = process.argv[0];
+    const args = process.argv.slice(1).concat('--no-elevate');
+    const psCmd = `Start-Process -FilePath '${exePath}' -ArgumentList '${args.join("' '")}' -Verb RunAs`;
 
-    if (result.response === 1) {
-      app.quit();
-      return;
-    }
+    const ps = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCmd], {
+      windowsHide: true,
+      detached: true,
+      stdio: 'ignore'
+    });
+    ps.unref();
+    app.quit();
+    return;
   }
 
   // Create the browser window
