@@ -1045,6 +1045,258 @@ async function cleanFontCache() {
 }
 
 /**
+ * Wipe user-profile-specific execution fingerprints
+ * CRITICAL: These are the entries that persist on the CURRENT user but
+ * would be clean on a NEW Windows user — explaining why new accounts bypass 1132.
+ *
+ * Covers: BAM, UserAssist, AppCompatFlags, ActivitiesCache, ShimCache, MUICache
+ * @returns {Promise<{success: boolean, deleted: number, details: Object}>}
+ */
+async function wipeUserProfileFingerprints() {
+  logger.info('Wiping user-profile execution fingerprints...');
+
+  let totalDeleted = 0;
+  const details = {};
+
+  // 1. BAM (Background Activity Monitor) — per-user SID in HKLM
+  //    Tracks every EXE run with exact timestamps, indexed by user SID
+  try {
+    const bamResult = await runPowerShell(`
+      $count = 0
+      $sid = (New-Object System.Security.Principal.NTAccount($env:USERNAME)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+
+      # BAM state (Win10 1709+)
+      $bamPaths = @(
+        "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\bam\\State\\UserSettings\\$sid",
+        "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\bam\\UserSettings\\$sid",
+        "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\dam\\State\\UserSettings\\$sid",
+        "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\dam\\UserSettings\\$sid"
+      )
+
+      foreach ($bamPath in $bamPaths) {
+        if (Test-Path $bamPath) {
+          $props = Get-ItemProperty $bamPath -ErrorAction SilentlyContinue
+          $props.PSObject.Properties | Where-Object {
+            $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' -or
+            $_.Name -like '*cpt*' -or $_.Name -like '*zcs*'
+          } | ForEach-Object {
+            Remove-ItemProperty -Path $bamPath -Name $_.Name -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 30000 });
+
+    const bamDeleted = parseInt(bamResult.stdout, 10) || 0;
+    details.bam = { deleted: bamDeleted };
+    totalDeleted += bamDeleted;
+    if (bamDeleted > 0) logger.ok(`BAM: removed ${bamDeleted} Zoom execution entries`);
+  } catch (e) {
+    details.bam = { error: e.message };
+    logger.debug('BAM cleanup failed', { error: e.message });
+  }
+
+  // 2. UserAssist — ROT13-encoded execution tracking per user
+  //    Tracks execution count, focus time, and last run for every program
+  try {
+    const uaResult = await runPowerShell(`
+      $count = 0
+      $uaBase = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist'
+
+      if (Test-Path $uaBase) {
+        Get-ChildItem $uaBase -ErrorAction SilentlyContinue | ForEach-Object {
+          $countPath = Join-Path $_.PSPath 'Count'
+          if (Test-Path $countPath) {
+            # UserAssist keys are ROT13 encoded
+            $props = Get-ItemProperty $countPath -ErrorAction SilentlyContinue
+            $props.PSObject.Properties | Where-Object {
+              # Decode ROT13 and check for zoom
+              $decoded = $_.Name -creplace '[A-Za-z]', { param($m) [char](([int][char]$m.Value - 65 + 13) % 26 + 65) }
+              # Also check raw name (some entries aren't ROT13)
+              $decoded -like '*zoom*' -or $decoded -like '*Zoom*' -or
+              $decoded -like '*cpt*' -or $decoded -like '*zcs*' -or
+              $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' -or
+              $_.Name -like '*Mbbz*' -or $_.Name -like '*MBBZ*'
+            } | ForEach-Object {
+              Remove-ItemProperty -Path $countPath -Name $_.Name -Force -ErrorAction SilentlyContinue
+              $count++
+            }
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 30000 });
+
+    const uaDeleted = parseInt(uaResult.stdout, 10) || 0;
+    details.userAssist = { deleted: uaDeleted };
+    totalDeleted += uaDeleted;
+    if (uaDeleted > 0) logger.ok(`UserAssist: removed ${uaDeleted} entries`);
+  } catch (e) {
+    details.userAssist = { error: e.message };
+    logger.debug('UserAssist cleanup failed', { error: e.message });
+  }
+
+  // 3. AppCompatFlags — per-user compatibility assistant tracking
+  try {
+    const acfResult = await runPowerShell(`
+      $count = 0
+      $acfPaths = @(
+        'HKCU:\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Compatibility Assistant\\Store',
+        'HKCU:\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers',
+        'HKLM:\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers'
+      )
+
+      foreach ($acfPath in $acfPaths) {
+        if (Test-Path $acfPath) {
+          $props = Get-ItemProperty $acfPath -ErrorAction SilentlyContinue
+          $props.PSObject.Properties | Where-Object {
+            $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' -or
+            $_.Name -like '*cpt*' -or $_.Name -like '*zcs*'
+          } | ForEach-Object {
+            Remove-ItemProperty -Path $acfPath -Name $_.Name -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 30000 });
+
+    const acfDeleted = parseInt(acfResult.stdout, 10) || 0;
+    details.appCompatFlags = { deleted: acfDeleted };
+    totalDeleted += acfDeleted;
+    if (acfDeleted > 0) logger.ok(`AppCompatFlags: removed ${acfDeleted} entries`);
+  } catch (e) {
+    details.appCompatFlags = { error: e.message };
+    logger.debug('AppCompatFlags cleanup failed', { error: e.message });
+  }
+
+  // 4. ActivitiesCache.db — Windows Timeline per-user database
+  try {
+    const actResult = await runPowerShell(`
+      $count = 0
+      $cdpBase = Join-Path $env:LOCALAPPDATA 'ConnectedDevicesPlatform'
+
+      if (Test-Path $cdpBase) {
+        # Stop the service that locks it
+        Stop-Service -Name 'CDPUserSvc*' -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+
+        Get-ChildItem $cdpBase -Recurse -Filter 'ActivitiesCache.db*' -ErrorAction SilentlyContinue | ForEach-Object {
+          Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+
+        # Also delete the whole CDP folder content
+        Get-ChildItem $cdpBase -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+          Get-ChildItem $_.FullName -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 30000 });
+
+    const actDeleted = parseInt(actResult.stdout, 10) || 0;
+    details.activitiesCache = { deleted: actDeleted };
+    totalDeleted += actDeleted;
+    if (actDeleted > 0) logger.ok(`ActivitiesCache: removed ${actDeleted} files`);
+  } catch (e) {
+    details.activitiesCache = { error: e.message };
+    logger.debug('ActivitiesCache cleanup failed', { error: e.message });
+  }
+
+  // 5. AppCompatCache / ShimCache — system-level execution cache
+  try {
+    const shimResult = await runPowerShell(`
+      # AppCompatCache is a binary blob — we clear it entirely and let Windows rebuild
+      $shimPath = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\AppCompatCache'
+      if (Test-Path $shimPath) {
+        try {
+          Remove-ItemProperty -Path $shimPath -Name 'AppCompatCache' -Force -ErrorAction Stop
+          Write-Output "1"
+        } catch {
+          Write-Output "0"
+        }
+      } else {
+        Write-Output "0"
+      }
+    `, { timeout: 15000 });
+
+    const shimDeleted = parseInt(shimResult.stdout, 10) || 0;
+    details.shimCache = { deleted: shimDeleted };
+    totalDeleted += shimDeleted;
+    if (shimDeleted > 0) logger.ok('ShimCache/AppCompatCache cleared');
+  } catch (e) {
+    details.shimCache = { error: e.message };
+    logger.debug('ShimCache cleanup failed', { error: e.message });
+  }
+
+  // 6. MUICache — per-user program name cache
+  try {
+    const muiResult = await runPowerShell(`
+      $count = 0
+      $muiPath = 'HKCU:\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\MuiCache'
+
+      if (Test-Path $muiPath) {
+        $props = Get-ItemProperty $muiPath -ErrorAction SilentlyContinue
+        $props.PSObject.Properties | Where-Object {
+          $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' -or
+          $_.Name -like '*cpt*' -or $_.Name -like '*zcs*'
+        } | ForEach-Object {
+          Remove-ItemProperty -Path $muiPath -Name $_.Name -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+      Write-Output $count
+    `, { timeout: 15000 });
+
+    const muiDeleted = parseInt(muiResult.stdout, 10) || 0;
+    details.muiCache = { deleted: muiDeleted };
+    totalDeleted += muiDeleted;
+    if (muiDeleted > 0) logger.ok(`MUICache: removed ${muiDeleted} entries`);
+  } catch (e) {
+    details.muiCache = { error: e.message };
+    logger.debug('MUICache cleanup failed', { error: e.message });
+  }
+
+  // 7. Explorer FeatureUsage — tracks per-user app launch counts
+  try {
+    const fuResult = await runPowerShell(`
+      $count = 0
+      $fuBase = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage'
+
+      if (Test-Path $fuBase) {
+        Get-ChildItem $fuBase -ErrorAction SilentlyContinue | ForEach-Object {
+          $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+          $props.PSObject.Properties | Where-Object {
+            $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' -or
+            $_.Name -like '*cpt*'
+          } | ForEach-Object {
+            Remove-ItemProperty -Path $_.PSPath -Name $_.Name -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 15000 });
+
+    const fuDeleted = parseInt(fuResult.stdout, 10) || 0;
+    details.featureUsage = { deleted: fuDeleted };
+    totalDeleted += fuDeleted;
+    if (fuDeleted > 0) logger.ok(`FeatureUsage: removed ${fuDeleted} entries`);
+  } catch (e) {
+    details.featureUsage = { error: e.message };
+    logger.debug('FeatureUsage cleanup failed', { error: e.message });
+  }
+
+  logger.info(`User profile fingerprint wipe: ${totalDeleted} total entries removed`);
+  return { success: true, deleted: totalDeleted, details };
+}
+
+
+/**
  * Complete device fingerprint wipe
  * This is the CRITICAL function for 1132 bypass
  * @param {Function} onProgress - Progress callback
@@ -1086,9 +1338,10 @@ async function wipeDeviceFingerprint(onProgress = null) {
     clearPrefetchFiles(),
     wipeAmcache(),
     wipeSrumDatabase(),
-    cleanEventLogs()
+    cleanEventLogs(),
+    wipeUserProfileFingerprints()
   ]);
-  const tier2Keys = ['credentials', 'prefetch', 'amcache', 'srum', 'eventLogs'];
+  const tier2Keys = ['credentials', 'prefetch', 'amcache', 'srum', 'eventLogs', 'userProfile'];
   tier2.forEach((result, i) => {
     steps[tier2Keys[i]] = result.status === 'fulfilled' ? result.value : { success: false, error: result.reason?.message };
   });
@@ -1178,6 +1431,7 @@ module.exports = {
   cleanNetworkProfiles,
   cleanNotificationDatabase,
   cleanFontCache,
+  wipeUserProfileFingerprints,
   wipeDeviceFingerprint,
   verifyFingerprintWipe
 };
