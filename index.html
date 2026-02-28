@@ -44,58 +44,60 @@
       z-index: 0;
     }
 
-    /* ===== TITLE / LOGO — BIG AND PROUD ===== */
+    /* ===== TITLE / LOGO — CENTERED STACK ===== */
     .header {
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 24px 24px 0;
+      padding: 22px 24px 0;
       position: relative;
       z-index: 1;
       -webkit-app-region: drag;
     }
     .logo {
       display: flex;
+      flex-direction: column;
       align-items: center;
-      gap: 18px;
+      gap: 10px;
     }
     .logo img {
-      width: 82px;
-      height: 82px;
-      border-radius: 18px;
-      filter: drop-shadow(0 6px 20px rgba(0,0,0,0.7));
+      width: 110px;
+      height: 110px;
+      border-radius: 22px;
+      filter: drop-shadow(0 8px 28px rgba(0,0,0,0.8));
     }
-    .logo-text {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-    }
-    .logo-num {
-      font-size: 56px;
+    .logo-title {
+      font-size: 36px;
       font-weight: 900;
-      letter-spacing: 5px;
+      letter-spacing: 3px;
       line-height: 1;
       background: linear-gradient(180deg, #ffe066, #ffd700, #f5a623);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       filter: drop-shadow(0 2px 8px rgba(245,166,35,0.6));
+      text-align: center;
     }
-    .logo-label {
-      color: #9aacbf;
-      font-weight: 700;
-      font-size: 19px;
-      letter-spacing: 12px;
-      text-transform: uppercase;
-      margin-top: 3px;
+    .logo-sep {
+      width: 60px;
+      height: 3px;
+      background: linear-gradient(90deg, var(--accent-hot), var(--accent));
+      border-radius: 2px;
+      margin-top: 2px;
+    }
+    .logo-desc {
+      color: var(--text-dim);
+      font-size: 13px;
+      font-weight: 400;
+      letter-spacing: 0.5px;
+      margin-top: 4px;
     }
     .version {
-      font-size: 11px;
+      font-size: 10px;
       color: var(--text-dim);
       background: rgba(255,255,255,0.06);
-      padding: 4px 14px;
+      padding: 3px 12px;
       border-radius: 20px;
       border: 1px solid rgba(255,255,255,0.08);
-      margin-top: 12px;
     }
 
     /* ===== MAIN — HERO DOMINANT ===== */
@@ -112,103 +114,83 @@
       -webkit-app-region: no-drag;
     }
 
-    /* ===== HERO BUTTON — LARGE ===== */
+    /* ===== HERO BUTTON — ROUNDED RECTANGLE ===== */
     .hero-wrap {
       position: relative;
-      width: 260px;
-      height: 260px;
       margin-bottom: 20px;
     }
 
     .hero-wrap::before {
       content: '';
       position: absolute;
-      inset: -24px;
-      border-radius: 50%;
-      background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+      inset: -20px;
+      border-radius: 40px;
+      background: radial-gradient(ellipse, rgba(245,200,35,0.25) 0%, transparent 70%);
       opacity: 0.6;
       animation: pulseGlow 3s ease-in-out infinite;
     }
     @keyframes pulseGlow {
       0%, 100% { opacity: 0.4; transform: scale(1); }
-      50% { opacity: 0.7; transform: scale(1.06); }
+      50% { opacity: 0.7; transform: scale(1.04); }
     }
 
-    .progress-ring {
-      position: absolute;
-      inset: -14px;
-      border-radius: 50%;
-      opacity: 0;
-      transition: opacity 0.4s;
-    }
-    .progress-ring.active { opacity: 1; }
-    .progress-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
-    .progress-ring circle { fill: none; stroke-width: 5; }
-    .progress-ring .ring-bg { stroke: rgba(255,255,255,0.08); }
-    .progress-ring .ring-fill {
-      stroke: var(--accent);
-      stroke-linecap: round;
-      stroke-dasharray: 565;
-      stroke-dashoffset: 565;
-      transition: stroke-dashoffset 0.5s ease;
-      filter: drop-shadow(0 0 8px var(--accent-glow));
-    }
-    .progress-ring.done .ring-fill { stroke: var(--green); filter: drop-shadow(0 0 8px var(--green-glow)); }
+    .progress-ring { display: none; }
 
     .hero-btn {
-      width: 260px;
-      height: 260px;
-      border-radius: 50%;
-      border: 3px solid rgba(255,255,255,0.15);
+      width: 280px;
+      height: 64px;
+      border-radius: 32px;
+      border: 2px solid rgba(255,255,255,0.15);
       cursor: pointer;
-      background: linear-gradient(145deg, #f5a623, #e8890c, #c06a00);
-      color: #fff;
-      font-size: 28px;
-      font-weight: 800;
-      letter-spacing: 6px;
+      background: linear-gradient(145deg, #ffd700, #f5c518, #e8a800);
+      color: #1a1a1a;
+      font-size: 20px;
+      font-weight: 900;
+      letter-spacing: 4px;
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 8px;
+      gap: 10px;
       box-shadow:
-        0 0 60px var(--accent-glow),
-        0 10px 40px rgba(0,0,0,0.5),
-        inset 0 2px 0 rgba(255,255,255,0.2),
-        inset 0 -3px 0 rgba(0,0,0,0.2);
+        0 0 40px rgba(245,197,24,0.35),
+        0 6px 24px rgba(0,0,0,0.4),
+        inset 0 2px 0 rgba(255,255,255,0.3),
+        inset 0 -2px 0 rgba(0,0,0,0.1);
       transition: all 0.3s ease;
       position: relative;
       z-index: 1;
     }
     .hero-btn:hover:not(:disabled) {
-      transform: scale(1.05);
-      box-shadow: 0 0 90px var(--accent-glow), 0 10px 48px rgba(0,0,0,0.6), inset 0 2px 0 rgba(255,255,255,0.25);
+      transform: scale(1.04);
+      box-shadow: 0 0 60px rgba(245,197,24,0.45), 0 8px 32px rgba(0,0,0,0.5), inset 0 2px 0 rgba(255,255,255,0.35);
     }
-    .hero-btn:active:not(:disabled) { transform: scale(0.96); }
+    .hero-btn:active:not(:disabled) { transform: scale(0.97); }
     .hero-btn:disabled { cursor: default; }
-    .hero-btn .icon { width: 52px; height: 52px; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.3)); }
-    .hero-btn .btn-label { font-size: 32px; text-shadow: 0 2px 6px rgba(0,0,0,0.3); }
-    .hero-btn .btn-pct { display: none; font-size: 44px; font-weight: 900; text-shadow: 0 2px 10px rgba(0,0,0,0.4); }
+    .hero-btn .icon { width: 28px; height: 28px; filter: drop-shadow(0 1px 3px rgba(0,0,0,0.2)); }
+    .hero-btn .btn-label { font-size: 20px; text-shadow: none; }
+    .hero-btn .btn-pct { display: none; font-size: 20px; font-weight: 900; }
 
     .hero-btn.running .icon, .hero-btn.running .btn-label { display: none; }
     .hero-btn.running .btn-pct { display: block; }
     .hero-btn.running {
-      background: linear-gradient(145deg, #8b5e1a, #6b4512, #4a2f0a);
-      border-color: rgba(245,166,35,0.3);
-      box-shadow: 0 0 40px rgba(245,166,35,0.2), 0 10px 40px rgba(0,0,0,0.5);
+      background: linear-gradient(145deg, #8b7a1a, #6b5c12, #4a400a);
+      color: var(--accent);
+      border-color: rgba(245,197,24,0.3);
+      box-shadow: 0 0 30px rgba(245,197,24,0.15), 0 6px 24px rgba(0,0,0,0.4);
     }
 
     .hero-btn.done {
       background: linear-gradient(145deg, #22c55e, #16a34a, #15803d);
+      color: #fff;
       border-color: rgba(34,197,94,0.3);
-      box-shadow: 0 0 60px var(--green-glow), 0 10px 40px rgba(0,0,0,0.5);
+      box-shadow: 0 0 40px var(--green-glow), 0 6px 24px rgba(0,0,0,0.4);
       cursor: default;
     }
     .hero-btn.done .icon, .hero-btn.done .btn-label, .hero-btn.done .btn-pct { display: none; }
     .hero-btn.done .btn-done { display: flex; }
-    .btn-done { display: none; flex-direction: column; align-items: center; gap: 4px; }
-    .btn-done .check { font-size: 64px; line-height: 1; text-shadow: 0 2px 10px rgba(0,0,0,0.3); }
-    .btn-done .done-text { font-size: 18px; font-weight: 800; letter-spacing: 6px; text-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+    .btn-done { display: none; align-items: center; gap: 8px; }
+    .btn-done .check { font-size: 28px; line-height: 1; }
+    .btn-done .done-text { font-size: 18px; font-weight: 800; letter-spacing: 4px; }
 
     /* ===== BOTTOM AREA — compact ===== */
     .bottom {
@@ -360,6 +342,90 @@
       font-size: 10px;
       font-weight: 700;
       letter-spacing: 2px;
+      border: 1px solid rgba(34, 197, 94, 0.4);
+      background: rgba(34, 197, 94, 0.1);
+      padding: 4px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s;
+      -webkit-app-region: no-drag;
+    }
+    .admin-badge:hover { background: rgba(34, 197, 94, 0.25); color: #fff; }
+
+    /* ===== EXIT BADGE — TOP RIGHT ===== */
+    .exit-badge {
+      position: fixed;
+      top: 10px;
+      right: 12px;
+      z-index: 50;
+      color: #ef4444;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      background: rgba(239, 68, 68, 0.1);
+      padding: 4px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s;
+      -webkit-app-region: no-drag;
+    }
+    .exit-badge:hover { background: rgba(239, 68, 68, 0.3); color: #fff; }
+
+    /* ===== STATUS BADGE — TOP LEFT ===== */
+    .status-badge {
+      position: fixed;
+      top: 10px;
+      left: 12px;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #ef4444;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      background: rgba(239, 68, 68, 0.1);
+      padding: 4px 12px;
+      border-radius: 4px;
+      -webkit-app-region: no-drag;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #ef4444;
+      box-shadow: 0 0 6px #ef4444;
+      animation: dotPulse 1.5s ease-in-out infinite;
+    }
+    @keyframes dotPulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 4px #ef4444; }
+      50% { opacity: 0.4; box-shadow: 0 0 10px #ef4444; }
+    }
+    .status-badge.running {
+      color: var(--accent);
+      border-color: rgba(245, 166, 35, 0.4);
+      background: rgba(245, 166, 35, 0.1);
+    }
+    .status-badge.running .status-dot {
+      background: var(--accent);
+      box-shadow: 0 0 6px var(--accent);
+      animation: dotPulseOrange 1s ease-in-out infinite;
+    }
+    @keyframes dotPulseOrange {
+      0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--accent); }
+      50% { opacity: 0.4; box-shadow: 0 0 10px var(--accent); }
+    }
+    .status-badge.done {
+      color: var(--green);
+      border-color: rgba(34, 197, 94, 0.4);
+      background: rgba(34, 197, 94, 0.1);
+    }
+    .status-badge.done .status-dot {
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+      animation: none;
     }
     .feedback-link {
       color: var(--accent);
@@ -375,11 +441,6 @@
       -webkit-app-region: no-drag;
     }
     .feedback-link:hover { background: rgba(245, 166, 35, 0.25); color: #fff; }
-    .version-label {
-      color: var(--text-dim);
-      font-size: 10px;
-      opacity: 0.7;
-    }
 
     /* ===== FEEDBACK MODAL ===== */
     .modal-overlay {
@@ -512,16 +573,17 @@
   </style>
 </head>
 <body>
+  <div class="status-badge" id="statusBadge"><span class="status-dot"></span><span id="statusBadgeText">Status: Ready</span></div>
+  <button class="exit-badge" id="btnExit">EXIT</button>
+
   <!-- BIG TITLE -->
   <div class="header">
     <div class="logo">
       <img src="assets/icon.png" alt="1132 Fixer">
-      <div class="logo-text">
-        <span class="logo-num">1132</span>
-        <span class="logo-label">Fixer</span>
-      </div>
+      <span class="logo-title">1132 Fixer</span>
+      <div class="logo-sep"></div>
+      <span class="logo-desc">Fix Zoom Error 1132 device bans on Windows</span>
     </div>
-    <span class="version" id="appVersion">v4.0</span>
   </div>
 
   <!-- HERO CENTER -->
@@ -537,7 +599,7 @@
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
         </svg>
-        <span class="btn-label">FIX</span>
+        <span class="btn-label">FIX NOW</span>
         <span class="btn-pct" id="btnPct">0%</span>
         <div class="btn-done">
           <span class="check">✓</span>
@@ -571,8 +633,8 @@
     <div class="hazard-bar"></div>
     <div class="footer-content">
       <button class="feedback-link" id="btnFeedback">Report Bug / Feedback</button>
-      <span class="version-label" id="versionLabel"></span>
-      <span class="admin-badge" id="adminStatus">ADMINISTRATOR</span>
+      <span class="version" id="appVersion">v4.0</span>
+      <button class="admin-badge" id="adminStatus">ADMINISTRATOR</button>
     </div>
   </div>
 

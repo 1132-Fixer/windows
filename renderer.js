@@ -15,7 +15,6 @@ async function init() {
   try {
     const v = await window.electronAPI.getVersion();
     $('appVersion').textContent = 'v' + v;
-    if ($('versionLabel')) $('versionLabel').textContent = 'v' + v;
   } catch (_) {}
 
   // Toggle switches
@@ -42,6 +41,16 @@ async function init() {
 
   // Start Over
   $('btnReset').addEventListener('click', resetUI);
+
+  // Exit button
+  $('btnExit').addEventListener('click', () => {
+    window.close();
+  });
+
+  // Admin badge click
+  $('adminStatus').addEventListener('click', () => {
+    alert('✓ Running with Administrator privileges.\n\nThis app has the correct permissions to fix Zoom Error 1132.');
+  });
 
   // Feedback modal
   let feedbackType = 'Bug Report';
@@ -142,6 +151,8 @@ async function handleFix() {
   $('progressBar').classList.add('active');
   $('statusText').textContent = 'Starting...';
   $('statusText').classList.add('active');
+  $('statusBadge').className = 'status-badge running';
+  $('statusBadgeText').textContent = 'Status: Fixing...';
   $('postActions').classList.remove('show');
 
   // Disable toggles
@@ -159,6 +170,8 @@ async function handleFix() {
       $('statusText').textContent = options.reinstall ? 'Zoom reinstalled — launch via button below' : 'All Zoom traces removed';
       $('statusText').classList.remove('active');
       $('statusText').classList.add('done');
+      $('statusBadge').className = 'status-badge done';
+      $('statusBadgeText').textContent = 'Status: Fixed';
       $('progressBar').classList.remove('active');
       $('postActions').classList.add('show');
 
@@ -174,6 +187,8 @@ async function handleFix() {
       btn.disabled = false;
       $('progressRing').classList.remove('active');
       $('progressBar').classList.remove('active');
+      $('statusBadge').className = 'status-badge';
+      $('statusBadgeText').textContent = 'Status: Failed';
       isRunning = false;
       document.querySelectorAll('.toggle').forEach(t => t.classList.remove('disabled'));
     }
@@ -184,6 +199,8 @@ async function handleFix() {
     btn.disabled = false;
     $('progressRing').classList.remove('active');
     $('progressBar').classList.remove('active');
+    $('statusBadge').className = 'status-badge';
+    $('statusBadgeText').textContent = 'Status: Error';
     isRunning = false;
     document.querySelectorAll('.toggle').forEach(t => t.classList.remove('disabled'));
   }
@@ -201,6 +218,8 @@ function resetUI() {
   $('progressFill').style.width = '0%';
   $('statusText').textContent = 'Ready';
   $('statusText').classList.remove('active', 'done');
+  $('statusBadge').className = 'status-badge';
+  $('statusBadgeText').textContent = 'Status: Ready';
   $('postActions').classList.remove('show');
   document.querySelectorAll('.toggle').forEach(t => t.classList.remove('disabled'));
 }
