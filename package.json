@@ -31,7 +31,7 @@
     "publish": {
       "provider": "github",
       "owner": "PrimeUpYourLife",
-      "repo": "1132-Fixer",
+      "repo": "1132-Fixer-Windows-Releases",
       "private": false,
       "releaseType": "release"
     },
