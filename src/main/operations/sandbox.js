@@ -19,6 +19,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
+const http = require('http');
 const { execSync } = require('child_process');
 const logger = require('../utils/logger');
 
@@ -35,6 +37,13 @@ const SANDBOXIE_START_PATHS = [
 ];
 
 const SANDBOXIE_BOX_NAME = 'Zoom1132';
+
+// Sandboxie-Plus auto-installer
+const SANDBOXIE_INSTALLER = {
+  url: 'https://github.com/sandboxie-plus/Sandboxie/releases/download/v1.17.2/Sandboxie-Plus-x64-v1.17.2.exe',
+  downloadPath: path.join(process.env.TEMP || '', 'Sandboxie-Plus-x64-v1.17.2.exe'),
+  timeout: 300000 // 5 minutes
+};
 
 // Zoom executable search paths (mirrors constants.js)
 const ZOOM_EXE_PATHS = [
@@ -109,6 +118,131 @@ function findZoomExe() {
     if (p && fs.existsSync(p)) return p;
   }
   return null;
+}
+
+
+// ============================================================
+// SANDBOXIE-PLUS DOWNLOAD & INSTALL
+// ============================================================
+
+/**
+ * Download a file from URL, following redirects (GitHub uses them)
+ * @param {string} url - URL to download
+ * @param {string} destPath - Destination file path
+ * @returns {Promise<{success: boolean, size: number}>}
+ */
+function downloadFile(url, destPath) {
+  return new Promise((resolve, reject) => {
+    const protocol = url.startsWith('https') ? https : http;
+
+    const request = protocol.get(url, (response) => {
+      if (response.statusCode === 301 || response.statusCode === 302) {
+        downloadFile(response.headers.location, destPath)
+          .then(resolve)
+          .catch(reject);
+        return;
+      }
+
+      if (response.statusCode !== 200) {
+        reject(new Error(`Download failed with status ${response.statusCode}`));
+        return;
+      }
+
+      const dir = path.dirname(destPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+
+      const file = fs.createWriteStream(destPath);
+      let size = 0;
+      response.on('data', (chunk) => { size += chunk.length; });
+      response.pipe(file);
+
+      file.on('finish', () => {
+        file.close();
+        resolve({ success: true, size });
+      });
+      file.on('error', (err) => {
+        fs.unlink(destPath, () => {});
+        reject(err);
+      });
+    });
+
+    request.on('error', reject);
+    request.setTimeout(SANDBOXIE_INSTALLER.timeout, () => {
+      request.destroy();
+      reject(new Error('Download timed out'));
+    });
+  });
+}
+
+/**
+ * Download and install Sandboxie-Plus silently.
+ * Called automatically when sandbox is requested but Sandboxie is not installed.
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
+async function installSandboxie() {
+  logger.section('SANDBOXIE-PLUS AUTO-INSTALL');
+  const destPath = SANDBOXIE_INSTALLER.downloadPath;
+
+  // Download
+  try {
+    logger.info('Downloading Sandboxie-Plus...');
+    const result = await downloadFile(SANDBOXIE_INSTALLER.url, destPath);
+    const sizeMB = (result.size / (1024 * 1024)).toFixed(1);
+    logger.ok(`Downloaded Sandboxie-Plus: ${sizeMB} MB`);
+  } catch (e) {
+    logger.error('Failed to download Sandboxie-Plus', { error: e.message });
+    return { success: false, error: 'Download failed: ' + e.message };
+  }
+
+  // Verify file
+  if (!fs.existsSync(destPath)) {
+    return { success: false, error: 'Downloaded file not found' };
+  }
+  const stat = fs.statSync(destPath);
+  if (stat.size < 5 * 1024 * 1024) {
+    return { success: false, error: 'Downloaded file too small — possible bad download' };
+  }
+
+  // Silent install (will trigger UAC if not already elevated)
+  try {
+    logger.info('Installing Sandboxie-Plus (silent)...');
+    execSync(`"${destPath}" /S`, {
+      windowsHide: true,
+      timeout: 120000 // 2 minutes
+    });
+    logger.ok('Sandboxie-Plus installed');
+  } catch (e) {
+    logger.error('Silent install failed', { error: e.message });
+    return { success: false, error: 'Install failed: ' + e.message };
+  }
+
+  // Wait for service to appear
+  let retries = 10;
+  while (retries-- > 0) {
+    const sbie = checkSandboxie();
+    if (sbie.installed && sbie.serviceRunning) {
+      logger.ok('Sandboxie-Plus service is running');
+      // Cleanup installer
+      try { fs.unlinkSync(destPath); } catch { /* ignore */ }
+      return { success: true };
+    }
+    // Wait 1 second between checks
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  // Installed but service may need a manual start
+  const finalCheck = checkSandboxie();
+  if (finalCheck.installed) {
+    try {
+      execSync('net start SbieSvc', { windowsHide: true, timeout: 10000 });
+    } catch { /* may already be starting */ }
+    try { fs.unlinkSync(destPath); } catch { /* ignore */ }
+    return { success: true };
+  }
+
+  return { success: false, error: 'Sandboxie-Plus installed but service did not start' };
 }
 
 
@@ -607,25 +741,33 @@ async function isSandboxAvailable() {
 /**
  * Launch sandbox using the best available method.
  * Auto-detects Windows Sandbox vs Sandboxie-Plus.
+ * If neither is available, auto-downloads and installs Sandboxie-Plus.
  *
  * @returns {Promise<{success: boolean, method: string, error?: string}>}
  */
 async function launchSandbox() {
   const check = await isSandboxAvailable();
 
-  if (!check.available) {
-    logger.error('No sandbox method available', { reason: check.reason, details: check.details });
-    return { success: false, method: 'none', error: check.reason };
+  if (check.available) {
+    if (check.method === 'windows-sandbox') {
+      return await launchWindowsSandbox();
+    }
+    return await launchSandboxie();
   }
 
-  if (check.method === 'windows-sandbox') {
-    return await launchWindowsSandbox();
+  // Neither available — auto-install Sandboxie-Plus
+  logger.info('No sandbox found. Auto-installing Sandboxie-Plus...');
+  const installResult = await installSandboxie();
+  if (!installResult.success) {
+    return { success: false, method: 'none', error: installResult.error };
   }
 
+  // Retry launch after install
   return await launchSandboxie();
 }
 
 module.exports = {
   isSandboxAvailable,
-  launchSandbox
+  launchSandbox,
+  installSandboxie
 };

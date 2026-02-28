@@ -28,9 +28,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openLogFolder: () => ipcRenderer.invoke('open-log-folder'),
   saveLog: (content) => ipcRenderer.invoke('save-log', content),
 
-  // === WINDOWS SANDBOX ===
+  // === SANDBOX (Windows Sandbox + Sandboxie-Plus) ===
   checkSandbox: () => ipcRenderer.invoke('check-sandbox'),
   launchSandbox: () => ipcRenderer.invoke('launch-sandbox'),
+  installSandboxie: () => ipcRenderer.invoke('install-sandboxie'),
 
   // === SELF-TEST ===
   runSelfTest: () => ipcRenderer.invoke('run-self-test'),

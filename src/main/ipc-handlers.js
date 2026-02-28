@@ -452,7 +452,7 @@ function registerHandlers() {
   });
 
   // ========================================
-  // WINDOWS SANDBOX
+  // SANDBOX (Windows Sandbox + Sandboxie-Plus)
   // ========================================
 
   ipcMain.handle('check-sandbox', async () => {
@@ -461,6 +461,10 @@ function registerHandlers() {
 
   ipcMain.handle('launch-sandbox', async () => {
     return await sandbox.launchSandbox();
+  });
+
+  ipcMain.handle('install-sandboxie', async () => {
+    return await sandbox.installSandboxie();
   });
 }
 
