@@ -8,8 +8,8 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     :root {
-      --bg-top: #0f1a30;
-      --bg-bot: #060d1a;
+      --bg-top: #0a1020;
+      --bg-bot: #050a14;
       --accent: #f5a623;
       --accent-hot: #ff8c00;
       --accent-glow: rgba(245, 166, 35, 0.5);
@@ -24,7 +24,7 @@
 
     body {
       font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
-      background: linear-gradient(170deg, var(--bg-top) 0%, #0a1530 40%, var(--bg-bot) 100%);
+      background: linear-gradient(170deg, var(--bg-top) 0%, #081018 40%, var(--bg-bot) 100%);
       color: var(--text);
       height: 100vh;
       display: flex;
@@ -38,8 +38,8 @@
       content: '';
       position: fixed;
       inset: 0;
-      background: radial-gradient(ellipse at 30% 20%, rgba(245,166,35,0.08) 0%, transparent 60%),
-                  radial-gradient(ellipse at 70% 80%, rgba(26,111,181,0.1) 0%, transparent 50%);
+      background: radial-gradient(ellipse at 30% 20%, rgba(245,166,35,0.04) 0%, transparent 60%),
+                  radial-gradient(ellipse at 70% 80%, rgba(26,111,181,0.05) 0%, transparent 50%);
       pointer-events: none;
       z-index: 0;
     }
@@ -49,7 +49,7 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 28px 24px 0;
+      padding: 24px 24px 0;
       position: relative;
       z-index: 1;
       -webkit-app-region: drag;
@@ -57,13 +57,13 @@
     .logo {
       display: flex;
       align-items: center;
-      gap: 16px;
+      gap: 18px;
     }
     .logo img {
-      width: 64px;
-      height: 64px;
-      border-radius: 14px;
-      filter: drop-shadow(0 4px 12px rgba(0,0,0,0.5));
+      width: 82px;
+      height: 82px;
+      border-radius: 18px;
+      filter: drop-shadow(0 6px 20px rgba(0,0,0,0.7));
     }
     .logo-text {
       display: flex;
@@ -71,31 +71,31 @@
       align-items: flex-start;
     }
     .logo-num {
-      font-size: 52px;
+      font-size: 56px;
       font-weight: 900;
-      letter-spacing: 4px;
+      letter-spacing: 5px;
       line-height: 1;
-      background: linear-gradient(180deg, #ffd700, #f5a623, #e8890c);
+      background: linear-gradient(180deg, #ffe066, #ffd700, #f5a623);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
-      filter: drop-shadow(0 2px 6px rgba(245,166,35,0.5));
+      filter: drop-shadow(0 2px 8px rgba(245,166,35,0.6));
     }
     .logo-label {
-      color: #c0c8d4;
-      font-weight: 600;
-      font-size: 18px;
-      letter-spacing: 10px;
+      color: #9aacbf;
+      font-weight: 700;
+      font-size: 19px;
+      letter-spacing: 12px;
       text-transform: uppercase;
-      margin-top: 2px;
+      margin-top: 3px;
     }
     .version {
       font-size: 11px;
       color: var(--text-dim);
-      background: rgba(255,255,255,0.08);
-      padding: 3px 12px;
+      background: rgba(255,255,255,0.06);
+      padding: 4px 14px;
       border-radius: 20px;
-      border: 1px solid rgba(255,255,255,0.1);
-      margin-top: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      margin-top: 12px;
     }
 
     /* ===== MAIN — HERO DOMINANT ===== */
@@ -394,7 +394,7 @@
     }
     .modal-overlay.show { display: flex; }
     .modal {
-      background: linear-gradient(170deg, #162a4a 0%, #0d1b30 100%);
+      background: linear-gradient(170deg, #10203a 0%, #0a1525 100%);
       border: 1px solid rgba(255,255,255,0.1);
       border-radius: 16px;
       padding: 24px;

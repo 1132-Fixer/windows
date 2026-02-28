@@ -1,6 +1,6 @@
 {
   "name": "1132-fixer",
-  "version": "4.0.10",
+  "version": "4.0.11",
   "description": "Zoom Error 1132 fix tool - device fingerprint reset",
   "main": "src/main/index.js",
   "scripts": {
