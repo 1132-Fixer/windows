@@ -1,122 +1,58 @@
-# 1132 Eliminator
+<p align="center">
+  <img src="assets/icon.png" alt="1132 Fixer" width="180">
+</p>
 
-**Forensic Zoom Error 1132 elimination tool — device fingerprint purge and clean reset.**
+<h1 align="center">1132 Fixer</h1>
 
-A Windows utility that resolves Zoom Error 1132 (device bans) by performing a forensic-grade purge of all Zoom artifacts, device fingerprints, and telemetry data, then optionally reinstalls a clean copy of Zoom.
+<p align="center">
+  <strong>Fix Zoom Error 1132 device bans on Windows</strong><br>
+  Reset device fingerprints, reinstall clean, get back on Zoom.
+</p>
 
-## Installation
+<p align="center">
+  <a href="https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Version-/releases/latest">Download Latest Release</a>
+</p>
 
-### Installer (Recommended)
-1. Download the latest **1132 Eliminator Setup** from [Releases](../../releases)
-2. Run the installer — UAC will prompt for admin automatically
-3. Desktop shortcut is created — launch from your desktop
-
-### Portable
-1. Download the latest **1132 Eliminator Portable** from [Releases](../../releases)
-2. Run directly (no installation needed)
+---
 
 ## What It Does
 
-The elimination protocol runs a 9-step purge sequence:
+Zoom Error 1132 is a device-level ban that persists even after uninstalling and reinstalling. This tool performs a complete device fingerprint reset so Zoom no longer recognizes the machine.
 
-| Step | Operation | Description |
-|------|-----------|-------------|
-| 1 | **Kill Processes** | Terminates all Zoom processes and services (116+ process variants) |
-| 2 | **Uninstall Zoom** | 5-method escalating uninstall chain |
-| 3 | **Remove Services** | Deletes Windows services, scheduled tasks, and WMI subscriptions |
-| 4 | **Clean Registry** | Purges 70+ registry key paths across HKCU, HKLM, HKCR, WOW64 |
-| 5 | **Wipe Fingerprints** | Eliminates device telemetry, Amcache, SRUM, credentials, prefetch |
-| 6 | **Delete Folders** | Removes 40+ Zoom data locations across all user profiles |
-| 7 | **Clean Recycle Bin** | Purges deleted Zoom files from the recycle bin |
-| 8 | **Rebuild Icon Cache** | Clears cached Zoom icons from the shell |
-| 9 | **Reinstall Zoom** | Downloads and installs a fresh copy with hardened settings |
+**One-click fix:**
 
-### Settings Preservation
-Your Zoom preferences (theme, audio devices, meeting options, video settings) are automatically backed up before each purge and restored after reinstall. No need to reconfigure Zoom after every reset.
+| Step | Operation |
+|------|-----------|
+| 1 | Kill all Zoom processes and services |
+| 2 | Uninstall Zoom completely |
+| 3 | Remove services, scheduled tasks, WMI subscriptions |
+| 4 | Clean registry (70+ key paths) |
+| 5 | Wipe device fingerprints and telemetry |
+| 6 | Delete all Zoom data folders |
+| 7 | Clean recycle bin and icon cache |
+| 8 | Randomize computer name |
+| 9 | Download and reinstall Zoom fresh |
 
-### Fingerprint Targets
-The core of Error 1132 resolution — these device identifiers cause the ban:
-- Telemetry databases (telemetrydata.db, zoomus.db, zoom.db)
-- CptService device ID storage
-- Registry service fingerprints
-- Amcache program execution database
-- SRUM resource usage monitor
-- Windows credentials and cached tokens
-- Prefetch execution history, event logs, DNS cache
-- Firewall rules, jump lists, crash dumps, certificates
+## Install
 
-## Options
+Download the latest **Setup .exe** from [Releases](https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Version-/releases/latest).
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| Uninstall Zoom | On | Remove Zoom before purge |
-| Reinstall Zoom | On | Download and install fresh Zoom after purge |
-| Launch Zoom | Off | Auto-launch Zoom after reinstall |
+> Requires **Windows 10/11** and **Administrator** privileges.
 
-## CLI Mode
+## Usage
 
-Run headless from the command line:
+1. Run **1132 Fixer**
+2. Toggle options (Uninstall / Reinstall / Auto-launch)
+3. Press the **FIX** button
+4. Wait for completion
+5. Launch Zoom
 
-```bash
-# Full reset
-1132-eliminator.exe --cli --full-reset
+The app auto-updates when new versions are available.
 
-# Self-test (dry run, no changes)
-1132-eliminator.exe --cli --self-test
+## Feedback
 
-# Skip reinstall
-1132-eliminator.exe --cli --full-reset --no-reinstall
-
-# Export session as JSON
-1132-eliminator.exe --cli --full-reset --json
-
-# List preset profiles
-1132-eliminator.exe --cli --list-presets
-
-# Apply a preset
-1132-eliminator.exe --cli --apply-preset quiet-meetings
-```
-
-### Presets
-Pre-built Zoom configuration profiles applied after reinstall:
-- **quiet-meetings** — Mute on join, no video, no notifications
-- **studio-audio** — High quality audio, original sound, stereo
-- **low-bandwidth** — Disable video, optimize for slow connections
-- **presentation** — HD video, screen sharing optimized
-- **privacy** — Video off, no sync, no chat history
-
-## Building from Source
-
-```bash
-npm install
-
-# Run in development
-npm start
-
-# Build installer (auto-bumps patch version)
-npm run build:installer
-
-# Build portable (auto-bumps patch version)
-npm run build
-
-# Build both
-npm run build:all
-
-# Manual version bump
-npm run bump          # patch (3.2.1 → 3.2.2)
-npm run bump:minor    # minor (3.2.x → 3.3.0)
-npm run bump:major    # major (3.x.x → 4.0.0)
-```
-
-## Requirements
-- Windows 10/11 (64-bit)
-- Administrator privileges (UAC prompt on launch via Windows manifest)
-
-## Version
-**v3.2.2** — 1132 Eliminator
-
-## Author
-High Texas
+Use the **Report Bug / Feedback** button in the app to submit issues and feature requests.
 
 ## License
-MIT
+
+MIT - High Texas

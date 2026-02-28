@@ -1,6 +1,6 @@
 /**
- * 1132 Eliminator - Main Process Entry Point
- * Zoom Error 1132 elimination tool - forensic device fingerprint purge
+ * 1132 Fixer - Main Process Entry Point
+ * Zoom Error 1132 fix tool - device fingerprint reset
  *
  * CLI Mode: Run with --cli flag for headless operation
  *   --cli             Run in CLI mode (no GUI)
@@ -14,10 +14,11 @@
  *   --list-presets    List available preset profiles
  *   --apply-preset X  Apply a preset profile (e.g., quiet-meetings)
  *
- * @version 3.2.9
+ * @version 4.0.9
  */
 
 const { app, BrowserWindow, dialog, nativeTheme } = require('electron');
+const { autoUpdater } = require('electron-updater');
 
 // Force dark mode always
 nativeTheme.themeSource = 'dark';
@@ -25,6 +26,11 @@ const path = require('path');
 const logger = require('./utils/logger');
 const ipcHandlers = require('./ipc-handlers');
 const { isElevated } = require('./utils/elevation');
+
+// Auto-updater config
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.logger = logger;
 
 // Single instance lock - prevent multiple windows
 const gotTheLock = app.requestSingleInstanceLock();
@@ -58,9 +64,10 @@ async function createWindow() {
     height: 700,
     minWidth: 800,
     minHeight: 600,
-    title: '1132 Eliminator',
+    title: '1132 Fixer',
     icon: path.join(__dirname, '../../assets/icon.ico'),
-    backgroundColor: '#0a0a0a',
+    backgroundColor: '#0a0e1a',
+    autoHideMenuBar: true,
     show: false, // Don't show until ready
     webPreferences: {
       preload: path.join(__dirname, '../preload.js'),
@@ -107,6 +114,52 @@ async function createWindow() {
     platform: process.platform,
     arch: process.arch
   });
+
+  // Check for updates after window is ready (non-blocking)
+  setupAutoUpdater();
+}
+
+/**
+ * Set up auto-updater events and check for updates
+ */
+function setupAutoUpdater() {
+  autoUpdater.on('update-available', (info) => {
+    logger.info('Update available', { version: info.version });
+    if (mainWindow) {
+      mainWindow.webContents.send('update-status', {
+        status: 'available',
+        version: info.version
+      });
+    }
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    if (mainWindow) {
+      mainWindow.webContents.send('update-status', {
+        status: 'downloading',
+        percent: Math.round(progress.percent)
+      });
+    }
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    logger.info('Update downloaded', { version: info.version });
+    if (mainWindow) {
+      mainWindow.webContents.send('update-status', {
+        status: 'ready',
+        version: info.version
+      });
+    }
+  });
+
+  autoUpdater.on('error', (err) => {
+    logger.warn('Auto-update error', { error: err.message });
+  });
+
+  // Check for updates (silent, non-blocking)
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch(() => {});
+  }, 3000);
 }
 
 /**
@@ -433,7 +486,7 @@ process.on('uncaughtException', (error) => {
   logger.error('Uncaught exception', { error: error.message, stack: error.stack });
 
   dialog.showErrorBox(
-    '1132 Eliminator - Error',
+    '1132 Fixer - Error',
     `An unexpected error occurred:\n\n${error.message}\n\nCheck the log file for details.`
   );
 });

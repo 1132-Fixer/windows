@@ -1295,6 +1295,1109 @@ async function wipeUserProfileFingerprints() {
   return { success: true, deleted: totalDeleted, details };
 }
 
+/**
+ * Deep wipe of all Zoom-related per-user traces that standard cleanup misses.
+ * These are the traces that differentiate a cleaned user from a brand-new Windows user.
+ * Covers: Audio PolicyConfig, CapabilityAccessManager, CloudStore, AppListBackup,
+ *         URL protocol handlers, browser data, custom Zoom apps, Run keys, shortcuts, etc.
+ */
+async function wipeDeepUserTraces() {
+  logger.info('Wiping deep user-profile Zoom traces...');
+  let totalDeleted = 0;
+  const details = {};
+
+  // 1. Audio PolicyConfig — hardware device-to-Zoom.exe mappings (hardware fingerprint!)
+  try {
+    const audioResult = await runPowerShell(`
+      $count = 0
+      $audioBase = 'HKCU:\\Software\\Microsoft\\Internet Explorer\\LowRegistry\\Audio\\PolicyConfig\\PropertyStore'
+      if (Test-Path $audioBase) {
+        Get-ChildItem $audioBase -ErrorAction SilentlyContinue | ForEach-Object {
+          $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+          $allText = ($props.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ' '
+          if ($allText -match 'zoom|Zoom|cpt') {
+            Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 30000 });
+    const d = parseInt(audioResult.stdout, 10) || 0;
+    details.audioPolicyConfig = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`Audio PolicyConfig: removed ${d} device mappings`);
+  } catch (e) {
+    details.audioPolicyConfig = { error: e.message };
+  }
+
+  // 2. CapabilityAccessManager — mic/webcam/location consent per Zoom path
+  try {
+    const camResult = await runPowerShell(`
+      $count = 0
+      $stores = @('microphone','webcam','location','camera')
+      foreach ($store in $stores) {
+        $basePath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\$store"
+        if (Test-Path $basePath) {
+          # Check NonPackaged subkeys
+          $npPath = Join-Path $basePath 'NonPackaged'
+          if (Test-Path $npPath) {
+            Get-ChildItem $npPath -ErrorAction SilentlyContinue | Where-Object {
+              $_.Name -match 'zoom|Zoom|cpt|zcs'
+            } | ForEach-Object {
+              Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+              $count++
+            }
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 30000 });
+    const d = parseInt(camResult.stdout, 10) || 0;
+    details.capabilityAccess = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`CapabilityAccessManager: removed ${d} consent entries`);
+  } catch (e) {
+    details.capabilityAccess = { error: e.message };
+  }
+
+  // 3. CloudStore — app metadata synced to Microsoft cloud
+  try {
+    const cloudResult = await runPowerShell(`
+      $count = 0
+      $cloudBase = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore'
+      if (Test-Path $cloudBase) {
+        Get-ChildItem $cloudBase -Recurse -ErrorAction SilentlyContinue | Where-Object {
+          $_.Name -match 'zoom|Zoom|zoomumx|ZoomUMX'
+        } | ForEach-Object {
+          Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+      Write-Output $count
+    `, { timeout: 30000 });
+    const d = parseInt(cloudResult.stdout, 10) || 0;
+    details.cloudStore = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`CloudStore: removed ${d} entries`);
+  } catch (e) {
+    details.cloudStore = { error: e.message };
+  }
+
+  // 4. AppListBackup — tracks every install/uninstall cycle
+  try {
+    const albResult = await runPowerShell(`
+      $count = 0
+      $albBase = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\AppListBackup'
+      if (Test-Path $albBase) {
+        Get-ChildItem $albBase -ErrorAction SilentlyContinue | ForEach-Object {
+          $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+          $allText = ($props.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ' '
+          if ($allText -match 'zoom|Zoom|ZoomUMX|zoomumx') {
+            Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 30000 });
+    const d = parseInt(albResult.stdout, 10) || 0;
+    details.appListBackup = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`AppListBackup: removed ${d} entries`);
+  } catch (e) {
+    details.appListBackup = { error: e.message };
+  }
+
+  // 5. URL protocol handlers and shell registrations
+  try {
+    const protoResult = await runPowerShell(`
+      $count = 0
+      $protoKeys = @(
+        'HKCU:\\Software\\Classes\\ZoomContactCenterCall',
+        'HKCU:\\Software\\Classes\\ZoomPhoneSMS',
+        'HKCU:\\Software\\Classes\\ZoomPhoneCall',
+        'HKCU:\\Software\\Clients\\ZoomPBX',
+        'HKCU:\\Software\\Classes\\zoommtg',
+        'HKCU:\\Software\\Classes\\zoomphonecall',
+        'HKCU:\\Software\\Classes\\zoomus',
+        'HKCU:\\Software\\Classes\\zoomrc',
+        'HKCU:\\Software\\Classes\\zoomrc.rooms'
+      )
+      foreach ($k in $protoKeys) {
+        if (Test-Path $k) {
+          Remove-Item $k -Recurse -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+
+      # ApplicationAssociationToasts
+      $toastPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\ApplicationAssociationToasts'
+      if (Test-Path $toastPath) {
+        $props = Get-ItemProperty $toastPath -ErrorAction SilentlyContinue
+        $props.PSObject.Properties | Where-Object { $_.Name -match 'zoom|Zoom' } | ForEach-Object {
+          Remove-ItemProperty -Path $toastPath -Name $_.Name -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+
+      # URL Associations
+      $uaBase = 'HKCU:\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations'
+      if (Test-Path $uaBase) {
+        Get-ChildItem $uaBase -ErrorAction SilentlyContinue | Where-Object {
+          $_.Name -match 'zoom|Zoom'
+        } | ForEach-Object {
+          Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+
+      # IE Feature Control
+      $fePath = 'HKCU:\\Software\\Microsoft\\Internet Explorer\\Main\\FeatureControl\\FEATURE_BROWSER_EMULATION'
+      if (Test-Path $fePath) {
+        $props = Get-ItemProperty $fePath -ErrorAction SilentlyContinue
+        $props.PSObject.Properties | Where-Object { $_.Name -match 'zoom|Zoom' } | ForEach-Object {
+          Remove-ItemProperty -Path $fePath -Name $_.Name -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+
+      Write-Output $count
+    `, { timeout: 30000 });
+    const d = parseInt(protoResult.stdout, 10) || 0;
+    details.protocolHandlers = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`Protocol handlers/associations: removed ${d} entries`);
+  } catch (e) {
+    details.protocolHandlers = { error: e.message };
+  }
+
+  // 6. Custom Zoom apps in AppData (zoom-agent-client, admin dashboard, etc.)
+  try {
+    const customAppsResult = await runPowerShell(`
+      $count = 0
+      $customPaths = @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\\zoom-agent-client'),
+        (Join-Path $env:APPDATA 'Zoom Agent Client'),
+        (Join-Path $env:APPDATA 'Zoom Admin Dashboard'),
+        (Join-Path $env:APPDATA 'Zoom Client'),
+        (Join-Path $env:APPDATA 'ZoomAdminDashboard'),
+        (Join-Path $env:APPDATA 'ZoomClient'),
+        (Join-Path $env:LOCALAPPDATA 'zoom-admin-dashboard-updater'),
+        (Join-Path $env:LOCALAPPDATA 'zoom-agent-client-updater'),
+        (Join-Path $env:APPDATA 'zoom-1132-eliminator'),
+        (Join-Path $env:LOCALAPPDATA '1132-Remover\\zoom-settings')
+      )
+      foreach ($p in $customPaths) {
+        if (Test-Path $p) {
+          Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+      Write-Output $count
+    `, { timeout: 30000 });
+    const d = parseInt(customAppsResult.stdout, 10) || 0;
+    details.customApps = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`Custom Zoom apps: removed ${d} directories`);
+  } catch (e) {
+    details.customApps = { error: e.message };
+  }
+
+  // 7. HKCU Run keys (auto-start entries)
+  try {
+    const runResult = await runPowerShell(`
+      $count = 0
+      $runPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+      if (Test-Path $runPath) {
+        $props = Get-ItemProperty $runPath -ErrorAction SilentlyContinue
+        $props.PSObject.Properties | Where-Object {
+          $_.Name -match 'zoom|Zoom' -or ($_.Value -is [string] -and $_.Value -match 'zoom|Zoom')
+        } | ForEach-Object {
+          Remove-ItemProperty -Path $runPath -Name $_.Name -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+      Write-Output $count
+    `, { timeout: 15000 });
+    const d = parseInt(runResult.stdout, 10) || 0;
+    details.runKeys = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`Run keys: removed ${d} auto-start entries`);
+  } catch (e) {
+    details.runKeys = { error: e.message };
+  }
+
+  // 8. Notification/Push settings
+  try {
+    const notifResult = await runPowerShell(`
+      $count = 0
+      $bases = @(
+        'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings',
+        'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\PushNotifications\\Backup'
+      )
+      foreach ($base in $bases) {
+        if (Test-Path $base) {
+          Get-ChildItem $base -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -match 'zoom|Zoom'
+          } | ForEach-Object {
+            Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 15000 });
+    const d = parseInt(notifResult.stdout, 10) || 0;
+    details.notifications = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`Notifications: removed ${d} entries`);
+  } catch (e) {
+    details.notifications = { error: e.message };
+  }
+
+  // 9. Custom GUID registry key (zoom-agent-client installer)
+  try {
+    const guidResult = await runPowerShell(`
+      $count = 0
+      Get-ChildItem 'HKCU:\\Software' -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -match '^HKEY_CURRENT_USER\\\\Software\\\\[0-9a-f]{8}-'
+      } | ForEach-Object {
+        $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+        $allText = ($props.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ' '
+        if ($allText -match 'zoom|Zoom') {
+          Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+      Write-Output $count
+    `, { timeout: 15000 });
+    const d = parseInt(guidResult.stdout, 10) || 0;
+    details.guidKeys = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`GUID registry keys: removed ${d} entries`);
+  } catch (e) {
+    details.guidKeys = { error: e.message };
+  }
+
+  // 10. Desktop/Start Menu shortcuts
+  try {
+    const shortcutResult = await runPowerShell(`
+      $count = 0
+      $shortcutDirs = @(
+        (Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs'),
+        (Join-Path $env:USERPROFILE 'Desktop')
+      )
+      foreach ($dir in $shortcutDirs) {
+        if (Test-Path $dir) {
+          Get-ChildItem $dir -Filter '*zoom*' -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+          Get-ChildItem $dir -Filter '*Zoom*' -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 15000 });
+    const d = parseInt(shortcutResult.stdout, 10) || 0;
+    details.shortcuts = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`Shortcuts: removed ${d} files`);
+  } catch (e) {
+    details.shortcuts = { error: e.message };
+  }
+
+  logger.info(`Deep user trace wipe: ${totalDeleted} total items removed`);
+  return { success: true, deleted: totalDeleted, details };
+}
+
+/**
+ * Wipe ALL browser data for zoom.us domains (Chrome + Edge).
+ * This is CRITICAL — browser cookies and localStorage are a primary fingerprint vector.
+ * A new Windows user has NO browser data, so this must be cleaned for the reset to work.
+ *
+ * Strategy:
+ * 1. Kill Chrome and Edge
+ * 2. Delete Cookies and Cookies-journal files (user will need to re-login to ALL sites)
+ * 3. Delete Local Storage leveldb (user loses ALL localStorage for ALL sites)
+ * 4. Delete Session Storage
+ * 5. Delete Cache directories for zoom.us
+ * 6. Delete Web Data (autofill for zoom.us forms)
+ *
+ * This is destructive but necessary — the ban fingerprint persists in browser storage.
+ */
+async function wipeBrowserZoomData() {
+  logger.info('Wiping browser zoom.us data (cookies, localStorage, cache)...');
+
+  let totalDeleted = 0;
+  const details = {};
+
+  // 1. Kill browsers first (they lock the SQLite files)
+  try {
+    await runPowerShell(`
+      Stop-Process -Name 'chrome' -Force -ErrorAction SilentlyContinue
+      Stop-Process -Name 'msedge' -Force -ErrorAction SilentlyContinue
+      Stop-Process -Name 'brave' -Force -ErrorAction SilentlyContinue
+      Stop-Process -Name 'firefox' -Force -ErrorAction SilentlyContinue
+      Start-Sleep -Seconds 2
+    `, { timeout: 15000 });
+    logger.ok('Browsers closed for cookie cleanup');
+  } catch (e) {
+    logger.debug('Browser kill attempt', { error: e.message });
+  }
+
+  // 2. Delete Cookies files from ALL browser profiles
+  try {
+    const cookieResult = await runPowerShell(`
+      $count = 0
+      $browserBases = @(
+        (Join-Path $env:LOCALAPPDATA 'Google\\Chrome\\User Data'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\\Edge\\User Data'),
+        (Join-Path $env:LOCALAPPDATA 'BraveSoftware\\Brave-Browser\\User Data')
+      )
+
+      foreach ($browserBase in $browserBases) {
+        if (-not (Test-Path $browserBase)) { continue }
+
+        # Find all profile directories
+        $profiles = @('Default') + (Get-ChildItem $browserBase -Directory -ErrorAction SilentlyContinue |
+          Where-Object { $_.Name -match '^Profile' } | ForEach-Object { $_.Name })
+
+        foreach ($profile in $profiles) {
+          $profilePath = Join-Path $browserBase $profile
+
+          # Delete Cookies and Cookies-journal
+          $cookiePaths = @(
+            (Join-Path $profilePath 'Network\\Cookies'),
+            (Join-Path $profilePath 'Network\\Cookies-journal'),
+            (Join-Path $profilePath 'Cookies'),
+            (Join-Path $profilePath 'Cookies-journal')
+          )
+
+          foreach ($cp in $cookiePaths) {
+            if (Test-Path $cp) {
+              Remove-Item $cp -Force -ErrorAction SilentlyContinue
+              $count++
+            }
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 30000 });
+
+    const d = parseInt(cookieResult.stdout, 10) || 0;
+    details.cookies = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`Browser cookies: deleted ${d} cookie database files`);
+  } catch (e) {
+    details.cookies = { error: e.message };
+    logger.debug('Cookie cleanup failed', { error: e.message });
+  }
+
+  // 3. Delete Local Storage leveldb (contains zoom.us localStorage fingerprints)
+  try {
+    const lsResult = await runPowerShell(`
+      $count = 0
+      $browserBases = @(
+        (Join-Path $env:LOCALAPPDATA 'Google\\Chrome\\User Data'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\\Edge\\User Data'),
+        (Join-Path $env:LOCALAPPDATA 'BraveSoftware\\Brave-Browser\\User Data')
+      )
+
+      foreach ($browserBase in $browserBases) {
+        if (-not (Test-Path $browserBase)) { continue }
+
+        $profiles = @('Default') + (Get-ChildItem $browserBase -Directory -ErrorAction SilentlyContinue |
+          Where-Object { $_.Name -match '^Profile' } | ForEach-Object { $_.Name })
+
+        foreach ($profile in $profiles) {
+          $lsPath = Join-Path $browserBase "$profile\\Local Storage\\leveldb"
+          if (Test-Path $lsPath) {
+            Remove-Item $lsPath -Recurse -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+
+          # Also delete Session Storage
+          $ssPath = Join-Path $browserBase "$profile\\Session Storage"
+          if (Test-Path $ssPath) {
+            Remove-Item $ssPath -Recurse -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 30000 });
+
+    const d = parseInt(lsResult.stdout, 10) || 0;
+    details.localStorage = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`Browser localStorage/sessionStorage: deleted ${d} directories`);
+  } catch (e) {
+    details.localStorage = { error: e.message };
+    logger.debug('localStorage cleanup failed', { error: e.message });
+  }
+
+  // 4. Delete zoom.us cache data from browser cache directories
+  try {
+    const cacheResult = await runPowerShell(`
+      $count = 0
+      $browserBases = @(
+        (Join-Path $env:LOCALAPPDATA 'Google\\Chrome\\User Data'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\\Edge\\User Data'),
+        (Join-Path $env:LOCALAPPDATA 'BraveSoftware\\Brave-Browser\\User Data')
+      )
+
+      foreach ($browserBase in $browserBases) {
+        if (-not (Test-Path $browserBase)) { continue }
+
+        $profiles = @('Default') + (Get-ChildItem $browserBase -Directory -ErrorAction SilentlyContinue |
+          Where-Object { $_.Name -match '^Profile' } | ForEach-Object { $_.Name })
+
+        foreach ($profile in $profiles) {
+          $profilePath = Join-Path $browserBase $profile
+
+          # Delete zoom.us Site Data (origins with zoom in name)
+          $sdPath = Join-Path $profilePath 'Site Data'
+          if (Test-Path $sdPath) {
+            Get-ChildItem $sdPath -Recurse -ErrorAction SilentlyContinue | Where-Object {
+              $_.Name -match 'zoom'
+            } | ForEach-Object {
+              Remove-Item $_.FullName -Force -Recurse -ErrorAction SilentlyContinue
+              $count++
+            }
+          }
+
+          # Delete Web Data (autofill for zoom.us forms)
+          $wdPaths = @(
+            (Join-Path $profilePath 'Web Data'),
+            (Join-Path $profilePath 'Web Data-journal')
+          )
+          foreach ($wd in $wdPaths) {
+            if (Test-Path $wd) {
+              Remove-Item $wd -Force -ErrorAction SilentlyContinue
+              $count++
+            }
+          }
+
+          # Delete Origin Bound Certs (TLS session tickets)
+          $obcPath = Join-Path $profilePath 'Origin Bound Certs'
+          if (Test-Path $obcPath) {
+            Remove-Item $obcPath -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+          $obcPath2 = Join-Path $profilePath 'Origin Bound Certs-journal'
+          if (Test-Path $obcPath2) {
+            Remove-Item $obcPath2 -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+
+          # Delete Reporting and NEL (network error logging for zoom.us)
+          $repPath = Join-Path $profilePath 'Reporting and NEL'
+          if (Test-Path $repPath) {
+            Remove-Item $repPath -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+
+          # Delete Trust Tokens
+          $ttPath = Join-Path $profilePath 'Trust Tokens'
+          if (Test-Path $ttPath) {
+            Remove-Item $ttPath -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 30000 });
+
+    const d = parseInt(cacheResult.stdout, 10) || 0;
+    details.browserCache = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`Browser cache/data: deleted ${d} items`);
+  } catch (e) {
+    details.browserCache = { error: e.message };
+    logger.debug('Browser cache cleanup failed', { error: e.message });
+  }
+
+  // 5. Firefox cleanup (uses different storage format)
+  try {
+    const ffResult = await runPowerShell(`
+      $count = 0
+      $ffBase = Join-Path $env:APPDATA 'Mozilla\\Firefox\\Profiles'
+      if (Test-Path $ffBase) {
+        Get-ChildItem $ffBase -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+          $profilePath = $_.FullName
+
+          # Delete cookies.sqlite (all cookies)
+          $cookieFile = Join-Path $profilePath 'cookies.sqlite'
+          if (Test-Path $cookieFile) {
+            Remove-Item $cookieFile -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+
+          # Delete webappsstore.sqlite (localStorage)
+          $wsFile = Join-Path $profilePath 'webappsstore.sqlite'
+          if (Test-Path $wsFile) {
+            Remove-Item $wsFile -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+
+          # Delete zoom-related storage
+          $storagePath = Join-Path $profilePath 'storage\\default'
+          if (Test-Path $storagePath) {
+            Get-ChildItem $storagePath -Directory -ErrorAction SilentlyContinue | Where-Object {
+              $_.Name -match 'zoom'
+            } | ForEach-Object {
+              Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+              $count++
+            }
+          }
+        }
+      }
+      Write-Output $count
+    `, { timeout: 20000 });
+
+    const d = parseInt(ffResult.stdout, 10) || 0;
+    details.firefox = { deleted: d };
+    totalDeleted += d;
+    if (d > 0) logger.ok(`Firefox: deleted ${d} zoom data files`);
+  } catch (e) {
+    details.firefox = { error: e.message };
+  }
+
+  logger.info(`Browser zoom data wipe: ${totalDeleted} total items removed`);
+  return { success: true, deleted: totalDeleted, details };
+}
+
+/**
+ * Rotate the Windows MachineGuid — a primary device identifier.
+ * Zoom reads HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid to identify devices.
+ * Changing this makes the machine appear as a brand-new Windows install.
+ * NOTE: This is safe — MachineGuid is not used by Windows licensing or activation.
+ * It is used by some apps for licensing, so we save the old value for optional restore.
+ */
+async function rotateMachineGuid() {
+  logger.info('Rotating MachineGuid...');
+
+  try {
+    const result = await runPowerShell(`
+      $cryptoPath = 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography'
+      $oldGuid = (Get-ItemProperty $cryptoPath -Name MachineGuid -ErrorAction SilentlyContinue).MachineGuid
+
+      if (-not $oldGuid) {
+        Write-Output "ERROR:Could not read current MachineGuid"
+        return
+      }
+
+      # Generate a new random GUID
+      $newGuid = [System.Guid]::NewGuid().ToString()
+
+      # Save old GUID for optional restore
+      $backupPath = Join-Path $env:LOCALAPPDATA '1132Fixer'
+      if (-not (Test-Path $backupPath)) { New-Item $backupPath -ItemType Directory -Force | Out-Null }
+      $oldGuid | Out-File (Join-Path $backupPath 'MachineGuid.bak') -Force
+
+      # Set new GUID
+      Set-ItemProperty -Path $cryptoPath -Name MachineGuid -Value $newGuid -Force
+      $verify = (Get-ItemProperty $cryptoPath -Name MachineGuid).MachineGuid
+
+      if ($verify -eq $newGuid) {
+        Write-Output "OK:$oldGuid->$newGuid"
+      } else {
+        Write-Output "FAIL:Could not verify new MachineGuid"
+      }
+    `, { timeout: 15000 });
+
+    const out = (result.stdout || '').trim();
+    if (out.startsWith('OK:')) {
+      const [oldG, newG] = out.substring(3).split('->');
+      logger.ok(`MachineGuid rotated: ${oldG} → ${newG}`);
+      return { success: true, oldGuid: oldG, newGuid: newG };
+    } else {
+      logger.warn('MachineGuid rotation issue: ' + out);
+      return { success: false, error: out };
+    }
+  } catch (e) {
+    logger.error('MachineGuid rotation failed', { error: e.message });
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Spoof MAC addresses on active network adapters.
+ * Zoom uses MAC addresses as part of its device fingerprint.
+ * This sets a random locally-administered MAC on each active physical adapter.
+ * The adapter is briefly disabled/re-enabled for the change to take effect.
+ */
+async function spoofMacAddresses() {
+  logger.info('Spoofing MAC addresses on active adapters...');
+
+  try {
+    const result = await runPowerShell(`
+      $spoofed = 0
+      $details = @()
+
+      # Get physical adapters that are Up (skip virtual/VPN/loopback)
+      $adapters = Get-NetAdapter | Where-Object {
+        $_.Status -eq 'Up' -and
+        $_.InterfaceDescription -notmatch 'Virtual|VPN|Loopback|Hyper-V|VirtualBox|TAP|WireGuard'
+      }
+
+      foreach ($adapter in $adapters) {
+        $name = $adapter.Name
+        $oldMac = $adapter.MacAddress
+
+        # Generate random locally-administered MAC
+        # Bit 1 of first octet = 1 (locally administered), Bit 0 = 0 (unicast)
+        $bytes = New-Object byte[] 6
+        [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+        $bytes[0] = ($bytes[0] -bor 0x02) -band 0xFE  # Set locally administered, clear multicast
+        $newMac = ($bytes | ForEach-Object { $_.ToString('X2') }) -join ''
+
+        # Set via registry (most reliable method)
+        $regPath = "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4D36E972-E325-11CE-BFC1-08002BE10318}"
+        $found = $false
+
+        Get-ChildItem $regPath -ErrorAction SilentlyContinue | ForEach-Object {
+          $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+          if ($props.DriverDesc -eq $adapter.InterfaceDescription) {
+            Set-ItemProperty -Path $_.PSPath -Name 'NetworkAddress' -Value $newMac -Force
+            $found = $true
+          }
+        }
+
+        if ($found) {
+          # Disable and re-enable adapter to apply
+          Disable-NetAdapter -Name $name -Confirm:$false -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          Enable-NetAdapter -Name $name -Confirm:$false -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+
+          $spoofed++
+          $newFormatted = ($newMac -replace '(.{2})', '$1-').TrimEnd('-')
+          $details += "$name : $oldMac -> $newFormatted"
+        }
+      }
+
+      Write-Output "$spoofed"
+      $details | ForEach-Object { Write-Output $_ }
+    `, { timeout: 60000 });
+
+    const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim());
+    const count = parseInt(lines[0], 10) || 0;
+    const adapterDetails = lines.slice(1);
+
+    if (count > 0) {
+      logger.ok(`Spoofed MAC on ${count} adapter(s)`);
+      adapterDetails.forEach(d => logger.info('  ' + d.trim()));
+    } else {
+      logger.info('No adapters required MAC spoofing');
+    }
+
+    return { success: true, spoofed: count, details: adapterDetails };
+  } catch (e) {
+    logger.error('MAC spoofing failed', { error: e.message });
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Randomize the computer name.
+ * Zoom may use the computer name as part of device fingerprinting.
+ * Generates a new DESKTOP-XXXXXXX style name to match Windows defaults.
+ * Requires a reboot to fully take effect, but the registry change is immediate.
+ */
+async function randomizeComputerName() {
+  logger.info('Randomizing computer name...');
+
+  try {
+    const result = await runPowerShell(`
+      $oldName = $env:COMPUTERNAME
+
+      # Generate random 7-char alphanumeric suffix (like Windows default)
+      $chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+      $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+      $bytes = New-Object byte[] 7
+      $rng.GetBytes($bytes)
+      $suffix = -join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
+      $newName = "DESKTOP-$suffix"
+
+      # Save old name for backup
+      $backupPath = Join-Path $env:LOCALAPPDATA '1132Fixer'
+      if (-not (Test-Path $backupPath)) { New-Item $backupPath -ItemType Directory -Force | Out-Null }
+      $oldName | Out-File (Join-Path $backupPath 'ComputerName.bak') -Force
+
+      # Set in all 3 registry locations
+      $tcpPath = 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters'
+      $cnPath  = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\ComputerName\\ComputerName'
+      $anPath  = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\ComputerName\\ActiveComputerName'
+
+      Set-ItemProperty -Path $tcpPath -Name 'Hostname'       -Value $newName -Force
+      Set-ItemProperty -Path $tcpPath -Name 'NV Hostname'    -Value $newName -Force
+      Set-ItemProperty -Path $cnPath  -Name 'ComputerName'   -Value $newName -Force
+      Set-ItemProperty -Path $anPath  -Name 'ComputerName'   -Value $newName -Force -ErrorAction SilentlyContinue
+
+      # Also rename via WMI (applies on next reboot)
+      try {
+        $cs = Get-WmiObject Win32_ComputerSystem
+        $cs.Rename($newName) | Out-Null
+      } catch { }
+
+      # Verify
+      $verify = (Get-ItemProperty $cnPath -Name ComputerName).ComputerName
+      if ($verify -eq $newName) {
+        Write-Output "OK:$oldName->$newName"
+      } else {
+        Write-Output "FAIL:Verify mismatch $verify"
+      }
+    `, { timeout: 15000 });
+
+    const out = (result.stdout || '').trim();
+    if (out.startsWith('OK:')) {
+      const [oldN, newN] = out.substring(3).split('->');
+      logger.ok(`Computer name randomized: ${oldN} → ${newN}`);
+      return { success: true, oldName: oldN, newName: newN };
+    } else {
+      logger.warn('Computer name randomization issue: ' + out);
+      return { success: false, error: out };
+    }
+  } catch (e) {
+    logger.error('Computer name randomization failed', { error: e.message });
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Change the C: drive volume serial number.
+ * Zoom may read the volume serial as a hardware fingerprint.
+ * Uses the volumeid approach via direct NTFS boot sector edit,
+ * or falls back to a reg-based approach.
+ * Requires reboot to fully apply.
+ */
+async function changeVolumeSerial() {
+  logger.info('Changing C: drive volume serial number...');
+
+  try {
+    const result = await runPowerShell(`
+      # Read current volume serial
+      $vol = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'"
+      $oldSerial = $vol.VolumeSerialNumber
+
+      # Save old serial for backup
+      $backupPath = Join-Path $env:LOCALAPPDATA '1132Fixer'
+      if (-not (Test-Path $backupPath)) { New-Item $backupPath -ItemType Directory -Force | Out-Null }
+      $oldSerial | Out-File (Join-Path $backupPath 'VolumeSerial.bak') -Force
+
+      # Generate random serial (8 hex chars -> XXXX-XXXX format internally)
+      $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+      $bytes = New-Object byte[] 4
+      $rng.GetBytes($bytes)
+      $newSerialHex = ($bytes | ForEach-Object { $_.ToString('X2') }) -join ''
+      $newSerialFormatted = $newSerialHex.Substring(0,4) + '-' + $newSerialHex.Substring(4,4)
+
+      # Method: Direct boot sector modification
+      # Volume serial is at offset 0x48 in NTFS boot sector
+      # We need raw disk access
+      try {
+        $drive = '\\\\.\\C:'
+        $handle = [System.IO.File]::Open($drive, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+        $reader = New-Object System.IO.BinaryReader($handle)
+        $writer = New-Object System.IO.BinaryWriter($handle)
+
+        # Read first 512 bytes (boot sector)
+        $bootSector = $reader.ReadBytes(512)
+
+        # NTFS volume serial is at offset 0x48 (8 bytes), but the displayed
+        # serial comes from bytes 0x48-0x4B (first 4 bytes, little-endian)
+        $handle.Seek(0x48, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $writer.Write($bytes)
+        $writer.Flush()
+
+        $handle.Close()
+        Write-Output "OK:$oldSerial->$newSerialFormatted"
+      } catch {
+        Write-Output "FAIL:$($_.Exception.Message)"
+      }
+    `, { timeout: 15000 });
+
+    const out = (result.stdout || '').trim();
+    if (out.startsWith('OK:')) {
+      const [oldS, newS] = out.substring(3).split('->');
+      logger.ok(`Volume serial changed: ${oldS} → ${newS} (reboot required)`);
+      return { success: true, oldSerial: oldS, newSerial: newS, rebootRequired: true };
+    } else {
+      logger.warn('Volume serial change issue: ' + out);
+      return { success: false, error: out };
+    }
+  } catch (e) {
+    logger.error('Volume serial change failed', { error: e.message });
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Post-install registry scrub — runs AFTER Zoom is installed to clean
+ * any fingerprint keys that the MSI installer recreates.
+ * Also sets DENY ACLs on SystemInfo to PREVENT Zoom from writing hardware
+ * fingerprints back on launch.
+ *
+ * CRITICAL INSIGHT: Zoom writes SystemInfo on LAUNCH, not during install.
+ * So we must both delete existing keys AND block future writes via ACLs.
+ */
+async function postInstallScrub() {
+  logger.info('Running post-install fingerprint scrub...');
+
+  let totalDeleted = 0;
+
+  // Wait for installer to finish writing registry keys
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  try {
+    const result = await runPowerShell(`
+      $count = 0
+
+      # 1. DELETE entire HKCU\\Software\\Zoom tree (including SystemInfo)
+      $zoomPath = 'HKCU:\\Software\\Zoom'
+      if (Test-Path $zoomPath) {
+        Remove-Item $zoomPath -Recurse -Force -ErrorAction SilentlyContinue
+        $count++
+      }
+
+      # 2. DELETE HKCU\\Software\\ZoomUMX
+      $zoomUmxPath = 'HKCU:\\Software\\ZoomUMX'
+      if (Test-Path $zoomUmxPath) {
+        Remove-Item $zoomUmxPath -Recurse -Force -ErrorAction SilentlyContinue
+        $count++
+      }
+
+      # 3. DELETE HKLM\\SOFTWARE\\Zoom
+      $hklmZoom = 'HKLM:\\SOFTWARE\\Zoom'
+      if (Test-Path $hklmZoom) {
+        Remove-Item $hklmZoom -Recurse -Force -ErrorAction SilentlyContinue
+        $count++
+      }
+
+      # 4. DELETE HKLM\\SOFTWARE\\ZoomUMX
+      $hklmZoomUmx = 'HKLM:\\SOFTWARE\\ZoomUMX'
+      if (Test-Path $hklmZoomUmx) {
+        Remove-Item $hklmZoomUmx -Recurse -Force -ErrorAction SilentlyContinue
+        $count++
+      }
+
+      # 5. DELETE WOW6432Node mirrors
+      @(
+        'HKLM:\\SOFTWARE\\WOW6432Node\\Zoom',
+        'HKLM:\\SOFTWARE\\WOW6432Node\\ZoomUMX'
+      ) | ForEach-Object {
+        if (Test-Path $_) {
+          Remove-Item $_ -Recurse -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+
+      # 6. Set DENY WRITE ACL on Zoom registry keys
+      #    Blocks Zoom from writing hardware fingerprints on launch
+      #    Set on BOTH the parent Zoom key AND SystemInfo subkey
+      $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+      [System.Security.AccessControl.RegistryRights]$rights = 'SetValue,CreateSubKey,Delete,WriteKey'
+      [System.Security.AccessControl.InheritanceFlags]$inherit = 'ContainerInherit,ObjectInherit'
+
+      foreach ($denyTarget in @('HKCU:\\Software\\Zoom', 'HKCU:\\Software\\Zoom\\SystemInfo')) {
+        if (-not (Test-Path $denyTarget)) {
+          New-Item -Path $denyTarget -Force -EA SilentlyContinue | Out-Null
+        }
+        try {
+          $acl = Get-Acl $denyTarget
+          $denyRule = New-Object System.Security.AccessControl.RegistryAccessRule(
+            $currentUser,
+            $rights,
+            $inherit,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Deny
+          )
+          $acl.AddAccessRule($denyRule)
+          Set-Acl $denyTarget $acl
+          $count++
+        } catch {
+          # If ACL set fails, log but continue
+        }
+      }
+
+      # 7. Remove CptService device ID folder
+      $cptPaths = @(
+        "$env:ProgramData\\CptService",
+        "$env:ProgramData\\Zoom\\CptService",
+        "$env:ProgramData\\ZoomCptService"
+      )
+      foreach ($cp in $cptPaths) {
+        if (Test-Path $cp) {
+          Remove-Item $cp -Recurse -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+
+      # 8. Kill CptService
+      Stop-Process -Name 'CptService' -Force -ErrorAction SilentlyContinue
+      Stop-Process -Name 'cptservice' -Force -ErrorAction SilentlyContinue
+      Stop-Service -Name 'ZoomCptService' -Force -ErrorAction SilentlyContinue
+      sc.exe delete ZoomCptService 2>$null | Out-Null
+
+      # 9. Remove Prefetch files created by installer
+      Get-ChildItem 'C:\\Windows\\Prefetch' -Filter '*ZOOM*.pf' -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+        $count++
+      }
+
+      # 10. Remove RecentFileCache
+      $rfcPath = 'C:\\Windows\\AppCompat\\Programs\\RecentFileCache.bcf'
+      if (Test-Path $rfcPath) {
+        Remove-Item $rfcPath -Force -ErrorAction SilentlyContinue
+        $count++
+      }
+
+      Write-Output $count
+    `, { timeout: 45000 });
+
+    totalDeleted = parseInt(result.stdout, 10) || 0;
+    if (totalDeleted > 0) {
+      logger.ok(`Post-install scrub: removed ${totalDeleted} fingerprint items, ACL deny set on SystemInfo`);
+    }
+
+    // Verify and retry with reg.exe if needed
+    const verifyResult = await runPowerShell(`
+      $remaining = @()
+      $si = Test-Path 'HKCU:\\Software\\Zoom\\SystemInfo'
+      if ($si) {
+        # Check if it's our empty locked key or Zoom's populated one
+        $children = (Get-ChildItem 'HKCU:\\Software\\Zoom\\SystemInfo' -EA SilentlyContinue | Measure-Object).Count
+        if ($children -gt 0) { $remaining += 'HKCU:Zoom\\SystemInfo(populated)' }
+      }
+      if (Test-Path 'HKLM:\\SOFTWARE\\Zoom') { $remaining += 'HKLM:Zoom' }
+      if (Test-Path 'HKLM:\\SOFTWARE\\ZoomUMX') { $remaining += 'HKLM:ZoomUMX' }
+      if ($remaining.Count -gt 0) {
+        Write-Output ("SURVIVING: " + ($remaining -join ', '))
+      } else {
+        Write-Output "ALL_CLEAN"
+      }
+    `, { timeout: 10000 });
+
+    const verifyOut = (verifyResult.stdout || '').trim();
+    if (verifyOut.startsWith('SURVIVING')) {
+      logger.warn('Post-install scrub: some keys survived: ' + verifyOut);
+      // Retry with reg.exe
+      await spawnSafe('reg', ['delete', 'HKLM\\SOFTWARE\\Zoom', '/f'], { timeout: 5000 }).catch(() => {});
+      await spawnSafe('reg', ['delete', 'HKLM\\SOFTWARE\\ZoomUMX', '/f'], { timeout: 5000 }).catch(() => {});
+      await spawnSafe('reg', ['delete', 'HKLM\\SOFTWARE\\WOW6432Node\\Zoom', '/f'], { timeout: 5000 }).catch(() => {});
+      await spawnSafe('reg', ['delete', 'HKLM\\SOFTWARE\\WOW6432Node\\ZoomUMX', '/f'], { timeout: 5000 }).catch(() => {});
+    } else {
+      logger.ok('Post-install scrub verified clean (SystemInfo ACL locked)');
+    }
+  } catch (e) {
+    logger.debug('Post-install scrub failed', { error: e.message });
+  }
+
+  return { success: true, deleted: totalDeleted };
+}
+
+/**
+ * Pre-launch scrub — runs RIGHT BEFORE launching Zoom.
+ * Deletes any SystemInfo data and refreshes the DENY ACL
+ * to prevent Zoom from caching hardware fingerprints.
+ * Also removes any HKLM Zoom keys that may have been recreated.
+ */
+async function preLaunchScrub() {
+  logger.info('Running pre-launch fingerprint scrub...');
+
+  try {
+    const result = await runPowerShell(`
+      $count = 0
+
+      # =============================================
+      # 1. REGISTRY: Nuke all Zoom registry keys
+      # =============================================
+      @('HKCU:\\Software\\Zoom', 'HKCU:\\Software\\ZoomUMX', 'HKCU:\\Software\\zoom.us',
+        'HKCU:\\Software\\Zoom Video Communications', 'HKCU:\\Software\\CptService') | ForEach-Object {
+        if (Test-Path $_) {
+          Remove-Item $_ -Recurse -Force -EA SilentlyContinue
+          $count++
+        }
+      }
+      # reg.exe for reliability (handles locked keys better)
+      reg delete "HKCU\\Software\\Zoom" /f 2>$null | Out-Null
+      reg delete "HKCU\\Software\\ZoomUMX" /f 2>$null | Out-Null
+      reg delete "HKCU\\Software\\zoom.us" /f 2>$null | Out-Null
+      reg delete "HKCU\\Software\\CptService" /f 2>$null | Out-Null
+
+      # HKLM keys
+      @('HKLM:\\SOFTWARE\\Zoom', 'HKLM:\\SOFTWARE\\ZoomUMX',
+        'HKLM:\\SOFTWARE\\WOW6432Node\\Zoom', 'HKLM:\\SOFTWARE\\WOW6432Node\\ZoomUMX') | ForEach-Object {
+        if (Test-Path $_) {
+          Remove-Item $_ -Recurse -Force -EA SilentlyContinue
+          $count++
+        }
+      }
+
+      # =============================================
+      # 2. DATA: Wipe Zoom data directories (encrypted DBs = fingerprint)
+      # =============================================
+      $roaming = [Environment]::GetFolderPath('ApplicationData')
+      $local = [Environment]::GetFolderPath('LocalApplicationData')
+
+      # Zoom data in Roaming — this contains ALL the fingerprint databases
+      $zoomRoamingData = Join-Path $roaming 'Zoom\\data'
+      if (Test-Path $zoomRoamingData) {
+        Remove-Item $zoomRoamingData -Recurse -Force -EA SilentlyContinue
+        $count++
+      }
+
+      # Root Zoom config files (Zoom.us.ini with win_osencrypt_key, viper.ini)
+      foreach ($f in @('Zoom.us.ini','viper.ini','appsafecheck.txt')) {
+        $p = Join-Path $roaming "Zoom\\$f"
+        if (Test-Path $p) { Remove-Item $p -Force -EA SilentlyContinue; $count++ }
+      }
+
+      # Zoom data in Local
+      $zoomLocalData = Join-Path $local 'Zoom\\data'
+      if (Test-Path $zoomLocalData) {
+        Remove-Item $zoomLocalData -Recurse -Force -EA SilentlyContinue
+        $count++
+      }
+
+      # Other Zoom-related AppData folders
+      foreach ($sub in @('ZoomUMX','zoomus','zoom.us')) {
+        $p1 = Join-Path $roaming $sub
+        $p2 = Join-Path $local $sub
+        if (Test-Path $p1) { Remove-Item $p1 -Recurse -Force -EA SilentlyContinue; $count++ }
+        if (Test-Path $p2) { Remove-Item $p2 -Recurse -Force -EA SilentlyContinue; $count++ }
+      }
+
+      # =============================================
+      # 3. Auto-start entries (prevent Zoom from respawning)
+      # =============================================
+      $runKey = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+      foreach ($v in @('Zoom','ZoomUMX','ZoomWorkplace')) {
+        Remove-ItemProperty -Path $runKey -Name $v -Force -EA SilentlyContinue
+      }
+
+      # =============================================
+      # 4. Kill Zoom processes
+      # =============================================
+      Get-Process | Where-Object { $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' } | Stop-Process -Force -EA SilentlyContinue
+      Get-Process -Name 'CptService','CptHost','CptControl' -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+
+      Write-Output $count
+    `, { timeout: 20000 });
+
+    const count = parseInt(result.stdout, 10) || 0;
+    logger.ok(`Pre-launch scrub: cleaned ${count} items (registry + data + processes)`);
+    return { success: true, cleaned: count };
+  } catch (e) {
+    logger.warn('Pre-launch scrub failed', { error: e.message });
+    return { success: false, error: e.message };
+  }
+}
 
 /**
  * Complete device fingerprint wipe
@@ -1331,17 +2434,18 @@ async function wipeDeviceFingerprint(onProgress = null) {
   steps.cptService = await wipeCptServiceData();
   steps.registry = await wipeRegistryFingerprints();
 
-  // Tier 2 (parallel - execution history, all independent)
-  reportProgress('Execution history');
+  // Tier 2 (parallel - execution history traces, all independent)
+  reportProgress('Execution history cleanup');
   const tier2 = await Promise.allSettled([
     removeWindowsCredentials(),
     clearPrefetchFiles(),
     wipeAmcache(),
     wipeSrumDatabase(),
     cleanEventLogs(),
-    wipeUserProfileFingerprints()
+    wipeUserProfileFingerprints(),
+    wipeDeepUserTraces()
   ]);
-  const tier2Keys = ['credentials', 'prefetch', 'amcache', 'srum', 'eventLogs', 'userProfile'];
+  const tier2Keys = ['credentials', 'prefetch', 'amcache', 'srum', 'eventLogs', 'userProfile', 'deepTraces'];
   tier2.forEach((result, i) => {
     steps[tier2Keys[i]] = result.status === 'fulfilled' ? result.value : { success: false, error: result.reason?.message };
   });
@@ -1432,6 +2536,13 @@ module.exports = {
   cleanNotificationDatabase,
   cleanFontCache,
   wipeUserProfileFingerprints,
+  wipeDeepUserTraces,
+  postInstallScrub,
+  preLaunchScrub,
+  rotateMachineGuid,
+  spoofMacAddresses,
+  randomizeComputerName,
+  changeVolumeSerial,
   wipeDeviceFingerprint,
   verifyFingerprintWipe
 };

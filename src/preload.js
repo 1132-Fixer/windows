@@ -1,68 +1,38 @@
 /**
- * 1132 Eliminator - Preload Script
+ * 1132 Fixer - Preload Script
  * Exposes safe IPC methods to renderer
  */
 
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  // === RESET OPERATIONS ===
+  // Reset
   fullReset: (options) => ipcRenderer.invoke('full-reset', options),
-  quickReset: () => ipcRenderer.invoke('quick-reset'),
-  audit: () => ipcRenderer.invoke('audit'),
 
-  // === ZOOM OPERATIONS ===
-  killZoom: () => ipcRenderer.invoke('kill-zoom'),
+  // Zoom
   launchZoom: () => ipcRenderer.invoke('launch-zoom'),
-  checkZoom: () => ipcRenderer.invoke('check-zoom'),
 
-  // === DIALOGS ===
-  showConfirm: (message) => ipcRenderer.invoke('show-confirm-dialog', message),
-  showError: (message) => ipcRenderer.invoke('show-error-dialog', message),
-  showSuccess: (message) => ipcRenderer.invoke('show-success-dialog', message),
+  // Dialogs
+  showConfirmDialog: (message) => ipcRenderer.invoke('show-confirm-dialog', message),
 
-  // === APP CONTROL ===
-  quitApp: () => ipcRenderer.invoke('quit-app'),
-  getLogPath: () => ipcRenderer.invoke('get-log-path'),
-  getAllLogs: () => ipcRenderer.invoke('get-all-logs'),
-  openLogFolder: () => ipcRenderer.invoke('open-log-folder'),
-  saveLog: (content) => ipcRenderer.invoke('save-log', content),
+  // App
+  getVersion: () => ipcRenderer.invoke('get-version'),
 
-  // === SANDBOX (Windows Sandbox + Sandboxie-Plus) ===
-  checkSandbox: () => ipcRenderer.invoke('check-sandbox'),
-  launchSandbox: () => ipcRenderer.invoke('launch-sandbox'),
-  installSandboxie: () => ipcRenderer.invoke('install-sandboxie'),
-
-  // === VIRTUALBOX VM ===
-  getVMStatus: () => ipcRenderer.invoke('get-vm-status'),
-  launchZoomVM: () => ipcRenderer.invoke('launch-zoom-vm'),
-  deleteZoomVM: () => ipcRenderer.invoke('delete-zoom-vm'),
-  installVBox: () => ipcRenderer.invoke('install-vbox'),
-  selectISO: () => ipcRenderer.invoke('select-iso'),
-  setupZoomVM: (isoPath) => ipcRenderer.invoke('setup-zoom-vm', isoPath),
-
-  // === SELF-TEST ===
-  runSelfTest: () => ipcRenderer.invoke('run-self-test'),
-
-  // === PERSISTENCE SNAPSHOTS & MONITORING ===
-  takeSnapshot: (label) => ipcRenderer.invoke('take-snapshot', label),
-  listSnapshots: () => ipcRenderer.invoke('list-snapshots'),
-  compareSnapshots: (beforePath, afterPath) => ipcRenderer.invoke('compare-snapshots', { beforePath, afterPath }),
-  checkPersistence: () => ipcRenderer.invoke('check-persistence'),
-
-  // === ONE-CLICK MODE ===
-  fullResetWithPrefs: (options) => ipcRenderer.invoke('full-reset-with-prefs', options),
-
-  // === EVENT LISTENERS ===
+  // Progress listener
   onProgress: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('reset-progress', handler);
     return () => ipcRenderer.removeListener('reset-progress', handler);
   },
 
-  onLog: (callback) => {
+  // Feedback
+  submitFeedback: (type, text) => ipcRenderer.invoke('submit-feedback', type, text),
+
+  // Auto-update
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+  onUpdateStatus: (callback) => {
     const handler = (event, data) => callback(data);
-    ipcRenderer.on('log', handler);
-    return () => ipcRenderer.removeListener('log', handler);
+    ipcRenderer.on('update-status', handler);
+    return () => ipcRenderer.removeListener('update-status', handler);
   }
 });

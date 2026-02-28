@@ -1,365 +1,207 @@
 /**
- * 1132 Eliminator - Renderer
+ * 1132 Fixer - Renderer
  */
 
 const $ = id => document.getElementById(id);
 
-// State
 let isRunning = false;
-let options = { uninstall: true, reinstall: true, launch: false, sandbox: false };
+const options = { uninstall: true, reinstall: true, launch: false };
 
-// Elements
-const statusDot = $('statusDot');
-const statusText = $('statusText');
-const btnReset = $('btnReset');
-const progressSection = $('progressSection');
-const progressFill = $('progressFill');
-const progressLabel = $('progressLabel');
-const progressPercent = $('progressPercent');
-const logContent = $('logContent');
-const normalView = $('normalView');
-const completeView = $('completeView');
-const completeMsg = $('completeMsg');
-const adminStatus = $('adminStatus');
+// Ring circumference for progress (2πr = 2π×90 ≈ 565)
+const RING_CIRC = 565;
 
-// Initialize
-document.addEventListener('DOMContentLoaded', init);
+async function init() {
+  // Version
+  try {
+    const v = await window.electronAPI.getVersion();
+    $('appVersion').textContent = 'v' + v;
+  } catch (_) {}
 
-function init() {
-  // Setup checkboxes
-  document.querySelectorAll('.option-checkbox').forEach(cb => {
-    cb.addEventListener('click', (e) => {
-      e.preventDefault();
+  // Toggle switches
+  document.querySelectorAll('.toggle').forEach(t => {
+    t.addEventListener('click', () => {
       if (isRunning) return;
-      cb.classList.toggle('checked');
-      options[cb.dataset.option] = cb.classList.contains('checked');
+      const key = t.dataset.key;
+      t.classList.toggle('on');
+      options[key] = t.classList.contains('on');
     });
   });
 
-  // Main button
-  btnReset.addEventListener('click', handleReset);
+  // FIX button
+  $('btnFix').addEventListener('click', handleFix);
 
-  // Log actions
-  $('btnCopyLog')?.addEventListener('click', copyLog);
-  $('btnClearLog')?.addEventListener('click', clearLog);
-  $('btnOpenLogs')?.addEventListener('click', () => window.electronAPI?.openLogFolder());
+  // Launch Zoom
+  $('btnLaunch').addEventListener('click', async () => {
+    $('btnLaunch').textContent = 'Launching...';
+    try {
+      await window.electronAPI.launchZoom();
+    } catch (_) {}
+    $('btnLaunch').textContent = 'Launch Zoom';
+  });
 
-  // Complete view buttons
-  $('btnLaunchZoom')?.addEventListener('click', async () => {
-    // If sandbox mode was used, launch through sandbox instead of bare
-    if (options.sandbox) {
-      addLog('info', 'Launching Zoom in sandbox...');
-      const result = await window.electronAPI?.launchSandbox();
-      if (result?.success) {
-        const methodName = result.method === 'sandboxie' ? 'Sandboxie-Plus'
-          : result.method === 'vm' ? 'VirtualBox VM'
-          : 'Windows Sandbox';
-        addLog('ok', `Zoom launched in ${methodName}.`);
+  // Start Over
+  $('btnReset').addEventListener('click', resetUI);
+
+  // Feedback modal
+  let feedbackType = 'Bug Report';
+  $('btnFeedback').addEventListener('click', () => {
+    $('feedbackModal').classList.add('show');
+    $('feedbackText').value = '';
+    $('feedbackStatus').textContent = '';
+    $('feedbackSubmit').disabled = false;
+  });
+  $('feedbackCancel').addEventListener('click', () => {
+    $('feedbackModal').classList.remove('show');
+  });
+  // Type selector bubbles
+  document.querySelectorAll('#feedbackType button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#feedbackType button').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      feedbackType = btn.dataset.type;
+    });
+  });
+  // Submit feedback
+  $('feedbackSubmit').addEventListener('click', async () => {
+    const text = $('feedbackText').value.trim();
+    if (!text) { $('feedbackStatus').textContent = 'Please enter a description'; return; }
+    $('feedbackSubmit').disabled = true;
+    $('feedbackStatus').textContent = 'Submitting...';
+    $('feedbackStatus').className = 'modal-status';
+    try {
+      const result = await window.electronAPI.submitFeedback(feedbackType, text);
+      if (result.success) {
+        $('feedbackStatus').textContent = 'Submitted! Thank you.';
+        $('feedbackStatus').classList.add('success');
+        setTimeout(() => $('feedbackModal').classList.remove('show'), 1500);
       } else {
-        addLog('err', 'Sandbox failed: ' + (result?.error || 'Unknown'));
+        $('feedbackStatus').textContent = result.error || 'Failed to submit';
+        $('feedbackStatus').classList.add('error');
+        $('feedbackSubmit').disabled = false;
       }
-    } else {
-      await window.electronAPI?.launchZoom();
+    } catch (err) {
+      $('feedbackStatus').textContent = 'Error: ' + err.message;
+      $('feedbackStatus').classList.add('error');
+      $('feedbackSubmit').disabled = false;
     }
   });
 
-  $('btnStartOver')?.addEventListener('click', () => {
-    completeView.classList.remove('active');
-    normalView.style.display = '';
-    clearLog();
-    addLog('info', 'System reset. Awaiting new target.');
-    setStatus('Standing By');
-  });
-
-  $('btnLaunchSandbox')?.addEventListener('click', async () => {
-    addLog('info', 'Checking sandbox availability...');
-    const result = await window.electronAPI?.launchSandbox();
-    if (result?.success) {
-      const methodName = result.method === 'sandboxie' ? 'Sandboxie-Plus'
-        : result.method === 'vm' ? 'VirtualBox VM'
-        : 'Windows Sandbox';
-      addLog('ok', `Zoom launched in ${methodName}. Fingerprints isolated.`);
-    } else {
-      addLog('err', 'Sandbox failed: ' + (result?.error || 'Unknown'));
-      await window.electronAPI?.showError('No sandbox method available.\n\n' + (result?.error || 'Use VM Setup for best results.'));
+  // Auto-update listener
+  window.electronAPI.onUpdateStatus((data) => {
+    const banner = $('updateBanner');
+    if (!data) return;
+    if (data.status === 'available') {
+      banner.textContent = `Update v${data.version} downloading...`;
+      banner.classList.add('show', 'downloading');
+    } else if (data.status === 'downloading') {
+      banner.textContent = `Downloading update... ${data.percent}%`;
+    } else if (data.status === 'ready') {
+      banner.textContent = `Update v${data.version} ready — click to restart`;
+      banner.classList.remove('downloading');
+      banner.classList.add('show');
+      banner.onclick = () => window.electronAPI.installUpdate();
     }
   });
 
-  // VM Setup flow
-  $('btnVMSetup')?.addEventListener('click', handleVMSetup);
+  // Progress listener
+  window.electronAPI.onProgress((data) => {
+    if (!data) return;
+    const pct = data.percent || 0;
 
-  // Progress updates from main process
-  window.electronAPI?.onProgress?.(data => {
-    if (data.percent !== undefined) {
-      progressFill.style.width = data.percent + '%';
-      progressPercent.textContent = data.percent + '%';
-    }
+    // Update ring
+    const offset = RING_CIRC - (RING_CIRC * pct / 100);
+    $('ringFill').style.strokeDashoffset = offset;
+    $('btnPct').textContent = Math.round(pct) + '%';
+
+    // Update bar
+    $('progressFill').style.width = pct + '%';
+
+    // Update status text
     if (data.step) {
-      progressLabel.textContent = data.step;
-      addLog('info', data.step);
+      $('statusText').textContent = data.step;
     }
   });
-
-  // Log updates from main process
-  window.electronAPI?.onLog?.(data => {
-    const type = data.level === 'error' ? 'err' : data.level === 'ok' ? 'ok' : 'info';
-    addLog(type, data.message);
-  });
-
-  // Check admin status
-  adminStatus.textContent = 'Administrator';
-
-  addLog('info', 'System armed. Awaiting target.');
-
-  // Wire up alert bar
-  window._alertBar = document.getElementById('alertBar');
 }
 
-async function handleReset() {
+async function handleFix() {
   if (isRunning) return;
 
   // Confirm
-  const confirmed = await window.electronAPI?.showConfirm(
-    'ELIMINATION PROTOCOL\n\nThis will purge all Zoom traces from this device:\n\n' +
-    (options.uninstall ? '• Uninstall Zoom\n' : '') +
-    '• Eliminate all registry entries & data\n' +
-    '• Purge device fingerprints\n' +
-    (options.reinstall ? '• Download clean Zoom install\n' : '') +
-    '\nInitiate purge?'
+  const confirmed = await window.electronAPI.showConfirmDialog(
+    'This will reset all Zoom data and device fingerprints to fix Error 1132.\n\nContinue?'
   );
+  if (!confirmed) return;
 
-  if (!confirmed) {
-    addLog('info', 'Operation aborted.');
-    return;
-  }
-
-  // Start
+  // Enter running state
   isRunning = true;
-  setStatus('Purging...', true);
-  btnReset.disabled = true;
-  progressSection.classList.add('active');
-  progressFill.style.width = '0%';
-  progressPercent.textContent = '0%';
-  if (window._alertBar) window._alertBar.classList.add('active');
-  clearLog();
-  addLog('info', 'Elimination protocol initiated...');
+  const btn = $('btnFix');
+  btn.classList.add('running');
+  btn.disabled = true;
+  $('progressRing').classList.add('active');
+  $('progressBar').classList.add('active');
+  $('statusText').textContent = 'Starting...';
+  $('statusText').classList.add('active');
+  $('postActions').classList.remove('show');
+
+  // Disable toggles
+  document.querySelectorAll('.toggle').forEach(t => t.classList.add('disabled'));
 
   try {
     const result = await window.electronAPI.fullReset(options);
 
-    if (result.success) {
-      setStatus('Eliminated');
-      addLog('ok', 'Target eliminated. All traces purged.');
+    if (result && result.success) {
+      // Done state
+      btn.classList.remove('running');
+      btn.classList.add('done');
+      $('progressRing').classList.add('done');
+      $('ringFill').style.strokeDashoffset = 0;
+      $('statusText').textContent = options.reinstall ? 'Zoom reinstalled — launch via button below' : 'All Zoom traces removed';
+      $('statusText').classList.remove('active');
+      $('statusText').classList.add('done');
+      $('progressBar').classList.remove('active');
+      $('postActions').classList.add('show');
 
-      // Show complete view
-      normalView.style.display = 'none';
-      completeView.classList.add('active');
-      completeMsg.textContent = options.reinstall
-        ? 'All Zoom artifacts purged. Clean install complete.'
-        : 'All Zoom traces have been eliminated from this device.';
-
-      // Auto-launch if selected
-      if (options.sandbox) {
-        addLog('info', 'Launching Zoom in sandbox...');
-        const sbResult = await window.electronAPI.launchSandbox();
-        if (sbResult?.success) {
-          const methodName = sbResult.method === 'sandboxie' ? 'Sandboxie-Plus'
-            : sbResult.method === 'vm' ? 'VirtualBox VM'
-            : 'Windows Sandbox';
-          addLog('ok', `Zoom launched in ${methodName}.`);
-        } else {
-          addLog('err', 'Sandbox unavailable: ' + (sbResult?.error || 'Unknown'));
-        }
-      } else if (options.launch && options.reinstall) {
-        addLog('info', 'Launching Zoom...');
-        await window.electronAPI.launchZoom();
+      // Auto-launch if option set
+      if (options.launch && options.reinstall) {
+        try { await window.electronAPI.launchZoom(); } catch (_) {}
       }
     } else {
-      setStatus('Failed');
-      addLog('err', 'Purge failed: ' + (result.error || 'Unknown error'));
+      // Failed
+      $('statusText').textContent = 'Fix failed — ' + (result?.error || 'unknown error');
+      $('statusText').classList.remove('active');
+      btn.classList.remove('running');
+      btn.disabled = false;
+      $('progressRing').classList.remove('active');
+      $('progressBar').classList.remove('active');
+      isRunning = false;
+      document.querySelectorAll('.toggle').forEach(t => t.classList.remove('disabled'));
     }
   } catch (err) {
-    setStatus('Error');
-    addLog('err', 'Error: ' + err.message);
+    $('statusText').textContent = 'Error: ' + err.message;
+    $('statusText').classList.remove('active');
+    btn.classList.remove('running');
+    btn.disabled = false;
+    $('progressRing').classList.remove('active');
+    $('progressBar').classList.remove('active');
+    isRunning = false;
+    document.querySelectorAll('.toggle').forEach(t => t.classList.remove('disabled'));
   }
+}
 
+function resetUI() {
   isRunning = false;
-  btnReset.disabled = false;
-  progressSection.classList.remove('active');
-  if (window._alertBar) window._alertBar.classList.remove('active');
+  const btn = $('btnFix');
+  btn.classList.remove('running', 'done');
+  btn.disabled = false;
+  $('btnPct').textContent = '0%';
+  $('ringFill').style.strokeDashoffset = RING_CIRC;
+  $('progressRing').classList.remove('active', 'done');
+  $('progressBar').classList.remove('active');
+  $('progressFill').style.width = '0%';
+  $('statusText').textContent = 'Ready';
+  $('statusText').classList.remove('active', 'done');
+  $('postActions').classList.remove('show');
+  document.querySelectorAll('.toggle').forEach(t => t.classList.remove('disabled'));
 }
 
-function setStatus(text, running = false) {
-  statusText.textContent = text;
-  statusDot.classList.toggle('running', running);
-}
-
-function clearLog() {
-  logContent.innerHTML = '';
-}
-
-function addLog(type, msg) {
-  // Remove empty state
-  const empty = logContent.querySelector('.log-empty');
-  if (empty) empty.remove();
-
-  const entry = document.createElement('div');
-  entry.className = 'log-entry';
-
-  const time = new Date().toLocaleTimeString('en-US', { hour12: false });
-
-  entry.innerHTML = `<span class="log-time">${time}</span><span class="log-msg ${type}">${escapeHtml(msg)}</span>`;
-
-  logContent.appendChild(entry);
-  logContent.scrollTop = logContent.scrollHeight;
-}
-
-function copyLog() {
-  const entries = logContent.querySelectorAll('.log-entry');
-  const lines = [];
-
-  entries.forEach(entry => {
-    const time = entry.querySelector('.log-time')?.textContent || '';
-    const msg = entry.querySelector('.log-msg')?.textContent || '';
-    lines.push(`${time} ${msg}`);
-  });
-
-  const text = lines.join('\n');
-
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(text).then(() => {
-      addLog('ok', 'Log copied to clipboard');
-    }).catch(() => {
-      fallbackCopy(text);
-    });
-  } else {
-    fallbackCopy(text);
-  }
-}
-
-function fallbackCopy(text) {
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  try {
-    document.execCommand('copy');
-    addLog('ok', 'Log copied to clipboard');
-  } catch (e) {
-    addLog('err', 'Failed to copy log');
-  }
-  document.body.removeChild(textarea);
-}
-
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-// ==========================================
-// VM SETUP FLOW
-// ==========================================
-
-async function handleVMSetup() {
-  addLog('info', 'Checking VM status...');
-
-  const status = await window.electronAPI?.getVMStatus();
-  if (!status) {
-    addLog('err', 'Failed to get VM status');
-    return;
-  }
-
-  // VM already exists and ready
-  if (status.vmExists) {
-    if (status.vmState === 'running') {
-      addLog('ok', 'Zoom VM is already running.');
-      return;
-    }
-    const launch = await window.electronAPI?.showConfirm(
-      'Zoom VM already exists.\n\nLaunch it now?'
-    );
-    if (launch) {
-      addLog('info', 'Starting Zoom VM...');
-      const result = await window.electronAPI?.launchZoomVM();
-      if (result?.success) {
-        addLog('ok', 'Zoom VM started. Use Zoom inside the VM window.');
-      } else {
-        addLog('err', 'VM launch failed: ' + (result?.error || 'Unknown'));
-      }
-    }
-    return;
-  }
-
-  // Need to set up VM — check VirtualBox first
-  if (!status.vboxInstalled) {
-    const installVBox = await window.electronAPI?.showConfirm(
-      'VirtualBox is not installed.\n\n' +
-      'VirtualBox creates a virtual PC with completely different hardware IDs — ' +
-      'the only reliable way to bypass hardware-level 1132 bans on Windows Home.\n\n' +
-      'Download and install VirtualBox (~100 MB)?'
-    );
-    if (!installVBox) {
-      addLog('info', 'VM setup cancelled.');
-      return;
-    }
-    addLog('info', 'Downloading & installing VirtualBox...');
-    const installResult = await window.electronAPI?.installVBox();
-    if (!installResult?.success) {
-      addLog('err', 'VirtualBox install failed: ' + (installResult?.error || 'Unknown'));
-      await window.electronAPI?.showError('VirtualBox installation failed.\n\n' + (installResult?.error || ''));
-      return;
-    }
-    addLog('ok', 'VirtualBox installed (v' + (installResult.version || '?') + ')');
-  }
-
-  // Need a Windows ISO
-  let isoPath = null;
-
-  if (status.isos && status.isos.length > 0) {
-    // Found ISOs automatically
-    const useFound = await window.electronAPI?.showConfirm(
-      'Found Windows ISO:\n' + status.isos[0] + '\n\nUse this ISO to create the Zoom VM?'
-    );
-    if (useFound) {
-      isoPath = status.isos[0];
-    }
-  }
-
-  if (!isoPath) {
-    // Ask user to pick ISO
-    addLog('info', 'Select a Windows 10/11 ISO file...');
-    const isoResult = await window.electronAPI?.selectISO();
-    if (!isoResult?.selected) {
-      addLog('info', 'No ISO selected. VM setup cancelled.');
-      await window.electronAPI?.showError(
-        'A Windows 10 or 11 ISO is needed to create the VM.\n\n' +
-        'Download one from microsoft.com/software-download/windows11'
-      );
-      return;
-    }
-    isoPath = isoResult.path;
-  }
-
-  // Create VM
-  addLog('info', 'Creating Zoom VM with spoofed hardware...');
-  addLog('info', 'ISO: ' + isoPath);
-
-  const setupResult = await window.electronAPI?.setupZoomVM(isoPath);
-  if (setupResult?.success) {
-    addLog('ok', 'Zoom VM created and started!');
-    addLog('ok', setupResult.message || 'Windows is installing automatically (~15 min).');
-    await window.electronAPI?.showSuccess(
-      'Zoom VM Created!\n\n' +
-      'Windows is installing automatically inside the VM.\n' +
-      'This takes about 15 minutes.\n\n' +
-      'Once Windows is ready, install Zoom inside the VM and use it for meetings.\n' +
-      'The VM has completely different hardware IDs — 1132 ban will not apply.'
-    );
-  } else {
-    addLog('err', 'VM setup failed: ' + (setupResult?.error || 'Unknown'));
-    await window.electronAPI?.showError('VM setup failed:\n\n' + (setupResult?.error || 'Unknown error'));
-  }
-}
+document.addEventListener('DOMContentLoaded', init);

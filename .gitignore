@@ -1,7 +1,24 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
 *.exe
+
+# OS / Editor
 nul
+Thumbs.db
+.DS_Store
+*.swp
+*.swo
+
+# Claude Code
 .claude/
 tmpclaude-*
-tauri/src-tauri/target/
+
+# Temporary scripts
+*.ps1
+!scripts/**/*.ps1
+
+# Logs
+*.log

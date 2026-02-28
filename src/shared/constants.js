@@ -187,7 +187,18 @@ const ZOOM_DATA_PATHS = [
   // Squirrel / auto-updater leftovers
   path.join(LOCALAPPDATA, 'zoom-1132-eliminator-updater'),
   path.join(LOCALAPPDATA, 'zoom-updater'),
-  path.join(LOCALAPPDATA, 'squirrel-zoom')
+  path.join(LOCALAPPDATA, 'squirrel-zoom'),
+
+  // Custom Zoom bot/agent apps
+  path.join(LOCALAPPDATA, 'Programs', 'zoom-agent-client'),
+  path.join(APPDATA, 'Zoom Agent Client'),
+  path.join(APPDATA, 'Zoom Admin Dashboard'),
+  path.join(APPDATA, 'Zoom Client'),
+  path.join(APPDATA, 'ZoomAdminDashboard'),
+  path.join(APPDATA, 'ZoomClient'),
+  path.join(LOCALAPPDATA, 'zoom-admin-dashboard-updater'),
+  path.join(LOCALAPPDATA, 'zoom-agent-client-updater'),
+  path.join(APPDATA, 'zoom-1132-eliminator')
 ];
 
 /**

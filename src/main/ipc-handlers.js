@@ -1,5 +1,5 @@
 /**
- * 1132 Eliminator - IPC Handlers
+ * 1132 Fixer - IPC Handlers
  * All Electron IPC handlers for renderer communication
  */
 
@@ -17,8 +17,6 @@ const installer = require('./operations/installer');
 const settingsBackup = require('./operations/settings-backup');
 const selfTest = require('./operations/self-test');
 const snapshot = require('./operations/snapshot');
-const sandbox = require('./operations/sandbox');
-const vm = require('./operations/vm');
 
 let mainWindow = null;
 
@@ -89,20 +87,20 @@ async function performFullReset(options = {}) {
         steps.push({ name: 'uninstall', ...uninstallResult });
       }
 
-      // Step 4: Delete ALL folders FIRST (includes fingerprint data folders)
-      // CRITICAL: Delete data before fingerprint wipe - folders contain the DBs
-      sendProgress({ step: 'Deleting Zoom data', percent: 30 });
-      const foldersResult = await folders.deleteAllZoomFolders((p) => {
+      // Step 4: Clean registry FIRST (reference order: registry before folders)
+      // Registry keys can trigger folder recreation, so kill them first
+      sendProgress({ step: 'Cleaning registry', percent: 30 });
+      const registryResult = await registry.cleanRegistry((p) => {
         sendProgress({ step: p.message, percent: 30 + (p.current / p.total) * 15 });
       });
-      steps.push({ name: 'folders', ...foldersResult });
+      steps.push({ name: 'registry', ...registryResult });
 
-      // Step 5: Clean registry (after folders to ensure no regeneration)
-      sendProgress({ step: 'Cleaning registry', percent: 45 });
-      const registryResult = await registry.cleanRegistry((p) => {
+      // Step 5: Delete ALL Zoom data folders (after registry is clean)
+      sendProgress({ step: 'Deleting Zoom data', percent: 45 });
+      const foldersResult = await folders.deleteAllZoomFolders((p) => {
         sendProgress({ step: p.message, percent: 45 + (p.current / p.total) * 15 });
       });
-      steps.push({ name: 'registry', ...registryResult });
+      steps.push({ name: 'folders', ...foldersResult });
 
       // Step 6: Wipe system fingerprints (Amcache, SRUM, Prefetch, etc.)
       // These are Windows-level traces, not Zoom folder data
@@ -123,15 +121,35 @@ async function performFullReset(options = {}) {
       const iconCacheResult = await fingerprint.rebuildIconCache();
       steps.push({ name: 'iconCache', ...iconCacheResult });
 
-      // Step 9: Reinstall (if option enabled)
+      // Step 9: Spoof hardware identifiers (BEFORE reinstall)
+      // Zoom reads MachineGuid + MAC addresses at first launch to fingerprint device
+      sendProgress({ step: 'Rotating hardware identifiers...', percent: 79 });
+      const machineGuidResult = await fingerprint.rotateMachineGuid();
+      steps.push({ name: 'machineGuid', ...machineGuidResult });
+
+      sendProgress({ step: 'Spoofing network identifiers...', percent: 80 });
+      const macSpoofResult = await fingerprint.spoofMacAddresses();
+      steps.push({ name: 'macSpoof', ...macSpoofResult });
+
+      // Step 9b: Randomize computer name
+      sendProgress({ step: 'Randomizing computer name...', percent: 81 });
+      const compNameResult = await fingerprint.randomizeComputerName();
+      steps.push({ name: 'computerName', ...compNameResult });
+
+      // Step 9c: Change volume serial number
+      sendProgress({ step: 'Changing volume serial...', percent: 82 });
+      const volSerialResult = await fingerprint.changeVolumeSerial();
+      steps.push({ name: 'volumeSerial', ...volSerialResult });
+
+      // Step 10: Reinstall (if option enabled)
       if (options.reinstall !== false) {
         // Download
-        sendProgress({ step: 'Downloading Zoom from zoom.us...', percent: 80 });
+        sendProgress({ step: 'Downloading Zoom from zoom.us...', percent: 84 });
         logger.info('Starting Zoom download...');
 
         try {
           const downloadResult = await installer.downloadZoomInstaller((p) => {
-            sendProgress({ step: `Downloading: ${p.percent}%`, percent: 80 + (p.percent / 100) * 10 });
+            sendProgress({ step: `Downloading: ${p.percent}%`, percent: 84 + (p.percent / 100) * 5 });
           });
 
           if (downloadResult.success) {
@@ -139,22 +157,50 @@ async function performFullReset(options = {}) {
             logger.ok('Download complete', { path: installerPath });
 
             // Install
-            sendProgress({ step: 'Installing Zoom (please wait)...', percent: 90 });
+            sendProgress({ step: 'Installing Zoom (please wait)...', percent: 89 });
             logger.info('Starting Zoom installation...');
 
             const installResult = await installer.installZoom(installerPath, (p) => {
-              sendProgress({ step: p.message || 'Installing...', percent: 92 });
+              sendProgress({ step: p.message || 'Installing...', percent: 91 });
             });
 
             if (installResult.success) {
               logger.ok('Zoom installed successfully');
+
+              // CRITICAL: Kill Zoom if it auto-started after install
+              // Zoom MSI sometimes auto-launches — we MUST prevent it from running
+              // under the banned JG user. It should ONLY run under ghost user.
+              sendProgress({ step: 'Preventing auto-start...', percent: 92 });
+              await processKiller.killAllZoomProcesses();
+
+              // Post-install scrub: remove hardware fingerprints recreated by installer
+              sendProgress({ step: 'Scrubbing post-install fingerprints...', percent: 93 });
+              const scrubResult = await fingerprint.postInstallScrub();
+              logger.info('Post-install scrub', scrubResult);
+              steps.push({ name: 'postInstallScrub', ...scrubResult });
+
+              // Kill Zoom again (post-install scrub takes time, Zoom may have respawned)
+              await processKiller.killAllZoomProcesses();
+
+              // Remove auto-start Run entries so Zoom doesn't auto-launch under JG
+              try {
+                const { runPowerShell } = require('./utils/spawn-safe');
+                await runPowerShell(`
+                  Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'Zoom' -Force -EA SilentlyContinue
+                  Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'ZoomUMX' -Force -EA SilentlyContinue
+                  Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'ZoomWorkplace' -Force -EA SilentlyContinue
+                  Remove-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'Zoom' -Force -EA SilentlyContinue
+                  Remove-ItemProperty -Path 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'ZoomCptService' -Force -EA SilentlyContinue
+                `, { timeout: 5000 });
+                logger.ok('Removed Zoom auto-start entries');
+              } catch (_) {}
 
               // Restore saved settings before Zoom launches
               sendProgress({ step: 'Restoring Zoom settings...', percent: 94 });
               const restoreResult = await settingsBackup.restoreZoomSettings();
               logger.info('Settings restore', restoreResult);
 
-              sendProgress({ step: 'Zoom installed with settings restored', percent: 95 });
+              sendProgress({ step: 'Zoom installed. Launch via app only.', percent: 95 });
             } else {
               logger.error('Zoom installation failed', { error: installResult.error });
               sendProgress({ step: 'Installation failed: ' + (installResult.error || 'Unknown error'), percent: 95 });
@@ -176,7 +222,7 @@ async function performFullReset(options = {}) {
         }
       }
 
-      // Step 10: Verification
+      // Step 11: Verification
       // Note: If reinstall was enabled, skip folder/process checks (Zoom will exist)
       sendProgress({ step: 'Verifying cleanup', percent: 98 });
       const verification = {
@@ -295,7 +341,27 @@ function registerHandlers() {
   });
 
   // === LAUNCH ZOOM ===
+  // Primary method: Clean Room Launch — redirect Zoom's APPDATA to fresh directory
+  // This gives Zoom empty data dirs = fresh fingerprint = no 1132 ban.
+  // Fallback 1: Ghost user (different SID entirely)
+  // Fallback 2: Normal launch (last resort)
   ipcMain.handle('launch-zoom', async () => {
+    // Method 1: Clean Room (redirected APPDATA — no separate user needed)
+    try {
+      logger.info('Attempting clean room launch...');
+      const cleanResult = await installer.launchZoomCleanRoom();
+      if (cleanResult.success) return cleanResult;
+      logger.warn('Clean room launch failed', { error: cleanResult.error });
+    } catch (e) {
+      logger.warn('Clean room launch error', { error: e.message });
+    }
+
+    // Method 2: Normal launch (pre-launch scrub + direct)
+    try {
+      await fingerprint.preLaunchScrub();
+    } catch (e) {
+      logger.warn('Pre-launch scrub failed', { error: e.message });
+    }
     return await installer.launchZoom();
   });
 
@@ -308,7 +374,7 @@ function registerHandlers() {
   ipcMain.handle('show-confirm-dialog', async (event, message) => {
     const result = await dialog.showMessageBox(mainWindow, {
       type: 'warning',
-      title: '1132 Remover',
+      title: '1132 Fixer',
       message: message,
       buttons: ['Yes', 'No'],
       defaultId: 1,
@@ -320,7 +386,7 @@ function registerHandlers() {
   ipcMain.handle('show-error-dialog', async (event, message) => {
     await dialog.showMessageBox(mainWindow, {
       type: 'error',
-      title: '1132 Remover - Error',
+      title: '1132 Fixer - Error',
       message: message,
       buttons: ['OK']
     });
@@ -329,13 +395,76 @@ function registerHandlers() {
   ipcMain.handle('show-success-dialog', async (event, message) => {
     await dialog.showMessageBox(mainWindow, {
       type: 'info',
-      title: '1132 Remover - Success',
+      title: '1132 Fixer - Success',
       message: message,
       buttons: ['OK']
     });
   });
 
   // === APP CONTROL ===
+  ipcMain.handle('get-version', () => require('electron').app.getVersion());
+
+  ipcMain.handle('install-update', () => {
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.quitAndInstall(false, true);
+  });
+
+  ipcMain.handle('submit-feedback', async (event, type, text) => {
+    try {
+      const version = require('electron').app.getVersion();
+      const os = require('os');
+      const https = require('https');
+
+      const title = `[${type}] ${text.substring(0, 80)}${text.length > 80 ? '...' : ''}`;
+      const body = `**Type:** ${type}\n**App Version:** ${version}\n**OS:** Windows ${os.release()}\n\n---\n\n${text}`;
+
+      const config = require('./config');
+      const token = config.GH_ISSUES_TOKEN;
+      if (!token) {
+        logger.warn('No GH_ISSUES_TOKEN configured');
+        return { success: false, error: 'Feedback service not configured' };
+      }
+
+      const postData = JSON.stringify({ title, body, labels: [type.toLowerCase().replace(' ', '-')] });
+
+      return new Promise((resolve) => {
+        const req = https.request({
+          hostname: 'api.github.com',
+          path: '/repos/PrimeUpYourLife/1132-Fixer-Windows-Version-/issues',
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'User-Agent': `1132Fixer/${version}`,
+            'Accept': 'application/vnd.github+json',
+            'Content-Length': Buffer.byteLength(postData)
+          }
+        }, (res) => {
+          let data = '';
+          res.on('data', (chunk) => data += chunk);
+          res.on('end', () => {
+            if (res.statusCode === 201) {
+              logger.info('Feedback submitted successfully');
+              resolve({ success: true });
+            } else {
+              logger.warn('Feedback submission failed', { status: res.statusCode, body: data });
+              resolve({ success: false, error: 'Submission failed' });
+            }
+          });
+        });
+        req.on('error', (err) => {
+          logger.error('Feedback submission error', { error: err.message });
+          resolve({ success: false, error: 'Network error' });
+        });
+        req.write(postData);
+        req.end();
+      });
+    } catch (err) {
+      logger.error('Feedback handler error', { error: err.message });
+      return { success: false, error: err.message };
+    }
+  });
+
   ipcMain.handle('quit-app', () => {
     logger.finalize();
     require('electron').app.quit();
@@ -366,7 +495,7 @@ function registerHandlers() {
 
     const result = await dialog.showSaveDialog(mainWindow, {
       title: 'Save Operation Log',
-      defaultPath: path.join(require('os').homedir(), 'Desktop', `1132-Eliminator-Log-${Date.now()}.txt`),
+      defaultPath: path.join(require('os').homedir(), 'Desktop', `1132-Fixer-Log-${Date.now()}.txt`),
       filters: [
         { name: 'Text Files', extensions: ['txt', 'log'] },
         { name: 'All Files', extensions: ['*'] }
@@ -452,68 +581,6 @@ function registerHandlers() {
     return await performFullReset(options);
   });
 
-  // ========================================
-  // SANDBOX (Windows Sandbox + Sandboxie-Plus)
-  // ========================================
-
-  ipcMain.handle('check-sandbox', async () => {
-    return await sandbox.isSandboxAvailable();
-  });
-
-  ipcMain.handle('launch-sandbox', async () => {
-    return await sandbox.launchSandbox();
-  });
-
-  ipcMain.handle('install-sandboxie', async () => {
-    return await sandbox.installSandboxie();
-  });
-
-  // ========================================
-  // VIRTUALBOX VM
-  // ========================================
-
-  ipcMain.handle('get-vm-status', async () => {
-    return await vm.getVMStatus();
-  });
-
-  ipcMain.handle('launch-zoom-vm', async () => {
-    return await vm.launchZoomVM();
-  });
-
-  ipcMain.handle('delete-zoom-vm', async () => {
-    return vm.deleteZoomVM();
-  });
-
-  ipcMain.handle('install-vbox', async () => {
-    return await vm.installVBox();
-  });
-
-  ipcMain.handle('select-iso', async () => {
-    // Show file picker for Windows ISO
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: 'Select Windows 10/11 ISO',
-      filters: [{ name: 'ISO Files', extensions: ['iso'] }],
-      properties: ['openFile']
-    });
-    if (result.canceled || !result.filePaths.length) {
-      return { selected: false };
-    }
-    return { selected: true, path: result.filePaths[0] };
-  });
-
-  ipcMain.handle('setup-zoom-vm', async (event, isoPath) => {
-    // Full VM setup: install VBox if needed, then create VM
-    const vboxCheck = vm.isVBoxInstalled();
-    if (!vboxCheck.installed) {
-      sendProgress({ step: 'Installing VirtualBox...', percent: 10 });
-      const installResult = await vm.installVBox();
-      if (!installResult.success) {
-        return { success: false, error: 'VirtualBox install failed: ' + installResult.error };
-      }
-    }
-    sendProgress({ step: 'Creating Zoom VM...', percent: 30 });
-    return await vm.createZoomVM(isoPath);
-  });
 }
 
 module.exports = {

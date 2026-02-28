@@ -224,11 +224,6 @@ async function hardenZoomInstall() {
     const result = await runPowerShell(`
       $count = 0
 
-      # Set AU2 policy: disable client auto-update
-      $au2Key = 'HKLM:\\SOFTWARE\\Policies\\Zoom\\Zoom Meetings\\AU2'
-      New-Item -Path $au2Key -Force -ErrorAction SilentlyContinue | Out-Null
-      New-ItemProperty -Path $au2Key -Name 'AU2_EnableAutoUpdate' -PropertyType DWord -Value 0 -Force -ErrorAction SilentlyContinue | Out-Null
-
       # Remove HKCU Run entries (prevent auto-start with Windows)
       $runKey = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
       foreach ($v in @('Zoom','ZoomUMX','ZoomWorkplace')) {
@@ -349,6 +344,115 @@ async function launchZoomPath(zoomPath) {
 }
 
 /**
+ * Clean Room Launch — bypass 1132 by redirecting Zoom's data to a fresh directory.
+ *
+ * How it works:
+ *   1. Create/wipe a clean room directory (C:\ProgramData\1132Fixer\CleanZoom)
+ *   2. Kill all existing Zoom processes
+ *   3. Delete HKCU\Software\Zoom registry (prevents stale fingerprint reads)
+ *   4. Launch Zoom.exe with APPDATA + LOCALAPPDATA env vars pointing to clean room
+ *   5. Zoom sees empty data dirs → generates fresh device fingerprint → no ban
+ *
+ * This avoids needing a separate Windows user (ghost user) because Zoom's
+ * fingerprint databases live in %APPDATA%\Zoom\data\ — redirecting that path
+ * gives Zoom a blank slate while keeping the same user session.
+ */
+async function launchZoomCleanRoom() {
+  logger.info('Clean room launch: starting...');
+
+  const installed = await isZoomInstalled();
+  if (!installed.success) {
+    return { success: false, error: 'Zoom not installed' };
+  }
+
+  const zoomExe = installed.path;
+  const cleanBase = path.join(process.env.ProgramData || 'C:\\ProgramData', '1132Fixer', 'CleanZoom');
+  const cleanRoaming = path.join(cleanBase, 'Roaming');
+  const cleanLocal = path.join(cleanBase, 'Local');
+
+  try {
+    // Step 1: Kill all Zoom processes
+    logger.info('Clean room: killing existing Zoom processes...');
+    await runPowerShell(`
+      $names = @('Zoom','Zoomus','Zoom_launcher','CptHost','CptService','CptControl',
+        'aomhost','aomhost64','airhost','zCrashReport','zCrashReport64',
+        'ZoomWebHost','zWebview2Agent','zCefAgent','zUpdater','ZoomInstaller')
+      foreach ($n in $names) { taskkill /F /IM "$n.exe" 2>$null | Out-Null }
+      Get-Process | Where-Object { $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' } | Stop-Process -Force -EA SilentlyContinue
+      Get-Process -Name 'CptService','CptHost','CptControl' -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+      Start-Sleep -Seconds 2
+      # Second pass
+      Get-Process | Where-Object { $_.Name -like '*zoom*' } | Stop-Process -Force -EA SilentlyContinue
+    `, { timeout: 15000 }).catch(() => {});
+
+    // Step 2: Wipe clean room (delete and recreate for total freshness)
+    logger.info('Clean room: wiping data directory...');
+    if (fs.existsSync(cleanBase)) {
+      await runPowerShell(
+        `Remove-Item -LiteralPath '${cleanBase.replace(/'/g, "''")}' -Recurse -Force -EA SilentlyContinue`,
+        { timeout: 10000 }
+      ).catch(() => {});
+    }
+    fs.mkdirSync(cleanRoaming, { recursive: true });
+    fs.mkdirSync(cleanLocal, { recursive: true });
+
+    // Step 3: Clean HKCU registry (Zoom reads SystemInfo from HKCU)
+    logger.info('Clean room: cleaning registry...');
+    await runPowerShell(`
+      # Delete all Zoom registry keys under HKCU
+      @('HKCU:\\Software\\Zoom', 'HKCU:\\Software\\ZoomUMX', 'HKCU:\\Software\\zoom.us',
+        'HKCU:\\Software\\Zoom Video Communications', 'HKCU:\\Software\\CptService') | ForEach-Object {
+        if (Test-Path $_) { Remove-Item $_ -Recurse -Force -EA SilentlyContinue }
+      }
+      # Also via reg.exe for reliability
+      reg delete "HKCU\\Software\\Zoom" /f 2>$null | Out-Null
+      reg delete "HKCU\\Software\\ZoomUMX" /f 2>$null | Out-Null
+      reg delete "HKCU\\Software\\zoom.us" /f 2>$null | Out-Null
+      reg delete "HKCU\\Software\\CptService" /f 2>$null | Out-Null
+      reg delete "HKCU\\Software\\Zoom Video Communications" /f 2>$null | Out-Null
+      # Delete HKLM Zoom keys too
+      @('HKLM:\\SOFTWARE\\Zoom', 'HKLM:\\SOFTWARE\\ZoomUMX') | ForEach-Object {
+        if (Test-Path $_) { Remove-Item $_ -Recurse -Force -EA SilentlyContinue }
+      }
+      # Remove auto-start entries
+      Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'Zoom' -Force -EA SilentlyContinue
+      Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'ZoomUMX' -Force -EA SilentlyContinue
+      Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'ZoomWorkplace' -Force -EA SilentlyContinue
+      # Purge ALL Zoom Group Policy registry keys (stale from older versions)
+      $policyRoot = 'HKLM:\\SOFTWARE\\Policies\\Zoom'
+      if (Test-Path $policyRoot) {
+        Remove-Item $policyRoot -Recurse -Force -EA SilentlyContinue
+      }
+    `, { timeout: 10000 }).catch(() => {});
+
+    // Step 4: Launch Zoom with redirected APPDATA → clean room
+    logger.info('Clean room: launching Zoom with redirected data paths...');
+    const { spawn } = require('child_process');
+    const cleanEnv = { ...process.env };
+    cleanEnv.APPDATA = cleanRoaming;
+    cleanEnv.LOCALAPPDATA = cleanLocal;
+
+    const child = spawn(zoomExe, [], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+      env: cleanEnv
+    });
+    child.unref();
+
+    logger.ok('Clean room: Zoom launched with fresh data paths', {
+      zoomExe,
+      APPDATA: cleanRoaming,
+      LOCALAPPDATA: cleanLocal
+    });
+    return { success: true, method: 'cleanroom', path: zoomExe, cleanBase };
+  } catch (e) {
+    logger.error('Clean room launch failed', { error: e.message });
+    return { success: false, error: e.message };
+  }
+}
+
+/**
  * Clean up installer file
  * @param {string} installerPath - Path to installer
  */
@@ -370,5 +474,6 @@ module.exports = {
   hardenZoomInstall,
   isZoomInstalled,
   launchZoom,
+  launchZoomCleanRoom,
   cleanupInstaller
 };

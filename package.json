@@ -1,7 +1,7 @@
 {
-  "name": "1132-eliminator",
-  "version": "3.3.4",
-  "description": "Zoom Error 1132 elimination tool - forensic device fingerprint purge and reset",
+  "name": "1132-fixer",
+  "version": "4.0.9",
+  "description": "Zoom Error 1132 fix tool - device fingerprint reset",
   "main": "src/main/index.js",
   "scripts": {
     "start": "electron .",
@@ -15,6 +15,7 @@
     "build": "electron-builder --win portable --x64",
     "build:installer": "electron-builder --win nsis --x64",
     "build:all": "electron-builder --win --x64",
+    "release": "electron-builder --win nsis --x64 --publish always",
     "pack": "electron-builder --dir",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -26,9 +27,15 @@
     "electron-builder": "^24.9.1"
   },
   "build": {
-    "appId": "com.hightexas.1132eliminator",
-    "publish": null,
-    "productName": "1132 Eliminator",
+    "appId": "com.hightexas.1132fixer",
+    "publish": {
+      "provider": "github",
+      "owner": "PrimeUpYourLife",
+      "repo": "1132-Fixer-Windows-Version-",
+      "private": true,
+      "releaseType": "release"
+    },
+    "productName": "1132 Fixer",
     "copyright": "Copyright (c) 2024-2026 High Texas",
     "directories": {
       "output": "dist",
@@ -38,11 +45,15 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "assets/icon.ico",
@@ -57,16 +68,16 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,
-      "shortcutName": "1132 Eliminator",
+      "shortcutName": "1132 Fixer",
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
       "installerHeaderIcon": "assets/icon.ico",
       "include": "build/installer.nsh",
       "license": "build/license.txt",
       "artifactName": "${productName} Setup ${version}.exe",
-      "uninstallDisplayName": "1132 Eliminator",
+      "uninstallDisplayName": "1132 Fixer",
       "deleteAppDataOnUninstall": false,
-      "menuCategory": "1132 Eliminator"
+      "menuCategory": "1132 Fixer"
     },
     "portable": {
       "artifactName": "${productName} Portable ${version}.exe",
@@ -94,11 +105,14 @@
     "fileAssociations": [
       {
         "ext": "cssr",
-        "name": "1132 Eliminator Report",
-        "description": "1132 Eliminator Attestation Report",
+        "name": "1132 Fixer Report",
+        "description": "1132 Fixer Attestation Report",
         "icon": "assets/icon.ico",
         "role": "Viewer"
       }
     ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
   }
 }
