@@ -33,6 +33,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   launchSandbox: () => ipcRenderer.invoke('launch-sandbox'),
   installSandboxie: () => ipcRenderer.invoke('install-sandboxie'),
 
+  // === VIRTUALBOX VM ===
+  getVMStatus: () => ipcRenderer.invoke('get-vm-status'),
+  launchZoomVM: () => ipcRenderer.invoke('launch-zoom-vm'),
+  deleteZoomVM: () => ipcRenderer.invoke('delete-zoom-vm'),
+  installVBox: () => ipcRenderer.invoke('install-vbox'),
+  selectISO: () => ipcRenderer.invoke('select-iso'),
+  setupZoomVM: (isoPath) => ipcRenderer.invoke('setup-zoom-vm', isoPath),
+
   // === SELF-TEST ===
   runSelfTest: () => ipcRenderer.invoke('run-self-test'),
 

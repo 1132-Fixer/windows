@@ -24,6 +24,8 @@ const http = require('http');
 const { execSync } = require('child_process');
 const logger = require('../utils/logger');
 
+const vm = require('./vm');
+
 const USERPROFILE = process.env.USERPROFILE;
 const LOCALAPPDATA = process.env.LOCALAPPDATA;
 const SANDBOX_DIR = path.join(LOCALAPPDATA, '1132-Remover', 'sandbox');
@@ -712,17 +714,33 @@ async function isSandboxAvailable() {
   const edition = getWindowsEdition();
   const wsSandbox = checkWindowsSandbox();
   const sbie = checkSandboxie();
+  const vmStatus = await vm.getVMStatus();
 
   // Windows Sandbox takes priority (best isolation)
   if (wsSandbox.available) {
     return {
       available: true,
       method: 'windows-sandbox',
-      details: { edition, windowsSandbox: true, sandboxie: sbie.installed }
+      details: { edition, windowsSandbox: true, sandboxie: sbie.installed, vm: vmStatus.vmExists }
     };
   }
 
-  // Sandboxie-Plus fallback
+  // VirtualBox VM — best for Windows Home (full hardware spoof)
+  if (vmStatus.available) {
+    return {
+      available: true,
+      method: 'vm',
+      details: {
+        edition,
+        windowsSandbox: false,
+        sandboxie: sbie.installed,
+        vm: true,
+        vmState: vmStatus.vmState
+      }
+    };
+  }
+
+  // Sandboxie-Plus fallback (NOTE: cannot spoof WMI hardware IDs)
   if (sbie.installed) {
     return {
       available: true,
@@ -732,19 +750,28 @@ async function isSandboxAvailable() {
         windowsSandbox: false,
         sandboxie: true,
         sandboxieService: sbie.serviceRunning,
-        startExe: sbie.startExe
+        startExe: sbie.startExe,
+        vm: false
       }
     };
   }
 
-  // Neither available
+  // Nothing available — check if VBox installed but VM not set up yet
+  if (vmStatus.vboxInstalled && !vmStatus.vmExists) {
+    return {
+      available: false,
+      method: null,
+      reason: 'VirtualBox installed but Zoom VM not set up yet. Click "VM Setup" to create it.',
+      details: { edition, windowsSandbox: false, sandboxie: false, vm: false, vboxInstalled: true, isos: vmStatus.isos }
+    };
+  }
+
+  // Nothing available at all
   return {
     available: false,
     method: null,
-    reason: /Home/i.test(edition)
-      ? 'Install Sandboxie-Plus (free, open-source) from sandboxie-plus.com to use sandbox mode on Windows Home.'
-      : 'Enable Windows Sandbox in Windows Features, or install Sandboxie-Plus from sandboxie-plus.com.',
-    details: { edition, windowsSandbox: false, sandboxie: false }
+    reason: 'No isolation method found. Click "VM Setup" to install VirtualBox and create a Zoom VM (best method for bypassing hardware bans).',
+    details: { edition, windowsSandbox: false, sandboxie: false, vm: false, vboxInstalled: false }
   };
 }
 
@@ -762,14 +789,23 @@ async function launchSandbox() {
     if (check.method === 'windows-sandbox') {
       return await launchWindowsSandbox();
     }
+    if (check.method === 'vm') {
+      const result = await vm.launchZoomVM();
+      return { ...result, method: 'vm' };
+    }
     return await launchSandboxie();
   }
 
-  // Neither available — auto-install Sandboxie-Plus
+  // No method available — try auto-install Sandboxie-Plus as quick fallback
   logger.info('No sandbox found. Auto-installing Sandboxie-Plus...');
   const installResult = await installSandboxie();
   if (!installResult.success) {
-    return { success: false, method: 'none', error: installResult.error };
+    return {
+      success: false,
+      method: 'none',
+      error: 'No isolation method available. ' + installResult.error +
+        '\n\nFor best results, use VM Setup to create a VirtualBox VM (fully spoofs hardware IDs).'
+    };
   }
 
   // Retry launch after install

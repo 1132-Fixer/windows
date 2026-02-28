@@ -18,6 +18,7 @@ const settingsBackup = require('./operations/settings-backup');
 const selfTest = require('./operations/self-test');
 const snapshot = require('./operations/snapshot');
 const sandbox = require('./operations/sandbox');
+const vm = require('./operations/vm');
 
 let mainWindow = null;
 
@@ -465,6 +466,53 @@ function registerHandlers() {
 
   ipcMain.handle('install-sandboxie', async () => {
     return await sandbox.installSandboxie();
+  });
+
+  // ========================================
+  // VIRTUALBOX VM
+  // ========================================
+
+  ipcMain.handle('get-vm-status', async () => {
+    return await vm.getVMStatus();
+  });
+
+  ipcMain.handle('launch-zoom-vm', async () => {
+    return await vm.launchZoomVM();
+  });
+
+  ipcMain.handle('delete-zoom-vm', async () => {
+    return vm.deleteZoomVM();
+  });
+
+  ipcMain.handle('install-vbox', async () => {
+    return await vm.installVBox();
+  });
+
+  ipcMain.handle('select-iso', async () => {
+    // Show file picker for Windows ISO
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select Windows 10/11 ISO',
+      filters: [{ name: 'ISO Files', extensions: ['iso'] }],
+      properties: ['openFile']
+    });
+    if (result.canceled || !result.filePaths.length) {
+      return { selected: false };
+    }
+    return { selected: true, path: result.filePaths[0] };
+  });
+
+  ipcMain.handle('setup-zoom-vm', async (event, isoPath) => {
+    // Full VM setup: install VBox if needed, then create VM
+    const vboxCheck = vm.isVBoxInstalled();
+    if (!vboxCheck.installed) {
+      sendProgress({ step: 'Installing VirtualBox...', percent: 10 });
+      const installResult = await vm.installVBox();
+      if (!installResult.success) {
+        return { success: false, error: 'VirtualBox install failed: ' + installResult.error };
+      }
+    }
+    sendProgress({ step: 'Creating Zoom VM...', percent: 30 });
+    return await vm.createZoomVM(isoPath);
   });
 }
 

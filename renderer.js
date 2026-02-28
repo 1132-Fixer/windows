@@ -51,8 +51,10 @@ function init() {
       addLog('info', 'Launching Zoom in sandbox...');
       const result = await window.electronAPI?.launchSandbox();
       if (result?.success) {
-        const method = result.method === 'sandboxie' ? 'Sandboxie-Plus' : 'Windows Sandbox';
-        addLog('ok', `Zoom launched in ${method}.`);
+        const methodName = result.method === 'sandboxie' ? 'Sandboxie-Plus'
+          : result.method === 'vm' ? 'VirtualBox VM'
+          : 'Windows Sandbox';
+        addLog('ok', `Zoom launched in ${methodName}.`);
       } else {
         addLog('err', 'Sandbox failed: ' + (result?.error || 'Unknown'));
       }
@@ -73,13 +75,18 @@ function init() {
     addLog('info', 'Checking sandbox availability...');
     const result = await window.electronAPI?.launchSandbox();
     if (result?.success) {
-      const method = result.method === 'sandboxie' ? 'Sandboxie-Plus' : 'Windows Sandbox';
-      addLog('ok', `Zoom launched in ${method}. Fingerprints isolated.`);
+      const methodName = result.method === 'sandboxie' ? 'Sandboxie-Plus'
+        : result.method === 'vm' ? 'VirtualBox VM'
+        : 'Windows Sandbox';
+      addLog('ok', `Zoom launched in ${methodName}. Fingerprints isolated.`);
     } else {
       addLog('err', 'Sandbox failed: ' + (result?.error || 'Unknown'));
-      await window.electronAPI?.showError('No sandbox method available.\n\n' + (result?.error || 'Install Sandboxie-Plus (free) from sandboxie-plus.com.'));
+      await window.electronAPI?.showError('No sandbox method available.\n\n' + (result?.error || 'Use VM Setup for best results.'));
     }
   });
+
+  // VM Setup flow
+  $('btnVMSetup')?.addEventListener('click', handleVMSetup);
 
   // Progress updates from main process
   window.electronAPI?.onProgress?.(data => {
@@ -156,8 +163,10 @@ async function handleReset() {
         addLog('info', 'Launching Zoom in sandbox...');
         const sbResult = await window.electronAPI.launchSandbox();
         if (sbResult?.success) {
-          const method = sbResult.method === 'sandboxie' ? 'Sandboxie-Plus' : 'Windows Sandbox';
-          addLog('ok', `Zoom launched in ${method}.`);
+          const methodName = sbResult.method === 'sandboxie' ? 'Sandboxie-Plus'
+            : sbResult.method === 'vm' ? 'VirtualBox VM'
+            : 'Windows Sandbox';
+          addLog('ok', `Zoom launched in ${methodName}.`);
         } else {
           addLog('err', 'Sandbox unavailable: ' + (sbResult?.error || 'Unknown'));
         }
@@ -248,4 +257,109 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// ==========================================
+// VM SETUP FLOW
+// ==========================================
+
+async function handleVMSetup() {
+  addLog('info', 'Checking VM status...');
+
+  const status = await window.electronAPI?.getVMStatus();
+  if (!status) {
+    addLog('err', 'Failed to get VM status');
+    return;
+  }
+
+  // VM already exists and ready
+  if (status.vmExists) {
+    if (status.vmState === 'running') {
+      addLog('ok', 'Zoom VM is already running.');
+      return;
+    }
+    const launch = await window.electronAPI?.showConfirm(
+      'Zoom VM already exists.\n\nLaunch it now?'
+    );
+    if (launch) {
+      addLog('info', 'Starting Zoom VM...');
+      const result = await window.electronAPI?.launchZoomVM();
+      if (result?.success) {
+        addLog('ok', 'Zoom VM started. Use Zoom inside the VM window.');
+      } else {
+        addLog('err', 'VM launch failed: ' + (result?.error || 'Unknown'));
+      }
+    }
+    return;
+  }
+
+  // Need to set up VM — check VirtualBox first
+  if (!status.vboxInstalled) {
+    const installVBox = await window.electronAPI?.showConfirm(
+      'VirtualBox is not installed.\n\n' +
+      'VirtualBox creates a virtual PC with completely different hardware IDs — ' +
+      'the only reliable way to bypass hardware-level 1132 bans on Windows Home.\n\n' +
+      'Download and install VirtualBox (~100 MB)?'
+    );
+    if (!installVBox) {
+      addLog('info', 'VM setup cancelled.');
+      return;
+    }
+    addLog('info', 'Downloading & installing VirtualBox...');
+    const installResult = await window.electronAPI?.installVBox();
+    if (!installResult?.success) {
+      addLog('err', 'VirtualBox install failed: ' + (installResult?.error || 'Unknown'));
+      await window.electronAPI?.showError('VirtualBox installation failed.\n\n' + (installResult?.error || ''));
+      return;
+    }
+    addLog('ok', 'VirtualBox installed (v' + (installResult.version || '?') + ')');
+  }
+
+  // Need a Windows ISO
+  let isoPath = null;
+
+  if (status.isos && status.isos.length > 0) {
+    // Found ISOs automatically
+    const useFound = await window.electronAPI?.showConfirm(
+      'Found Windows ISO:\n' + status.isos[0] + '\n\nUse this ISO to create the Zoom VM?'
+    );
+    if (useFound) {
+      isoPath = status.isos[0];
+    }
+  }
+
+  if (!isoPath) {
+    // Ask user to pick ISO
+    addLog('info', 'Select a Windows 10/11 ISO file...');
+    const isoResult = await window.electronAPI?.selectISO();
+    if (!isoResult?.selected) {
+      addLog('info', 'No ISO selected. VM setup cancelled.');
+      await window.electronAPI?.showError(
+        'A Windows 10 or 11 ISO is needed to create the VM.\n\n' +
+        'Download one from microsoft.com/software-download/windows11'
+      );
+      return;
+    }
+    isoPath = isoResult.path;
+  }
+
+  // Create VM
+  addLog('info', 'Creating Zoom VM with spoofed hardware...');
+  addLog('info', 'ISO: ' + isoPath);
+
+  const setupResult = await window.electronAPI?.setupZoomVM(isoPath);
+  if (setupResult?.success) {
+    addLog('ok', 'Zoom VM created and started!');
+    addLog('ok', setupResult.message || 'Windows is installing automatically (~15 min).');
+    await window.electronAPI?.showSuccess(
+      'Zoom VM Created!\n\n' +
+      'Windows is installing automatically inside the VM.\n' +
+      'This takes about 15 minutes.\n\n' +
+      'Once Windows is ready, install Zoom inside the VM and use it for meetings.\n' +
+      'The VM has completely different hardware IDs — 1132 ban will not apply.'
+    );
+  } else {
+    addLog('err', 'VM setup failed: ' + (setupResult?.error || 'Unknown'));
+    await window.electronAPI?.showError('VM setup failed:\n\n' + (setupResult?.error || 'Unknown error'));
+  }
 }

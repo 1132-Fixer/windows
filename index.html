@@ -647,6 +647,19 @@
       color: var(--accent-dim);
     }
 
+    .btn-vm {
+      background: #1a1a2e;
+      border-color: #4a3aaa;
+      color: #a78bfa;
+    }
+
+    .btn-vm:hover {
+      background: #2a2a3e;
+      border-color: #7c3aed;
+      color: #c4b5fd;
+      box-shadow: 0 0 12px rgba(124, 58, 237, 0.2);
+    }
+
     .hidden { display: none !important; }
   </style>
 </head>
@@ -808,12 +821,13 @@
         <button class="btn-secondary" id="btnStartOver">New Operation</button>
         <button class="btn-primary" id="btnLaunchZoom">Launch Zoom</button>
         <button class="btn-secondary" id="btnLaunchSandbox" title="Launch Zoom in isolated sandbox (no fingerprints)">Sandbox</button>
+        <button class="btn-secondary btn-vm" id="btnVMSetup" title="Set up VirtualBox VM with spoofed hardware (best 1132 bypass)">VM Setup</button>
       </div>
     </div>
   </main>
 
   <footer class="footer">
-    <span class="version">v3.2.9</span>
+    <span class="version">v3.3.1</span>
     <span id="adminStatus">Checking privileges...</span>
   </footer>
 
