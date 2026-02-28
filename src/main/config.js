@@ -4,7 +4,7 @@
  *
  * GH_ISSUES_TOKEN: Fine-grained PAT with Issues:write on the repo.
  *   Create at: https://github.com/settings/personal-access-tokens/new
- *   Scope: PrimeUpYourLife/1132-Fixer-Windows-Version-
+ *   Scope: PrimeUpYourLife/1132-Fixer-Windows
  *   Permission: Issues → Read and write
  */
 

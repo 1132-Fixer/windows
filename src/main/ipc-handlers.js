@@ -430,7 +430,7 @@ function registerHandlers() {
       return new Promise((resolve) => {
         const req = https.request({
           hostname: 'api.github.com',
-          path: '/repos/PrimeUpYourLife/1132-Fixer-Windows-Version-/issues',
+          path: '/repos/PrimeUpYourLife/1132-Fixer-Windows/issues',
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
