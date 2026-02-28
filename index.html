@@ -8,8 +8,8 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     :root {
-      --bg-top: #1a6fb5;
-      --bg-bot: #0a1628;
+      --bg-top: #0f1a30;
+      --bg-bot: #060d1a;
       --accent: #f5a623;
       --accent-hot: #ff8c00;
       --accent-glow: rgba(245, 166, 35, 0.5);
@@ -24,7 +24,7 @@
 
     body {
       font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
-      background: linear-gradient(170deg, var(--bg-top) 0%, #0f3460 40%, var(--bg-bot) 100%);
+      background: linear-gradient(170deg, var(--bg-top) 0%, #0a1530 40%, var(--bg-bot) 100%);
       color: var(--text);
       height: 100vh;
       display: flex;
@@ -362,17 +362,24 @@
       letter-spacing: 2px;
     }
     .feedback-link {
-      color: var(--text-dim);
-      font-size: 10px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 600;
       cursor: pointer;
-      border: none;
-      background: none;
-      text-decoration: underline;
-      text-underline-offset: 2px;
-      transition: color 0.2s;
+      border: 1px solid rgba(245, 166, 35, 0.4);
+      background: rgba(245, 166, 35, 0.1);
+      padding: 4px 12px;
+      border-radius: 4px;
+      text-decoration: none;
+      transition: all 0.2s;
       -webkit-app-region: no-drag;
     }
-    .feedback-link:hover { color: var(--accent); }
+    .feedback-link:hover { background: rgba(245, 166, 35, 0.25); color: #fff; }
+    .version-label {
+      color: var(--text-dim);
+      font-size: 10px;
+      opacity: 0.7;
+    }
 
     /* ===== FEEDBACK MODAL ===== */
     .modal-overlay {
@@ -564,6 +571,7 @@
     <div class="hazard-bar"></div>
     <div class="footer-content">
       <button class="feedback-link" id="btnFeedback">Report Bug / Feedback</button>
+      <span class="version-label" id="versionLabel"></span>
       <span class="admin-badge" id="adminStatus">ADMINISTRATOR</span>
     </div>
   </div>

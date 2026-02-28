@@ -15,6 +15,7 @@ async function init() {
   try {
     const v = await window.electronAPI.getVersion();
     $('appVersion').textContent = 'v' + v;
+    if ($('versionLabel')) $('versionLabel').textContent = 'v' + v;
   } catch (_) {}
 
   // Toggle switches

@@ -2,7 +2,7 @@
   <img src="assets/icon.png" alt="1132 Fixer" width="180">
 </p>
 
-<h1 align="center">1132 Fixer</h1>
+<h1 align="center">1132 Fixer - Windows</h1>
 
 <p align="center">
   <strong>Fix Zoom Error 1132 device bans on Windows</strong><br>
