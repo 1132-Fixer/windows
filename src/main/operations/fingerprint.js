@@ -503,12 +503,20 @@ async function wipeAmcache() {
       }
 
       try {
+        # Stop ALL services that lock Amcache
+        @('AeLookupSvc', 'PcaSvc', 'DiagTrack') | ForEach-Object {
+          Stop-Service -Name $_ -Force -ErrorAction SilentlyContinue
+        }
+        # Kill processes that hold Amcache open
+        @('CompatTelRunner', 'WerFault') | ForEach-Object {
+          Get-Process -Name $_ -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 2
+
         # Load the hive offline
         $loadResult = reg load $tempKey $hivePath 2>&1
         if ($LASTEXITCODE -ne 0) {
-          # Try stopping Application Experience service first
-          Stop-Service -Name 'AeLookupSvc' -Force -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 2
+          Start-Sleep -Seconds 3
           $loadResult = reg load $tempKey $hivePath 2>&1
         }
 
@@ -551,7 +559,24 @@ async function wipeAmcache() {
 
           Write-Output "$deleted|hive"
         } else {
-          Write-Output "0|locked"
+          # Hive still locked — schedule deletion at next reboot
+          try {
+            [System.IO.File]::Move($hivePath, "$hivePath.bak") 2>$null
+          } catch {}
+          # Use MoveFileEx to delete on reboot (kernel API)
+          $signature = @'
+[DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, int dwFlags);
+'@
+          $type = Add-Type -MemberDefinition $signature -Name 'MoveFileUtils' -Namespace 'Win32' -PassThru -ErrorAction SilentlyContinue
+          if ($type) {
+            $type::MoveFileEx($hivePath, $null, 4) | Out-Null  # MOVEFILE_DELAY_UNTIL_REBOOT
+            $type::MoveFileEx("$hivePath.LOG1", $null, 4) | Out-Null
+            $type::MoveFileEx("$hivePath.LOG2", $null, 4) | Out-Null
+            Write-Output "0|reboot_scheduled"
+          } else {
+            Write-Output "0|locked"
+          }
         }
       } catch {
         # Make sure we unload on error
@@ -567,6 +592,8 @@ async function wipeAmcache() {
 
     if (deleted > 0) {
       logger.ok(`Wiped ${deleted} Amcache entries`, { method });
+    } else if (method === 'reboot_scheduled') {
+      logger.warn('Amcache locked — scheduled for deletion on next reboot');
     } else if (method === 'locked') {
       logger.warn('Amcache is locked - may require reboot to clean');
     } else if (method === 'notfound') {

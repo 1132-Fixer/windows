@@ -46,7 +46,19 @@ function init() {
 
   // Complete view buttons
   $('btnLaunchZoom')?.addEventListener('click', async () => {
-    await window.electronAPI?.launchZoom();
+    // If sandbox mode was used, launch through sandbox instead of bare
+    if (options.sandbox) {
+      addLog('info', 'Launching Zoom in sandbox...');
+      const result = await window.electronAPI?.launchSandbox();
+      if (result?.success) {
+        const method = result.method === 'sandboxie' ? 'Sandboxie-Plus' : 'Windows Sandbox';
+        addLog('ok', `Zoom launched in ${method}.`);
+      } else {
+        addLog('err', 'Sandbox failed: ' + (result?.error || 'Unknown'));
+      }
+    } else {
+      await window.electronAPI?.launchZoom();
+    }
   });
 
   $('btnStartOver')?.addEventListener('click', () => {
