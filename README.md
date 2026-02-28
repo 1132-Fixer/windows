@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/PrimeUpYourLife/1132-Fixer-Windows/releases/latest">Download Latest Release</a>
+  <a href="https://github.com/PrimeUpYourLife/1132-Fixer/releases/latest">Download Latest Release</a>
 </p>
 
 ---
@@ -35,7 +35,7 @@ Zoom Error 1132 is a device-level ban that persists even after uninstalling and 
 
 ## Install
 
-Download the latest **Setup .exe** from [Releases](https://github.com/PrimeUpYourLife/1132-Fixer-Windows/releases/latest).
+Download the latest **Setup .exe** from [Releases](https://github.com/PrimeUpYourLife/1132-Fixer/releases/latest).
 
 > Requires **Windows 10/11** and **Administrator** privileges.
 

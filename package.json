@@ -31,8 +31,8 @@
     "publish": {
       "provider": "github",
       "owner": "PrimeUpYourLife",
-      "repo": "1132-Fixer-Windows",
-      "private": true,
+      "repo": "1132-Fixer",
+      "private": false,
       "releaseType": "release"
     },
     "productName": "1132 Fixer",
