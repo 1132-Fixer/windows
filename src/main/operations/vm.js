@@ -151,18 +151,61 @@ async function installVBox() {
     return { success: false, error: 'Downloaded file too small or missing' };
   }
 
-  // Silent install (--silent --ignore-reboot)
+  // Install VC++ Redistributable prerequisite (VBox 7.x requires it)
   try {
-    logger.info('Installing VirtualBox (silent)...');
-    execSync(`"${destPath}" --silent --ignore-reboot`, {
+    logger.info('Installing Visual C++ Redistributable...');
+    const vcRedistPath = path.join(process.env.TEMP || '', 'vc_redist.x64.exe');
+    await downloadFile('https://aka.ms/vs/17/release/vc_redist.x64.exe', vcRedistPath);
+    execSync(`"${vcRedistPath}" /install /quiet /norestart`, {
+      windowsHide: true,
+      timeout: 120000
+    });
+    logger.ok('VC++ Redistributable installed');
+    try { fs.unlinkSync(vcRedistPath); } catch { /* ignore */ }
+  } catch (e) {
+    logger.warn('VC++ Redistributable install failed (may already be present)', { error: e.message });
+  }
+
+  // Extract MSI from the EXE wrapper (more reliable than --silent which often fails)
+  const extractDir = path.join(process.env.TEMP || '', 'VBoxExtract');
+  try {
+    logger.info('Extracting VirtualBox MSI...');
+    execSync(`"${destPath}" --extract --silent --path "${extractDir}"`, {
+      windowsHide: true,
+      timeout: 120000
+    });
+  } catch (e) {
+    logger.error('MSI extraction failed', { error: e.message });
+    return { success: false, error: 'MSI extraction failed: ' + e.message };
+  }
+
+  // Find the extracted MSI
+  let msiPath = null;
+  try {
+    const files = fs.readdirSync(extractDir);
+    const msi = files.find(f => f.toLowerCase().endsWith('.msi'));
+    if (msi) msiPath = path.join(extractDir, msi);
+  } catch { /* dir read failed */ }
+
+  if (!msiPath || !fs.existsSync(msiPath)) {
+    return { success: false, error: 'Could not find extracted MSI in ' + extractDir };
+  }
+
+  // Install via msiexec (works reliably on all Windows editions)
+  try {
+    logger.info('Installing VirtualBox via MSI...', { msi: msiPath });
+    execSync(`msiexec /i "${msiPath}" /qn /norestart`, {
       windowsHide: true,
       timeout: 300000 // 5 min
     });
-    logger.ok('VirtualBox installed');
+    logger.ok('VirtualBox MSI installed');
   } catch (e) {
-    logger.error('VirtualBox install failed', { error: e.message });
-    return { success: false, error: 'Install failed: ' + e.message };
+    logger.error('VirtualBox MSI install failed', { error: e.message });
+    return { success: false, error: 'MSI install failed: ' + e.message };
   }
+
+  // Cleanup extraction
+  try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
   // Verify
   const check = isVBoxInstalled();
