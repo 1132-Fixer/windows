@@ -55,4 +55,4 @@ Use the **Report Bug / Feedback** button in the app to submit issues and feature
 
 ## License
 
-MIT - HT & OP
+MIT - PЯIMΞ
