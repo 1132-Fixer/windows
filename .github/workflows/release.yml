@@ -131,6 +131,26 @@ jobs:
           Write-Host "=== Release Artifacts ==="
           Get-ChildItem -Path dist | Format-Table Name, Length, LastWriteTime
 
+      - name: Delete all previous releases
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const currentTag = context.ref.replace('refs/tags/', '');
+            const releases = await github.paginate(github.rest.repos.listReleases, { owner, repo });
+            for (const release of releases) {
+              if (release.tag_name === currentTag) continue;
+              console.log(`Deleting release: ${release.tag_name}`);
+              await github.rest.repos.deleteRelease({ owner, repo, release_id: release.id });
+              // Also delete the tag
+              try {
+                await github.rest.git.deleteRef({ owner, repo, ref: `tags/${release.tag_name}` });
+              } catch (e) {
+                console.log(`  Tag ${release.tag_name} already gone or protected`);
+              }
+            }
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2.0.8
         with:

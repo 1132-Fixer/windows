@@ -344,18 +344,19 @@ async function launchZoomPath(zoomPath) {
 }
 
 /**
- * Clean Room Launch — bypass 1132 by redirecting Zoom's data to a fresh directory.
+ * Clean Room Launch — bypass 1132 by wiping ALL Zoom fingerprint data before launch.
  *
  * How it works:
- *   1. Create/wipe a clean room directory (C:\ProgramData\1132Fixer\CleanZoom)
- *   2. Kill all existing Zoom processes
- *   3. Delete HKCU\Software\Zoom registry (prevents stale fingerprint reads)
- *   4. Launch Zoom.exe with APPDATA + LOCALAPPDATA env vars pointing to clean room
- *   5. Zoom sees empty data dirs → generates fresh device fingerprint → no ban
+ *   1. Kill all existing Zoom processes and services
+ *   2. Delete ALL Zoom data from real APPDATA/LOCALAPPDATA/ProgramData
+ *      (telemetry DBs, encrypted DBs, config files — everything)
+ *   3. Delete ALL Zoom registry keys (HKCU + HKLM + WOW64)
+ *   4. Launch Zoom.exe normally — it sees empty data dirs + no registry
+ *      → generates a completely fresh device fingerprint → no ban
  *
- * This avoids needing a separate Windows user (ghost user) because Zoom's
- * fingerprint databases live in %APPDATA%\Zoom\data\ — redirecting that path
- * gives Zoom a blank slate while keeping the same user session.
+ * NOTE: Env var APPDATA redirect does NOT work for Win32 apps like Zoom.
+ * Zoom uses SHGetKnownFolderPath() which reads the registry, not env vars.
+ * The only reliable approach is to wipe the real data directories.
  */
 async function launchZoomCleanRoom() {
   logger.info('Clean room launch: starting...');
@@ -366,86 +367,181 @@ async function launchZoomCleanRoom() {
   }
 
   const zoomExe = installed.path;
-  const cleanBase = path.join(process.env.ProgramData || 'C:\\ProgramData', '1132Fixer', 'CleanZoom');
-  const cleanRoaming = path.join(cleanBase, 'Roaming');
-  const cleanLocal = path.join(cleanBase, 'Local');
 
   try {
-    // Step 1: Kill all Zoom processes
+    // Step 1: Kill all Zoom processes and services
     logger.info('Clean room: killing existing Zoom processes...');
     await runPowerShell(`
+      # Kill all known Zoom process names
       $names = @('Zoom','Zoomus','Zoom_launcher','CptHost','CptService','CptControl',
         'aomhost','aomhost64','airhost','zCrashReport','zCrashReport64',
-        'ZoomWebHost','zWebview2Agent','zCefAgent','zUpdater','ZoomInstaller')
+        'ZoomWebHost','zWebview2Agent','zCefAgent','zUpdater','ZoomInstaller',
+        'zcscpthost','zCSCptService','ZoomDocConverter','zTscoder')
       foreach ($n in $names) { taskkill /F /IM "$n.exe" 2>$null | Out-Null }
       Get-Process | Where-Object { $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' } | Stop-Process -Force -EA SilentlyContinue
       Get-Process -Name 'CptService','CptHost','CptControl' -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+      # Stop and delete services
+      Stop-Service -Name 'ZoomCptService' -Force -EA SilentlyContinue
+      Stop-Service -Name 'CptService' -Force -EA SilentlyContinue
+      sc.exe delete ZoomCptService 2>$null | Out-Null
+      sc.exe delete CptService 2>$null | Out-Null
+      sc.exe delete zCSCptService 2>$null | Out-Null
       Start-Sleep -Seconds 2
-      # Second pass
+      # Second pass — catch respawns
       Get-Process | Where-Object { $_.Name -like '*zoom*' } | Stop-Process -Force -EA SilentlyContinue
     `, { timeout: 15000 }).catch(() => {});
 
-    // Step 2: Wipe clean room (delete and recreate for total freshness)
-    logger.info('Clean room: wiping data directory...');
-    if (fs.existsSync(cleanBase)) {
-      await runPowerShell(
-        `Remove-Item -LiteralPath '${cleanBase.replace(/'/g, "''")}' -Recurse -Force -EA SilentlyContinue`,
-        { timeout: 10000 }
-      ).catch(() => {});
-    }
-    fs.mkdirSync(cleanRoaming, { recursive: true });
-    fs.mkdirSync(cleanLocal, { recursive: true });
+    // Step 2: Wipe ALL Zoom data from REAL APPDATA/LOCALAPPDATA/ProgramData
+    // NOTE: We wipe the REAL directories, not a fake clean room.
+    // Zoom uses Win32 SHGetKnownFolderPath, not %APPDATA% env var.
+    logger.info('Clean room: wiping ALL Zoom data directories...');
+    await runPowerShell(`
+      $roaming = [Environment]::GetFolderPath('ApplicationData')
+      $local = [Environment]::GetFolderPath('LocalApplicationData')
 
-    // Step 3: Clean HKCU registry (Zoom reads SystemInfo from HKCU)
+      # Wipe Zoom data dirs in Roaming (telemetry DBs, encrypted DBs, config)
+      $zoomRoaming = Join-Path $roaming 'Zoom'
+      if (Test-Path $zoomRoaming) {
+        # Delete data/, logs/, reports/, EBWebView/, app-data/ — all fingerprint sources
+        @('data','logs','reports','EBWebView','app-data','aomhost','CptService') | ForEach-Object {
+          $p = Join-Path $zoomRoaming $_
+          if (Test-Path $p) { Remove-Item $p -Recurse -Force -EA SilentlyContinue }
+        }
+        # Delete config files with device identifiers
+        @('Zoom.us.ini','viper.ini','appsafecheck.txt','ZoomWorkplace.ini') | ForEach-Object {
+          $p = Join-Path $zoomRoaming $_
+          if (Test-Path $p) { Remove-Item $p -Force -EA SilentlyContinue }
+        }
+      }
+
+      # Same for Zoom Workplace (newer branding)
+      $zoomWpRoaming = Join-Path $roaming 'Zoom Workplace'
+      if (Test-Path $zoomWpRoaming) {
+        Remove-Item $zoomWpRoaming -Recurse -Force -EA SilentlyContinue
+      }
+
+      # Wipe Zoom data dirs in Local
+      $zoomLocal = Join-Path $local 'Zoom'
+      if (Test-Path $zoomLocal) {
+        @('data','plugin','EBWebView','app-data','CptService') | ForEach-Object {
+          $p = Join-Path $zoomLocal $_
+          if (Test-Path $p) { Remove-Item $p -Recurse -Force -EA SilentlyContinue }
+        }
+      }
+      $zoomWpLocal = Join-Path $local 'Zoom Workplace'
+      if (Test-Path $zoomWpLocal) {
+        Remove-Item $zoomWpLocal -Recurse -Force -EA SilentlyContinue
+      }
+
+      # Other Zoom AppData variants
+      foreach ($sub in @('ZoomUMX','zoomus','zoom.us','ZoomVideoComm','ZoomGifCollector',
+                         'Zoom Meetings','ZoomLogs','zoom.us','Zoom VDI')) {
+        $p1 = Join-Path $roaming $sub
+        $p2 = Join-Path $local $sub
+        if (Test-Path $p1) { Remove-Item $p1 -Recurse -Force -EA SilentlyContinue }
+        if (Test-Path $p2) { Remove-Item $p2 -Recurse -Force -EA SilentlyContinue }
+      }
+
+      # Wipe ProgramData fingerprints (CptService, device IDs)
+      foreach ($pd in @('CptService','CptHost','Zoom','ZoomVideo','ZoomVideoComm',
+                        'Zoom Video Communications','Zoom CptService','zCSCptService',
+                        'Zoom Workplace','1132Fixer')) {
+        $p = Join-Path $env:ProgramData $pd
+        if (Test-Path $p) { Remove-Item $p -Recurse -Force -EA SilentlyContinue }
+      }
+
+      # Clean Windows credentials
+      cmdkey /list 2>$null | Select-String 'zoom' -CaseSensitive:$false | ForEach-Object {
+        $target = ($_ -split 'Target:')[1]
+        if ($target) { cmdkey /delete:$target.Trim() 2>$null | Out-Null }
+      }
+    `, { timeout: 20000 }).catch(() => {});
+
+    // Step 3: Clean ALL Zoom registry keys (HKCU + HKLM + WOW64)
     logger.info('Clean room: cleaning registry...');
     await runPowerShell(`
-      # Delete all Zoom registry keys under HKCU
-      @('HKCU:\\Software\\Zoom', 'HKCU:\\Software\\ZoomUMX', 'HKCU:\\Software\\zoom.us',
-        'HKCU:\\Software\\Zoom Video Communications', 'HKCU:\\Software\\CptService') | ForEach-Object {
-        if (Test-Path $_) { Remove-Item $_ -Recurse -Force -EA SilentlyContinue }
+      # HKCU keys — remove DENY ACLs first (from previous fixer runs), then delete
+      $hkcuKeys = @(
+        'HKCU:\\Software\\Zoom', 'HKCU:\\Software\\ZoomUMX', 'HKCU:\\Software\\zoom.us',
+        'HKCU:\\Software\\Zoom Video Communications', 'HKCU:\\Software\\Zoom Workplace',
+        'HKCU:\\Software\\ZoomVideoComm', 'HKCU:\\Software\\ZoomGifCollector',
+        'HKCU:\\Software\\CptService'
+      )
+      foreach ($k in $hkcuKeys) {
+        if (Test-Path $k) {
+          try {
+            $acl = Get-Acl $k
+            $acl.Access | Where-Object { $_.AccessControlType -eq 'Deny' } | ForEach-Object {
+              $acl.RemoveAccessRule($_) | Out-Null
+            }
+            Set-Acl $k $acl -EA SilentlyContinue
+            Get-ChildItem $k -Recurse -EA SilentlyContinue | ForEach-Object {
+              try {
+                $subAcl = Get-Acl $_.PSPath
+                $subAcl.Access | Where-Object { $_.AccessControlType -eq 'Deny' } | ForEach-Object {
+                  $subAcl.RemoveAccessRule($_) | Out-Null
+                }
+                Set-Acl $_.PSPath $subAcl -EA SilentlyContinue
+              } catch {}
+            }
+          } catch {}
+          Remove-Item $k -Recurse -Force -EA SilentlyContinue
+        }
       }
-      # Also via reg.exe for reliability
-      reg delete "HKCU\\Software\\Zoom" /f 2>$null | Out-Null
-      reg delete "HKCU\\Software\\ZoomUMX" /f 2>$null | Out-Null
-      reg delete "HKCU\\Software\\zoom.us" /f 2>$null | Out-Null
-      reg delete "HKCU\\Software\\CptService" /f 2>$null | Out-Null
-      reg delete "HKCU\\Software\\Zoom Video Communications" /f 2>$null | Out-Null
-      # Delete HKLM Zoom keys too
-      @('HKLM:\\SOFTWARE\\Zoom', 'HKLM:\\SOFTWARE\\ZoomUMX') | ForEach-Object {
-        if (Test-Path $_) { Remove-Item $_ -Recurse -Force -EA SilentlyContinue }
-      }
-      # Remove auto-start entries
-      Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'Zoom' -Force -EA SilentlyContinue
-      Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'ZoomUMX' -Force -EA SilentlyContinue
-      Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'ZoomWorkplace' -Force -EA SilentlyContinue
-      # Purge ALL Zoom Group Policy registry keys (stale from older versions)
-      $policyRoot = 'HKLM:\\SOFTWARE\\Policies\\Zoom'
-      if (Test-Path $policyRoot) {
-        Remove-Item $policyRoot -Recurse -Force -EA SilentlyContinue
-      }
-    `, { timeout: 10000 }).catch(() => {});
+      # reg.exe for reliability
+      foreach ($k in @(
+        'HKCU\\Software\\Zoom', 'HKCU\\Software\\ZoomUMX', 'HKCU\\Software\\zoom.us',
+        'HKCU\\Software\\CptService', 'HKCU\\Software\\Zoom Video Communications',
+        'HKCU\\Software\\Zoom Workplace', 'HKCU\\Software\\ZoomVideoComm',
+        'HKCU\\Software\\ZoomGifCollector'
+      )) { reg delete $k /f 2>$null | Out-Null }
 
-    // Step 4: Launch Zoom with redirected APPDATA → clean room
-    logger.info('Clean room: launching Zoom with redirected data paths...');
+      # HKLM + WOW64 keys
+      $hklmKeys = @(
+        'HKLM:\\SOFTWARE\\Zoom', 'HKLM:\\SOFTWARE\\ZoomUMX', 'HKLM:\\SOFTWARE\\zoom.us',
+        'HKLM:\\SOFTWARE\\Zoom Video Communications', 'HKLM:\\SOFTWARE\\Zoom Workplace',
+        'HKLM:\\SOFTWARE\\ZoomVideoComm', 'HKLM:\\SOFTWARE\\CptService',
+        'HKLM:\\SOFTWARE\\WOW6432Node\\Zoom', 'HKLM:\\SOFTWARE\\WOW6432Node\\ZoomUMX',
+        'HKLM:\\SOFTWARE\\WOW6432Node\\Zoom Workplace', 'HKLM:\\SOFTWARE\\WOW6432Node\\CptService',
+        'HKLM:\\SOFTWARE\\WOW6432Node\\ZoomVideoComm', 'HKLM:\\SOFTWARE\\Policies\\Zoom'
+      )
+      foreach ($k in $hklmKeys) {
+        if (Test-Path $k) {
+          try {
+            $acl = Get-Acl $k
+            $acl.Access | Where-Object { $_.AccessControlType -eq 'Deny' } | ForEach-Object {
+              $acl.RemoveAccessRule($_) | Out-Null
+            }
+            Set-Acl $k $acl -EA SilentlyContinue
+          } catch {}
+          Remove-Item $k -Recurse -Force -EA SilentlyContinue
+        }
+      }
+
+      # Remove auto-start entries
+      $runHKCU = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+      $runHKLM = 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+      foreach ($v in @('Zoom','ZoomUMX','ZoomWorkplace')) {
+        Remove-ItemProperty -Path $runHKCU -Name $v -Force -EA SilentlyContinue
+      }
+      foreach ($v in @('Zoom','ZoomCptService')) {
+        Remove-ItemProperty -Path $runHKLM -Name $v -Force -EA SilentlyContinue
+      }
+    `, { timeout: 20000 }).catch(() => {});
+
+    // Step 4: Launch Zoom normally — it starts with completely fresh data
+    logger.info('Clean room: launching Zoom with wiped data...');
     const { spawn } = require('child_process');
-    const cleanEnv = { ...process.env };
-    cleanEnv.APPDATA = cleanRoaming;
-    cleanEnv.LOCALAPPDATA = cleanLocal;
 
     const child = spawn(zoomExe, [], {
       detached: true,
       stdio: 'ignore',
-      windowsHide: false,
-      env: cleanEnv
+      windowsHide: false
     });
     child.unref();
 
-    logger.ok('Clean room: Zoom launched with fresh data paths', {
-      zoomExe,
-      APPDATA: cleanRoaming,
-      LOCALAPPDATA: cleanLocal
-    });
-    return { success: true, method: 'cleanroom', path: zoomExe, cleanBase };
+    logger.ok('Clean room: Zoom launched with wiped fingerprint data', { zoomExe });
+    return { success: true, method: 'cleanroom', path: zoomExe };
   } catch (e) {
     logger.error('Clean room launch failed', { error: e.message });
     return { success: false, error: e.message };

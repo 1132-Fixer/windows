@@ -49,7 +49,7 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 22px 24px 0;
+      padding: 18px 24px 0;
       position: relative;
       z-index: 1;
       -webkit-app-region: drag;
@@ -58,16 +58,16 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
     }
     .logo img {
-      width: 110px;
-      height: 110px;
+      width: 100px;
+      height: 100px;
       border-radius: 22px;
       filter: drop-shadow(0 8px 28px rgba(0,0,0,0.8));
     }
     .logo-title {
-      font-size: 36px;
+      font-size: 34px;
       font-weight: 900;
       letter-spacing: 3px;
       line-height: 1;
@@ -82,22 +82,33 @@
       height: 3px;
       background: linear-gradient(90deg, var(--accent-hot), var(--accent));
       border-radius: 2px;
-      margin-top: 2px;
     }
     .logo-desc {
       color: var(--text-dim);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 400;
       letter-spacing: 0.5px;
-      margin-top: 4px;
     }
     .version {
-      font-size: 10px;
+      font-size: 14px;
+      font-weight: 700;
       color: var(--text-dim);
-      background: rgba(255,255,255,0.06);
-      padding: 3px 12px;
-      border-radius: 20px;
-      border: 1px solid rgba(255,255,255,0.08);
+      background: linear-gradient(145deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03));
+      padding: 12px 26px;
+      border-radius: 50px;
+      border: 1.5px solid rgba(255,255,255,0.12);
+      cursor: pointer;
+      transition: all 0.25s ease;
+      -webkit-app-region: no-drag;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.06);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+    .version:hover {
+      background: linear-gradient(145deg, rgba(255,255,255,0.16), rgba(255,255,255,0.06));
+      color: var(--text);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 24px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.1);
     }
 
     /* ===== MAIN — HERO DOMINANT ===== */
@@ -117,7 +128,7 @@
     /* ===== HERO BUTTON — ROUNDED RECTANGLE ===== */
     .hero-wrap {
       position: relative;
-      margin-bottom: 20px;
+      margin-bottom: 16px;
     }
 
     .hero-wrap::before {
@@ -334,120 +345,173 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 4px 20px;
+      padding: 10px 20px;
       width: 100%;
     }
     .admin-badge {
       color: var(--green);
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 2px;
-      border: 1px solid rgba(34, 197, 94, 0.4);
-      background: rgba(34, 197, 94, 0.1);
-      padding: 4px 12px;
-      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      border: 1.5px solid rgba(34, 197, 94, 0.5);
+      background: linear-gradient(145deg, rgba(34, 197, 94, 0.15), rgba(34, 197, 94, 0.06));
+      padding: 12px 26px;
+      border-radius: 50px;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all 0.25s ease;
       -webkit-app-region: no-drag;
+      box-shadow: 0 4px 16px rgba(34, 197, 94, 0.12), inset 0 1px 0 rgba(255,255,255,0.06);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
     }
-    .admin-badge:hover { background: rgba(34, 197, 94, 0.25); color: #fff; }
+    .admin-badge:hover {
+      background: linear-gradient(145deg, rgba(34, 197, 94, 0.35), rgba(34, 197, 94, 0.15));
+      color: #fff;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 24px rgba(34, 197, 94, 0.25), inset 0 1px 0 rgba(255,255,255,0.1);
+    }
 
     /* ===== EXIT BADGE — TOP RIGHT ===== */
     .exit-badge {
       position: fixed;
-      top: 10px;
-      right: 12px;
+      top: 12px;
+      right: 14px;
       z-index: 50;
       color: #ef4444;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 2px;
-      border: 1px solid rgba(239, 68, 68, 0.4);
-      background: rgba(239, 68, 68, 0.1);
-      padding: 4px 12px;
-      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      border: 1.5px solid rgba(239, 68, 68, 0.5);
+      background: linear-gradient(145deg, rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.06));
+      padding: 12px 26px;
+      border-radius: 50px;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all 0.25s ease;
       -webkit-app-region: no-drag;
+      box-shadow: 0 4px 16px rgba(239, 68, 68, 0.12), inset 0 1px 0 rgba(255,255,255,0.06);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
     }
-    .exit-badge:hover { background: rgba(239, 68, 68, 0.3); color: #fff; }
+    .exit-badge:hover {
+      background: linear-gradient(145deg, rgba(239, 68, 68, 0.35), rgba(239, 68, 68, 0.15));
+      color: #fff;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 24px rgba(239, 68, 68, 0.25), inset 0 1px 0 rgba(255,255,255,0.1);
+    }
 
     /* ===== STATUS BADGE — TOP LEFT ===== */
+    /* Default = Ready (green) */
     .status-badge {
       position: fixed;
-      top: 10px;
-      left: 12px;
+      top: 12px;
+      left: 14px;
       z-index: 50;
       display: flex;
       align-items: center;
-      gap: 6px;
-      color: #ef4444;
-      font-size: 10px;
-      font-weight: 700;
+      gap: 10px;
+      color: var(--green);
+      font-size: 14px;
+      font-weight: 800;
       letter-spacing: 1.5px;
-      border: 1px solid rgba(239, 68, 68, 0.4);
-      background: rgba(239, 68, 68, 0.1);
-      padding: 4px 12px;
-      border-radius: 4px;
+      border: 1.5px solid rgba(34, 197, 94, 0.5);
+      background: linear-gradient(145deg, rgba(34, 197, 94, 0.15), rgba(34, 197, 94, 0.06));
+      padding: 12px 26px;
+      border-radius: 50px;
       -webkit-app-region: no-drag;
+      box-shadow: 0 4px 16px rgba(34, 197, 94, 0.12), inset 0 1px 0 rgba(255,255,255,0.06);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
     }
     .status-dot {
-      width: 6px;
-      height: 6px;
+      width: 10px;
+      height: 10px;
       border-radius: 50%;
-      background: #ef4444;
-      box-shadow: 0 0 6px #ef4444;
-      animation: dotPulse 1.5s ease-in-out infinite;
+      background: var(--green);
+      box-shadow: 0 0 6px var(--green);
+      animation: dotPulseGreen 2s ease-in-out infinite;
     }
-    @keyframes dotPulse {
-      0%, 100% { opacity: 1; box-shadow: 0 0 4px #ef4444; }
-      50% { opacity: 0.4; box-shadow: 0 0 10px #ef4444; }
+    @keyframes dotPulseGreen {
+      0%, 100% { opacity: 1; box-shadow: 0 0 6px var(--green); }
+      50% { opacity: 0.6; box-shadow: 0 0 14px var(--green); }
     }
+
+    /* Running = yellow/orange blink */
     .status-badge.running {
       color: var(--accent);
-      border-color: rgba(245, 166, 35, 0.4);
-      background: rgba(245, 166, 35, 0.1);
+      border-color: rgba(245, 166, 35, 0.5);
+      background: linear-gradient(145deg, rgba(245, 166, 35, 0.15), rgba(245, 166, 35, 0.06));
+      box-shadow: 0 4px 16px rgba(245, 166, 35, 0.12), inset 0 1px 0 rgba(255,255,255,0.06);
     }
     .status-badge.running .status-dot {
       background: var(--accent);
       box-shadow: 0 0 6px var(--accent);
-      animation: dotPulseOrange 1s ease-in-out infinite;
+      animation: dotBlinkYellow 0.8s ease-in-out infinite;
     }
-    @keyframes dotPulseOrange {
-      0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--accent); }
-      50% { opacity: 0.4; box-shadow: 0 0 10px var(--accent); }
+    @keyframes dotBlinkYellow {
+      0%, 100% { opacity: 1; box-shadow: 0 0 6px var(--accent); }
+      50% { opacity: 0.15; box-shadow: 0 0 12px var(--accent); }
     }
+
+    /* Done/Fixed = solid green (no blink) */
     .status-badge.done {
       color: var(--green);
-      border-color: rgba(34, 197, 94, 0.4);
-      background: rgba(34, 197, 94, 0.1);
+      border-color: rgba(34, 197, 94, 0.5);
+      background: linear-gradient(145deg, rgba(34, 197, 94, 0.15), rgba(34, 197, 94, 0.06));
+      box-shadow: 0 4px 16px rgba(34, 197, 94, 0.12), inset 0 1px 0 rgba(255,255,255,0.06);
     }
     .status-badge.done .status-dot {
       background: var(--green);
-      box-shadow: 0 0 6px var(--green);
+      box-shadow: 0 0 8px var(--green);
       animation: none;
+    }
+
+    /* Error/Failed = red blink */
+    .status-badge.error {
+      color: #ef4444;
+      border-color: rgba(239, 68, 68, 0.5);
+      background: linear-gradient(145deg, rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.06));
+      box-shadow: 0 4px 16px rgba(239, 68, 68, 0.12), inset 0 1px 0 rgba(255,255,255,0.06);
+    }
+    .status-badge.error .status-dot {
+      background: #ef4444;
+      box-shadow: 0 0 6px #ef4444;
+      animation: dotBlinkRed 0.8s ease-in-out infinite;
+    }
+    @keyframes dotBlinkRed {
+      0%, 100% { opacity: 1; box-shadow: 0 0 6px #ef4444; }
+      50% { opacity: 0.15; box-shadow: 0 0 12px #ef4444; }
     }
     .feedback-link {
       color: var(--accent);
-      font-size: 12px;
-      font-weight: 600;
+      font-size: 14px;
+      font-weight: 700;
       cursor: pointer;
-      border: 1px solid rgba(245, 166, 35, 0.4);
-      background: rgba(245, 166, 35, 0.1);
-      padding: 4px 12px;
-      border-radius: 4px;
+      border: 1.5px solid rgba(245, 166, 35, 0.5);
+      background: linear-gradient(145deg, rgba(245, 166, 35, 0.15), rgba(245, 166, 35, 0.06));
+      padding: 12px 26px;
+      border-radius: 50px;
       text-decoration: none;
-      transition: all 0.2s;
+      transition: all 0.25s ease;
       -webkit-app-region: no-drag;
+      box-shadow: 0 4px 16px rgba(245, 166, 35, 0.12), inset 0 1px 0 rgba(255,255,255,0.06);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
     }
-    .feedback-link:hover { background: rgba(245, 166, 35, 0.25); color: #fff; }
+    .feedback-link:hover {
+      background: linear-gradient(145deg, rgba(245, 166, 35, 0.35), rgba(245, 166, 35, 0.15));
+      color: #fff;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 24px rgba(245, 166, 35, 0.25), inset 0 1px 0 rgba(255,255,255,0.1);
+    }
 
     /* ===== FEEDBACK MODAL ===== */
     .modal-overlay {
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,0.7);
+      background: rgba(0,0,0,0.75);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
       z-index: 200;
       align-items: center;
       justify-content: center;
@@ -455,68 +519,229 @@
     }
     .modal-overlay.show { display: flex; }
     .modal {
-      background: linear-gradient(170deg, #10203a 0%, #0a1525 100%);
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 16px;
-      padding: 24px;
-      width: 420px;
+      background: linear-gradient(170deg, #141e30 0%, #0c1422 100%);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 20px;
+      padding: 0;
+      width: 440px;
       max-width: 90%;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+      box-shadow: 0 25px 80px rgba(0,0,0,0.6), 0 0 1px rgba(255,255,255,0.1);
+      overflow: hidden;
+      animation: modalIn 0.25s ease;
     }
-    .modal h3 {
-      font-size: 16px;
+    @keyframes modalIn { from { opacity: 0; transform: scale(0.95) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+    .modal-head {
+      padding: 22px 26px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.015);
+    }
+    .modal-head h3 {
+      font-size: 18px;
+      font-weight: 800;
+      margin: 0;
+      background: linear-gradient(135deg, #ffffff, #c0d0e8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: 0.3px;
+    }
+    .modal-sub {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 4px;
+      opacity: 0.7;
+    }
+    .modal-body {
+      padding: 18px 26px 22px;
+    }
+
+    /* Step 1: Category chooser */
+    .fb-choose {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .fb-option {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      width: 100%;
+      padding: 16px 18px;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.02);
+      color: var(--text);
+      cursor: pointer;
+      transition: all 0.25s ease;
+      text-align: left;
+      position: relative;
+    }
+    .fb-option:hover {
+      transform: translateX(3px);
+      background: rgba(255,255,255,0.04);
+    }
+    .fb-option[data-mode="bug"]:hover { border-color: rgba(239,68,68,0.5); box-shadow: 0 0 24px rgba(239,68,68,0.08); }
+    .fb-option[data-mode="rating"]:hover { border-color: rgba(245,166,35,0.5); box-shadow: 0 0 24px rgba(245,166,35,0.08); }
+    .fb-option[data-mode="contact"]:hover { border-color: rgba(96,165,250,0.5); box-shadow: 0 0 24px rgba(96,165,250,0.08); }
+    .fb-icon {
+      font-size: 22px;
+      flex-shrink: 0;
+      width: 46px;
+      height: 46px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 13px;
+    }
+    .fb-option[data-mode="bug"] .fb-icon {
+      background: linear-gradient(145deg, rgba(239,68,68,0.2), rgba(239,68,68,0.06));
+      box-shadow: 0 4px 16px rgba(239,68,68,0.1);
+    }
+    .fb-option[data-mode="rating"] .fb-icon {
+      background: linear-gradient(145deg, rgba(245,166,35,0.22), rgba(245,166,35,0.06));
+      box-shadow: 0 4px 16px rgba(245,166,35,0.1);
+    }
+    .fb-option[data-mode="contact"] .fb-icon {
+      background: linear-gradient(145deg, rgba(96,165,250,0.2), rgba(96,165,250,0.06));
+      box-shadow: 0 4px 16px rgba(96,165,250,0.1);
+    }
+    .fb-opt-text {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .fb-opt-label {
+      font-size: 14px;
       font-weight: 700;
-      margin-bottom: 16px;
+      display: block;
       color: var(--text);
     }
-    .modal-type {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 14px;
+    .fb-opt-desc {
+      font-size: 11px;
+      color: var(--text-dim);
+      display: block;
     }
-    .modal-type button {
+    .fb-opt-arrow {
+      font-size: 18px;
+      color: var(--text-dim);
+      flex-shrink: 0;
+      opacity: 0.3;
+      transition: all 0.25s;
+      font-weight: 300;
+    }
+    .fb-option:hover .fb-opt-arrow { opacity: 1; transform: translateX(3px); }
+    .fb-option[data-mode="bug"]:hover .fb-opt-arrow { color: #ef4444; }
+    .fb-option[data-mode="rating"]:hover .fb-opt-arrow { color: var(--accent); }
+    .fb-option[data-mode="contact"]:hover .fb-opt-arrow { color: #60a5fa; }
+    .fb-form { animation: fadeSlideIn 0.25s ease; }
+    @keyframes fadeSlideIn { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
+
+    /* System info panel (bug report) */
+    .sys-info-panel {
+      margin-top: 14px;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 12px;
+      padding: 12px 16px;
+    }
+    .sys-info-header {
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      opacity: 0.9;
+    }
+    .sys-info-header::before { content: '\2699'; font-size: 12px; }
+    .sys-info-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 5px 14px;
+      font-size: 11px;
+    }
+    .si-label {
+      color: var(--text-dim);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .si-value {
+      color: var(--text);
+      font-family: 'SF Mono', 'Consolas', monospace;
+      font-size: 10.5px;
+    }
+    .si-value.status-ok { color: var(--green); }
+    .si-value.status-fail { color: #ef4444; }
+    .si-value.status-yes { color: var(--green); }
+
+    /* Survey questions */
+    .survey-q { margin-bottom: 14px; }
+    .survey-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+    .rating-row { display: flex; gap: 6px; }
+    .rating-row button {
       flex: 1;
       padding: 8px 0;
       border-radius: 8px;
       border: 1px solid rgba(255,255,255,0.1);
-      background: rgba(255,255,255,0.05);
+      background: rgba(255,255,255,0.04);
       color: var(--text-dim);
-      font-size: 12px;
-      font-weight: 600;
+      font-size: 13px;
+      font-weight: 700;
       cursor: pointer;
       transition: all 0.2s;
     }
-    .modal-type button:hover { border-color: var(--accent); color: var(--text); }
-    .modal-type button.selected {
+    .rating-row button:hover { border-color: var(--accent); color: var(--text); background: rgba(245,166,35,0.06); }
+    .rating-row button.selected {
       background: linear-gradient(145deg, var(--accent-hot), var(--accent));
       color: #fff;
       border-color: var(--accent);
+      box-shadow: 0 0 14px rgba(245,166,35,0.3);
+      transform: scale(1.05);
+    }
+    .rating-hint {
+      display: flex;
+      justify-content: space-between;
+      font-size: 9px;
+      color: var(--text-dim);
+      margin-top: 4px;
+      padding: 0 2px;
+      opacity: 0.6;
     }
     .modal textarea {
       width: 100%;
-      height: 120px;
+      height: 110px;
       background: rgba(0,0,0,0.3);
-      border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
       color: var(--text);
       font-family: inherit;
       font-size: 13px;
-      padding: 12px;
+      padding: 12px 14px;
       resize: vertical;
       outline: none;
-      transition: border-color 0.2s;
+      transition: border-color 0.2s, box-shadow 0.2s;
     }
-    .modal textarea:focus { border-color: var(--accent); }
-    .modal textarea::placeholder { color: var(--text-dim); }
+    .modal textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(245,166,35,0.1); }
+    .modal textarea::placeholder { color: var(--text-dim); opacity: 0.6; }
     .modal-actions {
       display: flex;
       gap: 10px;
-      margin-top: 14px;
+      margin-top: 16px;
       justify-content: flex-end;
     }
+    #fbCloseRow { justify-content: center; }
     .modal-actions button {
-      padding: 8px 20px;
-      border-radius: 8px;
+      padding: 9px 22px;
+      border-radius: 10px;
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
@@ -527,54 +752,173 @@
       border: 1px solid rgba(255,255,255,0.1);
       color: var(--text-dim);
     }
-    .btn-modal-cancel:hover { border-color: rgba(255,255,255,0.3); color: var(--text); }
+    .btn-modal-cancel:hover { border-color: rgba(255,255,255,0.25); color: var(--text); }
     .btn-modal-submit {
       background: linear-gradient(145deg, var(--accent-hot), var(--accent));
       border: none;
       color: #fff;
+      box-shadow: 0 4px 16px rgba(245,166,35,0.2);
     }
-    .btn-modal-submit:hover { filter: brightness(1.1); }
-    .btn-modal-submit:disabled { opacity: 0.5; cursor: default; filter: none; }
+    .btn-modal-submit:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 6px 20px rgba(245,166,35,0.3); }
+    .btn-modal-submit:disabled { opacity: 0.4; cursor: default; filter: none; transform: none; box-shadow: none; }
+    .btn-modal-gray {
+      background: linear-gradient(145deg, rgba(255,255,255,0.1), rgba(255,255,255,0.04));
+      border: 1px solid rgba(255,255,255,0.15);
+      color: var(--text-dim);
+      padding: 9px 20px;
+      font-size: 12px;
+      border-radius: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .btn-modal-gray:hover { background: linear-gradient(145deg, rgba(255,255,255,0.18), rgba(255,255,255,0.08)); color: var(--text); transform: translateY(-1px); }
     .modal-status {
       font-size: 11px;
       color: var(--text-dim);
-      margin-top: 10px;
+      margin-top: 12px;
       text-align: center;
       min-height: 16px;
     }
     .modal-status.success { color: var(--green); }
     .modal-status.error { color: #ef4444; }
 
-    /* ===== UPDATE BANNER ===== */
-    .update-banner {
+
+    /* ===== UPDATE OVERLAY ===== */
+    .update-overlay {
       display: none;
       position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      background: linear-gradient(90deg, #16a34a, #22c55e);
-      color: #fff;
-      font-size: 12px;
-      font-weight: 600;
-      text-align: center;
-      padding: 6px 16px;
-      z-index: 100;
-      cursor: pointer;
-      letter-spacing: 0.5px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      z-index: 300;
+      align-items: center;
+      justify-content: center;
       -webkit-app-region: no-drag;
     }
-    .update-banner.show { display: block; }
-    .update-banner:hover { filter: brightness(1.1); }
-    .update-banner.downloading {
-      background: linear-gradient(90deg, var(--accent-hot), var(--accent));
-      cursor: default;
+    .update-overlay.show { display: flex; }
+    .update-card {
+      background: linear-gradient(170deg, #141e30 0%, #0c1422 100%);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 28px;
+      padding: 48px 56px;
+      width: 480px;
+      max-width: 85%;
+      text-align: center;
+      box-shadow: 0 30px 100px rgba(0,0,0,0.7), 0 0 1px rgba(255,255,255,0.1);
+      animation: modalIn 0.3s ease;
+    }
+    .update-hourglass {
+      font-size: 64px;
+      display: inline-block;
+      animation: hourglassSpin 2s ease-in-out infinite;
+      margin-bottom: 24px;
+      filter: drop-shadow(0 4px 20px rgba(245,166,35,0.4));
+    }
+    @keyframes hourglassSpin {
+      0% { transform: rotate(0deg); }
+      25% { transform: rotate(180deg); }
+      50% { transform: rotate(180deg); }
+      75% { transform: rotate(360deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .update-title {
+      font-size: 24px;
+      font-weight: 800;
+      color: var(--text);
+      margin-bottom: 10px;
+      letter-spacing: 0.5px;
+    }
+    .update-msg {
+      font-size: 15px;
+      color: var(--text-dim);
+      margin-bottom: 28px;
+      line-height: 1.5;
+    }
+    .update-progress-bar {
+      width: 100%;
+      height: 6px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 14px;
+    }
+    .update-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent-hot), var(--accent), var(--hazard-yellow));
+      border-radius: 3px;
+      transition: width 0.5s ease;
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+    .update-pct {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 1px;
+      margin-bottom: 6px;
+    }
+    .update-card.ready .update-hourglass { animation: none; }
+    .update-card.ready .update-title { color: var(--green); }
+    .update-card.ready .update-progress-fill {
+      width: 100% !important;
+      background: linear-gradient(90deg, #16a34a, #22c55e);
+      box-shadow: 0 0 10px var(--green-glow);
+    }
+    .update-card.error .update-hourglass { animation: none; }
+    .update-card.error .update-title { color: #ef4444; }
+    .update-retry-btn {
+      display: none;
+      margin-top: 20px;
+      background: linear-gradient(145deg, var(--accent-hot), var(--accent));
+      border: none;
+      color: #fff;
+      padding: 12px 32px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 1px;
+      transition: all 0.2s;
+      box-shadow: 0 4px 16px rgba(245,166,35,0.2);
+    }
+    .update-retry-btn:hover { filter: brightness(1.1); transform: translateY(-2px); }
+    .update-card.error .update-retry-btn { display: inline-block; }
+
+    /* Auto-close cancel button */
+    .close-cancel-btn {
+      margin-top: 24px;
+      background: linear-gradient(145deg, rgba(255,255,255,0.12), rgba(255,255,255,0.04));
+      border: 1.5px solid rgba(255,255,255,0.2);
+      color: #fff;
+      padding: 14px 40px;
+      border-radius: 50px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 1px;
+      transition: all 0.25s ease;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.08);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+    .close-cancel-btn:hover {
+      background: linear-gradient(145deg, rgba(255,255,255,0.22), rgba(255,255,255,0.08));
+      transform: translateY(-2px);
+      box-shadow: 0 6px 24px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.12);
+    }
+    #closeCountdown {
+      font-weight: 900;
+      color: var(--accent);
+      font-size: 18px;
     }
   </style>
 </head>
 <body>
   <div class="status-badge" id="statusBadge"><span class="status-dot"></span><span id="statusBadgeText">Status: Ready</span></div>
-  <button class="exit-badge" id="btnExit">EXIT</button>
+  <button class="exit-badge" id="btnExit">Exit</button>
 
   <!-- BIG TITLE -->
   <div class="header">
@@ -613,11 +957,11 @@
       <div class="toggles" id="toggles">
         <div class="toggle on" data-key="uninstall"><div class="toggle-track"><div class="toggle-knob"></div></div><span>Uninstall</span></div>
         <div class="toggle on" data-key="reinstall"><div class="toggle-track"><div class="toggle-knob"></div></div><span>Reinstall</span></div>
-        <div class="toggle" data-key="launch"><div class="toggle-track"><div class="toggle-knob"></div></div><span>Auto-launch</span></div>
+        <div class="toggle on" data-key="launch"><div class="toggle-track"><div class="toggle-knob"></div></div><span>Auto-launch</span></div>
       </div>
 
       <div class="status-area">
-        <div class="status-text" id="statusText">Ready</div>
+        <div class="status-text" id="statusText"></div>
         <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
       </div>
 
@@ -634,27 +978,159 @@
     <div class="footer-content">
       <button class="feedback-link" id="btnFeedback">Report Bug / Feedback</button>
       <span class="version" id="appVersion">v4.0</span>
-      <button class="admin-badge" id="adminStatus">ADMINISTRATOR</button>
+      <button class="admin-badge" id="adminStatus">Administrator</button>
     </div>
   </div>
 
-  <div class="update-banner" id="updateBanner"></div>
+  <!-- Status info popup -->
+  <div class="modal-overlay" id="statusModal">
+    <div class="modal" style="width:380px;">
+      <div class="modal-head">
+        <h3>App Info</h3>
+        <p class="modal-sub">System metadata and diagnostics</p>
+      </div>
+      <div class="modal-body">
+        <div class="sys-info-panel" style="margin-top:0;">
+          <div class="sys-info-header">System Info</div>
+          <div class="sys-info-grid">
+            <span class="si-label">Version</span><span class="si-value" id="smVersion">--</span>
+            <span class="si-label">OS</span><span class="si-value" id="smOS">--</span>
+            <span class="si-label">Admin</span><span class="si-value" id="smAdmin">--</span>
+            <span class="si-label">Last Fix</span><span class="si-value" id="smLastFix">--</span>
+            <span class="si-label">Result</span><span class="si-value" id="smResult">--</span>
+            <span class="si-label">Errors</span><span class="si-value" id="smErrors">--</span>
+          </div>
+        </div>
+        <div class="modal-actions" style="display:flex; gap:8px; margin-top:18px; justify-content:center;">
+          <button class="btn-modal-submit" id="smForceUpdate" style="font-size:12px; padding:9px 20px;">Force Update</button>
+          <button class="btn-modal-submit" id="smForceRestart" style="font-size:12px; padding:9px 20px; background:linear-gradient(145deg, #ef4444, #dc2626);">Force Restart</button>
+          <button class="btn-modal-gray" id="smClose">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auto-close countdown overlay -->
+  <div class="update-overlay" id="closeOverlay">
+    <div class="update-card" id="closeCard">
+      <div class="update-hourglass" id="closeIcon">&#9203;</div>
+      <div class="update-title" id="closeTitle">Closing Soon</div>
+      <div class="update-msg" id="closeMsg">App will close in <span id="closeCountdown">30</span> seconds</div>
+      <button class="close-cancel-btn" id="closeCancelBtn">Keep Open</button>
+    </div>
+  </div>
+
+  <div class="update-overlay" id="updateOverlay">
+    <div class="update-card" id="updateCard">
+      <div class="update-hourglass" id="updateIcon">⏳</div>
+      <div class="update-title" id="updateTitle">Downloading Update</div>
+      <div class="update-msg" id="updateMsg">A new version is being downloaded. Please wait...</div>
+      <div class="update-pct" id="updatePct"></div>
+      <div class="update-progress-bar"><div class="update-progress-fill" id="updateFill"></div></div>
+      <button class="update-retry-btn" id="updateRetry">Retry Update</button>
+    </div>
+  </div>
 
   <!-- Feedback Modal -->
   <div class="modal-overlay" id="feedbackModal">
     <div class="modal">
-      <h3>Submit Feedback</h3>
-      <div class="modal-type" id="feedbackType">
-        <button class="selected" data-type="Bug Report">Bug Report</button>
-        <button data-type="Feature Request">Feature</button>
-        <button data-type="Feedback">Feedback</button>
+      <div class="modal-head">
+        <h3 id="modalTitle">How can we help?</h3>
+        <p class="modal-sub" id="modalSubtitle">Choose a category below</p>
       </div>
-      <textarea id="feedbackText" placeholder="Describe the issue or suggestion..."></textarea>
-      <div class="modal-actions">
-        <button class="btn-modal-cancel" id="feedbackCancel">Cancel</button>
-        <button class="btn-modal-submit" id="feedbackSubmit">Submit</button>
+      <div class="modal-body">
+        <!-- Step 1: Choose category -->
+        <div id="fbChoose" class="fb-choose">
+          <button class="fb-option" data-mode="bug">
+            <span class="fb-icon">🐛</span>
+            <span class="fb-opt-text">
+              <span class="fb-opt-label">Report a Bug</span>
+              <span class="fb-opt-desc">App crashed, fix didn't work, or something broke</span>
+            </span>
+            <span class="fb-opt-arrow">›</span>
+          </button>
+          <button class="fb-option" data-mode="rating">
+            <span class="fb-icon">⭐</span>
+            <span class="fb-opt-text">
+              <span class="fb-opt-label">Rate Your Experience</span>
+              <span class="fb-opt-desc">Quick survey — helps us improve the app</span>
+            </span>
+            <span class="fb-opt-arrow">›</span>
+          </button>
+          <button class="fb-option" data-mode="contact">
+            <span class="fb-icon">💬</span>
+            <span class="fb-opt-text">
+              <span class="fb-opt-label">Send a Message</span>
+              <span class="fb-opt-desc">Feature requests, questions, or general feedback</span>
+            </span>
+            <span class="fb-opt-arrow">›</span>
+          </button>
+        </div>
+
+        <!-- Step 2a: Bug report -->
+        <div id="bugSection" class="fb-form" style="display:none;">
+          <textarea id="bugText" placeholder="Describe the bug — what happened and what you expected..."></textarea>
+          <div class="sys-info-panel" id="sysInfoPanel">
+            <div class="sys-info-header">System Info (auto-attached)</div>
+            <div class="sys-info-grid" id="sysInfoGrid">
+              <span class="si-label">Version</span><span class="si-value" id="siVersion">—</span>
+              <span class="si-label">OS</span><span class="si-value" id="siOS">—</span>
+              <span class="si-label">Admin</span><span class="si-value" id="siAdmin">—</span>
+              <span class="si-label">Last Fix</span><span class="si-value" id="siLastFix">—</span>
+              <span class="si-label">Result</span><span class="si-value" id="siLastFixStatus">—</span>
+              <span class="si-label">Errors</span><span class="si-value" id="siErrors">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 2b: Rating survey -->
+        <div id="ratingSection" class="fb-form" style="display:none;">
+          <div class="survey-q">
+            <span class="survey-label">How easy was the app to use?</span>
+            <div class="rating-row" data-q="ease">
+              <button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button>
+            </div>
+            <div class="rating-hint"><span>Difficult</span><span>Easy</span></div>
+          </div>
+          <div class="survey-q">
+            <span class="survey-label">Did the fix resolve your issue?</span>
+            <div class="rating-row" data-q="resolved">
+              <button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button>
+            </div>
+            <div class="rating-hint"><span>Not at all</span><span>Completely</span></div>
+          </div>
+          <div class="survey-q">
+            <span class="survey-label">How likely are you to recommend this?</span>
+            <div class="rating-row" data-q="recommend">
+              <button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button>
+            </div>
+            <div class="rating-hint"><span>Unlikely</span><span>Definitely</span></div>
+          </div>
+          <div class="survey-q">
+            <span class="survey-label">Overall experience</span>
+            <div class="rating-row" data-q="overall">
+              <button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button>
+            </div>
+            <div class="rating-hint"><span>Poor</span><span>Excellent</span></div>
+          </div>
+          <textarea id="feedbackText" placeholder="Any additional comments? (optional)"></textarea>
+        </div>
+
+        <!-- Step 2c: Contact us -->
+        <div id="contactSection" class="fb-form" style="display:none;">
+          <textarea id="contactText" placeholder="Write your message here..."></textarea>
+        </div>
+
+        <!-- Actions (hidden on step 1) -->
+        <div class="modal-actions" id="fbActions" style="display:none;">
+          <button class="btn-modal-cancel" id="feedbackBack">← Back</button>
+          <button class="btn-modal-submit" id="feedbackSubmit">Submit</button>
+        </div>
+        <div class="modal-actions" id="fbCloseRow">
+          <button class="btn-modal-gray" id="feedbackCancel">Close</button>
+        </div>
+        <div class="modal-status" id="feedbackStatus"></div>
       </div>
-      <div class="modal-status" id="feedbackStatus"></div>
     </div>
   </div>
 

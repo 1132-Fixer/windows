@@ -1,0 +1,94 @@
+# 1132 Fixer — Release Asset Cleanup
+# Runs after electron-builder publishes to the releases repo.
+# Deletes all non-.exe assets (latest.yml, blockmap, checksums)
+# and hides auto-generated source code archives.
+#
+# IMPORTANT: latest.yml is required for electron-updater auto-updates.
+#            This workflow intentionally deletes it so only .exe files
+#            are visible. If you need auto-updates, set KEEP_LATEST_YML=true.
+#
+# SETUP: Requires RELEASES_PAT secret with Contents:write on
+#   PrimeUpYourLife/1132-Fixer-Windows-Releases
+
+name: Clean Release Assets
+
+on:
+  # Run manually after publishing a release
+  workflow_dispatch:
+    inputs:
+      keep_latest_yml:
+        description: 'Keep latest.yml (needed for auto-updates)'
+        required: false
+        type: boolean
+        default: false
+  # Auto-run every 30 min to catch new publishes
+  schedule:
+    - cron: '*/30 * * * *'
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clean release assets
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.RELEASES_PAT }}
+          script: |
+            const owner = 'PrimeUpYourLife';
+            const repo = '1132-Fixer-Windows-Releases';
+            const keepYml = '${{ inputs.keep_latest_yml }}' === 'true';
+
+            // Get latest release
+            let release;
+            try {
+              const { data } = await github.rest.repos.getLatestRelease({ owner, repo });
+              release = data;
+            } catch (e) {
+              console.log('No releases found, skipping.');
+              return;
+            }
+
+            console.log(`Release: ${release.tag_name} — ${release.name}`);
+            console.log(`Assets: ${release.assets.length}`);
+
+            let deleted = 0;
+            let kept = 0;
+
+            for (const asset of release.assets) {
+              const isExe = asset.name.toLowerCase().endsWith('.exe');
+              const isYml = asset.name.toLowerCase() === 'latest.yml';
+
+              if (isExe || (isYml && keepYml)) {
+                console.log(`  ✓ KEEP: ${asset.name} (${(asset.size / 1024 / 1024).toFixed(1)} MB)`);
+                kept++;
+              } else {
+                console.log(`  ✗ DELETE: ${asset.name}`);
+                await github.rest.repos.deleteReleaseAsset({
+                  owner, repo,
+                  asset_id: asset.id
+                });
+                deleted++;
+              }
+            }
+
+            // Hide auto-generated source code archives (zip/tar.gz)
+            // Uses GitHub API's exclude_source_code_archives flag
+            try {
+              await github.request('PATCH /repos/{owner}/{repo}/releases/{release_id}', {
+                owner, repo,
+                release_id: release.id,
+                make_latest: 'true',
+                exclude_source_code_archives: true
+              });
+              console.log('Source code archives hidden.');
+            } catch (e) {
+              console.log('Note: Could not hide source code archives — ' + e.message);
+              console.log('(GitHub may not support this on your plan)');
+            }
+
+            console.log(`\nDone: kept ${kept}, deleted ${deleted}`);
+
+            if (deleted === 0) {
+              console.log('Release already clean — no changes needed.');
+            }

@@ -14,7 +14,7 @@
  *   --list-presets    List available preset profiles
  *   --apply-preset X  Apply a preset profile (e.g., quiet-meetings)
  *
- * @version 4.0.12
+ * @version 4.2.6
  */
 
 const { app, BrowserWindow, dialog, nativeTheme } = require('electron');
@@ -33,17 +33,25 @@ autoUpdater.autoInstallOnAppQuit = true;
 autoUpdater.logger = logger;
 
 // Single instance lock - prevent multiple windows
-const gotTheLock = app.requestSingleInstanceLock();
+// After auto-update, the old process may still be exiting when NSIS relaunches us.
+// Retry once after a delay so we don't silently quit during an update relaunch.
+let gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
-  app.quit();
-} else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
+  // Old process may still hold the lock — wait and retry once
+  setTimeout(() => {
+    gotTheLock = app.requestSingleInstanceLock();
+    if (!gotTheLock) {
+      app.quit();
     }
-  });
+  }, 3000);
 }
+
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
 
 // Keep reference to prevent garbage collection
 let mainWindow = null;
@@ -143,17 +151,27 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    logger.info('Update downloaded', { version: info.version });
+    logger.info('Update downloaded, auto-installing', { version: info.version });
     if (mainWindow) {
       mainWindow.webContents.send('update-status', {
         status: 'ready',
         version: info.version
       });
     }
+    // Auto-restart after brief delay to show the banner
+    setTimeout(() => {
+      autoUpdater.quitAndInstall(true, true);
+    }, 2000);
   });
 
   autoUpdater.on('error', (err) => {
     logger.warn('Auto-update error', { error: err.message });
+    if (mainWindow) {
+      mainWindow.webContents.send('update-status', {
+        status: 'error',
+        error: err.message
+      });
+    }
   });
 
   // Check for updates (silent, non-blocking)

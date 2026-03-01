@@ -322,6 +322,33 @@ function exportSessionJson() {
   return jsonPath;
 }
 
+/**
+ * Get last session status (for system info panel)
+ */
+function getLastSessionStatus() {
+  if (sessionData.success === true) return 'Success';
+  if (sessionData.success === false) return 'Failed';
+  return null;
+}
+
+/**
+ * Get recent error messages from current log (for system info panel)
+ */
+function getRecentErrors(limit = 3) {
+  if (!currentLogFile || !fs.existsSync(currentLogFile)) return [];
+  try {
+    const content = fs.readFileSync(currentLogFile, 'utf8');
+    const lines = content.split('\n');
+    const errors = lines
+      .filter(l => l.includes('[ERROR]') || l.includes('[WARN]'))
+      .slice(-limit)
+      .map(l => l.replace(/^\[[\d\-T:.Z]+\]\s*/, '').trim());
+    return errors;
+  } catch (_) {
+    return [];
+  }
+}
+
 module.exports = {
   initLogger,
   setMainWindow,
@@ -345,5 +372,8 @@ module.exports = {
   setVerification,
   setSessionSuccess,
   getSessionData,
-  exportSessionJson
+  exportSessionJson,
+  // System info helpers
+  getLastSessionStatus,
+  getRecentErrors
 };

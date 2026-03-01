@@ -1872,6 +1872,255 @@ async function wipeBrowserZoomData() {
 }
 
 /**
+ * Spoof additional hardware identifiers that Zoom reads for device fingerprinting.
+ * These are Windows-level IDs beyond MachineGuid that recent Zoom versions check:
+ *   - SQMClient MachineId (telemetry machine identifier)
+ *   - Hardware Profile GUID (hardware configuration fingerprint)
+ *   - Windows Product ID (unique per-installation)
+ *   - WMI persistent Zoom entries
+ *   - SMBIOS System UUID cache in registry
+ *
+ * @returns {Promise<{success: boolean, spoofed: number, details: Object}>}
+ */
+async function spoofHardwareIds() {
+  logger.info('Spoofing additional hardware identifiers...');
+
+  let totalSpoofed = 0;
+  const details = {};
+
+  // 1. SQMClient MachineId — Windows telemetry machine identifier
+  //    Zoom can read this via WMI or registry to fingerprint the device
+  try {
+    const sqmResult = await runPowerShell(`
+      $count = 0
+      $sqmPath = 'HKLM:\\SOFTWARE\\Microsoft\\SQMClient'
+      if (Test-Path $sqmPath) {
+        $oldId = (Get-ItemProperty $sqmPath -Name MachineId -EA SilentlyContinue).MachineId
+        if ($oldId) {
+          $newId = '{' + [System.Guid]::NewGuid().ToString().ToUpper() + '}'
+          Set-ItemProperty -Path $sqmPath -Name MachineId -Value $newId -Force
+          $count++
+        }
+      }
+      # Also clean SQMClient Windows subkeys
+      $sqmWin = 'HKLM:\\SOFTWARE\\Microsoft\\SQMClient\\Windows'
+      if (Test-Path $sqmWin) {
+        Remove-Item $sqmWin -Recurse -Force -EA SilentlyContinue
+        $count++
+      }
+      Write-Output $count
+    `, { timeout: 15000 });
+    const d = parseInt(sqmResult.stdout, 10) || 0;
+    details.sqmClient = { spoofed: d };
+    totalSpoofed += d;
+    if (d > 0) logger.ok('SQMClient MachineId rotated');
+  } catch (e) {
+    details.sqmClient = { error: e.message };
+    logger.debug('SQMClient spoof failed', { error: e.message });
+  }
+
+  // 2. Hardware Profile GUID — unique per hardware config
+  try {
+    const hwResult = await runPowerShell(`
+      $count = 0
+      $hwPath = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\IDConfigDB\\Hardware Profiles\\0001'
+      if (Test-Path $hwPath) {
+        $oldGuid = (Get-ItemProperty $hwPath -Name HwProfileGuid -EA SilentlyContinue).HwProfileGuid
+        if ($oldGuid) {
+          $newGuid = '{' + [System.Guid]::NewGuid().ToString() + '}'
+          # Backup
+          $backupPath = Join-Path $env:LOCALAPPDATA '1132Fixer'
+          if (-not (Test-Path $backupPath)) { New-Item $backupPath -ItemType Directory -Force | Out-Null }
+          $oldGuid | Out-File (Join-Path $backupPath 'HwProfileGuid.bak') -Force
+          Set-ItemProperty -Path $hwPath -Name HwProfileGuid -Value $newGuid -Force
+          $count++
+        }
+      }
+      Write-Output $count
+    `, { timeout: 15000 });
+    const d = parseInt(hwResult.stdout, 10) || 0;
+    details.hwProfileGuid = { spoofed: d };
+    totalSpoofed += d;
+    if (d > 0) logger.ok('HwProfileGuid rotated');
+  } catch (e) {
+    details.hwProfileGuid = { error: e.message };
+    logger.debug('HwProfileGuid spoof failed', { error: e.message });
+  }
+
+  // 3. Windows Product ID — unique per Windows installation
+  //    NOT related to license activation; safe to randomize
+  try {
+    const pidResult = await runPowerShell(`
+      $count = 0
+      $ntPath = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion'
+      $oldPid = (Get-ItemProperty $ntPath -Name ProductId -EA SilentlyContinue).ProductId
+      if ($oldPid) {
+        # Backup
+        $backupPath = Join-Path $env:LOCALAPPDATA '1132Fixer'
+        if (-not (Test-Path $backupPath)) { New-Item $backupPath -ItemType Directory -Force | Out-Null }
+        $oldPid | Out-File (Join-Path $backupPath 'ProductId.bak') -Force
+
+        # Generate a new ProductId in same format (XXXXX-XXX-XXXXXXX-XXXXX)
+        $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        $b = New-Object byte[] 20
+        $rng.GetBytes($b)
+        $chars = '0123456789'
+        $seg1 = -join (0..4 | ForEach-Object { $chars[$b[$_] % 10] })
+        $seg2 = -join (5..7 | ForEach-Object { $chars[$b[$_] % 10] })
+        $seg3 = -join (8..14 | ForEach-Object { $chars[$b[$_] % 10] })
+        $seg4 = -join (15..19 | ForEach-Object { $chars[$b[$_] % 10] })
+        $newPid = "$seg1-$seg2-$seg3-$seg4"
+
+        Set-ItemProperty -Path $ntPath -Name ProductId -Value $newPid -Force
+        $count++
+      }
+      Write-Output $count
+    `, { timeout: 15000 });
+    const d = parseInt(pidResult.stdout, 10) || 0;
+    details.productId = { spoofed: d };
+    totalSpoofed += d;
+    if (d > 0) logger.ok('Windows ProductId rotated');
+  } catch (e) {
+    details.productId = { error: e.message };
+    logger.debug('ProductId spoof failed', { error: e.message });
+  }
+
+  // 4. WMI repository — clean Zoom-related persistent entries
+  //    WMI stores device inventory that Zoom can query
+  try {
+    const wmiResult = await runPowerShell(`
+      $count = 0
+      # Reset WMI performance counters related to Zoom
+      # Remove any CCM_RecentlyUsedApps or similar cached entries
+      try {
+        Get-CimInstance -Namespace 'root\\cimv2' -ClassName 'Win32_Product' -Filter "Name LIKE '%Zoom%'" -EA SilentlyContinue | ForEach-Object {
+          $_ | Remove-CimInstance -EA SilentlyContinue
+          $count++
+        }
+      } catch {}
+
+      # Clean MSI installer database references
+      $installerBase = 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData'
+      if (Test-Path $installerBase) {
+        Get-ChildItem $installerBase -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+          $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+          $allText = ($props.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' } | ForEach-Object { "$($_.Value)" }) -join ' '
+          if ($allText -match 'zoom|Zoom Video Communications') {
+            Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+            $count++
+          }
+        }
+      }
+
+      # Clean Classes\\Installer product registrations
+      $clsInstaller = 'HKLM:\\SOFTWARE\\Classes\\Installer'
+      if (Test-Path $clsInstaller) {
+        foreach ($sub in @('Products','Features','UpgradeCodes')) {
+          $subPath = Join-Path $clsInstaller $sub
+          if (Test-Path $subPath) {
+            Get-ChildItem $subPath -ErrorAction SilentlyContinue | ForEach-Object {
+              $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+              if ($props.ProductName -like '*Zoom*' -or $props.ProductName -like '*zoom*') {
+                Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+                $count++
+              }
+            }
+          }
+        }
+      }
+
+      Write-Output $count
+    `, { timeout: 60000 });
+    const d = parseInt(wmiResult.stdout, 10) || 0;
+    details.wmi = { cleaned: d };
+    totalSpoofed += d;
+    if (d > 0) logger.ok(`WMI/Installer cleanup: removed ${d} entries`);
+  } catch (e) {
+    details.wmi = { error: e.message };
+    logger.debug('WMI cleanup failed', { error: e.message });
+  }
+
+  // 5. Clean Zoom EBWebView2 data in non-standard locations
+  //    Zoom's embedded browser stores unique identifiers outside normal data paths
+  try {
+    const ebResult = await runPowerShell(`
+      $count = 0
+      $ebPaths = @(
+        (Join-Path $env:LOCALAPPDATA 'ZoomVideoComm'),
+        (Join-Path $env:LOCALAPPDATA 'Zoom\\EBWebView'),
+        (Join-Path $env:APPDATA 'Zoom\\EBWebView'),
+        (Join-Path $env:LOCALAPPDATA 'Zoom\\app-data'),
+        (Join-Path $env:APPDATA 'Zoom\\app-data'),
+        (Join-Path $env:PROGRAMDATA 'Zoom\\EBWebView'),
+        (Join-Path $env:PROGRAMDATA 'ZoomVideo\\EBWebView')
+      )
+      foreach ($p in $ebPaths) {
+        if (Test-Path $p) {
+          Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
+          $count++
+        }
+      }
+
+      # Also clean any Zoom GUIDs under HKCU\\Software\\Microsoft\\Edge\\EBWebView
+      $edgeEbPath = 'HKCU:\\Software\\Microsoft\\Edge\\EBWebView'
+      if (Test-Path $edgeEbPath) {
+        Get-ChildItem $edgeEbPath -Recurse -EA SilentlyContinue | Where-Object {
+          $_.Name -match 'zoom|Zoom'
+        } | ForEach-Object {
+          Remove-Item $_.PSPath -Recurse -Force -EA SilentlyContinue
+          $count++
+        }
+      }
+
+      Write-Output $count
+    `, { timeout: 30000 });
+    const d = parseInt(ebResult.stdout, 10) || 0;
+    details.ebWebView = { cleaned: d };
+    totalSpoofed += d;
+    if (d > 0) logger.ok(`EBWebView cleanup: removed ${d} items`);
+  } catch (e) {
+    details.ebWebView = { error: e.message };
+    logger.debug('EBWebView cleanup failed', { error: e.message });
+  }
+
+  // 6. Machine-specific DigitalProductId (binary blob, different from ProductId string)
+  try {
+    const dpidResult = await runPowerShell(`
+      $count = 0
+      $ntPath = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion'
+      $dpid = (Get-ItemProperty $ntPath -Name DigitalProductId -EA SilentlyContinue).DigitalProductId
+      if ($dpid -and $dpid.Length -gt 0) {
+        # Backup
+        $backupPath = Join-Path $env:LOCALAPPDATA '1132Fixer'
+        if (-not (Test-Path $backupPath)) { New-Item $backupPath -ItemType Directory -Force | Out-Null }
+        [System.IO.File]::WriteAllBytes((Join-Path $backupPath 'DigitalProductId.bak'), $dpid)
+
+        # Randomize bytes 8-24 (the unique portion, not the header)
+        $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        $randBytes = New-Object byte[] 16
+        $rng.GetBytes($randBytes)
+        for ($i = 0; $i -lt 16; $i++) {
+          $dpid[8 + $i] = $randBytes[$i]
+        }
+        Set-ItemProperty -Path $ntPath -Name DigitalProductId -Value $dpid -Force
+        $count++
+      }
+      Write-Output $count
+    `, { timeout: 15000 });
+    const d = parseInt(dpidResult.stdout, 10) || 0;
+    details.digitalProductId = { spoofed: d };
+    totalSpoofed += d;
+    if (d > 0) logger.ok('DigitalProductId randomized');
+  } catch (e) {
+    details.digitalProductId = { error: e.message };
+    logger.debug('DigitalProductId spoof failed', { error: e.message });
+  }
+
+  logger.info(`Hardware ID spoofing: ${totalSpoofed} identifiers modified`);
+  return { success: true, spoofed: totalSpoofed, details };
+}
+
+/**
  * Rotate the Windows MachineGuid — a primary device identifier.
  * Zoom reads HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid to identify devices.
  * Changing this makes the machine appear as a brand-new Windows install.
@@ -2158,53 +2407,56 @@ async function postInstallScrub() {
     const result = await runPowerShell(`
       $count = 0
 
-      # 1. DELETE entire HKCU\\Software\\Zoom tree (including SystemInfo)
-      $zoomPath = 'HKCU:\\Software\\Zoom'
-      if (Test-Path $zoomPath) {
-        Remove-Item $zoomPath -Recurse -Force -ErrorAction SilentlyContinue
-        $count++
-      }
-
-      # 2. DELETE HKCU\\Software\\ZoomUMX
-      $zoomUmxPath = 'HKCU:\\Software\\ZoomUMX'
-      if (Test-Path $zoomUmxPath) {
-        Remove-Item $zoomUmxPath -Recurse -Force -ErrorAction SilentlyContinue
-        $count++
-      }
-
-      # 3. DELETE HKLM\\SOFTWARE\\Zoom
-      $hklmZoom = 'HKLM:\\SOFTWARE\\Zoom'
-      if (Test-Path $hklmZoom) {
-        Remove-Item $hklmZoom -Recurse -Force -ErrorAction SilentlyContinue
-        $count++
-      }
-
-      # 4. DELETE HKLM\\SOFTWARE\\ZoomUMX
-      $hklmZoomUmx = 'HKLM:\\SOFTWARE\\ZoomUMX'
-      if (Test-Path $hklmZoomUmx) {
-        Remove-Item $hklmZoomUmx -Recurse -Force -ErrorAction SilentlyContinue
-        $count++
-      }
-
-      # 5. DELETE WOW6432Node mirrors
-      @(
+      # 1-5. DELETE ALL Zoom registry trees (classic + Workplace + WOW64)
+      $allZoomKeys = @(
+        'HKCU:\\Software\\Zoom',
+        'HKCU:\\Software\\ZoomUMX',
+        'HKCU:\\Software\\zoom.us',
+        'HKCU:\\Software\\Zoom Workplace',
+        'HKCU:\\Software\\ZoomVideoComm',
+        'HKCU:\\Software\\ZoomGifCollector',
+        'HKCU:\\Software\\CptService',
+        'HKCU:\\Software\\Zoom Video Communications',
+        'HKLM:\\SOFTWARE\\Zoom',
+        'HKLM:\\SOFTWARE\\ZoomUMX',
+        'HKLM:\\SOFTWARE\\zoom.us',
+        'HKLM:\\SOFTWARE\\Zoom Workplace',
+        'HKLM:\\SOFTWARE\\ZoomVideoComm',
+        'HKLM:\\SOFTWARE\\CptService',
+        'HKLM:\\SOFTWARE\\Zoom Video Communications',
         'HKLM:\\SOFTWARE\\WOW6432Node\\Zoom',
-        'HKLM:\\SOFTWARE\\WOW6432Node\\ZoomUMX'
-      ) | ForEach-Object {
-        if (Test-Path $_) {
-          Remove-Item $_ -Recurse -Force -ErrorAction SilentlyContinue
+        'HKLM:\\SOFTWARE\\WOW6432Node\\ZoomUMX',
+        'HKLM:\\SOFTWARE\\WOW6432Node\\Zoom Workplace',
+        'HKLM:\\SOFTWARE\\WOW6432Node\\CptService',
+        'HKLM:\\SOFTWARE\\WOW6432Node\\ZoomVideoComm',
+        'HKLM:\\SOFTWARE\\Policies\\Zoom'
+      )
+      foreach ($k in $allZoomKeys) {
+        if (Test-Path $k) {
+          Remove-Item $k -Recurse -Force -ErrorAction SilentlyContinue
           $count++
         }
       }
 
       # 6. Set DENY WRITE ACL on Zoom registry keys
       #    Blocks Zoom from writing hardware fingerprints on launch
-      #    Set on BOTH the parent Zoom key AND SystemInfo subkey
+      #    Covers BOTH classic Zoom AND Zoom Workplace paths + Secrets/SystemInfo subkeys
       $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
       [System.Security.AccessControl.RegistryRights]$rights = 'SetValue,CreateSubKey,Delete,WriteKey'
       [System.Security.AccessControl.InheritanceFlags]$inherit = 'ContainerInherit,ObjectInherit'
 
-      foreach ($denyTarget in @('HKCU:\\Software\\Zoom', 'HKCU:\\Software\\Zoom\\SystemInfo')) {
+      $denyTargets = @(
+        'HKCU:\\Software\\Zoom',
+        'HKCU:\\Software\\Zoom\\SystemInfo',
+        'HKCU:\\Software\\Zoom\\Secrets',
+        'HKCU:\\Software\\Zoom Workplace',
+        'HKCU:\\Software\\Zoom Workplace\\SystemInfo',
+        'HKCU:\\Software\\Zoom Workplace\\Secrets',
+        'HKCU:\\Software\\ZoomUMX',
+        'HKCU:\\Software\\ZoomVideoComm',
+        'HKCU:\\Software\\CptService'
+      )
+      foreach ($denyTarget in $denyTargets) {
         if (-not (Test-Path $denyTarget)) {
           New-Item -Path $denyTarget -Force -EA SilentlyContinue | Out-Null
         }
@@ -2225,11 +2477,52 @@ async function postInstallScrub() {
         }
       }
 
+      # 6b. HKLM keys: DELETE only (no DENY ACLs — they break the MSI installer)
+      # HKLM keys get recreated by Zoom but the clean room launch wipes them before each launch
+      @(
+        'HKLM:\\SOFTWARE\\Zoom', 'HKLM:\\SOFTWARE\\Zoom Workplace',
+        'HKLM:\\SOFTWARE\\ZoomUMX', 'HKLM:\\SOFTWARE\\CptService',
+        'HKLM:\\SOFTWARE\\ZoomVideoComm'
+      ) | ForEach-Object {
+        if (Test-Path $_) {
+          Remove-Item $_ -Recurse -Force -EA SilentlyContinue
+          $count++
+        }
+      }
+
+      # 6c. Remove stale HKLM DENY ACLs from previous fixer versions
+      # Previous versions set Everyone DENY on HKLM — must clean up
+      foreach ($hklmKey in @(
+        'HKLM:\\SOFTWARE\\Zoom', 'HKLM:\\SOFTWARE\\Zoom Workplace',
+        'HKLM:\\SOFTWARE\\ZoomUMX', 'HKLM:\\SOFTWARE\\CptService'
+      )) {
+        if (Test-Path $hklmKey) {
+          try {
+            $acl = Get-Acl $hklmKey
+            $changed = $false
+            $acl.Access | Where-Object { $_.AccessControlType -eq 'Deny' } | ForEach-Object {
+              $acl.RemoveAccessRule($_) | Out-Null
+              $changed = $true
+            }
+            if ($changed) { Set-Acl $hklmKey $acl -EA SilentlyContinue }
+            Remove-Item $hklmKey -Recurse -Force -EA SilentlyContinue
+          } catch {}
+        }
+      }
+
       # 7. Remove CptService device ID folder
       $cptPaths = @(
         "$env:ProgramData\\CptService",
+        "$env:ProgramData\\CptHost",
         "$env:ProgramData\\Zoom\\CptService",
-        "$env:ProgramData\\ZoomCptService"
+        "$env:ProgramData\\Zoom CptService",
+        "$env:ProgramData\\zCSCptService",
+        "$env:ProgramData\\ZoomCptService",
+        "$env:ProgramData\\Zoom",
+        "$env:ProgramData\\ZoomVideo",
+        "$env:ProgramData\\ZoomVideoComm",
+        "$env:ProgramData\\Zoom Video Communications",
+        "$env:ProgramData\\Zoom Workplace"
       )
       foreach ($cp in $cptPaths) {
         if (Test-Path $cp) {
@@ -2238,11 +2531,16 @@ async function postInstallScrub() {
         }
       }
 
-      # 8. Kill CptService
+      # 8. Kill CptService and delete services
       Stop-Process -Name 'CptService' -Force -ErrorAction SilentlyContinue
       Stop-Process -Name 'cptservice' -Force -ErrorAction SilentlyContinue
+      Stop-Process -Name 'CptHost' -Force -ErrorAction SilentlyContinue
+      Stop-Process -Name 'CptControl' -Force -ErrorAction SilentlyContinue
       Stop-Service -Name 'ZoomCptService' -Force -ErrorAction SilentlyContinue
+      Stop-Service -Name 'CptService' -Force -ErrorAction SilentlyContinue
       sc.exe delete ZoomCptService 2>$null | Out-Null
+      sc.exe delete CptService 2>$null | Out-Null
+      sc.exe delete zCSCptService 2>$null | Out-Null
 
       # 9. Remove Prefetch files created by installer
       Get-ChildItem 'C:\\Windows\\Prefetch' -Filter '*ZOOM*.pf' -ErrorAction SilentlyContinue | ForEach-Object {
@@ -2262,20 +2560,36 @@ async function postInstallScrub() {
 
     totalDeleted = parseInt(result.stdout, 10) || 0;
     if (totalDeleted > 0) {
-      logger.ok(`Post-install scrub: removed ${totalDeleted} fingerprint items, ACL deny set on SystemInfo`);
+      logger.ok(`Post-install scrub: removed ${totalDeleted} items, DENY ACLs set on all Zoom+Workplace paths`);
     }
 
     // Verify and retry with reg.exe if needed
     const verifyResult = await runPowerShell(`
       $remaining = @()
-      $si = Test-Path 'HKCU:\\Software\\Zoom\\SystemInfo'
-      if ($si) {
-        # Check if it's our empty locked key or Zoom's populated one
-        $children = (Get-ChildItem 'HKCU:\\Software\\Zoom\\SystemInfo' -EA SilentlyContinue | Measure-Object).Count
-        if ($children -gt 0) { $remaining += 'HKCU:Zoom\\SystemInfo(populated)' }
+      # Check HKCU Zoom classic
+      foreach ($key in @('HKCU:\\Software\\Zoom\\SystemInfo', 'HKCU:\\Software\\Zoom\\Secrets')) {
+        if (Test-Path $key) {
+          $children = (Get-ChildItem $key -EA SilentlyContinue | Measure-Object).Count
+          $values = (Get-ItemProperty $key -EA SilentlyContinue).PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' }
+          if ($children -gt 0 -or ($values | Measure-Object).Count -gt 0) { $remaining += $key.Replace('HKCU:\\','HKCU:') + '(populated)' }
+        }
       }
-      if (Test-Path 'HKLM:\\SOFTWARE\\Zoom') { $remaining += 'HKLM:Zoom' }
-      if (Test-Path 'HKLM:\\SOFTWARE\\ZoomUMX') { $remaining += 'HKLM:ZoomUMX' }
+      # Check HKCU Zoom Workplace
+      foreach ($key in @('HKCU:\\Software\\Zoom Workplace\\SystemInfo', 'HKCU:\\Software\\Zoom Workplace\\Secrets')) {
+        if (Test-Path $key) {
+          $children = (Get-ChildItem $key -EA SilentlyContinue | Measure-Object).Count
+          $values = (Get-ItemProperty $key -EA SilentlyContinue).PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' }
+          if ($children -gt 0 -or ($values | Measure-Object).Count -gt 0) { $remaining += $key.Replace('HKCU:\\','HKCU:') + '(populated)' }
+        }
+      }
+      # Check HKLM keys
+      foreach ($key in @('HKLM:\\SOFTWARE\\Zoom', 'HKLM:\\SOFTWARE\\ZoomUMX', 'HKLM:\\SOFTWARE\\Zoom Workplace')) {
+        if (Test-Path $key) {
+          $children = (Get-ChildItem $key -EA SilentlyContinue | Measure-Object).Count
+          $values = (Get-ItemProperty $key -EA SilentlyContinue).PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' }
+          if ($children -gt 0 -or ($values | Measure-Object).Count -gt 0) { $remaining += $key.Replace('HKLM:\\','HKLM:') + '(populated)' }
+        }
+      }
       if ($remaining.Count -gt 0) {
         Write-Output ("SURVIVING: " + ($remaining -join ', '))
       } else {
@@ -2286,13 +2600,19 @@ async function postInstallScrub() {
     const verifyOut = (verifyResult.stdout || '').trim();
     if (verifyOut.startsWith('SURVIVING')) {
       logger.warn('Post-install scrub: some keys survived: ' + verifyOut);
-      // Retry with reg.exe
-      await spawnSafe('reg', ['delete', 'HKLM\\SOFTWARE\\Zoom', '/f'], { timeout: 5000 }).catch(() => {});
-      await spawnSafe('reg', ['delete', 'HKLM\\SOFTWARE\\ZoomUMX', '/f'], { timeout: 5000 }).catch(() => {});
-      await spawnSafe('reg', ['delete', 'HKLM\\SOFTWARE\\WOW6432Node\\Zoom', '/f'], { timeout: 5000 }).catch(() => {});
-      await spawnSafe('reg', ['delete', 'HKLM\\SOFTWARE\\WOW6432Node\\ZoomUMX', '/f'], { timeout: 5000 }).catch(() => {});
+      // Retry with reg.exe — covers all known Zoom registry paths
+      const retryKeys = [
+        'HKLM\\SOFTWARE\\Zoom', 'HKLM\\SOFTWARE\\ZoomUMX',
+        'HKLM\\SOFTWARE\\Zoom Workplace', 'HKLM\\SOFTWARE\\ZoomVideoComm',
+        'HKLM\\SOFTWARE\\WOW6432Node\\Zoom', 'HKLM\\SOFTWARE\\WOW6432Node\\ZoomUMX',
+        'HKLM\\SOFTWARE\\WOW6432Node\\Zoom Workplace',
+        'HKCU\\Software\\Zoom Workplace'
+      ];
+      for (const key of retryKeys) {
+        await spawnSafe('reg', ['delete', key, '/f'], { timeout: 5000 }).catch(() => {});
+      }
     } else {
-      logger.ok('Post-install scrub verified clean (SystemInfo ACL locked)');
+      logger.ok('Post-install scrub verified clean (DENY ACLs locked on all Zoom paths)');
     }
   } catch (e) {
     logger.debug('Post-install scrub failed', { error: e.message });
@@ -2315,26 +2635,70 @@ async function preLaunchScrub() {
       $count = 0
 
       # =============================================
-      # 1. REGISTRY: Nuke all Zoom registry keys
+      # 1. REGISTRY: Nuke ALL Zoom registry keys (classic + Workplace)
       # =============================================
-      @('HKCU:\\Software\\Zoom', 'HKCU:\\Software\\ZoomUMX', 'HKCU:\\Software\\zoom.us',
-        'HKCU:\\Software\\Zoom Video Communications', 'HKCU:\\Software\\CptService') | ForEach-Object {
-        if (Test-Path $_) {
-          Remove-Item $_ -Recurse -Force -EA SilentlyContinue
+      # HKCU keys — remove DENY ACLs first (from previous fixer runs)
+      $hkcuKeys = @(
+        'HKCU:\\Software\\Zoom',
+        'HKCU:\\Software\\ZoomUMX',
+        'HKCU:\\Software\\zoom.us',
+        'HKCU:\\Software\\Zoom Video Communications',
+        'HKCU:\\Software\\Zoom Workplace',
+        'HKCU:\\Software\\ZoomVideoComm',
+        'HKCU:\\Software\\ZoomGifCollector',
+        'HKCU:\\Software\\CptService'
+      )
+      foreach ($k in $hkcuKeys) {
+        if (Test-Path $k) {
+          try {
+            $acl = Get-Acl $k
+            $acl.Access | Where-Object { $_.AccessControlType -eq 'Deny' } | ForEach-Object {
+              $acl.RemoveAccessRule($_) | Out-Null
+            }
+            Set-Acl $k $acl -EA SilentlyContinue
+            # Also recurse subkeys
+            Get-ChildItem $k -Recurse -EA SilentlyContinue | ForEach-Object {
+              try {
+                $subAcl = Get-Acl $_.PSPath
+                $subAcl.Access | Where-Object { $_.AccessControlType -eq 'Deny' } | ForEach-Object {
+                  $subAcl.RemoveAccessRule($_) | Out-Null
+                }
+                Set-Acl $_.PSPath $subAcl -EA SilentlyContinue
+              } catch {}
+            }
+          } catch {}
+          Remove-Item $k -Recurse -Force -EA SilentlyContinue
           $count++
         }
       }
       # reg.exe for reliability (handles locked keys better)
-      reg delete "HKCU\\Software\\Zoom" /f 2>$null | Out-Null
-      reg delete "HKCU\\Software\\ZoomUMX" /f 2>$null | Out-Null
-      reg delete "HKCU\\Software\\zoom.us" /f 2>$null | Out-Null
-      reg delete "HKCU\\Software\\CptService" /f 2>$null | Out-Null
+      foreach ($k in @(
+        'HKCU\\Software\\Zoom', 'HKCU\\Software\\ZoomUMX', 'HKCU\\Software\\zoom.us',
+        'HKCU\\Software\\Zoom Video Communications', 'HKCU\\Software\\Zoom Workplace',
+        'HKCU\\Software\\ZoomVideoComm', 'HKCU\\Software\\CptService',
+        'HKCU\\Software\\ZoomGifCollector'
+      )) { reg delete $k /f 2>$null | Out-Null }
 
-      # HKLM keys
-      @('HKLM:\\SOFTWARE\\Zoom', 'HKLM:\\SOFTWARE\\ZoomUMX',
-        'HKLM:\\SOFTWARE\\WOW6432Node\\Zoom', 'HKLM:\\SOFTWARE\\WOW6432Node\\ZoomUMX') | ForEach-Object {
-        if (Test-Path $_) {
-          Remove-Item $_ -Recurse -Force -EA SilentlyContinue
+      # HKLM + WOW64 keys
+      $hklmKeys = @(
+        'HKLM:\\SOFTWARE\\Zoom', 'HKLM:\\SOFTWARE\\ZoomUMX', 'HKLM:\\SOFTWARE\\zoom.us',
+        'HKLM:\\SOFTWARE\\Zoom Video Communications', 'HKLM:\\SOFTWARE\\Zoom Workplace',
+        'HKLM:\\SOFTWARE\\ZoomVideoComm', 'HKLM:\\SOFTWARE\\CptService',
+        'HKLM:\\SOFTWARE\\WOW6432Node\\Zoom', 'HKLM:\\SOFTWARE\\WOW6432Node\\ZoomUMX',
+        'HKLM:\\SOFTWARE\\WOW6432Node\\Zoom Workplace', 'HKLM:\\SOFTWARE\\WOW6432Node\\CptService',
+        'HKLM:\\SOFTWARE\\WOW6432Node\\ZoomVideoComm',
+        'HKLM:\\SOFTWARE\\Policies\\Zoom'
+      )
+      foreach ($k in $hklmKeys) {
+        if (Test-Path $k) {
+          try {
+            $acl = Get-Acl $k
+            $acl.Access | Where-Object { $_.AccessControlType -eq 'Deny' } | ForEach-Object {
+              $acl.RemoveAccessRule($_) | Out-Null
+            }
+            Set-Acl $k $acl -EA SilentlyContinue
+          } catch {}
+          Remove-Item $k -Recurse -Force -EA SilentlyContinue
           $count++
         }
       }
@@ -2345,32 +2709,36 @@ async function preLaunchScrub() {
       $roaming = [Environment]::GetFolderPath('ApplicationData')
       $local = [Environment]::GetFolderPath('LocalApplicationData')
 
-      # Zoom data in Roaming — this contains ALL the fingerprint databases
-      $zoomRoamingData = Join-Path $roaming 'Zoom\\data'
-      if (Test-Path $zoomRoamingData) {
-        Remove-Item $zoomRoamingData -Recurse -Force -EA SilentlyContinue
-        $count++
+      # Wipe ALL Zoom data subdirs (classic + Workplace)
+      foreach ($base in @($roaming, $local)) {
+        foreach ($sub in @('Zoom\\data', 'Zoom Workplace\\data', 'Zoom\\EBWebView',
+                           'Zoom Workplace\\EBWebView', 'Zoom\\app-data', 'Zoom Workplace\\app-data')) {
+          $p = Join-Path $base $sub
+          if (Test-Path $p) { Remove-Item $p -Recurse -Force -EA SilentlyContinue; $count++ }
+        }
       }
 
       # Root Zoom config files (Zoom.us.ini with win_osencrypt_key, viper.ini)
-      foreach ($f in @('Zoom.us.ini','viper.ini','appsafecheck.txt')) {
-        $p = Join-Path $roaming "Zoom\\$f"
-        if (Test-Path $p) { Remove-Item $p -Force -EA SilentlyContinue; $count++ }
-      }
-
-      # Zoom data in Local
-      $zoomLocalData = Join-Path $local 'Zoom\\data'
-      if (Test-Path $zoomLocalData) {
-        Remove-Item $zoomLocalData -Recurse -Force -EA SilentlyContinue
-        $count++
+      foreach ($dir in @('Zoom', 'Zoom Workplace')) {
+        foreach ($f in @('Zoom.us.ini','viper.ini','appsafecheck.txt','ZoomWorkplace.ini')) {
+          $p = Join-Path $roaming "$dir\\$f"
+          if (Test-Path $p) { Remove-Item $p -Force -EA SilentlyContinue; $count++ }
+        }
       }
 
       # Other Zoom-related AppData folders
-      foreach ($sub in @('ZoomUMX','zoomus','zoom.us')) {
+      foreach ($sub in @('ZoomUMX','zoomus','zoom.us','ZoomVideoComm','ZoomGifCollector')) {
         $p1 = Join-Path $roaming $sub
         $p2 = Join-Path $local $sub
         if (Test-Path $p1) { Remove-Item $p1 -Recurse -Force -EA SilentlyContinue; $count++ }
         if (Test-Path $p2) { Remove-Item $p2 -Recurse -Force -EA SilentlyContinue; $count++ }
+      }
+
+      # ProgramData fingerprints
+      foreach ($pd in @('CptService','CptHost','Zoom','ZoomVideo','ZoomVideoComm',
+                        'Zoom Video Communications','Zoom CptService','zCSCptService','Zoom Workplace')) {
+        $p = Join-Path $env:ProgramData $pd
+        if (Test-Path $p) { Remove-Item $p -Recurse -Force -EA SilentlyContinue; $count++ }
       }
 
       # =============================================
@@ -2380,12 +2748,20 @@ async function preLaunchScrub() {
       foreach ($v in @('Zoom','ZoomUMX','ZoomWorkplace')) {
         Remove-ItemProperty -Path $runKey -Name $v -Force -EA SilentlyContinue
       }
+      $runKeyLM = 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+      foreach ($v in @('Zoom','ZoomCptService')) {
+        Remove-ItemProperty -Path $runKeyLM -Name $v -Force -EA SilentlyContinue
+      }
 
       # =============================================
-      # 4. Kill Zoom processes
+      # 4. Kill Zoom processes + services
       # =============================================
       Get-Process | Where-Object { $_.Name -like '*zoom*' -or $_.Name -like '*Zoom*' } | Stop-Process -Force -EA SilentlyContinue
       Get-Process -Name 'CptService','CptHost','CptControl' -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+      Stop-Service -Name 'ZoomCptService' -Force -EA SilentlyContinue
+      Stop-Service -Name 'CptService' -Force -EA SilentlyContinue
+      sc.exe delete ZoomCptService 2>$null | Out-Null
+      sc.exe delete CptService 2>$null | Out-Null
 
       Write-Output $count
     `, { timeout: 20000 });
@@ -2443,9 +2819,11 @@ async function wipeDeviceFingerprint(onProgress = null) {
     wipeSrumDatabase(),
     cleanEventLogs(),
     wipeUserProfileFingerprints(),
-    wipeDeepUserTraces()
+    wipeDeepUserTraces(),
+    wipeBrowserZoomData(),
+    spoofHardwareIds()
   ]);
-  const tier2Keys = ['credentials', 'prefetch', 'amcache', 'srum', 'eventLogs', 'userProfile', 'deepTraces'];
+  const tier2Keys = ['credentials', 'prefetch', 'amcache', 'srum', 'eventLogs', 'userProfile', 'deepTraces', 'browserData', 'hardwareIds'];
   tier2.forEach((result, i) => {
     steps[tier2Keys[i]] = result.status === 'fulfilled' ? result.value : { success: false, error: result.reason?.message };
   });
@@ -2537,6 +2915,8 @@ module.exports = {
   cleanFontCache,
   wipeUserProfileFingerprints,
   wipeDeepUserTraces,
+  wipeBrowserZoomData,
+  spoofHardwareIds,
   postInstallScrub,
   preLaunchScrub,
   rotateMachineGuid,

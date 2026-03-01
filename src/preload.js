@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // App
   getVersion: () => ipcRenderer.invoke('get-version'),
+  getSystemInfo: () => ipcRenderer.invoke('get-system-info'),
 
   // Progress listener
   onProgress: (callback) => {
@@ -28,8 +29,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Feedback
   submitFeedback: (type, text) => ipcRenderer.invoke('submit-feedback', type, text),
 
+  // Quit
+  quitApp: () => ipcRenderer.invoke('quit-app'),
+
+  // App control
+  forceRestart: () => ipcRenderer.invoke('force-restart'),
+
   // Auto-update
   installUpdate: () => ipcRenderer.invoke('install-update'),
+  retryUpdate: () => ipcRenderer.invoke('retry-update'),
   onUpdateStatus: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('update-status', handler);

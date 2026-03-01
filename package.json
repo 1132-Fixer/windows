@@ -1,6 +1,6 @@
 {
   "name": "1132-fixer",
-  "version": "4.0.12",
+  "version": "4.2.6",
   "description": "Zoom Error 1132 fix tool - device fingerprint reset",
   "main": "src/main/index.js",
   "scripts": {
@@ -12,6 +12,7 @@
     "prebuild": "node scripts/bump-version.js",
     "prebuild:installer": "node scripts/bump-version.js",
     "prebuild:all": "node scripts/bump-version.js",
+    "prerelease": "node scripts/bump-version.js",
     "build": "electron-builder --win portable --x64",
     "build:installer": "electron-builder --win nsis --x64",
     "build:all": "electron-builder --win --x64",
@@ -59,7 +60,8 @@
       "icon": "assets/icon.ico",
       "requestedExecutionLevel": "requireAdministrator",
       "signAndEditExecutable": true,
-      "publisherName": "High Texas"
+      "publisherName": "High Texas",
+      "verifyUpdateCodeSignature": false
     },
     "nsis": {
       "oneClick": false,

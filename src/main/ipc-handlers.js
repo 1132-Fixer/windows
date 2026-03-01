@@ -20,6 +20,28 @@ const snapshot = require('./operations/snapshot');
 
 let mainWindow = null;
 
+// Persistent last-fix tracking
+const LAST_FIX_FILE = require('path').join(process.env.LOCALAPPDATA || '', '1132-Remover', 'last-fix.json');
+
+function saveLastFix(data) {
+  try {
+    const fs = require('fs');
+    const dir = require('path').dirname(LAST_FIX_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(LAST_FIX_FILE, JSON.stringify(data, null, 2));
+  } catch (_) {}
+}
+
+function getLastFix() {
+  try {
+    const fs = require('fs');
+    if (fs.existsSync(LAST_FIX_FILE)) {
+      return JSON.parse(fs.readFileSync(LAST_FIX_FILE, 'utf8'));
+    }
+  } catch (_) {}
+  return null;
+}
+
 /**
  * Set the main window reference
  * @param {BrowserWindow} window
@@ -260,6 +282,14 @@ async function performFullReset(options = {}) {
 
       logger.finalize();
 
+      // Persist last-fix data for system info panel
+      saveLastFix({
+        timestamp: new Date().toISOString(),
+        success: true,
+        durationSec: Math.round(sessionDuration / 1000),
+        allClean
+      });
+
       return {
         success: true,
         steps,
@@ -281,6 +311,14 @@ async function performFullReset(options = {}) {
       });
       logger.finalize();
 
+      // Persist last-fix data for system info panel
+      saveLastFix({
+        timestamp: new Date().toISOString(),
+        success: false,
+        error: error.message,
+        durationSec: Math.round((Date.now() - sessionStart) / 1000)
+      });
+
       // Cleanup on error
       if (installerPath) {
         installer.cleanupInstaller(installerPath);
@@ -296,6 +334,84 @@ async function performFullReset(options = {}) {
 }
 
 function registerHandlers() {
+  // Startup: remove stale HKLM DENY ACLs from previous fixer versions
+  // Previous versions set Everyone DENY on HKLM Zoom keys which breaks the MSI installer.
+  // The DENY covers ReadPermissions (via WriteKey), so simple Get-Acl/Set-Acl fails.
+  // We must use .NET TakeOwnership privilege escalation to bypass the DACL.
+  // This runs on app startup (as admin via UAC manifest).
+  (async () => {
+    try {
+      const { runPowerShell } = require('./utils/spawn-safe');
+      await runPowerShell(`
+        # Enable SeTakeOwnershipPrivilege so we can bypass DENY ACLs
+        $privType = @'
+using System;
+using System.Runtime.InteropServices;
+public class AclPriv {
+    [DllImport("advapi32.dll", SetLastError=true)]
+    static extern bool AdjustTokenPrivileges(IntPtr h, bool d, ref TP n, int b, IntPtr p, IntPtr r);
+    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+    static extern bool LookupPrivilegeValue(string s, string n, out LUID l);
+    [DllImport("advapi32.dll", SetLastError=true)]
+    static extern bool OpenProcessToken(IntPtr h, uint a, out IntPtr t);
+    [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+    [StructLayout(LayoutKind.Sequential)] public struct TP { public uint C; public LUID L; public uint A; }
+    [StructLayout(LayoutKind.Sequential)] public struct LUID { public uint Lo; public int Hi; }
+    public static void Enable(string p) {
+        IntPtr t; OpenProcessToken(GetCurrentProcess(), 0x28, out t);
+        TP tp; tp.C = 1; tp.A = 2; LookupPrivilegeValue(null, p, out tp.L);
+        AdjustTokenPrivileges(t, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero);
+    }
+}
+'@
+        try { Add-Type $privType -EA SilentlyContinue } catch {}
+        try { [AclPriv]::Enable('SeTakeOwnershipPrivilege') } catch {}
+        try { [AclPriv]::Enable('SeRestorePrivilege') } catch {}
+
+        $adminSid = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
+
+        foreach ($keyPath in @('SOFTWARE\\Zoom', 'SOFTWARE\\Zoom Workplace',
+                               'SOFTWARE\\ZoomUMX', 'SOFTWARE\\CptService',
+                               'SOFTWARE\\ZoomVideoComm')) {
+          try {
+            # Open with TakeOwnership right — bypasses DACL entirely
+            $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($keyPath,
+              [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
+              [System.Security.AccessControl.RegistryRights]::TakeOwnership)
+            if ($key) {
+              # Take ownership as Administrators
+              $acl = $key.GetAccessControl([System.Security.AccessControl.AccessControlSections]::None)
+              $acl.SetOwner($adminSid)
+              $key.SetAccessControl($acl)
+              $key.Close()
+
+              # Reopen with ChangePermissions
+              $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($keyPath,
+                [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
+                [System.Security.AccessControl.RegistryRights]::ChangePermissions)
+              if ($key) {
+                $acl = $key.GetAccessControl()
+                $acl.Access | Where-Object { $_.AccessControlType -eq 'Deny' } | ForEach-Object {
+                  $acl.RemoveAccessRule($_) | Out-Null
+                }
+                $acl.AddAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule(
+                  $adminSid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+                $key.SetAccessControl($acl)
+                $key.Close()
+              }
+
+              # Now delete cleanly
+              Remove-Item "HKLM:\\$keyPath" -Recurse -Force -EA SilentlyContinue
+            }
+          } catch {
+            # Fallback: try reg.exe
+            reg delete "HKLM\\$keyPath" /f 2>$null | Out-Null
+          }
+        }
+      `, { timeout: 15000 }).catch(() => {});
+    } catch (_) {}
+  })();
+
   // === FULL RESET ===
   ipcMain.handle('full-reset', async (event, options = {}) => {
     return await performFullReset(options);
@@ -341,22 +457,19 @@ function registerHandlers() {
   });
 
   // === LAUNCH ZOOM ===
-  // Primary method: Clean Room Launch — redirect Zoom's APPDATA to fresh directory
-  // This gives Zoom empty data dirs = fresh fingerprint = no 1132 ban.
-  // Fallback 1: Ghost user (different SID entirely)
-  // Fallback 2: Normal launch (last resort)
+  // Clean Room Launch — wipe ALL Zoom fingerprint data, then launch fresh.
+  // Registry DENY ACLs prevent Zoom from persisting device identity.
   ipcMain.handle('launch-zoom', async () => {
-    // Method 1: Clean Room (redirected APPDATA — no separate user needed)
     try {
-      logger.info('Attempting clean room launch...');
+      logger.info('Attempting clean room launch (wipe + launch)...');
       const cleanResult = await installer.launchZoomCleanRoom();
       if (cleanResult.success) return cleanResult;
-      logger.warn('Clean room launch failed', { error: cleanResult.error });
+      logger.warn('Clean room launch failed, trying fallback', { error: cleanResult.error });
     } catch (e) {
-      logger.warn('Clean room launch error', { error: e.message });
+      logger.warn('Clean room launch error, trying fallback', { error: e.message });
     }
 
-    // Method 2: Normal launch (pre-launch scrub + direct)
+    // Fallback: pre-launch scrub + normal launch
     try {
       await fingerprint.preLaunchScrub();
     } catch (e) {
@@ -404,9 +517,67 @@ function registerHandlers() {
   // === APP CONTROL ===
   ipcMain.handle('get-version', () => require('electron').app.getVersion());
 
+  ipcMain.handle('get-system-info', async () => {
+    try {
+      const os = require('os');
+      const { app } = require('electron');
+
+      // Reliable synchronous admin check via net session
+      let admin = false;
+      try {
+        require('child_process').execSync('net session', { stdio: 'ignore' });
+        admin = true;
+      } catch (_) {
+        admin = false;
+      }
+
+      // Read persistent last-fix data from disk
+      const lastFix = getLastFix();
+      let lastFixText = 'Never';
+      let lastFixStatus = null;
+      if (lastFix && lastFix.timestamp) {
+        const d = new Date(lastFix.timestamp);
+        const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        const timeStr = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        lastFixText = `${dateStr}, ${timeStr}`;
+        lastFixStatus = lastFix.success ? 'Completed' : 'Failed';
+      }
+
+      // Recent errors from current log session
+      let recentErrors = [];
+      try {
+        if (typeof logger.getRecentErrors === 'function') {
+          recentErrors = logger.getRecentErrors(3);
+        }
+      } catch (_) {}
+
+      return {
+        version: app.getVersion(),
+        os: `Windows ${os.release()} (${os.arch()})`,
+        admin,
+        lastFix: lastFixText,
+        lastFixStatus,
+        errors: recentErrors.length > 0 ? recentErrors.join('; ') : 'None'
+      };
+    } catch (err) {
+      return { version: '?', os: 'Windows', admin: false, lastFix: '?', lastFixStatus: null, errors: err.message };
+    }
+  });
+
   ipcMain.handle('install-update', () => {
     const { autoUpdater } = require('electron-updater');
-    autoUpdater.quitAndInstall(false, true);
+    autoUpdater.quitAndInstall(true, true);
+  });
+
+  ipcMain.handle('retry-update', () => {
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.checkForUpdates().catch(() => {});
+  });
+
+  ipcMain.handle('force-restart', () => {
+    const { app } = require('electron');
+    app.relaunch();
+    app.exit(0);
   });
 
   ipcMain.handle('submit-feedback', async (event, type, text) => {
@@ -425,12 +596,13 @@ function registerHandlers() {
         return { success: false, error: 'Feedback service not configured' };
       }
 
-      const postData = JSON.stringify({ title, body, labels: [type.toLowerCase().replace(' ', '-')] });
+      const label = type === 'User Rating' ? 'user-rating' : type.toLowerCase().replace(' ', '-');
+      const postData = JSON.stringify({ title, body, labels: [label] });
 
       return new Promise((resolve) => {
         const req = https.request({
           hostname: 'api.github.com',
-          path: '/repos/PrimeUpYourLife/1132-Fixer-Windows/issues',
+          path: `/repos/${config.GH_ISSUES_REPO}/issues`,
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,

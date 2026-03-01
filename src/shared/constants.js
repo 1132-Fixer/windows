@@ -148,12 +148,15 @@ const ZOOM_DATA_PATHS = [
   // ProgramData (system-wide device identifiers)
   path.join(PROGRAMDATA, 'Zoom'),
   path.join(PROGRAMDATA, 'ZoomVideo'),
+  path.join(PROGRAMDATA, 'ZoomVideoComm'),
   path.join(PROGRAMDATA, 'Zoom Video Communications'),
   path.join(PROGRAMDATA, 'CptService'),
   path.join(PROGRAMDATA, 'CptHost'),
   path.join(PROGRAMDATA, 'Zoom CptService'),
   path.join(PROGRAMDATA, 'zCSCptService'),
   path.join(PROGRAMDATA, 'Zoom VDI'),
+  path.join(PROGRAMDATA, 'Zoom Workplace'),
+  path.join(PROGRAMDATA, '1132Fixer'),
 
   // User profile locations
   path.join(USERPROFILE, 'Documents', 'Zoom'),
@@ -208,12 +211,18 @@ const ZOOM_DATA_PATHS = [
 const REGISTRY_KEYS = {
   // Current User
   HKCU: [
+    // CRITICAL: Delete SystemInfo and Secrets FIRST (device fingerprint data)
+    'HKCU\\Software\\Zoom\\Secrets',
+    'HKCU\\Software\\Zoom\\SystemInfo',
     'HKCU\\Software\\Zoom',
     'HKCU\\Software\\ZoomUMX',
     'HKCU\\Software\\zoom.us',
     'HKCU\\Software\\Zoom Video Communications',
     'HKCU\\Software\\Zoom Workplace',
+    'HKCU\\Software\\Zoom Workplace\\Secrets',
+    'HKCU\\Software\\Zoom Workplace\\SystemInfo',
     'HKCU\\Software\\ZoomGifCollector',
+    'HKCU\\Software\\ZoomVideoComm',
     'HKCU\\Software\\CptService',
     // IM Provider registration
     'HKCU\\Software\\IM Providers\\Zoom',
@@ -235,21 +244,27 @@ const REGISTRY_KEYS = {
     'HKCU\\Software\\Classes\\zoomrc.rooms',
     // Notification Settings
     'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\Zoom.Zoom',
-    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\zoom.us.Zoom'
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\zoom.us.Zoom',
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\Zoom Video Communications.Zoom Workplace'
   ],
 
   // Local Machine
   HKLM: [
-    'HKLM\\Software\\Zoom',
-    // CRITICAL: Cryptographic secrets/device identity
+    // CRITICAL: Delete Secrets FIRST (contains cryptographic device identity)
     'HKLM\\Software\\Zoom\\Secrets',
+    'HKLM\\Software\\Zoom\\SystemInfo',
+    'HKLM\\Software\\Zoom',
     'HKLM\\Software\\ZoomUMX',
     'HKLM\\Software\\zoom.us',
     'HKLM\\Software\\Zoom Video Communications',
     'HKLM\\Software\\Zoom Workplace',
+    'HKLM\\Software\\Zoom Workplace\\Secrets',
+    'HKLM\\Software\\Zoom Workplace\\SystemInfo',
     'HKLM\\Software\\CptService',
+    'HKLM\\Software\\ZoomVideoComm',
     'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ZoomUMX',
     'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Zoom',
+    'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{0CB2CA8E-D061-4F48-B53E-A44D41AAAE0A}',
     'HKLM\\SYSTEM\\CurrentControlSet\\Services\\CptService',
     'HKLM\\SYSTEM\\CurrentControlSet\\Services\\ZoomCptService',
     'HKLM\\SYSTEM\\CurrentControlSet\\Services\\zCSCptService',
@@ -266,20 +281,27 @@ const REGISTRY_KEYS = {
     'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings\\Meetings',
     'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings\\Chat',
     // AU2 = auto-update policy (hardened install sets AU2_EnableAutoUpdate=0)
-    'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings\\AU2'
+    'HKLM\\Software\\Policies\\Zoom\\Zoom Meetings\\AU2',
+    // Zoom Workplace policy keys
+    'HKLM\\Software\\Policies\\Zoom\\Zoom Workplace',
+    'HKLM\\Software\\Policies\\Zoom\\Zoom Workplace\\General'
   ],
 
   // WOW6432Node (32-bit on 64-bit)
   WOW64: [
+    'HKLM\\Software\\WOW6432Node\\Zoom\\Secrets',
+    'HKLM\\Software\\WOW6432Node\\Zoom\\SystemInfo',
     'HKLM\\Software\\WOW6432Node\\Zoom',
     'HKLM\\Software\\WOW6432Node\\ZoomUMX',
     'HKLM\\Software\\WOW6432Node\\zoom.us',
     'HKLM\\Software\\WOW6432Node\\Zoom Video Communications',
     'HKLM\\Software\\WOW6432Node\\Zoom Workplace',
     'HKLM\\Software\\WOW6432Node\\CptService',
+    'HKLM\\Software\\WOW6432Node\\ZoomVideoComm',
     // Group Policy WOW64
     'HKLM\\Software\\WOW6432Node\\Policies\\Zoom',
-    'HKLM\\Software\\WOW6432Node\\Policies\\Zoom\\Zoom Meetings'
+    'HKLM\\Software\\WOW6432Node\\Policies\\Zoom\\Zoom Meetings',
+    'HKLM\\Software\\WOW6432Node\\Policies\\Zoom\\Zoom Workplace'
   ],
 
   // HKEY_CLASSES_ROOT (URL handlers & COM)
@@ -433,7 +455,11 @@ const FINGERPRINT_LOCATIONS = {
     'HKLM\\SYSTEM\\CurrentControlSet\\Services\\ZoomCptService',
     'HKLM\\SYSTEM\\CurrentControlSet\\Services\\zCSCptService',
     'HKCU\\Software\\CptService',
-    'HKLM\\Software\\CptService'
+    'HKLM\\Software\\CptService',
+    'HKCU\\Software\\Zoom\\Secrets',
+    'HKLM\\Software\\Zoom\\Secrets',
+    'HKCU\\Software\\Zoom\\SystemInfo',
+    'HKLM\\Software\\Zoom\\SystemInfo'
   ],
 
   // Prefetch files (Windows execution history)

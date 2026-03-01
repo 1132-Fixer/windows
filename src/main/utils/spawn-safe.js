@@ -206,6 +206,7 @@ async function registryKeyExists(keyPath) {
 
 /**
  * Delete a registry key
+ * Handles DENY ACLs (from previous postInstallScrub runs) by removing them first
  * @param {string} keyPath - Registry key path
  * @returns {Promise<{success: boolean, existed: boolean}>}
  */
@@ -217,8 +218,105 @@ async function deleteRegistryKey(keyPath) {
   }
 
   try {
-    const result = await spawnSafe('reg', ['delete', keyPath, '/f'], { timeout: 10000 });
-    const stillExists = await registryKeyExists(keyPath);
+    // Attempt 1: Plain reg delete
+    await spawnSafe('reg', ['delete', keyPath, '/f'], { timeout: 10000 });
+    const gone = !(await registryKeyExists(keyPath));
+    if (gone) return { success: true, existed: true, deleted: true };
+
+    // Attempt 2: Remove DENY ACLs (from previous fixer runs) then retry
+    // Convert reg path to PowerShell path format (HKCU\\ -> HKCU:\\ etc.)
+    const psPath = keyPath.replace(/^(HKCU|HKLM|HKCR)\\/, '$1:\\');
+    await runPowerShell(`
+      $path = '${psPath.replace(/'/g, "''")}'
+      if (Test-Path $path) {
+        try {
+          $acl = Get-Acl $path
+          $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+          # Remove all Deny rules for current user
+          $acl.Access | Where-Object { $_.AccessControlType -eq 'Deny' } | ForEach-Object {
+            $acl.RemoveAccessRule($_) | Out-Null
+          }
+          Set-Acl $path $acl -ErrorAction SilentlyContinue
+        } catch {}
+        # Also do it recursively for subkeys
+        Get-ChildItem $path -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+          try {
+            $subAcl = Get-Acl $_.PSPath
+            $subAcl.Access | Where-Object { $_.AccessControlType -eq 'Deny' } | ForEach-Object {
+              $subAcl.RemoveAccessRule($_) | Out-Null
+            }
+            Set-Acl $_.PSPath $subAcl -ErrorAction SilentlyContinue
+          } catch {}
+        }
+        Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    `, { timeout: 15000 }).catch(() => {});
+
+    // Also retry with reg.exe
+    await spawnSafe('reg', ['delete', keyPath, '/f'], { timeout: 5000 }).catch(() => {});
+    let stillExists = await registryKeyExists(keyPath);
+    if (!stillExists) return { success: true, existed: true, deleted: true };
+
+    // Attempt 3: .NET TakeOwnership privilege escalation (for Everyone DENY ACLs)
+    // The DENY covers ReadPermissions so Get-Acl fails. Must bypass DACL entirely.
+    const isHKLM = keyPath.startsWith('HKLM\\');
+    const subKeyPath = keyPath.replace(/^(HKCU|HKLM)\\/, '');
+    const hive = isHKLM ? 'LocalMachine' : 'CurrentUser';
+    await runPowerShell(`
+      $privType = @'
+using System; using System.Runtime.InteropServices;
+public class DelPriv {
+    [DllImport("advapi32.dll", SetLastError=true)]
+    static extern bool AdjustTokenPrivileges(IntPtr h, bool d, ref TP n, int b, IntPtr p, IntPtr r);
+    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+    static extern bool LookupPrivilegeValue(string s, string n, out LUID l);
+    [DllImport("advapi32.dll", SetLastError=true)]
+    static extern bool OpenProcessToken(IntPtr h, uint a, out IntPtr t);
+    [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+    [StructLayout(LayoutKind.Sequential)] public struct TP { public uint C; public LUID L; public uint A; }
+    [StructLayout(LayoutKind.Sequential)] public struct LUID { public uint Lo; public int Hi; }
+    public static void Enable(string p) {
+        IntPtr t; OpenProcessToken(GetCurrentProcess(), 0x28, out t);
+        TP tp; tp.C = 1; tp.A = 2; LookupPrivilegeValue(null, p, out tp.L);
+        AdjustTokenPrivileges(t, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero);
+    }
+}
+'@
+      try { Add-Type $privType -EA SilentlyContinue } catch {}
+      try { [DelPriv]::Enable('SeTakeOwnershipPrivilege') } catch {}
+      try { [DelPriv]::Enable('SeRestorePrivilege') } catch {}
+      $adminSid = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
+      $subKeyPath = '${subKeyPath.replace(/'/g, "''").replace(/\\/g, '\\\\')}'
+      try {
+        $key = [Microsoft.Win32.Registry]::${hive}.OpenSubKey($subKeyPath,
+          [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
+          [System.Security.AccessControl.RegistryRights]::TakeOwnership)
+        if ($key) {
+          $acl = $key.GetAccessControl([System.Security.AccessControl.AccessControlSections]::None)
+          $acl.SetOwner($adminSid)
+          $key.SetAccessControl($acl)
+          $key.Close()
+          $key = [Microsoft.Win32.Registry]::${hive}.OpenSubKey($subKeyPath,
+            [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
+            [System.Security.AccessControl.RegistryRights]::ChangePermissions)
+          if ($key) {
+            $acl = $key.GetAccessControl()
+            $acl.Access | Where-Object { $_.AccessControlType -eq 'Deny' } | ForEach-Object {
+              $acl.RemoveAccessRule($_) | Out-Null
+            }
+            $acl.AddAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule(
+              $adminSid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+            $key.SetAccessControl($acl)
+            $key.Close()
+          }
+        }
+      } catch {}
+      $psPath = '${psPath.replace(/'/g, "''")}'
+      Remove-Item $psPath -Recurse -Force -EA SilentlyContinue
+    `, { timeout: 20000 }).catch(() => {});
+
+    await spawnSafe('reg', ['delete', keyPath, '/f'], { timeout: 5000 }).catch(() => {});
+    stillExists = await registryKeyExists(keyPath);
 
     return {
       success: !stillExists,
