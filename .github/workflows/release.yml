@@ -27,6 +27,9 @@ env:
   # Disable code signing auto-discovery (we control this explicitly)
   CSC_IDENTITY_AUTO_DISCOVERY: false
 
+permissions:
+  contents: write
+
 jobs:
   build-and-release:
     name: Build & Release
