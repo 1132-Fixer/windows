@@ -5,7 +5,7 @@
 const $ = id => document.getElementById(id);
 
 let isRunning = false;
-const options = { uninstall: true, reinstall: true, launch: true };
+const options = { launch: true };
 
 // === Auto-close system ===
 let autoCloseTimer = null;
@@ -459,7 +459,7 @@ async function handleFix() {
       btn.classList.add('done');
       $('progressRing').classList.add('done');
       $('ringFill').style.strokeDashoffset = 0;
-      $('statusText').textContent = options.reinstall ? 'Zoom reinstalled — launch via button below' : 'All Zoom traces removed';
+      $('statusText').textContent = 'All Zoom traces removed';
       $('statusText').classList.remove('active');
       $('statusText').classList.add('done');
       $('statusBadge').className = 'status-badge done';
@@ -468,7 +468,7 @@ async function handleFix() {
       $('postActions').classList.add('show');
 
       // Auto-launch if option set
-      if (options.launch && options.reinstall) {
+      if (options.launch) {
         try { await window.electronAPI.launchZoom(); } catch (_) {}
       }
 
