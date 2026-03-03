@@ -14,7 +14,7 @@
  *   --list-presets    List available preset profiles
  *   --apply-preset X  Apply a preset profile (e.g., quiet-meetings)
  *
- * @version 4.2.7
+ * @version 4.2.8
  */
 
 const { app, BrowserWindow, dialog, nativeTheme } = require('electron');
