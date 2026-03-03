@@ -153,12 +153,7 @@ async function performFullReset(options = {}) {
       const macSpoofResult = await fingerprint.spoofMacAddresses();
       steps.push({ name: 'macSpoof', ...macSpoofResult });
 
-      // Step 9b: Randomize computer name
-      sendProgress({ step: 'Randomizing computer name...', percent: 81 });
-      const compNameResult = await fingerprint.randomizeComputerName();
-      steps.push({ name: 'computerName', ...compNameResult });
-
-      // Step 9c: Change volume serial number
+      // Step 9b: Change volume serial number
       sendProgress({ step: 'Changing volume serial...', percent: 82 });
       const volSerialResult = await fingerprint.changeVolumeSerial();
       steps.push({ name: 'volumeSerial', ...volSerialResult });

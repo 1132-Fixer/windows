@@ -2253,72 +2253,6 @@ async function spoofMacAddresses() {
 }
 
 /**
- * Randomize the computer name.
- * Zoom may use the computer name as part of device fingerprinting.
- * Generates a new DESKTOP-XXXXXXX style name to match Windows defaults.
- * Requires a reboot to fully take effect, but the registry change is immediate.
- */
-async function randomizeComputerName() {
-  logger.info('Randomizing computer name...');
-
-  try {
-    const result = await runPowerShell(`
-      $oldName = $env:COMPUTERNAME
-
-      # Generate random 7-char alphanumeric suffix (like Windows default)
-      $chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-      $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-      $bytes = New-Object byte[] 7
-      $rng.GetBytes($bytes)
-      $suffix = -join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
-      $newName = "DESKTOP-$suffix"
-
-      # Save old name for backup
-      $backupPath = Join-Path $env:LOCALAPPDATA '1132Fixer'
-      if (-not (Test-Path $backupPath)) { New-Item $backupPath -ItemType Directory -Force | Out-Null }
-      $oldName | Out-File (Join-Path $backupPath 'ComputerName.bak') -Force
-
-      # Set in all 3 registry locations
-      $tcpPath = 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters'
-      $cnPath  = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\ComputerName\\ComputerName'
-      $anPath  = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\ComputerName\\ActiveComputerName'
-
-      Set-ItemProperty -Path $tcpPath -Name 'Hostname'       -Value $newName -Force
-      Set-ItemProperty -Path $tcpPath -Name 'NV Hostname'    -Value $newName -Force
-      Set-ItemProperty -Path $cnPath  -Name 'ComputerName'   -Value $newName -Force
-      Set-ItemProperty -Path $anPath  -Name 'ComputerName'   -Value $newName -Force -ErrorAction SilentlyContinue
-
-      # Also rename via WMI (applies on next reboot)
-      try {
-        $cs = Get-WmiObject Win32_ComputerSystem
-        $cs.Rename($newName) | Out-Null
-      } catch { }
-
-      # Verify
-      $verify = (Get-ItemProperty $cnPath -Name ComputerName).ComputerName
-      if ($verify -eq $newName) {
-        Write-Output "OK:$oldName->$newName"
-      } else {
-        Write-Output "FAIL:Verify mismatch $verify"
-      }
-    `, { timeout: 15000 });
-
-    const out = (result.stdout || '').trim();
-    if (out.startsWith('OK:')) {
-      const [oldN, newN] = out.substring(3).split('->');
-      logger.ok(`Computer name randomized: ${oldN} → ${newN}`);
-      return { success: true, oldName: oldN, newName: newN };
-    } else {
-      logger.warn('Computer name randomization issue: ' + out);
-      return { success: false, error: out };
-    }
-  } catch (e) {
-    logger.error('Computer name randomization failed', { error: e.message });
-    return { success: false, error: e.message };
-  }
-}
-
-/**
  * Change the C: drive volume serial number.
  * Zoom may read the volume serial as a hardware fingerprint.
  * Uses the volumeid approach via direct NTFS boot sector edit,
@@ -2921,7 +2855,6 @@ module.exports = {
   preLaunchScrub,
   rotateMachineGuid,
   spoofMacAddresses,
-  randomizeComputerName,
   changeVolumeSerial,
   wipeDeviceFingerprint,
   verifyFingerprintWipe
