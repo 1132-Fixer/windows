@@ -443,7 +443,39 @@ const FINGERPRINT_LOCATIONS = {
     path.join(APPDATA, 'Zoom', 'data', 'zoomus.db'),
     path.join(LOCALAPPDATA, 'Zoom', 'data', 'zoomus.db'),
     path.join(APPDATA, 'Zoom', 'data', 'zoom.db'),
-    path.join(LOCALAPPDATA, 'Zoom', 'data', 'zoom.db')
+    path.join(LOCALAPPDATA, 'Zoom', 'data', 'zoom.db'),
+    // Additional databases found in Zoom\data
+    path.join(APPDATA, 'Zoom', 'data', 'zoomus.enc.db'),
+    path.join(LOCALAPPDATA, 'Zoom', 'data', 'zoomus.enc.db'),
+    path.join(APPDATA, 'Zoom', 'data', 'zoommeeting.enc.db'),
+    path.join(LOCALAPPDATA, 'Zoom', 'data', 'zoommeeting.enc.db'),
+    path.join(APPDATA, 'Zoom', 'data', 'local_dns_cache.db'),
+    path.join(LOCALAPPDATA, 'Zoom', 'data', 'local_dns_cache.db'),
+    path.join(APPDATA, 'Zoom', 'data', 'process_monitoring.db'),
+    path.join(LOCALAPPDATA, 'Zoom', 'data', 'process_monitoring.db'),
+    path.join(APPDATA, 'Zoom', 'data', '3dCustomAvatar.enc.db'),
+    path.join(LOCALAPPDATA, 'Zoom', 'data', '3dCustomAvatar.enc.db'),
+    path.join(APPDATA, 'Zoom', 'data', 'zoomus.zmdb.default.noenc.rlock.db'),
+    path.join(LOCALAPPDATA, 'Zoom', 'data', 'zoomus.zmdb.default.noenc.rlock.db'),
+    path.join(APPDATA, 'Zoom', 'data', 'zoomus.zmdb.kvs.enc.db'),
+    path.join(LOCALAPPDATA, 'Zoom', 'data', 'zoomus.zmdb.kvs.enc.db'),
+    path.join(APPDATA, 'Zoom', 'data', 'zoom_conf_local_asr.enc.db'),
+    path.join(LOCALAPPDATA, 'Zoom', 'data', 'zoom_conf_local_asr.enc.db')
+  ],
+
+  // Database file names to scan for across all user profiles
+  zoomDatabaseFileNames: [
+    'telemetrydata.db',
+    'zoomus.db',
+    'zoom.db',
+    'zoomus.enc.db',
+    'zoommeeting.enc.db',
+    'local_dns_cache.db',
+    'process_monitoring.db',
+    '3dCustomAvatar.enc.db',
+    'zoomus.zmdb.default.noenc.rlock.db',
+    'zoomus.zmdb.kvs.enc.db',
+    'zoom_conf_local_asr.enc.db'
   ],
 
   // CptService - Screen sharing service with device ID

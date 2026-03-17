@@ -21,6 +21,102 @@ const logger = require('../utils/logger');
 const { FINGERPRINT_LOCATIONS, SYSTEM_TRACE_LOCATIONS, ZOOM_CREDENTIALS } = require('../../shared/constants');
 
 /**
+ * Wipe Zoom data directories and database files for ALL user profiles on the machine.
+ * Scans C:\Users\* for AppData\Roaming\Zoom\data and AppData\Local\Zoom\data.
+ * @returns {Promise<{success: boolean, deleted: number, users: string[]}>}
+ */
+async function wipeAllUserZoomData() {
+  logger.info('Wiping Zoom data for all user profiles...');
+
+  const dbFileNames = FINGERPRINT_LOCATIONS.zoomDatabaseFileNames || [];
+  const usersDir = 'C:\\Users';
+  const skipUsers = ['Public', 'Default', 'Default User', 'All Users'];
+  let deleted = 0;
+  const affectedUsers = [];
+
+  try {
+    const users = fs.readdirSync(usersDir);
+
+    for (const user of users) {
+      if (skipUsers.includes(user)) continue;
+
+      const userPath = path.join(usersDir, user);
+      try {
+        if (!fs.statSync(userPath).isDirectory()) continue;
+      } catch (_) { continue; }
+
+      const dataDirs = [
+        path.join(userPath, 'AppData', 'Roaming', 'Zoom', 'data'),
+        path.join(userPath, 'AppData', 'Local', 'Zoom', 'data')
+      ];
+
+      let userHit = false;
+
+      for (const dataDir of dataDirs) {
+        if (!fs.existsSync(dataDir)) continue;
+
+        // Delete all known database files
+        for (const dbName of dbFileNames) {
+          const dbPath = path.join(dataDir, dbName);
+          if (fs.existsSync(dbPath)) {
+            try {
+              fs.unlinkSync(dbPath);
+              deleted++;
+              userHit = true;
+              logger.ok(`Deleted: ${dbPath}`);
+            } catch (_) {
+              // Force delete via PowerShell
+              try {
+                await runPowerShell(`Remove-Item -LiteralPath "${dbPath}" -Force`, { timeout: 5000 });
+                deleted++;
+                userHit = true;
+                logger.ok(`Force deleted: ${dbPath}`);
+              } catch (e2) {
+                logger.warn(`Could not delete: ${dbPath}`, { error: e2.message });
+              }
+            }
+          }
+        }
+
+        // Also delete any remaining .db files we didn't know about
+        try {
+          const files = fs.readdirSync(dataDir);
+          for (const file of files) {
+            if (file.endsWith('.db')) {
+              const filePath = path.join(dataDir, file);
+              try {
+                fs.unlinkSync(filePath);
+                deleted++;
+                userHit = true;
+                logger.ok(`Deleted extra DB: ${filePath}`);
+              } catch (_) {
+                try {
+                  await runPowerShell(`Remove-Item -LiteralPath "${filePath}" -Force`, { timeout: 5000 });
+                  deleted++;
+                  userHit = true;
+                } catch (_) {}
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (userHit) affectedUsers.push(user);
+    }
+  } catch (e) {
+    logger.warn('Error scanning user profiles', { error: e.message });
+  }
+
+  if (deleted > 0) {
+    logger.ok(`Deleted ${deleted} Zoom database(s) across ${affectedUsers.length} user(s): ${affectedUsers.join(', ')}`);
+  } else {
+    logger.info('No Zoom databases found across user profiles');
+  }
+
+  return { success: true, deleted, users: affectedUsers };
+}
+
+/**
  * Delete telemetry databases
  * These contain device-specific tracking data
  * @returns {Promise<{success: boolean, deleted: number}>}
@@ -3114,7 +3210,7 @@ async function wipeDeviceFingerprint(onProgress = null) {
   logger.warn('This removes all device identifiers used by Zoom');
 
   const steps = {};
-  const totalTiers = 3;
+  const totalTiers = 4;
   let currentTier = 0;
 
   const reportProgress = (tierName) => {
@@ -3131,6 +3227,10 @@ async function wipeDeviceFingerprint(onProgress = null) {
 
   // NOTE: Recycle bin cleanup and icon cache rebuild are NOT included here.
   //       They must be called AFTER folder deletion by ipc-handlers.js.
+
+  // Tier 0: Wipe Zoom databases for ALL user profiles on the machine
+  reportProgress('All-user Zoom database cleanup');
+  steps.allUserData = await wipeAllUserZoomData();
 
   // Tier 1 (sequential - order matters: telemetry -> cpt -> registry fingerprints)
   reportProgress('Core fingerprint data');
@@ -3256,5 +3356,6 @@ module.exports = {
   verifyFingerprintWipe,
   blockCptServiceNetwork,
   unblockCptServiceNetwork,
-  neutralizeCptServiceBinary
+  neutralizeCptServiceBinary,
+  wipeAllUserZoomData
 };
