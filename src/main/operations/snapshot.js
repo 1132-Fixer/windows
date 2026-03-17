@@ -96,19 +96,17 @@ async function takeSnapshot(label = 'Snapshot') {
   // --- Services ---
   try {
     const svcList = ZOOM_SERVICES.map(s => "'" + s + "'").join(',');
-    const result = await runPowerShell(`
-      $out = @()
-      $names = @(${svcList})
-      foreach ($n in $names) {
-        $svc = Get-Service -Name $n -ErrorAction SilentlyContinue
-        if ($svc) { $out += "$($svc.Name)|$($svc.DisplayName)|$($svc.Status)" }
-      }
-      # Dynamic discovery
-      Get-Service | Where-Object { $_.Name -like '*zoom*' -or $_.Name -like '*cpt*' } | ForEach-Object {
-        if ($_.Name -notin $names) { $out += "$($_.Name)|$($_.DisplayName)|$($_.Status)" }
-      }
-      $out -join [char]10
-    `, { timeout: 15000 });
+    const psScript = '$out = @()\n' +
+      '$names = @(' + svcList + ')\n' +
+      'foreach ($n in $names) {\n' +
+      '  $svc = Get-Service -Name $n -ErrorAction SilentlyContinue\n' +
+      '  if ($svc) { $out += "$($svc.Name)|$($svc.DisplayName)|$($svc.Status)" }\n' +
+      '}\n' +
+      'Get-Service | Where-Object { $_.Name -like \'*zoom*\' -or $_.Name -like \'*cpt*\' } | ForEach-Object {\n' +
+      '  if ($_.Name -notin $names) { $out += "$($_.Name)|$($_.DisplayName)|$($_.Status)" }\n' +
+      '}\n' +
+      '$out -join [char]10';
+    const result = await runPowerShell(psScript, { timeout: 15000 });
 
     if (result.stdout && result.stdout.trim()) {
       for (const line of result.stdout.trim().split('\n')) {

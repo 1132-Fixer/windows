@@ -20,5 +20,9 @@ tmpclaude-*
 *.ps1
 !scripts/**/*.ps1
 
-# Logs
+# Logs & debug output
 *.log
+*-result.txt
+
+# Test scripts
+test-clean-user.js

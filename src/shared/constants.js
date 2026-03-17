@@ -394,7 +394,12 @@ const ZOOM_SERVICES = [
   'ZoomRooms',
   'ZoomPresence',
   'ZoomAutoUpdate',
-  'ZoomMeetingDaemon'
+  'ZoomMeetingDaemon',
+  'ZoomUpdater',
+  'ZoomVDI',
+  'ZoomBackground',
+  'ZoomToolkit',
+  'ZoomWorkplace'
 ];
 
 /**

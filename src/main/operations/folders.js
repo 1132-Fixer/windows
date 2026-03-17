@@ -325,16 +325,46 @@ async function deleteContentsRecursive(folderPath) {
 }
 
 /**
+ * Check if a path is a Zoom installation directory (contains binaries)
+ * @param {string} p - Path to check
+ * @returns {boolean}
+ */
+function isZoomInstallDir(p) {
+  const normalized = p.toLowerCase().replace(/\\/g, '/');
+  if (normalized.startsWith('c:/program files')) return true;
+  if (normalized.includes('/programs/zoom')) return true;
+  try {
+    if (fs.existsSync(path.join(p, 'bin', 'Zoom.exe'))) return true;
+  } catch (_) {}
+  return false;
+}
+
+/**
  * Delete all Zoom folders
  * @param {Function} onProgress - Progress callback
+ * @param {Object} opts - Options
+ * @param {boolean} opts.skipInstallDirs - Skip Zoom installation directories
  * @returns {Promise<{success: boolean, deleted: number, failed: number, results: Array}>}
  */
-async function deleteAllZoomFolders(onProgress = null) {
+async function deleteAllZoomFolders(onProgress = null, opts = {}) {
   logger.section('Deleting Zoom Data Folders');
 
   // First scan for all folders
   const scan = await scanZoomFolders();
   logger.info(`Found ${scan.paths.length} Zoom folders (${formatBytes(scan.totalSize)})`);
+
+  // Filter out installation directories if requested (keep Zoom installed)
+  if (opts.skipInstallDirs) {
+    const before = scan.paths.length;
+    scan.paths = scan.paths.filter(p => {
+      if (isZoomInstallDir(p)) {
+        logger.info(`Skipping install dir: ${p}`);
+        return false;
+      }
+      return true;
+    });
+    logger.info(`Filtered: ${before} -> ${scan.paths.length} paths (skipped ${before - scan.paths.length} install dirs)`);
+  }
 
   const results = [];
   let deleted = 0;

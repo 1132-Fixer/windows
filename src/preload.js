@@ -26,9 +26,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('reset-progress', handler);
   },
 
-  // Feedback
-  submitFeedback: (type, text) => ipcRenderer.invoke('submit-feedback', type, text),
-
   // Quit
   quitApp: () => ipcRenderer.invoke('quit-app'),
 

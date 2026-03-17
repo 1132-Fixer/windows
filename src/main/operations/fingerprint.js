@@ -242,6 +242,225 @@ async function removeFirewallRules() {
 }
 
 /**
+ * Block CptService from accessing the network
+ * Must be called BEFORE MSI install to prevent device fingerprint registration
+ * Creates Windows Firewall rules that block CptService.exe outbound traffic
+ * @returns {Promise<{success: boolean, rulesCreated: number}>}
+ */
+async function blockCptServiceNetwork() {
+  logger.info('Blocking Zoom/CptService network access via firewall...');
+
+  try {
+    const result = await runPowerShell(`
+      $count = 0
+
+      # Remove any existing block rules first (idempotent)
+      Get-NetFirewallRule -DisplayName '1132Fix-Block-*' -ErrorAction SilentlyContinue |
+        Remove-NetFirewallRule -ErrorAction SilentlyContinue
+
+      # Block ALL Zoom binaries from outbound network access
+      # CptShare.dll runs INSIDE Zoom.exe, so we must block Zoom.exe itself
+      $zoomExePaths = @(
+        "$env:ProgramFiles\\Zoom\\bin\\Zoom.exe",
+        "$env:ProgramFiles\\Zoom\\bin\\CptInstall.exe",
+        "$env:ProgramFiles\\Zoom\\bin\\Zoom_launcher.exe",
+        "$env:ProgramFiles\\Zoom\\bin\\aomhost64.exe",
+        "$env:ProgramFiles (x86)\\Zoom\\bin\\Zoom.exe",
+        "$env:ProgramFiles (x86)\\Zoom\\bin\\CptInstall.exe",
+        "$env:LOCALAPPDATA\\Zoom\\Zoom.exe",
+        "$env:LOCALAPPDATA\\Zoom\\CptInstall.exe",
+        "$env:APPDATA\\Zoom\\bin\\Zoom.exe"
+      )
+
+      foreach ($p in $zoomExePaths) {
+        $hash = $p.GetHashCode()
+        New-NetFirewallRule -DisplayName "1132Fix-Block-Zoom-$hash" -Direction Outbound -Action Block \`
+          -Program $p -Profile Any -Enabled True -ErrorAction SilentlyContinue | Out-Null
+        $count++
+      }
+
+      # Block by service name
+      foreach ($svc in @('ZoomCptService','CptService','zCSCptService')) {
+        New-NetFirewallRule -DisplayName "1132Fix-Block-Svc-$svc" -Direction Outbound -Action Block \`
+          -Service $svc -Profile Any -Enabled True -ErrorAction SilentlyContinue | Out-Null
+        $count++
+      }
+
+      Write-Output $count
+    `, { timeout: 30000 });
+
+    const created = parseInt(result.stdout, 10) || 0;
+    logger.ok(`Created ${created} firewall block rules for Zoom/CptService`);
+    return { success: true, rulesCreated: created };
+  } catch (e) {
+    logger.warn('Failed to create firewall blocks', { error: e.message });
+    return { success: false, rulesCreated: 0 };
+  }
+}
+
+/**
+ * Remove 1132Fix firewall block rules (cleanup)
+ * Called if the user wants to unblock CptService later
+ * @returns {Promise<{success: boolean, removed: number}>}
+ */
+async function unblockCptServiceNetwork() {
+  logger.info('Removing CptService firewall blocks...');
+
+  try {
+    const result = await runPowerShell(`
+      $rules = Get-NetFirewallRule -DisplayName '1132Fix-Block-*' -ErrorAction SilentlyContinue
+      $count = 0
+      if ($rules) {
+        $count = $rules.Count
+        $rules | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+      }
+      Write-Output $count
+    `, { timeout: 30000 });
+
+    const removed = parseInt(result.stdout, 10) || 0;
+    logger.ok(`Removed ${removed} CptService block rules`);
+    return { success: true, removed };
+  } catch (e) {
+    logger.warn('Failed to remove CptService block rules', { error: e.message });
+    return { success: false, removed: 0 };
+  }
+}
+
+/**
+ * Neutralize CptService binary after MSI install
+ * Deletes the CptService.exe binary and sets DENY ACLs on the path
+ * to prevent Zoom from recreating it
+ * @returns {Promise<{success: boolean, neutralized: number}>}
+ */
+async function neutralizeCptServiceBinary() {
+  logger.info('Neutralizing CptService/CptShare binaries...');
+
+  try {
+    const result = await runPowerShell(`
+      $count = 0
+
+      # Kill any running CptService/Zoom processes first
+      Get-Process -Name 'CptService','CptHost','CptControl','CptInstall','zcscpthost','zCSCptService','Zoom','Zoomus','Zoom_launcher' -EA SilentlyContinue |
+        Stop-Process -Force -EA SilentlyContinue
+      Start-Sleep -Milliseconds 1000
+
+      Stop-Service -Name 'ZoomCptService' -Force -EA SilentlyContinue
+      Stop-Service -Name 'CptService' -Force -EA SilentlyContinue
+      Stop-Service -Name 'zCSCptService' -Force -EA SilentlyContinue
+      sc.exe delete ZoomCptService 2>$null | Out-Null
+      sc.exe delete CptService 2>$null | Out-Null
+      sc.exe delete zCSCptService 2>$null | Out-Null
+
+      # Target the ACTUAL fingerprinting binaries in Zoom install dirs
+      # CptShare.dll = the DLL loaded by Zoom.exe that generates device fingerprints
+      # CptInstall.exe = installs/manages CptService
+      $zoomBinDirs = @(
+        "$env:ProgramFiles\\Zoom\\bin",
+        "$env:ProgramFiles (x86)\\Zoom\\bin",
+        "$env:LOCALAPPDATA\\Zoom\\bin",
+        "$env:APPDATA\\Zoom\\bin",
+        "$env:ProgramFiles\\Common Files\\Zoom\\Support",
+        "$env:ProgramFiles (x86)\\Common Files\\Zoom\\Support"
+      )
+
+      # ALL fingerprinting-related binaries
+      $cptBinaries = @(
+        'CptShare.dll',
+        'CptInstall.exe',
+        'CptService.exe',
+        'CptHost.exe',
+        'CptControl.exe',
+        'zcscpthost.exe',
+        'zCSCptService.exe',
+        'zMcmService.dll'
+      )
+
+      foreach ($dir in $zoomBinDirs) {
+        if (-not (Test-Path $dir)) { continue }
+        foreach ($bin in $cptBinaries) {
+          $fullPath = Join-Path $dir $bin
+          if (Test-Path $fullPath) {
+            try {
+              takeown /F "$fullPath" /A 2>&1 | Out-Null
+              icacls "$fullPath" /grant Administrators:F /Q 2>&1 | Out-Null
+              Remove-Item -LiteralPath $fullPath -Force -EA Stop
+              $count++
+              Write-Host "DELETED: $fullPath"
+            } catch {
+              # Try renaming instead of deleting (may be locked)
+              try {
+                $newName = "$fullPath.disabled"
+                Rename-Item -LiteralPath $fullPath -NewName $newName -Force -EA Stop
+                $count++
+                Write-Host "RENAMED: $fullPath -> $newName"
+              } catch {
+                Write-Host "FAILED: $fullPath - $_"
+              }
+            }
+          }
+        }
+      }
+
+      # Clean CptService data directories
+      $cptDataPaths = @(
+        "$env:ProgramData\\CptService",
+        "$env:ProgramData\\CptHost",
+        "$env:ProgramData\\Zoom CptService",
+        "$env:ProgramData\\zCSCptService",
+        "$env:ProgramData\\ZoomCptService"
+      )
+
+      foreach ($dp in $cptDataPaths) {
+        if (Test-Path $dp) {
+          takeown /F "$dp" /R /A /D Y 2>&1 | Out-Null
+          icacls "$dp" /grant Administrators:F /T /Q 2>&1 | Out-Null
+          Remove-Item $dp -Recurse -Force -EA SilentlyContinue
+          if (-not (Test-Path $dp)) {
+            $count++
+            Write-Host "DELETED DIR: $dp"
+          }
+        }
+      }
+
+      # Create placeholder files at CptShare.dll path to prevent Zoom from recreating
+      foreach ($dir in $zoomBinDirs) {
+        if (-not (Test-Path $dir)) { continue }
+        foreach ($bin in @('CptShare.dll','CptInstall.exe')) {
+          $fullPath = Join-Path $dir $bin
+          if (-not (Test-Path $fullPath)) {
+            try {
+              # Create a 0-byte placeholder
+              [System.IO.File]::Create($fullPath).Close()
+              # Make it read-only and set DENY write ACL
+              $item = Get-Item $fullPath
+              $item.Attributes = 'ReadOnly,System,Hidden'
+              $acl = Get-Acl $fullPath
+              $everyone = New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0')
+              $deny = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $everyone, 'Write,Delete,Modify', 'None', 'None', 'Deny')
+              $acl.AddAccessRule($deny)
+              Set-Acl -Path $fullPath -AclObject $acl -EA SilentlyContinue
+              Write-Host "PLACEHOLDER: $fullPath (0-byte, locked)"
+            } catch {
+              Write-Host "Could not create placeholder: $fullPath"
+            }
+          }
+        }
+      }
+
+      Write-Output $count
+    `, { timeout: 45000 });
+
+    const neutralized = parseInt(result.stdout, 10) || 0;
+    logger.ok(`Neutralized ${neutralized} CptService/CptShare binaries`);
+    return { success: true, neutralized };
+  } catch (e) {
+    logger.warn('Failed to neutralize CptService', { error: e.message });
+    return { success: false, neutralized: 0 };
+  }
+}
+
+/**
  * Clean Jump Lists (Recent items in taskbar)
  * These contain shortcuts to Zoom files/meetings
  * @returns {Promise<{success: boolean, deleted: number}>}
@@ -2132,30 +2351,58 @@ async function rotateMachineGuid() {
 
   try {
     const result = await runPowerShell(`
+      $ErrorActionPreference = 'Stop'
       $cryptoPath = 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography'
-      $oldGuid = (Get-ItemProperty $cryptoPath -Name MachineGuid -ErrorAction SilentlyContinue).MachineGuid
+      $oldGuid = (Get-ItemProperty $cryptoPath -Name MachineGuid).MachineGuid
 
       if (-not $oldGuid) {
         Write-Output "ERROR:Could not read current MachineGuid"
         return
       }
 
-      # Generate a new random GUID
       $newGuid = [System.Guid]::NewGuid().ToString()
 
-      # Save old GUID for optional restore
+      # Backup old GUID
       $backupPath = Join-Path $env:LOCALAPPDATA '1132Fixer'
       if (-not (Test-Path $backupPath)) { New-Item $backupPath -ItemType Directory -Force | Out-Null }
       $oldGuid | Out-File (Join-Path $backupPath 'MachineGuid.bak') -Force
 
-      # Set new GUID
-      Set-ItemProperty -Path $cryptoPath -Name MachineGuid -Value $newGuid -Force
-      $verify = (Get-ItemProperty $cryptoPath -Name MachineGuid).MachineGuid
+      # Method 1: Try Set-ItemProperty (works when elevated)
+      $written = $false
+      try {
+        Set-ItemProperty -Path $cryptoPath -Name MachineGuid -Value $newGuid -Force -ErrorAction Stop
+        $written = $true
+      } catch {
+        # Method 2: Try reg.exe (sometimes succeeds when PS cmdlet fails)
+        try {
+          $regOut = & reg add "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid /t REG_SZ /d $newGuid /f 2>&1
+          if ($LASTEXITCODE -eq 0) { $written = $true }
+        } catch {}
+      }
 
+      # Method 3: Use .NET Registry API with explicit write access
+      if (-not $written) {
+        try {
+          $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\\Microsoft\\Cryptography', $true)
+          if ($key) {
+            $key.SetValue('MachineGuid', $newGuid, [Microsoft.Win32.RegistryValueKind]::String)
+            $key.Close()
+            $written = $true
+          }
+        } catch {}
+      }
+
+      if (-not $written) {
+        Write-Output "FAIL:All write methods failed (not elevated?)"
+        return
+      }
+
+      # Verify
+      $verify = (Get-ItemProperty $cryptoPath -Name MachineGuid).MachineGuid
       if ($verify -eq $newGuid) {
         Write-Output "OK:$oldGuid->$newGuid"
       } else {
-        Write-Output "FAIL:Could not verify new MachineGuid"
+        Write-Output "FAIL:Write appeared to succeed but verification failed"
       }
     `, { timeout: 15000 });
 
@@ -2175,6 +2422,56 @@ async function rotateMachineGuid() {
 }
 
 /**
+ * Detect active VPN adapters that could interfere with MAC spoofing.
+ * VPNs can leak the real MAC or cause connectivity issues during adapter cycling.
+ * @returns {Promise<{active: boolean, adapters: string[]}>}
+ */
+async function detectActiveVPN() {
+  try {
+    const result = await runPowerShell(`
+      $vpnAdapters = @()
+
+      # Check for VPN network adapters
+      Get-NetAdapter | Where-Object {
+        $_.Status -eq 'Up' -and
+        $_.InterfaceDescription -match 'TAP|TUN|VPN|WireGuard|Windscribe|NordLynx|Wintun|Fortinet|Cisco AnyConnect|GlobalProtect|OpenVPN'
+      } | ForEach-Object {
+        $vpnAdapters += "$($_.Name) ($($_.InterfaceDescription))"
+      }
+
+      # Check if default route goes through a VPN-style interface
+      $defaultRoute = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+        Sort-Object RouteMetric | Select-Object -First 1
+      if ($defaultRoute) {
+        $iface = Get-NetAdapter -InterfaceIndex $defaultRoute.InterfaceIndex -ErrorAction SilentlyContinue
+        if ($iface -and $iface.InterfaceDescription -match 'TAP|TUN|VPN|WireGuard|Windscribe|NordLynx|Wintun|Fortinet|Cisco|GlobalProtect|OpenVPN') {
+          $name = "$($iface.Name) ($($iface.InterfaceDescription))"
+          if ($vpnAdapters -notcontains $name) { $vpnAdapters += $name }
+        }
+      }
+
+      if ($vpnAdapters.Count -gt 0) {
+        Write-Output "VPN_ACTIVE"
+        $vpnAdapters | ForEach-Object { Write-Output $_ }
+      } else {
+        Write-Output "NO_VPN"
+      }
+    `, { timeout: 10000 });
+
+    const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim());
+    if (lines[0] === 'VPN_ACTIVE') {
+      const adapters = lines.slice(1).map(l => l.trim());
+      logger.warn(`Active VPN detected: ${adapters.join(', ')}`);
+      return { active: true, adapters };
+    }
+    return { active: false, adapters: [] };
+  } catch (e) {
+    logger.debug('VPN detection failed, assuming no VPN', { error: e.message });
+    return { active: false, adapters: [] };
+  }
+}
+
+/**
  * Spoof MAC addresses on active network adapters.
  * Zoom uses MAC addresses as part of its device fingerprint.
  * This sets a random locally-administered MAC on each active physical adapter.
@@ -2182,6 +2479,13 @@ async function rotateMachineGuid() {
  */
 async function spoofMacAddresses() {
   logger.info('Spoofing MAC addresses on active adapters...');
+
+  // Check for active VPN before spoofing
+  const vpnCheck = await detectActiveVPN();
+  if (vpnCheck.active) {
+    logger.warn(`MAC spoofing skipped: VPN active (${vpnCheck.adapters.join(', ')}). Disconnect VPN before spoofing to avoid connectivity issues.`);
+    return { success: true, spoofed: 0, skipped: true, reason: `VPN active: ${vpnCheck.adapters.join(', ')}` };
+  }
 
   try {
     const result = await runPowerShell(`
@@ -2255,6 +2559,74 @@ async function spoofMacAddresses() {
 /**
  * Change the C: drive volume serial number.
  * Zoom may read the volume serial as a hardware fingerprint.
+ * Randomize the computer name.
+ * Zoom may use the computer name as part of device fingerprinting.
+ * Generates a new DESKTOP-XXXXXXX style name to match Windows defaults.
+ * Requires a reboot to fully take effect, but the registry change is immediate.
+ */
+async function randomizeComputerName() {
+  logger.info('Randomizing computer name...');
+
+  try {
+    const result = await runPowerShell(`
+      $oldName = $env:COMPUTERNAME
+
+      # Generate random 7-char alphanumeric suffix (like Windows default)
+      $chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+      $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+      $bytes = New-Object byte[] 7
+      $rng.GetBytes($bytes)
+      $suffix = -join ($bytes | ForEach-Object { $chars[$_ % $chars.Length] })
+      $newName = "DESKTOP-$suffix"
+
+      # Save old name for backup
+      $backupPath = Join-Path $env:LOCALAPPDATA '1132Fixer'
+      if (-not (Test-Path $backupPath)) { New-Item $backupPath -ItemType Directory -Force | Out-Null }
+      $oldName | Out-File (Join-Path $backupPath 'ComputerName.bak') -Force
+
+      # Set in all 3 registry locations
+      $tcpPath = 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters'
+      $cnPath  = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\ComputerName\\ComputerName'
+      $anPath  = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\ComputerName\\ActiveComputerName'
+
+      Set-ItemProperty -Path $tcpPath -Name 'Hostname'       -Value $newName -Force
+      Set-ItemProperty -Path $tcpPath -Name 'NV Hostname'    -Value $newName -Force
+      Set-ItemProperty -Path $cnPath  -Name 'ComputerName'   -Value $newName -Force
+      Set-ItemProperty -Path $anPath  -Name 'ComputerName'   -Value $newName -Force -ErrorAction SilentlyContinue
+
+      # Also rename via WMI (applies on next reboot)
+      try {
+        $cs = Get-WmiObject Win32_ComputerSystem
+        $cs.Rename($newName) | Out-Null
+      } catch { }
+
+      # Verify
+      $verify = (Get-ItemProperty $cnPath -Name ComputerName).ComputerName
+      if ($verify -eq $newName) {
+        Write-Output "OK:$oldName->$newName"
+      } else {
+        Write-Output "FAIL:Verify mismatch $verify"
+      }
+    `, { timeout: 15000 });
+
+    const out = (result.stdout || '').trim();
+    if (out.startsWith('OK:')) {
+      const [oldN, newN] = out.substring(3).split('->');
+      logger.ok(`Computer name randomized: ${oldN} → ${newN}`);
+      return { success: true, oldName: oldN, newName: newN };
+    } else {
+      logger.warn('Computer name randomization issue: ' + out);
+      return { success: false, error: out };
+    }
+  } catch (e) {
+    logger.error('Computer name randomization failed', { error: e.message });
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Change the C: drive volume serial number.
+ * Zoom may read the volume serial as a hardware fingerprint.
  * Uses the volumeid approach via direct NTFS boot sector edit,
  * or falls back to a reg-based approach.
  * Requires reboot to fully apply.
@@ -2280,25 +2652,47 @@ async function changeVolumeSerial() {
       $newSerialHex = ($bytes | ForEach-Object { $_.ToString('X2') }) -join ''
       $newSerialFormatted = $newSerialHex.Substring(0,4) + '-' + $newSerialHex.Substring(4,4)
 
-      # Method: Direct boot sector modification
-      # Volume serial is at offset 0x48 in NTFS boot sector
-      # We need raw disk access
+      # Method: Direct boot sector modification via P/Invoke
+      # System.IO.File.Open on \\.\C: returns non-seekable stream on Win11.
+      # Use kernel32 CreateFile + SetFilePointer for raw disk access.
       try {
-        $drive = '\\\\.\\C:'
-        $handle = [System.IO.File]::Open($drive, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
-        $reader = New-Object System.IO.BinaryReader($handle)
-        $writer = New-Object System.IO.BinaryWriter($handle)
+        Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public class DiskIO {
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+    public static extern IntPtr CreateFile(string lpFileName, uint dwAccess, uint dwShare, IntPtr lpSA, uint dwDisp, uint dwFlags, IntPtr hTemplate);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    public static extern bool ReadFile(IntPtr h, byte[] buf, uint nRead, out uint read, IntPtr ov);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    public static extern bool WriteFile(IntPtr h, byte[] buf, uint nWrite, out uint written, IntPtr ov);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    public static extern uint SetFilePointer(IntPtr h, int lo, IntPtr hi, uint method);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    public static extern bool CloseHandle(IntPtr h);
+    public const uint GENERIC_READ = 0x80000000;
+    public const uint GENERIC_WRITE = 0x40000000;
+    public const uint OPEN_EXISTING = 3;
+    public const uint FILE_SHARE_RW = 3;
+}
+'@ -ErrorAction SilentlyContinue
 
-        # Read first 512 bytes (boot sector)
-        $bootSector = $reader.ReadBytes(512)
+        $h = [DiskIO]::CreateFile('\\.\C:', [DiskIO]::GENERIC_READ -bor [DiskIO]::GENERIC_WRITE, [DiskIO]::FILE_SHARE_RW, [IntPtr]::Zero, [DiskIO]::OPEN_EXISTING, 0, [IntPtr]::Zero)
+        if ($h -eq [IntPtr]::new(-1)) { throw "CreateFile failed (error $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error()))" }
 
-        # NTFS volume serial is at offset 0x48 (8 bytes), but the displayed
-        # serial comes from bytes 0x48-0x4B (first 4 bytes, little-endian)
-        $handle.Seek(0x48, [System.IO.SeekOrigin]::Begin) | Out-Null
-        $writer.Write($bytes)
-        $writer.Flush()
+        # Read boot sector
+        $bootSector = New-Object byte[] 512
+        $read = [uint32]0
+        [DiskIO]::ReadFile($h, $bootSector, 512, [ref]$read, [IntPtr]::Zero) | Out-Null
 
-        $handle.Close()
+        # Seek to offset 0x48 (NTFS volume serial, 4 bytes little-endian)
+        [DiskIO]::SetFilePointer($h, 0x48, [IntPtr]::Zero, 0) | Out-Null
+
+        # Write new serial bytes
+        $written = [uint32]0
+        [DiskIO]::WriteFile($h, $bytes, 4, [ref]$written, [IntPtr]::Zero) | Out-Null
+        [DiskIO]::CloseHandle($h) | Out-Null
+
         Write-Output "OK:$oldSerial->$newSerialFormatted"
       } catch {
         Write-Output "FAIL:$($_.Exception.Message)"
@@ -2854,8 +3248,13 @@ module.exports = {
   postInstallScrub,
   preLaunchScrub,
   rotateMachineGuid,
+  detectActiveVPN,
   spoofMacAddresses,
+  randomizeComputerName,
   changeVolumeSerial,
   wipeDeviceFingerprint,
-  verifyFingerprintWipe
+  verifyFingerprintWipe,
+  blockCptServiceNetwork,
+  unblockCptServiceNetwork,
+  neutralizeCptServiceBinary
 };

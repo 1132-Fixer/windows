@@ -191,11 +191,79 @@ async function waitForZoomExit(timeoutMs = 10000) {
   return false;
 }
 
+/**
+ * All apps to kill before database purge
+ * Browsers, messengers, and anything that might hold locks on Zoom files
+ */
+const APPS_TO_KILL = [
+  // Browsers
+  'chrome',
+  'msedge',
+  'firefox',
+  'opera',
+  'brave',
+  'vivaldi',
+  'iexplore',
+  'chromium',
+  'waterfox',
+  'seamonkey',
+  'tor',
+  // Messaging / VoIP
+  'Discord',
+  'DiscordPTB',
+  'DiscordCanary',
+  'DiscordDevelopment',
+  'Telegram',
+  'Slack',
+  'Teams',
+  'ms-teams',
+  'Skype',
+  'Signal',
+  'WhatsApp',
+  'Viber',
+  'Messenger',
+  'Element',
+  'Wire',
+  'Webex',
+  'GoTo',
+  'BlueJeans',
+];
+
+/**
+ * Kill all browser processes
+ * @param {Function} onProgress - Progress callback
+ * @returns {Promise<{success: boolean, killed: number, failed: number}>}
+ */
+async function killAllBrowsers(onProgress = null) {
+  logger.section('Killing Browser Processes');
+  let killed = 0;
+  let failed = 0;
+
+  for (let i = 0; i < APPS_TO_KILL.length; i++) {
+    const proc = APPS_TO_KILL[i];
+    if (onProgress) {
+      onProgress({
+        message: `Closing ${proc}...`,
+        current: i + 1,
+        total: APPS_TO_KILL.length
+      });
+    }
+    const result = await killProcess(proc);
+    if (result.wasRunning && result.killed) killed++;
+    else if (result.wasRunning && !result.killed) failed++;
+  }
+
+  logger.info(`Apps killed: ${killed}, failed: ${failed}`);
+  return { success: true, killed, failed };
+}
+
 module.exports = {
   stopZoomServices,
   killProcess,
   killAllZoomProcesses,
+  killAllBrowsers,
   findZoomProcesses,
   isZoomRunning,
-  waitForZoomExit
+  waitForZoomExit,
+  APPS_TO_KILL
 };

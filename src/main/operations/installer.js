@@ -252,7 +252,64 @@ async function hardenZoomInstall() {
     logger.debug('Post-install hardening partially failed', { error: e.message });
   }
 
+  // Kill updater processes and disable scheduled tasks
+  try {
+    const updaterResult = await killZoomUpdaters();
+    details.updatersKilled = updaterResult.killed;
+    details.updateTasksDisabled = updaterResult.tasksDisabled;
+  } catch (e) {
+    logger.debug('Updater kill failed during hardening', { error: e.message });
+  }
+
   return { success: true, details };
+}
+
+/**
+ * Kill Zoom updater processes and disable their scheduled tasks.
+ * Prevents auto-update from restoring identity data before the user joins a meeting.
+ * @returns {Promise<{success: boolean, killed: number, tasksDisabled: number}>}
+ */
+async function killZoomUpdaters() {
+  logger.info('Killing Zoom updaters and disabling update tasks...');
+
+  try {
+    const result = await runPowerShell(`
+      $killed = 0
+      $disabled = 0
+
+      # Kill updater processes
+      foreach ($proc in @('zUpdater','ZoomUpdate','ZoomUpdateAgent','zPTUpdaterUI','ZoomInstaller')) {
+        $running = Get-Process -Name $proc -ErrorAction SilentlyContinue
+        if ($running) {
+          $running | Stop-Process -Force -ErrorAction SilentlyContinue
+          $killed++
+        }
+      }
+
+      # Disable Zoom scheduled tasks
+      Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+        $_.TaskName -match 'Zoom'
+      } | ForEach-Object {
+        Disable-ScheduledTask -TaskName $_.TaskName -ErrorAction SilentlyContinue | Out-Null
+        $disabled++
+      }
+
+      Write-Output "$killed|$disabled"
+    `, { timeout: 15000 });
+
+    const [killed, tasksDisabled] = (result.stdout || '0|0').trim().split('|').map(n => parseInt(n, 10) || 0);
+
+    if (killed > 0 || tasksDisabled > 0) {
+      logger.ok(`Updaters stopped: ${killed} processes killed, ${tasksDisabled} tasks disabled`);
+    } else {
+      logger.info('No active Zoom updaters found');
+    }
+
+    return { success: true, killed, tasksDisabled };
+  } catch (e) {
+    logger.debug('Updater kill partially failed', { error: e.message });
+    return { success: true, killed: 0, tasksDisabled: 0 };
+  }
 }
 
 /**
@@ -351,7 +408,7 @@ async function launchZoomPath(zoomPath) {
  *   2. Delete ALL Zoom data from real APPDATA/LOCALAPPDATA/ProgramData
  *      (telemetry DBs, encrypted DBs, config files — everything)
  *   3. Delete ALL Zoom registry keys (HKCU + HKLM + WOW64)
- *   4. Launch Zoom.exe normally — it sees empty data dirs + no registry
+ *   4. Kill updaters, then launch Zoom — it sees empty data dirs + no registry
  *      → generates a completely fresh device fingerprint → no ban
  *
  * NOTE: Env var APPDATA redirect does NOT work for Win32 apps like Zoom.
@@ -529,10 +586,12 @@ async function launchZoomCleanRoom() {
       }
     `, { timeout: 20000 }).catch(() => {});
 
+    // Step 3.5: Kill updaters before launch
+    await killZoomUpdaters();
+
     // Step 4: Launch Zoom normally — it starts with completely fresh data
     logger.info('Clean room: launching Zoom with wiped data...');
     const { spawn } = require('child_process');
-
     const child = spawn(zoomExe, [], {
       detached: true,
       stdio: 'ignore',
@@ -545,6 +604,292 @@ async function launchZoomCleanRoom() {
   } catch (e) {
     logger.error('Clean room launch failed', { error: e.message });
     return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Launch Zoom as a clean Windows user to bypass DPAPI-based device bans.
+ *
+ * Why this works:
+ *   Zoom's device fingerprint includes a DPAPI-encrypted key (win_osencrypt_key)
+ *   that is tied to the Windows user's SID + master encryption keys. Same user
+ *   always produces the same fingerprint — even after a full data wipe + reinstall.
+ *   A different Windows user has different DPAPI keys → different fingerprint → no ban.
+ *
+ * Flow:
+ *   1. Delete any existing ZoomClean user + stale profile data
+ *   2. Create a fresh ZoomClean user
+ *   3. Force profile creation via interactive logon
+ *   4. Symlink shared folders (Documents, Downloads, etc.) to the real user's folders
+ *   5. Launch Zoom as ZoomClean via schtasks
+ *
+ * @returns {Promise<{success: boolean, tempUser?: string, error?: string}>}
+ */
+async function launchZoomAsCleanUser() {
+  logger.info('Clean user launch: setting up ZoomClean Windows user...');
+
+  const installed = await isZoomInstalled();
+  if (!installed.success) {
+    return { success: false, error: 'Zoom not installed' };
+  }
+
+  const elevated = await isElevated();
+  if (!elevated) {
+    return { success: false, error: 'Admin privileges required to create a temporary user' };
+  }
+
+  const zoomExe = installed.path;
+  const tempUser = 'ZoomClean';
+  const password = 'Z00mCl3an!' + new Date().getFullYear();
+
+  try {
+    // Step 1: Kill any ZoomClean processes and delete old accounts
+    logger.info('Cleaning up any existing ZoomClean accounts...');
+    await runPowerShell(`
+      # Kill ALL processes running under any ZoomClean user
+      Get-Process -IncludeUserName -EA SilentlyContinue |
+        Where-Object { $_.UserName -like '*ZoomClean*' } |
+        Stop-Process -Force -EA SilentlyContinue
+
+      Start-Sleep -Seconds 3
+
+      # Delete all ZoomClean* local users
+      Get-LocalUser | Where-Object { $_.Name -like 'ZoomClean*' } | ForEach-Object {
+        Remove-LocalUser -Name $_.Name -EA SilentlyContinue
+      }
+
+      # Wait for profile to unload after process kill
+      Start-Sleep -Seconds 3
+
+      # Remove stale CIM profile entries (critical — prevents TEMP profile creation)
+      Get-CimInstance Win32_UserProfile |
+        Where-Object { $_.LocalPath -like '*ZoomClean*' } |
+        ForEach-Object { Remove-CimInstance $_ -EA SilentlyContinue }
+
+      # Remove stale profile directories
+      Get-ChildItem 'C:\\Users' -Directory |
+        Where-Object { $_.Name -like 'ZoomClean*' } |
+        ForEach-Object { cmd /c "rmdir /S /Q \`"$($_.FullName)\`"" 2>$null }
+
+      # Remove TEMP profile if it was created by a failed attempt
+      if (Test-Path 'C:\\Users\\TEMP') {
+        cmd /c "rmdir /S /Q \`"C:\\Users\\TEMP\`"" 2>$null
+      }
+
+      Start-Sleep -Seconds 2
+      Write-Output 'cleaned'
+    `, { timeout: 45000 });
+
+    // Step 2: Create fresh ZoomClean user
+    logger.info('Creating fresh ZoomClean user...');
+    await runPowerShell(`
+      $pw = ConvertTo-SecureString '${password}' -AsPlainText -Force
+      New-LocalUser -Name '${tempUser}' -Password $pw -Description '1132-Remover clean profile' -PasswordNeverExpires -EA Stop | Out-Null
+      Add-LocalGroupMember -Group 'Users' -Member '${tempUser}' -EA SilentlyContinue
+      Write-Output 'created'
+    `, { timeout: 15000 });
+
+    // Step 3: Force profile creation via interactive logon
+    logger.info('Creating user profile via logon...');
+    await runPowerShell(`
+      $pw = ConvertTo-SecureString '${password}' -AsPlainText -Force
+      $cred = New-Object System.Management.Automation.PSCredential('.\\${tempUser}', $pw)
+
+      $p = Start-Process 'cmd.exe' -ArgumentList '/c','echo %USERPROFILE% & timeout /t 2' -Credential $cred -PassThru -WindowStyle Hidden
+      $p.WaitForExit(15000)
+      Start-Sleep -Seconds 5
+
+      # Verify profile was created
+      $profilePath = $null
+      Get-ChildItem 'C:\\Users' -Directory |
+        Where-Object { $_.Name -like '${tempUser}*' } |
+        ForEach-Object { $profilePath = $_.FullName }
+
+      if (-not $profilePath) {
+        $wmiProfile = Get-CimInstance Win32_UserProfile |
+          Where-Object { $_.LocalPath -like '*${tempUser}*' } |
+          Select-Object -First 1
+        if ($wmiProfile) { $profilePath = $wmiProfile.LocalPath }
+      }
+
+      if (-not $profilePath -or -not (Test-Path $profilePath)) {
+        throw 'Profile directory not created'
+      }
+
+      Write-Output $profilePath
+    `, { timeout: 30000 });
+
+    // Step 4: Symlink shared folders and grant access
+    const realProfile = process.env.USERPROFILE;
+    const zoomDir = path.dirname(zoomExe);
+    logger.info('Symlinking shared folders and granting access...');
+    await runPowerShell(`
+      $profilePath = $null
+      Get-ChildItem 'C:\\Users' -Directory |
+        Where-Object { $_.Name -like '${tempUser}*' } |
+        ForEach-Object { $profilePath = $_.FullName }
+
+      $realProfile = '${realProfile.replace(/\\/g, '\\\\')}'
+
+      foreach ($folder in @('Documents','Downloads','Pictures','Videos','Desktop')) {
+        $target = Join-Path $realProfile $folder
+        $link = Join-Path $profilePath $folder
+
+        if (-not (Test-Path $target)) { continue }
+
+        if (Test-Path $link) {
+          $item = Get-Item $link -Force
+          if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { continue }
+          cmd /c "rmdir /S /Q \`"$link\`"" 2>$null
+          Start-Sleep -Milliseconds 300
+        }
+
+        cmd /c "mklink /D \`"$link\`" \`"$target\`"" 2>$null | Out-Null
+        # Grant on folder only — (OI)(CI) inherits to children without /T recursion
+        icacls "$target" /grant '${tempUser}:(OI)(CI)M' /Q 2>$null | Out-Null
+      }
+
+      # Grant Zoom directory read+execute access (no /T — inheritance handles children)
+      icacls '${zoomDir.replace(/\\/g, '\\\\')}' /grant '${tempUser}:(OI)(CI)RX' /Q 2>$null | Out-Null
+
+      Write-Output 'symlinked'
+    `, { timeout: 30000 });
+
+    // Step 5: Launch ManyCam + Zoom as ZoomClean in the same session
+    // Both apps must share a session so ManyCam's virtual camera is visible to Zoom.
+    // We use a single schtask running a batch script to keep them in one session.
+    const manyCamExe = 'C:\\Program Files (x86)\\ManyCam\\ManyCam.exe';
+    const hasManyCam = fs.existsSync(manyCamExe);
+    logger.info(`Launching ${hasManyCam ? 'ManyCam + ' : ''}Zoom as ZoomClean...`);
+
+    // Write a launcher batch script that starts ManyCam (if present), waits, then starts Zoom
+    const launcherPath = path.join(process.env.TEMP || 'C:\\Windows\\Temp', '1132fix-launcher.cmd');
+    const launcherLines = ['@echo off'];
+    if (hasManyCam) {
+      launcherLines.push(`start "" "${manyCamExe}"`);
+      launcherLines.push('timeout /t 5 /nobreak >nul');
+    }
+    launcherLines.push(`start "" "${zoomExe}"`);
+    fs.writeFileSync(launcherPath, launcherLines.join('\r\n'));
+
+    await runPowerShell(`
+      $launcherPath = '${launcherPath.replace(/\\/g, '\\\\')}'
+      $taskName = '1132Fix-LaunchZoom'
+
+      schtasks /Delete /TN $taskName /F 2>$null | Out-Null
+      schtasks /Create /TN $taskName /TR "\`"$launcherPath\`"" /SC ONCE /ST 00:00 /RU '${tempUser}' /RP '${password}' /RL LIMITED /F 2>&1 | Out-Null
+      schtasks /Run /TN $taskName 2>&1 | Out-Null
+      Start-Sleep -Seconds 8
+      schtasks /Delete /TN $taskName /F 2>$null | Out-Null
+
+      Write-Output 'launched'
+    `, { timeout: 25000 });
+
+    // Clean up launcher script
+    try { fs.unlinkSync(launcherPath); } catch (e) { /* ignore */ }
+
+    logger.ok(`${hasManyCam ? 'ManyCam + ' : ''}Zoom launched as ZoomClean user`);
+    return { success: true, tempUser };
+  } catch (e) {
+    logger.error('Clean user launch failed', { error: e.message });
+    await cleanupTempUser(tempUser).catch(() => {});
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Clean up a ZoomClean user created by launchZoomAsCleanUser.
+ * Kills any processes running as that user, then deletes the account + profile + CIM entries.
+ * @param {string} [tempUser='ZoomClean'] - Username to remove
+ * @returns {Promise<{success: boolean}>}
+ */
+async function cleanupTempUser(tempUser = 'ZoomClean') {
+  if (!tempUser || !tempUser.startsWith('ZoomClean')) {
+    return { success: false, error: 'Invalid temp user name' };
+  }
+
+  logger.info(`Cleaning up user: ${tempUser}`);
+  try {
+    await runPowerShell(`
+      $name = '${tempUser}'
+
+      # Kill all processes running as this user
+      Get-Process -IncludeUserName -EA SilentlyContinue |
+        Where-Object { $_.UserName -like "*\\$name" } |
+        Stop-Process -Force -EA SilentlyContinue
+
+      Start-Sleep -Seconds 2
+
+      # Remove the user account
+      Remove-LocalUser -Name $name -EA SilentlyContinue
+
+      # Remove CIM profile entry (prevents stale profile issues on next creation)
+      Get-CimInstance Win32_UserProfile |
+        Where-Object { $_.LocalPath -like "*\\$name*" } |
+        ForEach-Object { Remove-CimInstance $_ -EA SilentlyContinue }
+
+      # Remove profile directory
+      Get-ChildItem 'C:\\Users' -Directory |
+        Where-Object { $_.Name -like "$name*" } |
+        ForEach-Object { cmd /c "rmdir /S /Q \`"$($_.FullName)\`"" 2>$null }
+
+      Write-Output 'cleaned'
+    `, { timeout: 30000 });
+
+    logger.ok(`User ${tempUser} removed`);
+    return { success: true };
+  } catch (e) {
+    logger.warn(`Failed to clean up user ${tempUser}`, { error: e.message });
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Clean up ALL leftover ZoomClean* users from previous runs.
+ * @returns {Promise<{success: boolean, removed: number}>}
+ */
+async function cleanupAllTempUsers() {
+  try {
+    const result = await runPowerShell(`
+      $count = 0
+
+      # Delete all ZoomClean* local users
+      Get-LocalUser | Where-Object { $_.Name -like 'ZoomClean*' } | ForEach-Object {
+        $name = $_.Name
+
+        # Kill processes
+        Get-Process -IncludeUserName -EA SilentlyContinue |
+          Where-Object { $_.UserName -like "*\\$name" } |
+          Stop-Process -Force -EA SilentlyContinue
+
+        Start-Sleep -Seconds 1
+
+        # Remove user
+        Remove-LocalUser -Name $name -EA SilentlyContinue
+        $count++
+      }
+
+      # Remove ALL stale CIM profile entries
+      Get-CimInstance Win32_UserProfile |
+        Where-Object { $_.LocalPath -like '*ZoomClean*' } |
+        ForEach-Object { Remove-CimInstance $_ -EA SilentlyContinue }
+
+      # Remove ALL stale profile directories
+      Get-ChildItem 'C:\\Users' -Directory |
+        Where-Object { $_.Name -like 'ZoomClean*' } |
+        ForEach-Object { cmd /c "rmdir /S /Q \`"$($_.FullName)\`"" 2>$null }
+
+      Write-Output $count
+    `, { timeout: 60000 });
+
+    const removed = parseInt(result.stdout, 10) || 0;
+    if (removed > 0) {
+      logger.ok(`Cleaned up ${removed} ZoomClean user(s)`);
+    }
+    return { success: true, removed };
+  } catch (e) {
+    logger.warn('Failed to clean up ZoomClean users', { error: e.message });
+    return { success: false, removed: 0 };
   }
 }
 
@@ -568,8 +913,12 @@ module.exports = {
   downloadZoomInstaller,
   installZoom,
   hardenZoomInstall,
+  killZoomUpdaters,
   isZoomInstalled,
   launchZoom,
   launchZoomCleanRoom,
+  launchZoomAsCleanUser,
+  cleanupTempUser,
+  cleanupAllTempUsers,
   cleanupInstaller
 };
