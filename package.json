@@ -1,6 +1,6 @@
 {
   "name": "1132-fixer",
-  "version": "5.0.3",
+  "version": "5.0.19",
   "description": "Zoom Error 1132 fix tool - device fingerprint reset",
   "main": "src/main/index.js",
   "scripts": {
@@ -102,6 +102,14 @@
       {
         "from": "assets/icon.ico",
         "to": "icon.ico"
+      },
+      {
+        "from": "assets/dpapi_hook.dll",
+        "to": "dpapi_hook.dll"
+      },
+      {
+        "from": "assets/zoom-launcher.exe",
+        "to": "zoom-launcher.exe"
       }
     ],
     "fileAssociations": [

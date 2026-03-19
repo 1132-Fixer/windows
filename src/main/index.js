@@ -2,7 +2,7 @@
  * 1132 Fixer - Main Process Entry Point
  * Zoom Error 1132 fix tool - device fingerprint reset
  *
- * @version 5.0.3
+ * @version 5.0.14
  */
 
 const { app, BrowserWindow, dialog, nativeTheme } = require('electron');

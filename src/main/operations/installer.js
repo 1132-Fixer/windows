@@ -653,18 +653,32 @@ async function launchZoomAsCleanUser() {
 
       Start-Sleep -Seconds 3
 
+      # Unload ZoomClean registry hives (prevents profile lock)
+      $zoomSIDs = (Get-CimInstance Win32_UserProfile |
+        Where-Object { $_.LocalPath -like '*ZoomClean*' }).SID
+      foreach ($sid in $zoomSIDs) {
+        if ($sid) {
+          reg unload "HKU\\$sid" 2>$null | Out-Null
+        }
+      }
+      Start-Sleep -Seconds 2
+
       # Delete all ZoomClean* local users
       Get-LocalUser | Where-Object { $_.Name -like 'ZoomClean*' } | ForEach-Object {
         Remove-LocalUser -Name $_.Name -EA SilentlyContinue
       }
 
-      # Wait for profile to unload after process kill
+      # Wait for profile to unload after user deletion
       Start-Sleep -Seconds 3
 
-      # Remove stale CIM profile entries (critical — prevents TEMP profile creation)
-      Get-CimInstance Win32_UserProfile |
-        Where-Object { $_.LocalPath -like '*ZoomClean*' } |
-        ForEach-Object { Remove-CimInstance $_ -EA SilentlyContinue }
+      # Remove stale CIM profile entries with retry (critical — prevents TEMP profile)
+      for ($i = 0; $i -lt 3; $i++) {
+        $stale = Get-CimInstance Win32_UserProfile |
+          Where-Object { $_.LocalPath -like '*ZoomClean*' -or $_.LocalPath -eq 'C:\\Users\\TEMP' }
+        if (-not $stale) { break }
+        $stale | ForEach-Object { Remove-CimInstance $_ -EA SilentlyContinue }
+        Start-Sleep -Seconds 2
+      }
 
       # Remove stale profile directories
       Get-ChildItem 'C:\\Users' -Directory |
@@ -676,9 +690,15 @@ async function launchZoomAsCleanUser() {
         cmd /c "rmdir /S /Q \`"C:\\Users\\TEMP\`"" 2>$null
       }
 
+      # Final verification — no stale entries remain
       Start-Sleep -Seconds 2
+      $remaining = Get-CimInstance Win32_UserProfile |
+        Where-Object { $_.LocalPath -like '*ZoomClean*' -or $_.LocalPath -eq 'C:\\Users\\TEMP' }
+      if ($remaining) {
+        throw "Stale CIM profile entries still exist: $($remaining.LocalPath -join ', ')"
+      }
       Write-Output 'cleaned'
-    `, { timeout: 45000 });
+    `, { timeout: 60000 });
 
     // Step 2: Create fresh ZoomClean user
     logger.info('Creating fresh ZoomClean user...');
@@ -695,16 +715,25 @@ async function launchZoomAsCleanUser() {
       $pw = ConvertTo-SecureString '${password}' -AsPlainText -Force
       $cred = New-Object System.Management.Automation.PSCredential('.\\${tempUser}', $pw)
 
+      # Ensure SecLogon service is running (required for credential-based Start-Process)
+      $svc = Get-Service seclogon -EA SilentlyContinue
+      if ($svc -and $svc.Status -ne 'Running') {
+        Set-Service seclogon -StartupType Manual -EA SilentlyContinue
+        Start-Service seclogon -EA SilentlyContinue
+        Start-Sleep -Seconds 1
+      }
+
       $p = Start-Process 'cmd.exe' -ArgumentList '/c','echo %USERPROFILE% & timeout /t 2' -Credential $cred -PassThru -WindowStyle Hidden
       $p.WaitForExit(15000)
       Start-Sleep -Seconds 5
 
-      # Verify profile was created
+      # Verify profile was created as ZoomClean (not TEMP)
       $profilePath = $null
       Get-ChildItem 'C:\\Users' -Directory |
         Where-Object { $_.Name -like '${tempUser}*' } |
         ForEach-Object { $profilePath = $_.FullName }
 
+      # Check WMI if filesystem check didn't find it
       if (-not $profilePath) {
         $wmiProfile = Get-CimInstance Win32_UserProfile |
           Where-Object { $_.LocalPath -like '*${tempUser}*' } |
@@ -712,48 +741,27 @@ async function launchZoomAsCleanUser() {
         if ($wmiProfile) { $profilePath = $wmiProfile.LocalPath }
       }
 
+      # Detect TEMP profile — means stale CIM entry caused Windows to redirect
       if (-not $profilePath -or -not (Test-Path $profilePath)) {
+        $tempProfile = Get-CimInstance Win32_UserProfile |
+          Where-Object { $_.LocalPath -eq 'C:\\Users\\TEMP' }
+        if ($tempProfile -or (Test-Path 'C:\\Users\\TEMP')) {
+          throw 'Profile was created as C:\\Users\\TEMP instead of ${tempUser}. Stale CIM entries were not fully removed — retry the operation.'
+        }
         throw 'Profile directory not created'
       }
 
       Write-Output $profilePath
     `, { timeout: 30000 });
 
-    // Step 4: Symlink shared folders and grant access
-    const realProfile = process.env.USERPROFILE;
+    // Step 4: Grant ZoomClean access to Zoom directory (no symlinks — fully isolated profile)
     const zoomDir = path.dirname(zoomExe);
-    logger.info('Symlinking shared folders and granting access...');
+    logger.info('Granting ZoomClean access to Zoom directory...');
     await runPowerShell(`
-      $profilePath = $null
-      Get-ChildItem 'C:\\Users' -Directory |
-        Where-Object { $_.Name -like '${tempUser}*' } |
-        ForEach-Object { $profilePath = $_.FullName }
-
-      $realProfile = '${realProfile.replace(/\\/g, '\\\\')}'
-
-      foreach ($folder in @('Documents','Downloads','Pictures','Videos','Desktop')) {
-        $target = Join-Path $realProfile $folder
-        $link = Join-Path $profilePath $folder
-
-        if (-not (Test-Path $target)) { continue }
-
-        if (Test-Path $link) {
-          $item = Get-Item $link -Force
-          if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { continue }
-          cmd /c "rmdir /S /Q \`"$link\`"" 2>$null
-          Start-Sleep -Milliseconds 300
-        }
-
-        cmd /c "mklink /D \`"$link\`" \`"$target\`"" 2>$null | Out-Null
-        # Grant on folder only — (OI)(CI) inherits to children without /T recursion
-        icacls "$target" /grant '${tempUser}:(OI)(CI)M' /Q 2>$null | Out-Null
-      }
-
       # Grant Zoom directory read+execute access (no /T — inheritance handles children)
       icacls '${zoomDir.replace(/\\/g, '\\\\')}' /grant '${tempUser}:(OI)(CI)RX' /Q 2>$null | Out-Null
-
-      Write-Output 'symlinked'
-    `, { timeout: 30000 });
+      Write-Output 'granted'
+    `, { timeout: 15000 });
 
     // Step 5: Launch ManyCam + Zoom as ZoomClean in the same session
     // Both apps must share a session so ManyCam's virtual camera is visible to Zoom.

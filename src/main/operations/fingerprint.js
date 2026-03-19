@@ -26,11 +26,10 @@ const { FINGERPRINT_LOCATIONS, SYSTEM_TRACE_LOCATIONS, ZOOM_CREDENTIALS } = requ
  * @returns {Promise<{success: boolean, deleted: number, users: string[]}>}
  */
 async function wipeAllUserZoomData() {
-  logger.info('Wiping Zoom data for all user profiles...');
+  logger.info('Nuking ALL Zoom data for all user profiles...');
 
-  const dbFileNames = FINGERPRINT_LOCATIONS.zoomDatabaseFileNames || [];
   const usersDir = 'C:\\Users';
-  const skipUsers = ['Public', 'Default', 'Default User', 'All Users'];
+  const skipUsers = [];  // Don't skip ANY user — nuke Zoom data everywhere
   let deleted = 0;
   const affectedUsers = [];
 
@@ -45,60 +44,101 @@ async function wipeAllUserZoomData() {
         if (!fs.statSync(userPath).isDirectory()) continue;
       } catch (_) { continue; }
 
-      const dataDirs = [
-        path.join(userPath, 'AppData', 'Roaming', 'Zoom', 'data'),
-        path.join(userPath, 'AppData', 'Local', 'Zoom', 'data')
-      ];
+      // Wipe fingerprint data subdirectories but KEEP bin/ (Zoom installation) intact
+      // User-installed Zoom lives at AppData\Roaming\Zoom\bin — deleting the whole folder uninstalls Zoom
+      const zoomDataSubdirs = ['data', 'EBWebView', 'app-data', 'logs', 'CrashDumps', 'WebviewCacheX64'];
+      const zoomRoots = ['Zoom', 'Zoom Workplace'];
+      const zoomDirs = [];
+      for (const base of ['Roaming', 'Local']) {
+        for (const root of zoomRoots) {
+          for (const sub of zoomDataSubdirs) {
+            zoomDirs.push(path.join(userPath, 'AppData', base, root, sub));
+          }
+        }
+      }
+      // These are NOT Zoom installations, safe to nuke entirely
+      for (const extra of ['ZoomAgentClient', 'ZoomAlt']) {
+        zoomDirs.push(path.join(userPath, 'AppData', 'Roaming', extra));
+        zoomDirs.push(path.join(userPath, 'AppData', 'Local', extra));
+      }
 
-      let userHit = false;
-
-      for (const dataDir of dataDirs) {
-        if (!fs.existsSync(dataDir)) continue;
-
-        // Delete all known database files
-        for (const dbName of dbFileNames) {
-          const dbPath = path.join(dataDir, dbName);
-          if (fs.existsSync(dbPath)) {
-            try {
-              fs.unlinkSync(dbPath);
-              deleted++;
-              userHit = true;
-              logger.ok(`Deleted: ${dbPath}`);
-            } catch (_) {
-              // Force delete via PowerShell
-              try {
-                await runPowerShell(`Remove-Item -LiteralPath "${dbPath}" -Force`, { timeout: 5000 });
-                deleted++;
-                userHit = true;
-                logger.ok(`Force deleted: ${dbPath}`);
-              } catch (e2) {
-                logger.warn(`Could not delete: ${dbPath}`, { error: e2.message });
+      // Also catch data subdirs in any other Zoom* dirs we don't know about
+      try {
+        for (const base of ['Roaming', 'Local']) {
+          const appDataBase = path.join(userPath, 'AppData', base);
+          if (fs.existsSync(appDataBase)) {
+            const entries = fs.readdirSync(appDataBase);
+            for (const entry of entries) {
+              if (entry.toLowerCase().startsWith('zoom')) {
+                // Only target data subdirs, not the root (which may contain bin/)
+                for (const sub of zoomDataSubdirs) {
+                  const subPath = path.join(appDataBase, entry, sub);
+                  if (!zoomDirs.includes(subPath)) {
+                    zoomDirs.push(subPath);
+                  }
+                }
               }
             }
           }
         }
+      } catch (_) {}
 
-        // Also delete any remaining .db files we didn't know about
-        try {
-          const files = fs.readdirSync(dataDir);
-          for (const file of files) {
-            if (file.endsWith('.db')) {
-              const filePath = path.join(dataDir, file);
-              try {
-                fs.unlinkSync(filePath);
+      // Also delete key fingerprint config files from Zoom root dirs (but NOT bin/)
+      const fingerprintFiles = ['Zoom.us.ini', 'viper.ini', 'appsafecheck.txt', 'ZoomWorkplace.ini'];
+      for (const base of ['Roaming', 'Local']) {
+        for (const root of ['Zoom', 'Zoom Workplace']) {
+          const zoomRoot = path.join(userPath, 'AppData', base, root);
+          for (const f of fingerprintFiles) {
+            const fp = path.join(zoomRoot, f);
+            try {
+              if (fs.existsSync(fp)) {
+                fs.unlinkSync(fp);
                 deleted++;
-                userHit = true;
-                logger.ok(`Deleted extra DB: ${filePath}`);
-              } catch (_) {
-                try {
-                  await runPowerShell(`Remove-Item -LiteralPath "${filePath}" -Force`, { timeout: 5000 });
-                  deleted++;
-                  userHit = true;
-                } catch (_) {}
+                logger.ok(`Deleted config: ${fp}`);
               }
-            }
+            } catch (_) {}
           }
-        } catch (_) {}
+        }
+      }
+
+      let userHit = false;
+
+      for (const zoomDir of zoomDirs) {
+        if (!fs.existsSync(zoomDir)) continue;
+
+        try {
+          // Count files before deletion
+          const countBefore = countFilesRecursive(zoomDir);
+          logger.info(`Found ${countBefore} files in ${zoomDir}`);
+
+          // Try Node.js recursive delete first
+          fs.rmSync(zoomDir, { recursive: true, force: true });
+          deleted += countBefore;
+          userHit = true;
+          logger.ok(`Nuked entire directory: ${zoomDir} (${countBefore} files)`);
+        } catch (_) {
+          // Force delete via PowerShell if Node fails (locked files, permissions)
+          try {
+            await runPowerShell(
+              `Remove-Item -LiteralPath '${zoomDir}' -Recurse -Force -ErrorAction SilentlyContinue`,
+              { timeout: 15000 }
+            );
+            userHit = true;
+            logger.ok(`Force nuked directory: ${zoomDir}`);
+          } catch (e2) {
+            logger.warn(`Could not fully delete: ${zoomDir}`, { error: e2.message });
+            // Last resort: try to at least delete key fingerprint files
+            try {
+              await runPowerShell(`
+                Get-ChildItem '${zoomDir}' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+                  try { Remove-Item $_.FullName -Force -ErrorAction Stop } catch {}
+                }
+              `, { timeout: 15000 });
+              userHit = true;
+              logger.ok(`Force deleted files in: ${zoomDir}`);
+            } catch (_) {}
+          }
+        }
       }
 
       if (userHit) affectedUsers.push(user);
@@ -107,13 +147,87 @@ async function wipeAllUserZoomData() {
     logger.warn('Error scanning user profiles', { error: e.message });
   }
 
+  // Also nuke global Zoom directories (ProgramData, Program Files leftovers)
+  const globalZoomDirs = [
+    'C:\\ProgramData\\Zoom',
+    'C:\\ProgramData\\Zoom Workplace',
+    'C:\\ProgramData\\ZoomCptService',
+    'C:\\ProgramData\\Zoom CptService',
+    'C:\\ProgramData\\zCSCptService',
+  ];
+
+  // Catch Zoom_del_* leftover directories in Program Files (NOT the actual Zoom installation)
+  try {
+    const pfDirs = ['C:\\Program Files', 'C:\\Program Files (x86)'];
+    for (const pf of pfDirs) {
+      if (fs.existsSync(pf)) {
+        const entries = fs.readdirSync(pf);
+        for (const entry of entries) {
+          const lower = entry.toLowerCase();
+          // Only delete leftover/temp dirs like "Zoom_del_xxxx", never the main "Zoom" or "Zoom Workplace" installation
+          if (lower.startsWith('zoom_del') || lower.startsWith('zoom workplace_del')) {
+            globalZoomDirs.push(path.join(pf, entry));
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  for (const gDir of globalZoomDirs) {
+    if (!fs.existsSync(gDir)) continue;
+    try {
+      const countBefore = countFilesRecursive(gDir);
+      fs.rmSync(gDir, { recursive: true, force: true });
+      deleted += countBefore;
+      logger.ok(`Nuked global directory: ${gDir} (${countBefore} files)`);
+    } catch (_) {
+      try {
+        await runPowerShell(`
+          $dir = '${gDir.replace(/'/g, "''")}'
+          # Take ownership and reset ACLs
+          takeown /F $dir /R /D Y 2>&1 | Out-Null
+          icacls $dir /reset /T /Q 2>&1 | Out-Null
+          icacls $dir /grant:r Administrators:F /T /Q 2>&1 | Out-Null
+          Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction Stop
+        `, { timeout: 30000 });
+        logger.ok(`Force nuked global directory: ${gDir}`);
+      } catch (_) {
+        // Last resort: cmd rd
+        try {
+          await spawnSafe('cmd', ['/c', 'rd', '/s', '/q', gDir], { timeout: 15000 });
+          logger.ok(`rd nuked global directory: ${gDir}`);
+        } catch (_) {
+          logger.warn(`Could not delete global dir: ${gDir}`);
+        }
+      }
+    }
+  }
+
   if (deleted > 0) {
-    logger.ok(`Deleted ${deleted} Zoom database(s) across ${affectedUsers.length} user(s): ${affectedUsers.join(', ')}`);
+    logger.ok(`Nuked ${deleted} Zoom files across ${affectedUsers.length} user(s): ${affectedUsers.join(', ')}`);
   } else {
-    logger.info('No Zoom databases found across user profiles');
+    logger.info('No Zoom data found across user profiles');
   }
 
   return { success: true, deleted, users: affectedUsers };
+}
+
+/**
+ * Count files recursively in a directory
+ */
+function countFilesRecursive(dirPath) {
+  let count = 0;
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile()) {
+        count++;
+      } else if (entry.isDirectory()) {
+        count += countFilesRecursive(path.join(dirPath, entry.name));
+      }
+    }
+  } catch (_) {}
+  return count;
 }
 
 /**
@@ -2729,80 +2843,105 @@ async function randomizeComputerName() {
  */
 async function changeVolumeSerial() {
   logger.info('Changing C: drive volume serial number...');
+  const fs = require('fs');
+  const path = require('path');
+  const { execSync } = require('child_process');
 
   try {
-    const result = await runPowerShell(`
-      # Read current volume serial
-      $vol = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'"
-      $oldSerial = $vol.VolumeSerialNumber
+    // Get current volume serial
+    const wmiOut = execSync('powershell -Command "(Get-WmiObject Win32_LogicalDisk -Filter \\"DeviceID=\'C:\'\\" ).VolumeSerialNumber"', { encoding: 'utf8' }).trim();
+    const oldSerial = wmiOut;
 
-      # Save old serial for backup
-      $backupPath = Join-Path $env:LOCALAPPDATA '1132Fixer'
-      if (-not (Test-Path $backupPath)) { New-Item $backupPath -ItemType Directory -Force | Out-Null }
-      $oldSerial | Out-File (Join-Path $backupPath 'VolumeSerial.bak') -Force
+    // Backup
+    const backupDir = path.join(process.env.LOCALAPPDATA, '1132Fixer');
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+    fs.writeFileSync(path.join(backupDir, 'VolumeSerial.bak'), oldSerial);
 
-      # Generate random serial (8 hex chars -> XXXX-XXXX format internally)
-      $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-      $bytes = New-Object byte[] 4
-      $rng.GetBytes($bytes)
-      $newSerialHex = ($bytes | ForEach-Object { $_.ToString('X2') }) -join ''
-      $newSerialFormatted = $newSerialHex.Substring(0,4) + '-' + $newSerialHex.Substring(4,4)
+    // Write C# source file directly (avoids JS/PowerShell escaping issues)
+    const tmpDir = path.join(process.env.TEMP, '1132Fixer');
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+    const csFile = path.join(tmpDir, 'volserial.cs');
+    const exeFile = path.join(tmpDir, 'volserial.exe');
 
-      # Method: Direct boot sector modification via P/Invoke
-      # System.IO.File.Open on \\.\C: returns non-seekable stream on Win11.
-      # Use kernel32 CreateFile + SetFilePointer for raw disk access.
-      try {
-        Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public class DiskIO {
-    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
-    public static extern IntPtr CreateFile(string lpFileName, uint dwAccess, uint dwShare, IntPtr lpSA, uint dwDisp, uint dwFlags, IntPtr hTemplate);
-    [DllImport("kernel32.dll", SetLastError=true)]
-    public static extern bool ReadFile(IntPtr h, byte[] buf, uint nRead, out uint read, IntPtr ov);
-    [DllImport("kernel32.dll", SetLastError=true)]
-    public static extern bool WriteFile(IntPtr h, byte[] buf, uint nWrite, out uint written, IntPtr ov);
-    [DllImport("kernel32.dll", SetLastError=true)]
-    public static extern uint SetFilePointer(IntPtr h, int lo, IntPtr hi, uint method);
-    [DllImport("kernel32.dll", SetLastError=true)]
-    public static extern bool CloseHandle(IntPtr h);
-    public const uint GENERIC_READ = 0x80000000;
-    public const uint GENERIC_WRITE = 0x40000000;
-    public const uint OPEN_EXISTING = 3;
-    public const uint FILE_SHARE_RW = 3;
-}
-'@ -ErrorAction SilentlyContinue
+    // C# source with proper backslash escaping (written directly to file, no template literal issues)
+    const csSource = [
+      'using System;',
+      'using System.Runtime.InteropServices;',
+      'using System.Security.Cryptography;',
+      'class Program {',
+      '    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]',
+      '    static extern IntPtr CreateFile(string f, uint a, uint s, IntPtr sa, uint d, uint fl, IntPtr t);',
+      '    [DllImport("kernel32.dll", SetLastError=true)]',
+      '    static extern bool ReadFile(IntPtr h, byte[] b, uint n, out uint r, IntPtr o);',
+      '    [DllImport("kernel32.dll", SetLastError=true)]',
+      '    static extern bool WriteFile(IntPtr h, byte[] b, uint n, out uint w, IntPtr o);',
+      '    [DllImport("kernel32.dll", SetLastError=true)]',
+      '    static extern uint SetFilePointer(IntPtr h, int lo, IntPtr hi, uint method);',
+      '    [DllImport("kernel32.dll", SetLastError=true)]',
+      '    static extern bool CloseHandle(IntPtr h);',
+      '    static int Main() {',
+      '        string diskPath = @"\\\\.\\C:";',
+      '        IntPtr h = CreateFile(diskPath, 0xC0000000u, 3u, IntPtr.Zero, 3u, 0u, IntPtr.Zero);',
+      '        if (h == new IntPtr(-1)) {',
+      '            Console.WriteLine("FAIL:CreateFile error " + Marshal.GetLastWin32Error());',
+      '            return 1;',
+      '        }',
+      '        byte[] boot = new byte[512];',
+      '        uint read;',
+      '        if (!ReadFile(h, boot, 512, out read, IntPtr.Zero) || read != 512) {',
+      '            CloseHandle(h); Console.WriteLine("FAIL:ReadFile error " + Marshal.GetLastWin32Error()); return 1;',
+      '        }',
+      '        byte[] rand = new byte[8];',
+      '        using (var rng = RandomNumberGenerator.Create()) { rng.GetBytes(rand); }',
+      '        Array.Copy(rand, 0, boot, 0x48, 8);',
+      '        if (SetFilePointer(h, 0, IntPtr.Zero, 0) != 0) {',
+      '            CloseHandle(h); Console.WriteLine("FAIL:Seek error " + Marshal.GetLastWin32Error()); return 1;',
+      '        }',
+      '        uint written;',
+      '        if (!WriteFile(h, boot, 512, out written, IntPtr.Zero) || written != 512) {',
+      '            CloseHandle(h); Console.WriteLine("FAIL:WriteFile error " + Marshal.GetLastWin32Error()); return 1;',
+      '        }',
+      '        CloseHandle(h);',
+      '        uint display = BitConverter.ToUInt32(rand, 4);',
+      '        Console.WriteLine(string.Format("OK:{0:X4}-{1:X4}", (display >> 16) & 0xFFFF, display & 0xFFFF));',
+      '        return 0;',
+      '    }',
+      '}',
+    ].join('\r\n');
 
-        $h = [DiskIO]::CreateFile('\\.\C:', [DiskIO]::GENERIC_READ -bor [DiskIO]::GENERIC_WRITE, [DiskIO]::FILE_SHARE_RW, [IntPtr]::Zero, [DiskIO]::OPEN_EXISTING, 0, [IntPtr]::Zero)
-        if ($h -eq [IntPtr]::new(-1)) { throw "CreateFile failed (error $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error()))" }
+    fs.writeFileSync(csFile, csSource, 'utf8');
 
-        # Read boot sector
-        $bootSector = New-Object byte[] 512
-        $read = [uint32]0
-        [DiskIO]::ReadFile($h, $bootSector, 512, [ref]$read, [IntPtr]::Zero) | Out-Null
+    // Find csc.exe
+    const cscOut = execSync('powershell -Command "[System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()"', { encoding: 'utf8' }).trim();
+    const cscPath = path.join(cscOut, 'csc.exe');
 
-        # Seek to offset 0x48 (NTFS volume serial, 4 bytes little-endian)
-        [DiskIO]::SetFilePointer($h, 0x48, [IntPtr]::Zero, 0) | Out-Null
+    // Compile
+    try {
+      execSync(`"${cscPath}" /nologo /out:"${exeFile}" "${csFile}"`, { encoding: 'utf8' });
+    } catch (compileErr) {
+      logger.error('Volume serial C# compile failed', { error: compileErr.stderr || compileErr.message });
+      return { success: false, error: 'Compile failed: ' + (compileErr.stderr || compileErr.message) };
+    }
 
-        # Write new serial bytes
-        $written = [uint32]0
-        [DiskIO]::WriteFile($h, $bytes, 4, [ref]$written, [IntPtr]::Zero) | Out-Null
-        [DiskIO]::CloseHandle($h) | Out-Null
+    // Run (inherits admin elevation)
+    let exeOut;
+    try {
+      exeOut = execSync(`"${exeFile}"`, { encoding: 'utf8' }).trim();
+    } catch (runErr) {
+      exeOut = (runErr.stdout || '').trim();
+    }
 
-        Write-Output "OK:$oldSerial->$newSerialFormatted"
-      } catch {
-        Write-Output "FAIL:$($_.Exception.Message)"
-      }
-    `, { timeout: 15000 });
+    // Cleanup
+    try { fs.unlinkSync(exeFile); } catch (_) {}
+    try { fs.unlinkSync(csFile); } catch (_) {}
 
-    const out = (result.stdout || '').trim();
-    if (out.startsWith('OK:')) {
-      const [oldS, newS] = out.substring(3).split('->');
-      logger.ok(`Volume serial changed: ${oldS} → ${newS} (reboot required)`);
-      return { success: true, oldSerial: oldS, newSerial: newS, rebootRequired: true };
+    if (exeOut.startsWith('OK:')) {
+      const newSerial = exeOut.substring(3);
+      logger.ok(`Volume serial changed: ${oldSerial} → ${newSerial} (reboot required)`);
+      return { success: true, oldSerial, newSerial, rebootRequired: true };
     } else {
-      logger.warn('Volume serial change issue: ' + out);
-      return { success: false, error: out };
+      logger.warn('Volume serial change issue: ' + exeOut);
+      return { success: false, error: exeOut };
     }
   } catch (e) {
     logger.error('Volume serial change failed', { error: e.message });
