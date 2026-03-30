@@ -1,166 +1,131 @@
-/**
- * 1132 Fixer - Renderer (Streamlined)
- */
+let foundFiles = [];
+let hasDeletedFiles = false;
 
-const $ = id => document.getElementById(id);
+const fileList = document.getElementById('fileList');
+const deleteBtn = document.getElementById('deleteBtn');
+const refreshBtn = document.getElementById('refreshBtn');
 
-let isRunning = false;
-const options = { launch: true };
+window.addEventListener('DOMContentLoaded', () => {
+  scanFiles();
 
-// Ring circumference for progress (2*pi*90 ~ 565)
-const RING_CIRC = 565;
-
-async function init() {
-  // Version
-  try {
-    const v = await window.electronAPI.getVersion();
-    $('appVersion').textContent = 'v' + v;
-  } catch (_) {}
-
-  // Toggle switches
-  document.querySelectorAll('.toggle').forEach(t => {
-    t.addEventListener('click', () => {
-      if (isRunning) return;
-      const key = t.dataset.key;
-      t.classList.toggle('on');
-      options[key] = t.classList.contains('on');
-    });
+  // Exit button
+  document.getElementById('btnExit').addEventListener('click', () => {
+    window.electronAPI.quitApp();
   });
 
-  // FIX button
-  $('btnFix').addEventListener('click', handleFix);
+  // Refresh button
+  refreshBtn.addEventListener('click', () => scanFiles());
 
-  // Launch Zoom
-  $('btnLaunch').addEventListener('click', async () => {
-    $('btnLaunch').textContent = 'Launching...';
-    try { await window.electronAPI.launchZoom(); } catch (_) {}
-    $('btnLaunch').textContent = 'Launch Zoom';
+  // Delete button
+  deleteBtn.addEventListener('click', async () => {
+    if (foundFiles.length === 0) return;
+
+    const confirmed = await window.electronAPI.showConfirmDialog(
+      `Delete ${foundFiles.length} database files?\n\nThis cannot be undone!`
+    );
+    if (!confirmed) return;
+
+    await deleteFiles();
   });
+});
 
-  // Start Over
-  $('btnReset').addEventListener('click', resetUI);
+async function scanFiles() {
+  clearFileList();
+  addFileItem('Scanning for database files...', 'loading');
+  deleteBtn.disabled = true;
+  setStatus('scanning', 'Scanning');
 
-  // Exit
-  $('btnExit').addEventListener('click', () => window.electronAPI.quitApp());
+  const result = await window.electronAPI.scanFiles();
 
-  // Auto-update listener
-  window.electronAPI.onUpdateStatus((data) => {
-    if (!data) return;
-    const overlay = $('updateOverlay');
-    const icon = $('updateIcon');
-    const title = $('updateTitle');
-    const msg = $('updateMsg');
-    const pct = $('updatePct');
-    const fill = $('updateFill');
-    const card = $('updateCard');
+  clearFileList();
 
-    if (data.status === 'available' || data.status === 'downloading') {
-      overlay.classList.add('show');
-      icon.textContent = '\u231B';
-      title.textContent = 'Downloading Update';
-      msg.textContent = data.version ? `Version ${data.version} is being downloaded...` : 'Downloading...';
-      pct.textContent = (data.percent || 0) + '%';
-      fill.style.width = (data.percent || 0) + '%';
-    } else if (data.status === 'ready') {
-      card.className = 'update-card ready';
-      icon.textContent = '\u2705';
-      title.textContent = 'Update Ready';
-      msg.textContent = 'Restarting now...';
-      pct.textContent = '100%';
-      fill.style.width = '100%';
+  if (!result.success) {
+    addFileItem('ERROR: NO ZOOM DATA FOLDER FOUND!', 'error');
+    addFileItem('Is Zoom installed?', 'error');
+    foundFiles = [];
+    setStatus('', 'Ready');
+    return;
+  }
+
+  for (const dir of result.directories) {
+    addFileItem(`Scanning \u2192 ${dir}`, 'header');
+  }
+  addEmptyLine();
+
+  if (result.files.length === 0) {
+    addFileItem('NO DATABASE FILES FOUND', 'header');
+    addEmptyLine();
+    addFileItem('\u2192 Either already clean', '');
+    addFileItem('\u2192 Or Zoom is running (close it first!)', '');
+    addFileItem('\u2192 Or files are locked', '');
+    foundFiles = [];
+    deleteBtn.disabled = true;
+    setStatus('done', 'Clean');
+  } else {
+    addFileItem(`FOUND ${result.files.length} DATABASE FILES`, 'header');
+    addEmptyLine();
+
+    for (const file of result.files) {
+      const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+      addFileItem(`${file.path}  (${sizeMB} MB)`, '');
     }
-  });
 
-  // Progress listener
-  window.electronAPI.onProgress((data) => {
-    if (!data) return;
-    const pct = data.percent || 0;
-
-    $('progressFill').style.width = pct + '%';
-    $('btnPct').textContent = Math.round(pct) + '%';
-
-    if (data.step) {
-      $('statusText').textContent = data.step;
-    }
-  });
-}
-
-async function handleFix() {
-  if (isRunning) return;
-
-  const confirmed = await window.electronAPI.showConfirmDialog(
-    'This will:\n\n' +
-    '1. Kill all Zoom processes\n' +
-    '2. Change MachineGuid and volume serial\n' +
-    '3. Relaunch Zoom\n\n' +
-    'Zoom will restart with a new device identity.\n\nContinue?'
-  );
-  if (!confirmed) return;
-
-  isRunning = true;
-  const btn = $('btnFix');
-  btn.classList.add('running');
-  btn.disabled = true;
-  $('progressBar').classList.add('active');
-  $('statusText').textContent = 'Starting...';
-  $('statusText').classList.add('active');
-  $('statusBadge').className = 'status-badge running';
-  $('statusBadgeText').textContent = 'Fixing...';
-  $('postActions').classList.remove('show');
-
-  document.querySelectorAll('.toggle').forEach(t => t.classList.add('disabled'));
-
-  try {
-    const result = await window.electronAPI.fullReset(options);
-
-    if (result && result.success) {
-      btn.classList.remove('running');
-      btn.classList.add('done');
-      $('statusText').textContent = 'Device identity reset — Zoom relaunched';
-      $('statusText').classList.remove('active');
-      $('statusText').classList.add('done');
-      $('statusBadge').className = 'status-badge done';
-      $('statusBadgeText').textContent = 'Fixed';
-      $('progressBar').classList.remove('active');
-      $('postActions').classList.add('show');
-    } else {
-      $('statusText').textContent = 'Fix failed — ' + (result?.error || 'unknown error');
-      $('statusText').classList.remove('active');
-      btn.classList.remove('running');
-      btn.disabled = false;
-      $('progressBar').classList.remove('active');
-      $('statusBadge').className = 'status-badge error';
-      $('statusBadgeText').textContent = 'Failed';
-      isRunning = false;
-      document.querySelectorAll('.toggle').forEach(t => t.classList.remove('disabled'));
-    }
-  } catch (err) {
-    $('statusText').textContent = 'Error: ' + err.message;
-    $('statusText').classList.remove('active');
-    btn.classList.remove('running');
-    btn.disabled = false;
-    $('progressBar').classList.remove('active');
-    $('statusBadge').className = 'status-badge error';
-    $('statusBadgeText').textContent = 'Error';
-    isRunning = false;
-    document.querySelectorAll('.toggle').forEach(t => t.classList.remove('disabled'));
+    foundFiles = result.files;
+    deleteBtn.disabled = false;
+    setStatus('', 'Ready');
   }
 }
 
-function resetUI() {
-  isRunning = false;
-  const btn = $('btnFix');
-  btn.classList.remove('running', 'done');
-  btn.disabled = false;
-  $('btnPct').textContent = '0%';
-  $('progressBar').classList.remove('active');
-  $('progressFill').style.width = '0%';
-  $('statusText').textContent = '';
-  $('statusText').classList.remove('active', 'done');
-  $('statusBadge').className = 'status-badge';
-  $('statusBadgeText').textContent = 'Ready';
-  $('postActions').classList.remove('show');
-  document.querySelectorAll('.toggle').forEach(t => t.classList.remove('disabled'));
+async function deleteFiles() {
+  const filePaths = foundFiles.map(f => f.path);
+
+  setStatus('scanning', 'Deleting');
+  addEmptyLine();
+  addFileItem('STARTING DELETION...', 'header');
+  addEmptyLine();
+
+  const result = await window.electronAPI.deleteFiles(filePaths);
+
+  for (const res of result.results) {
+    const className = res.success ? 'success' : 'failed';
+    addFileItem(res.message, className);
+  }
+
+  addEmptyLine();
+  addFileItem(`ELIMINATION COMPLETE: ${result.deletedCount} files destroyed`, 'header');
+
+  if (result.deletedCount > 0) {
+    hasDeletedFiles = true;
+    foundFiles = [];
+    deleteBtn.disabled = true;
+    setStatus('done', 'Done');
+
+    await window.electronAPI.showSuccess(result.deletedCount);
+    await window.electronAPI.launchZoom();
+  }
 }
 
-document.addEventListener('DOMContentLoaded', init);
+function setStatus(className, text) {
+  const badge = document.getElementById('statusBadge');
+  badge.className = 'status-badge' + (className ? ' ' + className : '');
+  document.getElementById('statusBadgeText').textContent = text;
+}
+
+function clearFileList() {
+  fileList.innerHTML = '';
+}
+
+function addFileItem(text, className = '') {
+  const div = document.createElement('div');
+  div.className = `file-item ${className}`;
+  div.textContent = text;
+  fileList.appendChild(div);
+  fileList.scrollTop = fileList.scrollHeight;
+}
+
+function addEmptyLine() {
+  const div = document.createElement('div');
+  div.className = 'file-item empty-line';
+  div.innerHTML = '&nbsp;';
+  fileList.appendChild(div);
+}
