@@ -129,3 +129,142 @@ function addEmptyLine() {
   div.innerHTML = '&nbsp;';
   fileList.appendChild(div);
 }
+
+// ===== FEEDBACK MODAL =====
+const ratings = { ease: 0, resolved: 0, recommend: 0, overall: 0 };
+let feedbackMode = '';
+
+function showSection(id) {
+  document.querySelectorAll('.fb-section').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+function openFeedback() {
+  document.getElementById('fbOverlay').classList.add('show');
+  showSection('fbChoose');
+  feedbackMode = '';
+  // Reset forms
+  document.querySelectorAll('.fb-textarea').forEach(t => { t.value = ''; });
+  document.querySelectorAll('.fb-rating-btn').forEach(b => b.classList.remove('selected'));
+  document.querySelectorAll('.fb-status').forEach(s => { s.textContent = ''; s.className = 'fb-status'; });
+  Object.keys(ratings).forEach(k => { ratings[k] = 0; });
+  // Load system info for bug reports
+  loadSysInfo();
+}
+
+function closeFeedback() {
+  document.getElementById('fbOverlay').classList.remove('show');
+}
+
+async function loadSysInfo() {
+  try {
+    const info = await window.electronAPI.getSystemInfo();
+    const el = document.getElementById('fbSysInfo');
+    el.textContent = `Version: ${info.version}\nOS: ${info.os}\nAdmin: ${info.admin ? 'Yes' : 'No'}`;
+  } catch (_) {
+    document.getElementById('fbSysInfo').textContent = 'Could not load system info';
+  }
+}
+
+// Version display
+(async () => {
+  try {
+    const v = await window.electronAPI.getVersion();
+    document.getElementById('appVersion').textContent = 'v' + v;
+  } catch (_) {}
+})();
+
+// Feedback button
+document.getElementById('btnFeedback').addEventListener('click', openFeedback);
+
+// Close/cancel buttons
+['fbClose', 'fbBugCancel', 'fbRatingCancel', 'fbContactCancel'].forEach(id => {
+  document.getElementById(id).addEventListener('click', closeFeedback);
+});
+
+// Back buttons
+['fbBugBack', 'fbRatingBack', 'fbContactBack'].forEach(id => {
+  document.getElementById(id).addEventListener('click', () => showSection('fbChoose'));
+});
+
+// Category choices
+document.querySelectorAll('.fb-choice').forEach(el => {
+  el.addEventListener('click', () => {
+    feedbackMode = el.dataset.mode;
+    if (feedbackMode === 'bug') showSection('fbBug');
+    else if (feedbackMode === 'rating') showSection('fbRating');
+    else if (feedbackMode === 'contact') showSection('fbContact');
+  });
+});
+
+// Rating buttons
+document.querySelectorAll('.fb-rating-btns').forEach(group => {
+  const cat = group.dataset.cat;
+  group.querySelectorAll('.fb-rating-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      ratings[cat] = parseInt(btn.dataset.val);
+      group.querySelectorAll('.fb-rating-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      // Enable submit if at least one rating
+      const filled = Object.values(ratings).filter(v => v > 0).length;
+      document.getElementById('fbRatingSubmit').disabled = filled === 0;
+    });
+  });
+});
+
+// Text validation for bug/contact
+['fbBugText', 'fbContactText'].forEach(id => {
+  const submitId = id === 'fbBugText' ? 'fbBugSubmit' : 'fbContactSubmit';
+  document.getElementById(id).addEventListener('input', (e) => {
+    document.getElementById(submitId).disabled = e.target.value.trim().length < 50;
+  });
+});
+
+// Submit handlers
+document.getElementById('fbBugSubmit').addEventListener('click', async () => {
+  const text = document.getElementById('fbBugText').value.trim();
+  const sysInfo = document.getElementById('fbSysInfo').textContent;
+  const body = `${text}\n\n---\n**System Info**\n${sysInfo.split('\n').map(l => '- ' + l).join('\n')}`;
+  await submitFeedback('Bug Report', body, 'fbBugStatus');
+});
+
+document.getElementById('fbRatingSubmit').addEventListener('click', async () => {
+  const filled = Object.entries(ratings).filter(([,v]) => v > 0);
+  const avg = (filled.reduce((s,[,v]) => s + v, 0) / filled.length).toFixed(1);
+  const comments = document.getElementById('fbRatingText').value.trim();
+  let body = `## User Rating Survey\n\n| Category | Score |\n|----------|-------|\n`;
+  body += `| Ease of Use | ${ratings.ease}/5 |\n`;
+  body += `| Issue Resolved | ${ratings.resolved}/5 |\n`;
+  body += `| Recommend | ${ratings.recommend}/5 |\n`;
+  body += `| Overall | ${ratings.overall}/5 |\n`;
+  body += `| **Average** | **${avg}/5** |\n`;
+  if (comments) body += `\n### Comments\n${comments}\n`;
+  body += `\n---\n_Submitted via 1132 Fixer app_\n\n<!-- RATING_DATA:${JSON.stringify({...ratings, avg: parseFloat(avg)})} -->`;
+  await submitFeedback('User Rating', body, 'fbRatingStatus');
+});
+
+document.getElementById('fbContactSubmit').addEventListener('click', async () => {
+  const text = document.getElementById('fbContactText').value.trim();
+  await submitFeedback('Contact', text, 'fbContactStatus');
+});
+
+async function submitFeedback(type, text, statusId) {
+  const statusEl = document.getElementById(statusId);
+  statusEl.textContent = 'Submitting...';
+  statusEl.className = 'fb-status';
+
+  try {
+    const result = await window.electronAPI.submitFeedback(type, text);
+    if (result.success) {
+      statusEl.textContent = 'Submitted successfully!';
+      statusEl.className = 'fb-status ok';
+      setTimeout(closeFeedback, 1500);
+    } else {
+      statusEl.textContent = result.error || 'Submission failed';
+      statusEl.className = 'fb-status err';
+    }
+  } catch (err) {
+    statusEl.textContent = 'Network error';
+    statusEl.className = 'fb-status err';
+  }
+}

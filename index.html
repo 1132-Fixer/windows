@@ -300,6 +300,170 @@
       font-weight: 600;
       letter-spacing: 0.5px;
     }
+    .feedback-badge {
+      color: var(--accent);
+      border: 1.5px solid rgba(245, 166, 35, 0.5);
+      background: linear-gradient(145deg, rgba(245, 166, 35, 0.15), rgba(245, 166, 35, 0.06));
+    }
+
+    /* ===== FEEDBACK MODAL ===== */
+    .fb-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      backdrop-filter: blur(12px);
+      z-index: 500;
+      align-items: center;
+      justify-content: center;
+    }
+    .fb-overlay.show { display: flex; }
+    .fb-card {
+      background: linear-gradient(170deg, #141e30 0%, #0c1422 100%);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 20px;
+      padding: 32px;
+      width: 460px;
+      max-width: 90%;
+      max-height: 85vh;
+      overflow-y: auto;
+      box-shadow: 0 30px 100px rgba(0,0,0,0.7);
+    }
+    .fb-card::-webkit-scrollbar { width: 6px; }
+    .fb-card::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+    .fb-title {
+      font-size: 20px;
+      font-weight: 800;
+      text-align: center;
+      margin-bottom: 20px;
+      color: var(--accent);
+    }
+    .fb-choices {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .fb-choice {
+      padding: 14px 18px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: left;
+    }
+    .fb-choice:hover { background: rgba(245,166,35,0.1); border-color: rgba(245,166,35,0.3); }
+
+    .fb-section { display: none; }
+    .fb-section.active { display: block; }
+
+    .fb-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+    }
+    .fb-textarea {
+      width: 100%;
+      min-height: 100px;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 10px;
+      padding: 12px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      resize: vertical;
+      margin-bottom: 12px;
+    }
+    .fb-textarea:focus { outline: none; border-color: var(--accent); }
+
+    .fb-rating-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .fb-rating-label { font-size: 12px; color: var(--text-dim); flex: 1; }
+    .fb-rating-btns { display: flex; gap: 6px; }
+    .fb-rating-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.04);
+      color: var(--text-dim);
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .fb-rating-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .fb-rating-btn.selected {
+      background: linear-gradient(145deg, var(--accent-hot), var(--accent));
+      color: #1a1a1a;
+      border-color: var(--accent);
+    }
+
+    .fb-sysinfo {
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-family: 'Consolas', monospace;
+      font-size: 10px;
+      color: var(--text-dim);
+      margin-bottom: 12px;
+      line-height: 1.6;
+    }
+
+    .fb-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .fb-btn {
+      padding: 10px 24px;
+      border-radius: 10px;
+      border: none;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .fb-btn-cancel {
+      background: rgba(255,255,255,0.06);
+      color: var(--text-dim);
+    }
+    .fb-btn-cancel:hover { background: rgba(255,255,255,0.1); color: var(--text); }
+    .fb-btn-submit {
+      background: linear-gradient(145deg, var(--accent-hot), var(--accent));
+      color: #1a1a1a;
+      letter-spacing: 1px;
+    }
+    .fb-btn-submit:hover { transform: translateY(-1px); }
+    .fb-btn-submit:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .fb-btn-back {
+      background: none;
+      color: var(--text-dim);
+      font-size: 12px;
+      cursor: pointer;
+      border: none;
+      margin-bottom: 12px;
+    }
+    .fb-btn-back:hover { color: var(--text); }
+    .fb-status {
+      text-align: center;
+      font-size: 12px;
+      margin-top: 8px;
+      min-height: 16px;
+    }
+    .fb-status.ok { color: var(--green); }
+    .fb-status.err { color: var(--red); }
   </style>
 </head>
 <body>
@@ -333,7 +497,107 @@
     <div class="hazard-bar"></div>
     <div class="footer-content">
       <span class="badge version-badge" id="appVersion">v5.1</span>
+      <button class="badge feedback-badge" id="btnFeedback">Feedback</button>
       <span class="badge admin-badge">Administrator</span>
+    </div>
+  </div>
+
+  <!-- Feedback Modal -->
+  <div class="fb-overlay" id="fbOverlay">
+    <div class="fb-card">
+      <!-- Step 1: Choose -->
+      <div class="fb-section active" id="fbChoose">
+        <div class="fb-title">Send Feedback</div>
+        <div class="fb-choices">
+          <div class="fb-choice" data-mode="bug">Bug Report</div>
+          <div class="fb-choice" data-mode="rating">Rate Your Experience</div>
+          <div class="fb-choice" data-mode="contact">Send a Message</div>
+        </div>
+        <div class="fb-actions">
+          <button class="fb-btn fb-btn-cancel" id="fbClose">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Step 2a: Bug Report -->
+      <div class="fb-section" id="fbBug">
+        <button class="fb-btn-back" id="fbBugBack">Back</button>
+        <div class="fb-title">Bug Report</div>
+        <div class="fb-label">Describe the issue (min 50 characters)</div>
+        <textarea class="fb-textarea" id="fbBugText" placeholder="What happened? What did you expect?"></textarea>
+        <div class="fb-label">System Info (auto-attached)</div>
+        <div class="fb-sysinfo" id="fbSysInfo">Loading...</div>
+        <div class="fb-actions">
+          <button class="fb-btn fb-btn-cancel" id="fbBugCancel">Cancel</button>
+          <button class="fb-btn fb-btn-submit" id="fbBugSubmit" disabled>Submit</button>
+        </div>
+        <div class="fb-status" id="fbBugStatus"></div>
+      </div>
+
+      <!-- Step 2b: Rating -->
+      <div class="fb-section" id="fbRating">
+        <button class="fb-btn-back" id="fbRatingBack">Back</button>
+        <div class="fb-title">Rate Your Experience</div>
+        <div class="fb-rating-row">
+          <span class="fb-rating-label">How easy was the app to use?</span>
+          <div class="fb-rating-btns" data-cat="ease">
+            <button class="fb-rating-btn" data-val="1">1</button>
+            <button class="fb-rating-btn" data-val="2">2</button>
+            <button class="fb-rating-btn" data-val="3">3</button>
+            <button class="fb-rating-btn" data-val="4">4</button>
+            <button class="fb-rating-btn" data-val="5">5</button>
+          </div>
+        </div>
+        <div class="fb-rating-row">
+          <span class="fb-rating-label">Did the fix resolve your issue?</span>
+          <div class="fb-rating-btns" data-cat="resolved">
+            <button class="fb-rating-btn" data-val="1">1</button>
+            <button class="fb-rating-btn" data-val="2">2</button>
+            <button class="fb-rating-btn" data-val="3">3</button>
+            <button class="fb-rating-btn" data-val="4">4</button>
+            <button class="fb-rating-btn" data-val="5">5</button>
+          </div>
+        </div>
+        <div class="fb-rating-row">
+          <span class="fb-rating-label">How likely are you to recommend this?</span>
+          <div class="fb-rating-btns" data-cat="recommend">
+            <button class="fb-rating-btn" data-val="1">1</button>
+            <button class="fb-rating-btn" data-val="2">2</button>
+            <button class="fb-rating-btn" data-val="3">3</button>
+            <button class="fb-rating-btn" data-val="4">4</button>
+            <button class="fb-rating-btn" data-val="5">5</button>
+          </div>
+        </div>
+        <div class="fb-rating-row">
+          <span class="fb-rating-label">Overall experience</span>
+          <div class="fb-rating-btns" data-cat="overall">
+            <button class="fb-rating-btn" data-val="1">1</button>
+            <button class="fb-rating-btn" data-val="2">2</button>
+            <button class="fb-rating-btn" data-val="3">3</button>
+            <button class="fb-rating-btn" data-val="4">4</button>
+            <button class="fb-rating-btn" data-val="5">5</button>
+          </div>
+        </div>
+        <div class="fb-label">Comments (optional)</div>
+        <textarea class="fb-textarea" id="fbRatingText" placeholder="Any additional feedback?" style="min-height:60px;"></textarea>
+        <div class="fb-actions">
+          <button class="fb-btn fb-btn-cancel" id="fbRatingCancel">Cancel</button>
+          <button class="fb-btn fb-btn-submit" id="fbRatingSubmit" disabled>Submit</button>
+        </div>
+        <div class="fb-status" id="fbRatingStatus"></div>
+      </div>
+
+      <!-- Step 2c: Contact -->
+      <div class="fb-section" id="fbContact">
+        <button class="fb-btn-back" id="fbContactBack">Back</button>
+        <div class="fb-title">Send a Message</div>
+        <div class="fb-label">Your message (min 50 characters)</div>
+        <textarea class="fb-textarea" id="fbContactText" placeholder="What would you like to tell us?"></textarea>
+        <div class="fb-actions">
+          <button class="fb-btn fb-btn-cancel" id="fbContactCancel">Cancel</button>
+          <button class="fb-btn fb-btn-submit" id="fbContactSubmit" disabled>Submit</button>
+        </div>
+        <div class="fb-status" id="fbContactStatus"></div>
+      </div>
     </div>
   </div>
 

@@ -5,21 +5,11 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev --enable-logging",
-    "bump": "node scripts/bump-version.js",
-    "bump:minor": "node scripts/bump-version.js minor",
-    "bump:major": "node scripts/bump-version.js major",
-    "prebuild": "node scripts/bump-version.js",
-    "prebuild:installer": "node scripts/bump-version.js",
-    "prebuild:all": "node scripts/bump-version.js",
-    "prerelease": "node scripts/bump-version.js",
+    "dev": "electron . --enable-logging",
     "build": "electron-builder --win portable --x64",
     "build:installer": "electron-builder --win nsis --x64",
     "build:all": "electron-builder --win --x64",
-    "release": "electron-builder --win nsis --x64 --publish always",
-    "pack": "electron-builder --dir",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "release": "electron-builder --win nsis --x64 --publish always"
   },
   "author": "High Texas",
   "license": "MIT",
@@ -102,23 +92,6 @@
       {
         "from": "assets/icon.ico",
         "to": "icon.ico"
-      },
-      {
-        "from": "assets/dpapi_hook.dll",
-        "to": "dpapi_hook.dll"
-      },
-      {
-        "from": "assets/zoom-launcher.exe",
-        "to": "zoom-launcher.exe"
-      }
-    ],
-    "fileAssociations": [
-      {
-        "ext": "cssr",
-        "name": "1132 Fixer Report",
-        "description": "1132 Fixer Attestation Report",
-        "icon": "assets/icon.ico",
-        "role": "Viewer"
       }
     ]
   },
