@@ -1,0 +1,19 @@
+version: 2
+
+updates:
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    labels: ["dependencies", "github-actions"]
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Europe/Stockholm
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    labels: ["dependencies", "npm"]
