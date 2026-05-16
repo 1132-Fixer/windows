@@ -77,10 +77,19 @@ jobs:
         continue-on-error: true
 
       - name: Build all targets
+        shell: pwsh
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-        run: npm run build:all
+        run: |
+          # Unset empty CSC_LINK so electron-builder doesn't try to resolve it as a file
+          if ([string]::IsNullOrEmpty($env:CSC_LINK)) {
+            Remove-Item Env:CSC_LINK -ErrorAction SilentlyContinue
+            Remove-Item Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
+          }
+          # -p never: this workflow handles release creation via action-gh-release;
+          # electron-builder's own publish would target a different repo and conflict.
+          npx electron-builder --win --x64 -p never
 
       - name: Verify build artifacts exist
         shell: pwsh
