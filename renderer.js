@@ -1,107 +1,120 @@
-let foundFiles = [];
-let hasDeletedFiles = false;
-
 const fileList = document.getElementById('fileList');
-const deleteBtn = document.getElementById('deleteBtn');
-const refreshBtn = document.getElementById('refreshBtn');
+const fixBtn = document.getElementById('fixBtn');
+const shortcutBtn = document.getElementById('shortcutBtn');
 
-window.addEventListener('DOMContentLoaded', () => {
-  scanFiles();
+let isRunning = false;
 
-  // Exit button
+window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnExit').addEventListener('click', () => {
     window.electronAPI.quitApp();
   });
 
-  // Refresh button
-  refreshBtn.addEventListener('click', () => scanFiles());
+  fixBtn.addEventListener('click', runFix);
+  shortcutBtn.addEventListener('click', () => createShortcut(true));
 
-  // Delete button
-  deleteBtn.addEventListener('click', async () => {
-    if (foundFiles.length === 0) return;
-
-    const confirmed = await window.electronAPI.showConfirmDialog(
-      `Delete ${foundFiles.length} database files?\n\nThis cannot be undone!`
-    );
-    if (!confirmed) return;
-
-    await deleteFiles();
+  window.electronAPI.onFixLog(({ line, kind }) => {
+    const cls = kind === 'err' ? 'failed'
+      : kind === 'header' ? 'header'
+      : kind === 'success' ? 'success'
+      : '';
+    addFileItem(line, cls);
   });
+
+  await showInstructions();
 });
 
-async function scanFiles() {
+async function showInstructions() {
   clearFileList();
-  addFileItem('Scanning for database files...', 'loading');
-  deleteBtn.disabled = true;
-  setStatus('scanning', 'Scanning');
+  const elevated = await window.electronAPI.isElevated();
 
-  const result = await window.electronAPI.scanFiles();
-
-  clearFileList();
-
-  if (!result.success) {
-    addFileItem('ERROR: NO ZOOM DATA FOLDER FOUND!', 'error');
-    addFileItem('Is Zoom installed?', 'error');
-    foundFiles = [];
-    setStatus('', 'Ready');
-    return;
+  if (!elevated) {
+    addFileItem('NOT RUNNING AS ADMINISTRATOR', 'error');
+    addFileItem('→ Close this app and right-click → Run as administrator', 'error');
+    addEmptyLine();
   }
 
-  for (const dir of result.directories) {
-    addFileItem(`Scanning \u2192 ${dir}`, 'header');
-  }
+  addFileItem('HOW THIS FIX WORKS', 'header');
+  addEmptyLine();
+  addFileItem('Creates a local Windows user (user1 / user1), adds it to', '');
+  addFileItem('Administrators, and launches Zoom Workplace as that user.', '');
+  addEmptyLine();
+  addFileItem('  1. Create or reset user1 with password user1', '');
+  addFileItem('  2. Ensure user1 is in the Administrators group', '');
+  addFileItem('  3. Launch Zoom as user1 (no password prompt)', '');
+  addEmptyLine();
+  addFileItem('Windows may ask for permission before continuing.', '');
+  addEmptyLine();
+  addFileItem('You can also create a Desktop shortcut to launch Zoom as', '');
+  addFileItem('user1 in the future — uses the same 1132 Fixer icon.', '');
+
+  fixBtn.disabled = !elevated;
+  shortcutBtn.disabled = !elevated;
+  setStatus(elevated ? '' : 'error', elevated ? 'Ready' : 'Not Admin');
+}
+
+async function runFix() {
+  if (isRunning) return;
+
+  const confirmed = await window.electronAPI.showFixConfirm();
+  if (!confirmed) return;
+
+  isRunning = true;
+  fixBtn.disabled = true;
+  shortcutBtn.disabled = true;
+  setStatus('scanning', 'Running');
+
+  clearFileList();
+  addFileItem('STARTING FIX...', 'header');
   addEmptyLine();
 
-  if (result.files.length === 0) {
-    addFileItem('NO DATABASE FILES FOUND', 'header');
-    addEmptyLine();
-    addFileItem('\u2192 Either already clean', '');
-    addFileItem('\u2192 Or Zoom is running (close it first!)', '');
-    addFileItem('\u2192 Or files are locked', '');
-    foundFiles = [];
-    deleteBtn.disabled = true;
-    setStatus('done', 'Clean');
-  } else {
-    addFileItem(`FOUND ${result.files.length} DATABASE FILES`, 'header');
-    addEmptyLine();
+  const result = await window.electronAPI.runFix();
 
-    for (const file of result.files) {
-      const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
-      addFileItem(`${file.path}  (${sizeMB} MB)`, '');
+  isRunning = false;
+  fixBtn.disabled = false;
+  shortcutBtn.disabled = false;
+
+  addEmptyLine();
+  if (result.success) {
+    addFileItem('FIX COMPLETE', 'header');
+    setStatus('done', 'Done');
+
+    const wantShortcut = await window.electronAPI.showShortcutPrompt();
+    if (wantShortcut) {
+      await createShortcut(false);
     }
-
-    foundFiles = result.files;
-    deleteBtn.disabled = false;
-    setStatus('', 'Ready');
+  } else {
+    addFileItem(`FIX FAILED: ${friendlyError(result.error)}`, 'failed');
+    setStatus('error', 'Failed');
   }
 }
 
-async function deleteFiles() {
-  const filePaths = foundFiles.map(f => f.path);
-
-  setStatus('scanning', 'Deleting');
-  addEmptyLine();
-  addFileItem('STARTING DELETION...', 'header');
-  addEmptyLine();
-
-  const result = await window.electronAPI.deleteFiles(filePaths);
-
-  for (const res of result.results) {
-    const className = res.success ? 'success' : 'failed';
-    addFileItem(res.message, className);
+function friendlyError(code) {
+  switch (code) {
+    case 'create_user_failed':
+      return 'Could not create the user1 account. Make sure the app is running as Administrator.';
+    case 'set_password_failed':
+      return 'user1 exists but the password could not be reset. Check Windows password policy or remove user1 manually, then try again.';
+    case 'add_admin_failed':
+      return 'Could not add user1 to Administrators. Make sure the app is running as Administrator.';
+    case 'zoom_not_found':
+      return 'Zoom Workplace was not found at C:\\Program Files\\Zoom\\bin\\Zoom.exe. Install the machine-wide Zoom Workplace MSI (not the per-user installer), then try again.';
+    case 'launch_failed':
+      return 'Zoom could not be launched as user1. Try running this app as Administrator, or check that user1 has permission to start C:\\Program Files\\Zoom\\bin\\Zoom.exe.';
+    default:
+      return code || 'Unknown error.';
   }
+}
 
-  addEmptyLine();
-  addFileItem(`ELIMINATION COMPLETE: ${result.deletedCount} files destroyed`, 'header');
-
-  if (result.deletedCount > 0) {
-    hasDeletedFiles = true;
-    foundFiles = [];
-    deleteBtn.disabled = true;
-    setStatus('done', 'Done');
-
-    await window.electronAPI.showSuccess(result.deletedCount);
-    await window.electronAPI.launchZoom();
+async function createShortcut(showHeader) {
+  if (showHeader) {
+    addEmptyLine();
+    addFileItem('CREATING DESKTOP SHORTCUT...', 'header');
+  }
+  const result = await window.electronAPI.createShortcut();
+  if (result.success) {
+    addFileItem(`Shortcut created: ${result.path}`, 'success');
+  } else {
+    addFileItem(`Shortcut failed: ${result.error}`, 'failed');
   }
 }
 
@@ -143,12 +156,10 @@ function openFeedback() {
   document.getElementById('fbOverlay').classList.add('show');
   showSection('fbChoose');
   feedbackMode = '';
-  // Reset forms
   document.querySelectorAll('.fb-textarea').forEach(t => { t.value = ''; });
   document.querySelectorAll('.fb-rating-btn').forEach(b => b.classList.remove('selected'));
   document.querySelectorAll('.fb-status').forEach(s => { s.textContent = ''; s.className = 'fb-status'; });
   Object.keys(ratings).forEach(k => { ratings[k] = 0; });
-  // Load system info for bug reports
   loadSysInfo();
 }
 
@@ -166,7 +177,6 @@ async function loadSysInfo() {
   }
 }
 
-// Version display
 (async () => {
   try {
     const v = await window.electronAPI.getVersion();
@@ -174,20 +184,16 @@ async function loadSysInfo() {
   } catch (_) {}
 })();
 
-// Feedback button
 document.getElementById('btnFeedback').addEventListener('click', openFeedback);
 
-// Close/cancel buttons
 ['fbClose', 'fbBugCancel', 'fbRatingCancel', 'fbContactCancel'].forEach(id => {
   document.getElementById(id).addEventListener('click', closeFeedback);
 });
 
-// Back buttons
 ['fbBugBack', 'fbRatingBack', 'fbContactBack'].forEach(id => {
   document.getElementById(id).addEventListener('click', () => showSection('fbChoose'));
 });
 
-// Category choices
 document.querySelectorAll('.fb-choice').forEach(el => {
   el.addEventListener('click', () => {
     feedbackMode = el.dataset.mode;
@@ -197,7 +203,6 @@ document.querySelectorAll('.fb-choice').forEach(el => {
   });
 });
 
-// Rating buttons
 document.querySelectorAll('.fb-rating-btns').forEach(group => {
   const cat = group.dataset.cat;
   group.querySelectorAll('.fb-rating-btn').forEach(btn => {
@@ -205,14 +210,12 @@ document.querySelectorAll('.fb-rating-btns').forEach(group => {
       ratings[cat] = parseInt(btn.dataset.val);
       group.querySelectorAll('.fb-rating-btn').forEach(b => b.classList.remove('selected'));
       btn.classList.add('selected');
-      // Enable submit if at least one rating
       const filled = Object.values(ratings).filter(v => v > 0).length;
       document.getElementById('fbRatingSubmit').disabled = filled === 0;
     });
   });
 });
 
-// Text validation for bug/contact
 ['fbBugText', 'fbContactText'].forEach(id => {
   const submitId = id === 'fbBugText' ? 'fbBugSubmit' : 'fbContactSubmit';
   document.getElementById(id).addEventListener('input', (e) => {
@@ -220,7 +223,6 @@ document.querySelectorAll('.fb-rating-btns').forEach(group => {
   });
 });
 
-// Submit handlers
 document.getElementById('fbBugSubmit').addEventListener('click', async () => {
   const text = document.getElementById('fbBugText').value.trim();
   const sysInfo = document.getElementById('fbSysInfo').textContent;

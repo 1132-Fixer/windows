@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -9,6 +9,10 @@ const config = require('./src/main/config');
 
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
+
+const FIX_USER = 'user1';
+const FIX_PASS = 'user1';
+const ZOOM_PATH = 'C:\\Program Files\\Zoom\\bin\\Zoom.exe';
 
 let mainWindow;
 
@@ -29,21 +33,18 @@ function createWindow() {
   });
 
   mainWindow.loadFile('index.html');
-
   mainWindow.setMenu(null);
 }
 
 app.whenReady().then(() => {
   createWindow();
 
-  // Auto-update events
-  autoUpdater.on('update-downloaded', (info) => {
+  autoUpdater.on('update-downloaded', () => {
     setTimeout(() => {
       autoUpdater.quitAndInstall(true, true);
     }, 2000);
   });
 
-  // Check for updates silently
   setTimeout(() => {
     autoUpdater.checkForUpdates().catch(() => {});
   }, 3000);
@@ -59,184 +60,189 @@ app.on('window-all-closed', () => {
   app.quit();
 });
 
-// Get Zoom data paths
-function getZoomDataPaths() {
-  const paths = [];
-  const home = os.homedir();
-  const appData = process.env.APPDATA;
-  const localAppData = process.env.LOCALAPPDATA;
-
-  const candidates = [
-    appData ? path.join(appData, 'Zoom', 'data') : null,
-    localAppData ? path.join(localAppData, 'Zoom', 'data') : null,
-    path.join(home, 'AppData', 'Roaming', 'Zoom', 'data'),
-    path.join(home, 'AppData', 'Local', 'Zoom', 'data')
-  ];
-
-  // Deduplicate and filter existing
-  const seen = new Set();
-  for (const p of candidates) {
-    if (p && fs.existsSync(p)) {
-      const resolved = path.resolve(p);
-      if (!seen.has(resolved)) {
-        seen.add(resolved);
-        paths.push(resolved);
-      }
-    }
-  }
-
-  return paths;
+function getIconPath() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.ico')
+    : path.join(__dirname, 'assets', 'icon.ico');
 }
 
-// Check if file is dangerous temp file
-function isDangerousTempFile(filename) {
-  const bad = ['-wal', '-shm', '-journal', '.tmp', '.lock', '.lck'];
-  const lower = filename.toLowerCase();
-  return bad.some(x => lower.includes(x));
-}
-
-// Find all Zoom database files
-function findAllZoomDbFiles(dataDirs) {
-  const found = [];
-  const extensions = ['.db', '.enc', '.rdb', '.kvs', '.ldb'];
-
-  for (const dataDir of dataDirs) {
-    if (!fs.existsSync(dataDir)) continue;
-
-    try {
-      const files = fs.readdirSync(dataDir);
-      for (const filename of files) {
-        const fullPath = path.join(dataDir, filename);
-
-        try {
-          const stat = fs.statSync(fullPath);
-          if (!stat.isFile()) continue;
-
-          const ext = path.extname(filename).toLowerCase();
-
-          // Check if it matches known extensions
-          if (extensions.includes(ext) && !isDangerousTempFile(filename)) {
-            found.push({
-              path: fullPath,
-              name: filename,
-              size: stat.size
-            });
-          }
-          // Also catch extensionless files > 1KB
-          else if (ext === '' && stat.size > 1000 && !isDangerousTempFile(filename)) {
-            found.push({
-              path: fullPath,
-              name: filename,
-              size: stat.size
-            });
-          }
-        } catch (err) {
-          console.error(`Error reading file ${fullPath}:`, err);
-        }
-      }
-    } catch (err) {
-      console.error(`Error reading directory ${dataDir}:`, err);
-    }
-  }
-
-  return found;
-}
-
-// Delete and replace file
-function deleteAndReplace(filePath) {
-  try {
-    const dir = path.dirname(filePath);
-    const baseName = path.basename(filePath, path.extname(filePath));
-    const placeholder = path.join(dir, `${baseName}.txt`);
-
-    // Try to delete the file
-    fs.unlinkSync(filePath);
-
-    // Create placeholder
-    fs.writeFileSync(placeholder, 'This file was deleted by Zoom 1132 Eliminator\n', 'utf8');
-
-    return { success: true, message: `DELETED → ${path.basename(filePath)}` };
-  } catch (err) {
-    return { success: false, message: `FAILED → ${path.basename(filePath)} (${err.message})` };
-  }
-}
-
-// Launch Zoom
-function launchZoom() {
-  try {
-    spawn('cmd', ['/c', 'start', 'zoommtg://'], { shell: true, detached: true });
-  } catch (err) {
-    console.error('Failed to launch Zoom:', err);
-  }
-}
-
-// IPC Handlers
-ipcMain.handle('scan-files', async () => {
-  const dataDirs = getZoomDataPaths();
-
-  if (dataDirs.length === 0) {
-    return {
-      success: false,
-      message: 'No Zoom data folders found. Is Zoom installed?',
-      files: [],
-      directories: []
+function runProcess(exe, args, onLine) {
+  return new Promise((resolve) => {
+    let stdoutBuf = '';
+    let stderrBuf = '';
+    const child = spawn(exe, args, { windowsHide: true });
+    const emit = (buf, kind) => {
+      const text = buf.toString();
+      if (kind === 'err') stderrBuf += text; else stdoutBuf += text;
+      text.split(/\r?\n/).forEach(line => {
+        const trimmed = line.replace(/\s+$/, '');
+        if (trimmed) onLine(trimmed, kind);
+      });
     };
-  }
+    child.stdout.on('data', d => emit(d, 'out'));
+    child.stderr.on('data', d => emit(d, 'err'));
+    child.on('error', err => {
+      onLine(`Failed to launch ${exe}: ${err.message}`, 'err');
+      resolve({ code: -1, stdout: stdoutBuf, stderr: stderrBuf });
+    });
+    child.on('close', code => resolve({ code, stdout: stdoutBuf, stderr: stderrBuf }));
+  });
+}
 
-  const files = findAllZoomDbFiles(dataDirs);
+function userExists(username) {
+  return new Promise(resolve => {
+    const child = spawn('net.exe', ['user', username], { windowsHide: true });
+    child.stdout.on('data', () => {});
+    child.stderr.on('data', () => {});
+    child.on('error', () => resolve(false));
+    child.on('close', code => resolve(code === 0));
+  });
+}
 
-  return {
-    success: true,
-    files: files,
-    directories: dataDirs
-  };
-});
+ipcMain.handle('run-fix', async (event) => {
+  const send = (line, kind = 'out') => event.sender.send('fix-log', { line, kind });
+  const noop = () => {};
 
-ipcMain.handle('delete-files', async (event, filePaths) => {
-  const results = [];
-  let deletedCount = 0;
-
-  for (const filePath of filePaths) {
-    const result = deleteAndReplace(filePath);
-    results.push(result);
-    if (result.success) {
-      deletedCount++;
+  const exists = await userExists(FIX_USER);
+  if (exists) {
+    send(`[1/3] User '${FIX_USER}' exists — resetting password...`, 'header');
+    const r = await runProcess('net.exe', ['user', FIX_USER, FIX_PASS], send);
+    if (r.code !== 0) {
+      send('ERROR: Failed to reset password.', 'err');
+      return { success: false, error: 'set_password_failed' };
+    }
+  } else {
+    send(`[1/3] Creating user '${FIX_USER}'...`, 'header');
+    const r = await runProcess('net.exe', ['user', FIX_USER, FIX_PASS, '/add'], send);
+    if (r.code !== 0) {
+      send('ERROR: Failed to create user.', 'err');
+      return { success: false, error: 'create_user_failed' };
     }
   }
 
-  return {
-    results: results,
-    deletedCount: deletedCount
-  };
-});
+  send(`[2/3] Ensuring '${FIX_USER}' is in Administrators...`, 'header');
+  const memberCheck = await runProcess('net.exe', ['localgroup', 'administrators'], noop);
+  const inAdmins = new RegExp(`(^|\\s)${FIX_USER}(\\s|$)`, 'mi').test(memberCheck.stdout);
+  if (inAdmins) {
+    send(`'${FIX_USER}' is already in Administrators.`, 'out');
+  } else {
+    const r = await runProcess('net.exe', ['localgroup', 'administrators', FIX_USER, '/add'], send);
+    if (r.code !== 0) {
+      send('ERROR: Failed to add to administrators.', 'err');
+      return { success: false, error: 'add_admin_failed' };
+    }
+  }
 
-ipcMain.handle('launch-zoom', async () => {
-  launchZoom();
+  send(`[3/3] Launching Zoom as ${FIX_USER}...`, 'header');
+  if (!fs.existsSync(ZOOM_PATH)) {
+    send(`ERROR: Zoom not found at ${ZOOM_PATH}`, 'err');
+    return { success: false, error: 'zoom_not_found' };
+  }
+
+  const psLaunch =
+    `$p = ConvertTo-SecureString '${FIX_PASS}' -AsPlainText -Force; ` +
+    `$c = New-Object System.Management.Automation.PSCredential('${FIX_USER}', $p); ` +
+    `Start-Process -FilePath '${ZOOM_PATH}' -Credential $c`;
+  const launch = await runProcess(
+    'powershell.exe',
+    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psLaunch],
+    send
+  );
+  if (launch.code !== 0) {
+    send('ERROR: Failed to launch Zoom as user1.', 'err');
+    return { success: false, error: 'launch_failed' };
+  }
+
+  send('Done. Zoom should appear momentarily.', 'success');
   return { success: true };
 });
 
-ipcMain.handle('show-confirm-dialog', async (event, message) => {
+ipcMain.handle('create-shortcut', async () => {
+  const desktop = path.join(os.homedir(), 'Desktop');
+  const shortcutPath = path.join(desktop, `Launch Zoom as ${FIX_USER}.lnk`);
+  const iconPath = getIconPath();
+
+  const scriptDir = path.join(app.getPath('appData'), '1132 Fixer');
+  const scriptPath = path.join(scriptDir, `launch-zoom-as-${FIX_USER}.ps1`);
+  try {
+    fs.mkdirSync(scriptDir, { recursive: true });
+    const scriptContent =
+      `$p = ConvertTo-SecureString '${FIX_PASS}' -AsPlainText -Force\r\n` +
+      `$c = New-Object System.Management.Automation.PSCredential('${FIX_USER}', $p)\r\n` +
+      `Start-Process -FilePath '${ZOOM_PATH}' -Credential $c\r\n`;
+    fs.writeFileSync(scriptPath, scriptContent, 'utf8');
+  } catch (err) {
+    return { success: false, error: `Failed to write launcher script: ${err.message}` };
+  }
+
+  const escape = s => s.replace(/'/g, "''");
+  const ps = [
+    "$s = New-Object -ComObject WScript.Shell",
+    `$sc = $s.CreateShortcut('${escape(shortcutPath)}')`,
+    "$sc.TargetPath = 'powershell.exe'",
+    `$sc.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"${escape(scriptPath)}\"'`,
+    `$sc.IconLocation = '${escape(iconPath)}'`,
+    `$sc.WorkingDirectory = [Environment]::GetFolderPath('UserProfile')`,
+    `$sc.Description = 'Launch Zoom as ${FIX_USER}'`,
+    "$sc.Save()"
+  ].join('; ');
+
+  return new Promise((resolve) => {
+    const child = spawn('powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps],
+      { windowsHide: true }
+    );
+    let stderr = '';
+    child.stderr.on('data', d => { stderr += d.toString(); });
+    child.on('error', err => resolve({ success: false, error: err.message }));
+    child.on('close', code => {
+      if (code === 0) resolve({ success: true, path: shortcutPath });
+      else resolve({ success: false, error: stderr.trim() || `Exit ${code}` });
+    });
+  });
+});
+
+ipcMain.handle('show-shortcut-prompt', async () => {
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    buttons: ['Yes, create shortcut', 'No thanks'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Create Desktop Shortcut',
+    message: `Place a "Launch Zoom as ${FIX_USER}" shortcut on your desktop?`,
+    detail: `One-click re-launch of Zoom as ${FIX_USER}. Windows may ask for the ${FIX_USER} password the first time (saved for later).`
+  });
+  return result.response === 0;
+});
+
+ipcMain.handle('show-fix-confirm', async () => {
   const result = await dialog.showMessageBox(mainWindow, {
     type: 'warning',
-    buttons: ['Delete', 'Cancel'],
-    defaultId: 1,
-    title: 'NUCLEAR OPTION',
-    message: message
+    buttons: ['Continue', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Confirm Fix',
+    message: 'This fix creates a new Windows user on your computer and launches Zoom Workplace as that user.',
+    detail:
+      `Username: ${FIX_USER}\n` +
+      `Password: ${FIX_PASS}\n\n` +
+      'The user will be added to the local Administrators group. ' +
+      'Windows may ask for permission before continuing.'
   });
-
-  return result.response === 0; // Return true if "Delete" was clicked
+  return result.response === 0;
 });
 
-ipcMain.handle('show-success', async (event, count) => {
-  await dialog.showMessageBox(mainWindow, {
-    type: 'info',
-    buttons: ['OK'],
-    title: 'Success',
-    message: `${count} files eliminated!\n\nZoom will be launched.`
+ipcMain.handle('is-elevated', async () => {
+  return new Promise(resolve => {
+    const child = spawn('net.exe', ['session'], { windowsHide: true });
+    child.stdout.on('data', () => {});
+    child.stderr.on('data', () => {});
+    child.on('error', () => resolve(false));
+    child.on('close', code => resolve(code === 0));
   });
 });
 
-ipcMain.handle('quit-app', async () => {
+ipcMain.handle('quit-app', () => {
   app.quit();
 });
 
@@ -280,18 +286,13 @@ ipcMain.handle('submit-feedback', async (event, type, text) => {
         }
       }, (res) => {
         let data = '';
-        res.on('data', (chunk) => data += chunk);
+        res.on('data', chunk => data += chunk);
         res.on('end', () => {
-          if (res.statusCode === 201) {
-            resolve({ success: true });
-          } else {
-            resolve({ success: false, error: 'Submission failed' });
-          }
+          if (res.statusCode === 201) resolve({ success: true });
+          else resolve({ success: false, error: 'Submission failed' });
         });
       });
-      req.on('error', () => {
-        resolve({ success: false, error: 'Network error' });
-      });
+      req.on('error', () => resolve({ success: false, error: 'Network error' }));
       req.write(postData);
       req.end();
     });

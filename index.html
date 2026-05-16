@@ -223,6 +223,17 @@
     }
     .status-badge.done .status-dot { animation: none; }
 
+    .status-badge.error {
+      color: var(--red);
+      border-color: rgba(239, 68, 68, 0.5);
+      background: linear-gradient(145deg, rgba(239, 68, 68, 0.15), rgba(239, 68, 68, 0.06));
+    }
+    .status-badge.error .status-dot {
+      background: var(--red);
+      box-shadow: 0 0 6px var(--red);
+      animation: none;
+    }
+
     /* ===== EXIT ===== */
     .exit-badge {
       color: #ef4444;
@@ -476,27 +487,27 @@
       <img src="assets/icon.png" alt="1132 Fixer">
       <span class="logo-title">1132 FIXER</span>
       <div class="logo-sep"></div>
-      <span class="logo-desc">Zoom Database Purge — Total Elimination</span>
+      <span class="logo-desc">Zoom 1132 Bypass — User Switch &amp; Launch</span>
     </div>
   </div>
 
   <div class="main">
     <div class="file-list" id="fileList">
-      <div class="file-item loading">Scanning for database files...</div>
+      <div class="file-item loading">Loading...</div>
     </div>
 
     <div class="button-container">
-      <button id="deleteBtn" class="btn-delete" disabled>DELETE ALL FOUND FILES</button>
-      <button id="refreshBtn" class="btn-refresh">Refresh</button>
+      <button id="fixBtn" class="btn-delete" disabled>FIX NOW</button>
+      <button id="shortcutBtn" class="btn-refresh">Desktop Shortcut</button>
     </div>
 
-    <p class="footer-warning" style="text-align:center;">Script will NOT exit until files are deleted</p>
+    <p class="footer-warning" style="text-align:center;">Creates a Windows user and launches Zoom as that user</p>
   </div>
 
   <div class="footer">
     <div class="hazard-bar"></div>
     <div class="footer-content">
-      <span class="badge version-badge" id="appVersion">v5.1</span>
+      <span class="badge version-badge" id="appVersion">v5.2</span>
       <button class="badge feedback-badge" id="btnFeedback">Feedback</button>
       <span class="badge admin-badge">Administrator</span>
     </div>
