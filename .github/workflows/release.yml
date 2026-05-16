@@ -168,6 +168,8 @@ jobs:
             dist/*Setup*.exe
             dist/*Portable*.exe
             dist/checksums-sha256.txt
+            dist/latest.yml
+            dist/*.blockmap
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
