@@ -1,4 +1,4 @@
-# CleanState Sentinel - Automated Release Pipeline
+# 1132 Fixer - Automated Release Pipeline
 # Triggered when a version tag is pushed (e.g., v2.0.1)
 #
 # SETUP REQUIRED:
@@ -76,12 +76,7 @@ jobs:
         run: npm test
         continue-on-error: true
 
-      - name: Build all targets (unsigned)
-        if: ${{ secrets.CSC_LINK == '' }}
-        run: npm run build:all
-
-      - name: Build all targets (signed)
-        if: ${{ secrets.CSC_LINK != '' }}
+      - name: Build all targets
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -157,7 +152,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2.0.8
         with:
-          name: CleanState Sentinel v${{ steps.version.outputs.VERSION }}
+          name: 1132 Fixer v${{ steps.version.outputs.VERSION }}
           draft: true
           generate_release_notes: true
           files: |
