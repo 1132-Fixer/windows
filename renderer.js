@@ -1,6 +1,7 @@
 const fileList = document.getElementById('fileList');
 const fixBtn = document.getElementById('fixBtn');
 const shortcutBtn = document.getElementById('shortcutBtn');
+const checkEnvBtn = document.getElementById('checkEnvBtn');
 
 let isRunning = false;
 
@@ -11,6 +12,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   fixBtn.addEventListener('click', runFix);
   shortcutBtn.addEventListener('click', () => createShortcut(true));
+  checkEnvBtn.addEventListener('click', checkEnvironment);
 
   window.electronAPI.onFixLog(({ line, kind }) => {
     const cls = kind === 'err' ? 'failed'
@@ -35,14 +37,20 @@ async function showInstructions() {
 
   addFileItem('HOW THIS FIX WORKS', 'header');
   addEmptyLine();
-  addFileItem('Creates a local Windows user (user1 / user1), adds it to', '');
-  addFileItem('Administrators, and launches Zoom Workplace as that user.', '');
+  addFileItem('Fully resets the local user1 account and launches a clean', '');
+  addFileItem('Zoom Workplace session under it. Destructive - do NOT run', '');
+  addFileItem('while signed in AS user1.', '');
   addEmptyLine();
-  addFileItem('  1. Create or reset user1 with password user1', '');
-  addFileItem('  2. Ensure user1 is in the Administrators group', '');
-  addFileItem('  3. Launch Zoom as user1 (no password prompt)', '');
+  addFileItem('  1. Log off / kill any active user1 session', '');
+  addFileItem('  2. Remove leftover suffixed profile folders', '');
+  addFileItem('  3. Delete the user1 account, profile, and registry entries', '');
+  addFileItem('  4. Recreate user1 (password user1) as a local admin', '');
+  addFileItem('  5. Launch Zoom as user1 to materialize the profile', '');
+  addFileItem('  6. Deploy "Apply Zoom Settings" helper on user1 desktop', '');
+  addFileItem('  7. Apply per-user dark mode + mirror Zoom device prefs', '');
+  addFileItem('  8. Relaunch Zoom with the new settings', '');
   addEmptyLine();
-  addFileItem('Windows may ask for permission before continuing.', '');
+  addFileItem('Excluded: file/media transfer and Zoom group-policy edits.', '');
   addEmptyLine();
   addFileItem('You can also create a Desktop shortcut to launch Zoom as', '');
   addFileItem('user1 in the future — uses the same 1132 Fixer icon.', '');
@@ -61,6 +69,7 @@ async function runFix() {
   isRunning = true;
   fixBtn.disabled = true;
   shortcutBtn.disabled = true;
+  checkEnvBtn.disabled = true;
   setStatus('scanning', 'Running');
 
   clearFileList();
@@ -72,11 +81,19 @@ async function runFix() {
   isRunning = false;
   fixBtn.disabled = false;
   shortcutBtn.disabled = false;
+  checkEnvBtn.disabled = false;
 
   addEmptyLine();
   if (result.success) {
-    addFileItem('FIX COMPLETE', 'header');
-    setStatus('done', 'Done');
+    const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+    if (warnings.length) {
+      addFileItem(`FIX COMPLETE (with ${warnings.length} warning(s))`, 'header');
+      warnings.forEach(w => addFileItem(`  • [${w.code}] ${w.message}`, 'failed'));
+      setStatus('done', 'Done (warnings)');
+    } else {
+      addFileItem('FIX COMPLETE', 'header');
+      setStatus('done', 'Done');
+    }
 
     const wantShortcut = await window.electronAPI.showShortcutPrompt();
     if (wantShortcut) {
@@ -84,24 +101,103 @@ async function runFix() {
     }
   } else {
     addFileItem(`FIX FAILED: ${friendlyError(result.error)}`, 'failed');
+    if (Array.isArray(result.blockers) && result.blockers.length) {
+      result.blockers.forEach(b => addFileItem(`  • [${b.code}] ${b.message}`, 'failed'));
+    }
+    if (Array.isArray(result.warnings) && result.warnings.length) {
+      result.warnings.forEach(w => addFileItem(`  • [${w.code}] ${w.message}`, 'failed'));
+    }
     setStatus('error', 'Failed');
   }
 }
 
 function friendlyError(code) {
   switch (code) {
+    case 'not_elevated':
+      return 'Process is not running as Administrator. Re-launch the app elevated (right-click → Run as administrator).';
+    case 'running_as_target':
+      return 'You are currently signed in as user1. Sign in as a different administrator and try again.';
+    case 'preflight_failed':
+      return 'Environment check found one or more blockers. Look at the highlighted lines above — each one tells you what to fix before retrying.';
+    case 'missing_tool':
+      return 'A required Windows tool is missing from PATH (powershell/taskkill/robocopy/icacls/takeown/net/reg). See preflight output above.';
     case 'create_user_failed':
-      return 'Could not create the user1 account. Make sure the app is running as Administrator.';
-    case 'set_password_failed':
-      return 'user1 exists but the password could not be reset. Check Windows password policy or remove user1 manually, then try again.';
-    case 'add_admin_failed':
-      return 'Could not add user1 to Administrators. Make sure the app is running as Administrator.';
+      return 'Could not create the user1 account. Make sure the app is running as Administrator and that password policy allows the password.';
+    case 'delete_user_failed':
+      return 'Could not delete the existing user1 account. Make sure the app is running as Administrator.';
+    case 'delete_profile_failed':
+      return 'The user1 profile folder could not be removed - a file handle is still open. Reboot once and run the fix again.';
     case 'zoom_not_found':
       return 'Zoom Workplace was not found at C:\\Program Files\\Zoom\\bin\\Zoom.exe. Install the machine-wide Zoom Workplace MSI (not the per-user installer), then try again.';
     case 'launch_failed':
-      return 'Zoom could not be launched as user1. Try running this app as Administrator, or check that user1 has permission to start C:\\Program Files\\Zoom\\bin\\Zoom.exe.';
+      return 'Zoom could not be launched as user1. Common causes: Secondary Logon service disabled, password policy mismatch, or user1 lacks permission to start C:\\Program Files\\Zoom\\bin\\Zoom.exe. Re-run as Administrator or check the log above for the exact PowerShell exception.';
+    case 'seclogon_disabled':
+      return 'The Secondary Logon service is disabled. It is required to launch processes under another local account. Run this from an admin shell and retry:  sc.exe config seclogon start= demand  &  sc.exe start seclogon';
+    case 'profile_not_materialized':
+      return 'The user1 profile did not appear in time. The account was created and Zoom was launched, but per-user prefs (dark mode, device IDs) were skipped.';
+    case 'tool_probe_failed':
+      return 'The PowerShell tool probe failed. PowerShell itself may be missing or restricted by AppLocker/policy. The fix cannot continue.';
     default:
       return code || 'Unknown error.';
+  }
+}
+
+async function checkEnvironment() {
+  if (isRunning) return;
+  checkEnvBtn.disabled = true;
+  setStatus('scanning', 'Checking...');
+  clearFileList();
+  addFileItem('ENVIRONMENT CHECK (read-only, no changes made)', 'header');
+  addEmptyLine();
+  try {
+    const r = await window.electronAPI.preflight();
+    const required = ['powershell.exe','taskkill.exe','robocopy.exe','icacls.exe','takeown.exe','net.exe','reg.exe'];
+    const optional = ['quser.exe','logoff.exe'];
+    addFileItem('Required Windows tools:', 'header');
+    required.forEach(t => {
+      const ok = r.info && r.info.tools && r.info.tools[t];
+      addFileItem(`  ${ok ? 'OK  ' : 'MISS'}  ${t}`, ok ? 'success' : 'failed');
+    });
+    addEmptyLine();
+    addFileItem('Optional Windows tools:', 'header');
+    optional.forEach(t => {
+      const ok = r.info && r.info.tools && r.info.tools[t];
+      addFileItem(`  ${ok ? 'OK  ' : 'opt '}  ${t}${ok ? '' : ' (missing — session logoff will be skipped, taskkill still runs)'}`, '');
+    });
+    addEmptyLine();
+    addFileItem('Other environment:', 'header');
+    if (r.info) {
+      addFileItem(`  Zoom path:        ${r.info.zoomPath}`, '');
+      addFileItem(`  Firstrun script:  ${r.info.firstRunScript}`, '');
+      addFileItem(`  Interactive user: ${r.info.interactiveUser}`, '');
+      addFileItem(`  Elevated:         ${r.info.elevated ? 'YES' : 'NO'}`, r.info.elevated ? 'success' : 'failed');
+      if (r.info.seclogon) {
+        addFileItem(`  Secondary Logon:  ${r.info.seclogon.status} (${r.info.seclogon.startType})`, '');
+      }
+    }
+    addEmptyLine();
+    if (r.blockers && r.blockers.length) {
+      addFileItem(`${r.blockers.length} BLOCKER(S) — fix these before running FIX NOW:`, 'header');
+      r.blockers.forEach(b => addFileItem(`  • [${b.code}] ${b.message}`, 'failed'));
+      addEmptyLine();
+    }
+    if (r.warnings && r.warnings.length) {
+      addFileItem(`${r.warnings.length} warning(s) — FIX NOW can still proceed:`, 'header');
+      r.warnings.forEach(w => addFileItem(`  • [${w.code}] ${w.message}`, 'failed'));
+      addEmptyLine();
+    }
+    if (r.ok) {
+      addFileItem('ENVIRONMENT OK — safe to click FIX NOW.', 'success');
+      setStatus('done', 'Ready');
+    } else {
+      addFileItem('ENVIRONMENT NOT READY — see blockers above.', 'failed');
+      setStatus('error', 'Blocked');
+    }
+  } catch (err) {
+    addFileItem(`Preflight call failed: ${err.message}`, 'failed');
+    setStatus('error', 'Error');
+  } finally {
+    checkEnvBtn.disabled = false;
   }
 }
 

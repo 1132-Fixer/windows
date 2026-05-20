@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showFixConfirm: () => ipcRenderer.invoke('show-fix-confirm'),
   showShortcutPrompt: () => ipcRenderer.invoke('show-shortcut-prompt'),
   isElevated: () => ipcRenderer.invoke('is-elevated'),
+  preflight: () => ipcRenderer.invoke('preflight'),
   onFixLog: (cb) => {
     const handler = (_, data) => cb(data);
     ipcRenderer.on('fix-log', handler);
