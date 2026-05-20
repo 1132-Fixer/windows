@@ -1,11 +1,11 @@
 # 1132 Fixer — Release Asset Cleanup
-# Runs after electron-builder publishes to the releases repo.
-# Deletes all non-.exe assets (latest.yml, blockmap, checksums)
-# and hides auto-generated source code archives.
+# Runs after a release is published to the Releases repo.
+# Removes incidental assets (checksums.txt, source archives) while
+# PRESERVING auto-updater assets (latest.yml + *.blockmap) by default.
 #
-# IMPORTANT: latest.yml is required for electron-updater auto-updates.
-#            This workflow intentionally deletes it so only .exe files
-#            are visible. If you need auto-updates, set KEEP_LATEST_YML=true.
+# To wipe ALL non-.exe assets (will break auto-update — use only for
+# old releases you've moved off of), trigger manually with
+# `delete_updater_assets: true`.
 #
 # SETUP: Requires RELEASES_PAT secret with Contents:write on
 #   PrimeUpYourLife/1132-Fixer-Windows-Releases
@@ -16,12 +16,13 @@ on:
   # Run manually after publishing a release
   workflow_dispatch:
     inputs:
-      keep_latest_yml:
-        description: 'Keep latest.yml (needed for auto-updates)'
+      delete_updater_assets:
+        description: 'ALSO delete latest.yml and *.blockmap (BREAKS auto-update!)'
         required: false
         type: boolean
         default: false
-  # Auto-run every 30 min to catch new publishes
+  # Auto-run every 30 min to catch new publishes.
+  # Cron runs always preserve updater assets (the input default applies).
   schedule:
     - cron: '*/30 * * * *'
 
@@ -37,7 +38,10 @@ jobs:
           script: |
             const owner = 'PrimeUpYourLife';
             const repo = '1132-Fixer-Windows-Releases';
-            const keepYml = '${{ inputs.keep_latest_yml }}' === 'true';
+            // Default: keep latest.yml + *.blockmap (needed for electron-updater).
+            // Cron triggers send no inputs, so `${{ inputs.delete_updater_assets }}`
+            // evaluates to '' → false → updater assets preserved.
+            const deleteUpdaterAssets = '${{ inputs.delete_updater_assets }}' === 'true';
 
             // Get latest release
             let release;
@@ -51,15 +55,20 @@ jobs:
 
             console.log(`Release: ${release.tag_name} — ${release.name}`);
             console.log(`Assets: ${release.assets.length}`);
+            console.log(`Preserving updater assets: ${!deleteUpdaterAssets}`);
 
             let deleted = 0;
             let kept = 0;
 
             for (const asset of release.assets) {
-              const isExe = asset.name.toLowerCase().endsWith('.exe');
-              const isYml = asset.name.toLowerCase() === 'latest.yml';
+              const name = asset.name.toLowerCase();
+              const isExe = name.endsWith('.exe');
+              const isYml = name === 'latest.yml';
+              const isBlockmap = name.endsWith('.blockmap');
+              const isUpdaterAsset = isYml || isBlockmap;
 
-              if (isExe || (isYml && keepYml)) {
+              // Always keep: .exe files. Conditionally keep: updater assets.
+              if (isExe || (isUpdaterAsset && !deleteUpdaterAssets)) {
                 console.log(`  ✓ KEEP: ${asset.name} (${(asset.size / 1024 / 1024).toFixed(1)} MB)`);
                 kept++;
               } else {
