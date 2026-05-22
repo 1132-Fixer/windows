@@ -66,13 +66,13 @@
       "installerHeaderIcon": "assets/icon.ico",
       "include": "build/installer.nsh",
       "license": "build/license.txt",
-      "artifactName": "${productName} Setup ${version}.exe",
+      "artifactName": "1132-Fixer-Setup-${version}.${ext}",
       "uninstallDisplayName": "1132 Fixer",
       "deleteAppDataOnUninstall": false,
       "menuCategory": "1132 Fixer"
     },
     "portable": {
-      "artifactName": "${productName} Portable ${version}.exe",
+      "artifactName": "1132-Fixer-Portable-${version}.${ext}",
       "requestExecutionLevel": "admin"
     },
     "files": [
