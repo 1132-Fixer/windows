@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createShortcut: () => ipcRenderer.invoke('create-shortcut'),
   showFixConfirm: () => ipcRenderer.invoke('show-fix-confirm'),
   showShortcutPrompt: () => ipcRenderer.invoke('show-shortcut-prompt'),
+  shortcutExists: () => ipcRenderer.invoke('shortcut-exists'),
   isElevated: () => ipcRenderer.invoke('is-elevated'),
   preflight: () => ipcRenderer.invoke('preflight'),
   onFixLog: (cb) => {

@@ -11,7 +11,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
 
   fixBtn.addEventListener('click', runFix);
-  shortcutBtn.addEventListener('click', () => createShortcut(true));
+  shortcutBtn.addEventListener('click', async () => {
+    const proceed = await window.electronAPI.showShortcutPrompt();
+    if (proceed) await createShortcut(true);
+  });
   checkEnvBtn.addEventListener('click', checkEnvironment);
 
   window.electronAPI.onFixLog(({ line, kind }) => {
@@ -95,9 +98,15 @@ async function runFix() {
       setStatus('done', 'Done');
     }
 
-    const wantShortcut = await window.electronAPI.showShortcutPrompt();
-    if (wantShortcut) {
-      await createShortcut(false);
+    const status = await window.electronAPI.shortcutExists();
+    if (status && status.exists) {
+      addEmptyLine();
+      addFileItem(`Desktop shortcut already present: ${status.path}`, 'success');
+    } else {
+      const wantShortcut = await window.electronAPI.showShortcutPrompt();
+      if (wantShortcut) {
+        await createShortcut(false);
+      }
     }
   } else {
     addFileItem(`FIX FAILED: ${friendlyError(result.error)}`, 'failed');

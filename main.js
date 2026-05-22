@@ -314,15 +314,10 @@ async function preflightCheck() {
       });
     }
   }
-  for (const t of OPTIONAL_TOOLS) {
-    if (!presence[t]) {
-      warnings.push({
-        code: 'optional_tool_missing',
-        message: `Optional tool not available: ${t} (session logoff may be skipped)`
-      });
-    }
-  }
-  // seclogon: warn only — Start-Process -Credential can auto-start it if StartType != Disabled.
+  // OPTIONAL_TOOLS (quser.exe, logoff.exe) ship on Windows Pro/Enterprise only;
+  // absent by design on Home. tryLogoffUser gates on info.tools and falls back
+  // to taskkill alone, so we don't surface this to the user as a warning.
+  // seclogon: Start-Process -Credential can auto-start it if StartType is Manual or Automatic.
   if (info.seclogon.status === 'MISSING') {
     warnings.push({
       code: 'seclogon_missing',
@@ -333,10 +328,12 @@ async function preflightCheck() {
       code: 'seclogon_disabled',
       message: 'Secondary Logon service (seclogon) is Disabled. Start-Process -Credential cannot run. Run "sc.exe config seclogon start= demand" from an admin shell and retry.'
     });
-  } else if (info.seclogon.status !== 'Running') {
+  } else if (info.seclogon.status !== 'Running' && info.seclogon.startType !== 'Manual') {
+    // Stopped+Manual is the Windows default and healthy — service will auto-start on first credential launch.
+    // Anything else stopped (e.g. Stopped+Automatic) is an anomaly worth flagging.
     warnings.push({
       code: 'seclogon_not_running',
-      message: `Secondary Logon service is ${info.seclogon.status}/${info.seclogon.startType}. Windows should auto-start it on demand; will surface a clearer error if launch fails.`
+      message: `Secondary Logon service is ${info.seclogon.status}/${info.seclogon.startType} (expected Running or Manual). Windows should auto-start it on demand; will surface a clearer error if launch fails.`
     });
   }
 
@@ -730,10 +727,13 @@ ipcMain.handle('run-fix', async (event) => {
   await runProcess('taskkill.exe',
     ['/F', '/FI', `USERNAME eq ${FIX_USER}`], send);
   const logoff = await tryLogoffUser(FIX_USER, pre.info.tools, send);
-  if (logoff.notes.length) {
+  // quser_missing is the expected path on Windows Home (no quser.exe shipped);
+  // taskkill alone is sufficient, so it should not raise a warning.
+  const realNotes = logoff.notes.filter(n => n !== 'quser_missing');
+  if (realNotes.length) {
     warnings.push({
       code: 'logoff_partial',
-      message: `Session logoff issues: ${logoff.notes.join(', ')}`
+      message: `Session logoff issues: ${realNotes.join(', ')}`
     });
   }
   await sleep(3000);
@@ -1184,14 +1184,25 @@ ipcMain.handle('create-shortcut', async () => {
   });
 });
 
+ipcMain.handle('shortcut-exists', async () => {
+  const desktop = path.join(os.homedir(), 'Desktop');
+  const shortcutPath = path.join(desktop, `Launch Zoom as ${FIX_USER}.lnk`);
+  return { exists: fs.existsSync(shortcutPath), path: shortcutPath };
+});
+
 ipcMain.handle('show-shortcut-prompt', async () => {
+  const desktop = path.join(os.homedir(), 'Desktop');
+  const shortcutPath = path.join(desktop, `Launch Zoom as ${FIX_USER}.lnk`);
+  const exists = fs.existsSync(shortcutPath);
   const result = await dialog.showMessageBox(mainWindow, {
     type: 'question',
-    buttons: ['Yes, create shortcut', 'No thanks'],
-    defaultId: 0,
+    buttons: exists ? ['Replace shortcut', 'Keep existing'] : ['Yes, create shortcut', 'No thanks'],
+    defaultId: exists ? 1 : 0,
     cancelId: 1,
-    title: 'Create Desktop Shortcut',
-    message: `Place a "Launch Zoom as ${FIX_USER}" shortcut on your desktop?`,
+    title: exists ? 'Desktop Shortcut Already Exists' : 'Create Desktop Shortcut',
+    message: exists
+      ? `A "Launch Zoom as ${FIX_USER}" shortcut already exists on your desktop. Replace it?`
+      : `Place a "Launch Zoom as ${FIX_USER}" shortcut on your desktop?`,
     detail: `One-click re-launch of Zoom as ${FIX_USER}. Windows may ask for the ${FIX_USER} password the first time (saved for later).`
   });
   return result.response === 0;
