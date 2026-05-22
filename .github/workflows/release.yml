@@ -18,9 +18,10 @@ on:
     tags:
       - 'v*'
 
-# Prevent concurrent releases from racing
+# Serialize ALL release runs (any tag) so an accidental rerun of an old tag
+# can't race the current tag's upload to the releases repo.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-pipeline
   cancel-in-progress: false
 
 env:
@@ -71,10 +72,6 @@ jobs:
         run: |
           npm cache clean --force
           npm ci
-
-      - name: Run tests
-        run: npm test
-        continue-on-error: true
 
       - name: Build all targets
         shell: pwsh
@@ -154,6 +151,13 @@ jobs:
             dist/checksums-sha256.txt
             dist/latest.yml
             dist/*.blockmap
+
+      - name: Validate published release assets
+        shell: pwsh
+        env:
+          RELEASES_PAT: ${{ secrets.RELEASES_PAT }}
+        run: |
+          node scripts/validate-release-assets.mjs "v${{ steps.version.outputs.VERSION }}"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4.3.1

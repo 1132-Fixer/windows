@@ -10,6 +10,32 @@ const config = require('./src/main/config');
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
 
+// Updater diagnostics. Surface every state transition to the main-process
+// console so a failure to update doesn't go unnoticed silently. None of
+// these listeners are allowed to crash — they only log.
+const UPDATER = '[updater]';
+let _lastUpdaterProgressPct = -10;
+autoUpdater.on('checking-for-update', () => {
+  console.log(`${UPDATER} checking-for-update`);
+});
+autoUpdater.on('update-available', (info) => {
+  console.log(`${UPDATER} update-available version=${info && info.version}`);
+});
+autoUpdater.on('update-not-available', (info) => {
+  console.log(`${UPDATER} update-not-available current=${info && info.version}`);
+});
+autoUpdater.on('error', (err) => {
+  console.warn(`${UPDATER} error: ${(err && err.message) || err}`);
+});
+autoUpdater.on('download-progress', (p) => {
+  const pct = Math.floor((p && p.percent) || 0);
+  if (pct - _lastUpdaterProgressPct >= 10 || pct >= 100) {
+    _lastUpdaterProgressPct = pct;
+    const mb = (n) => Math.round((n || 0) / 1024 / 1024);
+    console.log(`${UPDATER} download-progress ${pct}% (${mb(p && p.transferred)}MB / ${mb(p && p.total)}MB)`);
+  }
+});
+
 const FIX_USER = 'user1';
 const FIX_PASS = 'user1';
 const ZOOM_PATH = 'C:\\Program Files\\Zoom\\bin\\Zoom.exe';
@@ -53,14 +79,18 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow();
 
-  autoUpdater.on('update-downloaded', () => {
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log(`${UPDATER} update-downloaded version=${info && info.version} — quitAndInstall in 2s`);
     setTimeout(() => {
       autoUpdater.quitAndInstall(true, true);
     }, 2000);
   });
 
   setTimeout(() => {
-    autoUpdater.checkForUpdates().catch(() => {});
+    autoUpdater.checkForUpdates().catch((err) => {
+      // Non-fatal: app continues without auto-update. Visible in logs now.
+      console.warn(`${UPDATER} checkForUpdates rejected: ${(err && err.message) || err}`);
+    });
   }, 3000);
 
   app.on('activate', () => {
@@ -870,7 +900,7 @@ ipcMain.handle('run-fix', async (event) => {
   }
 
   // ============================================================
-  // STEP 5: Launch Zoom as user1 to materialize the profile.
+  // STEP 5: Launch Zoom once as user1 so Windows creates the profile.
   // ============================================================
   send(`[5/8] Launching Zoom as '${FIX_USER}'...`, 'header');
   // Re-check zoom in case it disappeared between preflight and now.
@@ -1137,15 +1167,109 @@ ipcMain.handle('run-fix', async (event) => {
 });
 
 // ============================================================
+// Shortcut helpers.
+// Windows can present several "Desktop" folders to the same user:
+//   - The classic per-user Desktop (C:\Users\<name>\Desktop)
+//   - OneDrive-redirected Desktop (C:\Users\<name>\OneDrive\Desktop)
+//   - Public Desktop (C:\Users\Public\Desktop, visible to every account)
+// We scan all three for an existing "Launch Zoom as user1.lnk" so we don't
+// stack duplicates, and for creation we prefer the OS-canonical user Desktop
+// (which honors OneDrive redirection).
+// ============================================================
+const SHORTCUT_FILENAME = `Launch Zoom as ${FIX_USER}.lnk`;
+const LAUNCHER_SCRIPT_NAME = `launch-zoom-as-${FIX_USER}.ps1`;
+const LAUNCHER_SCRIPT_PATH = () => path.join(app.getPath('appData'), '1132 Fixer', LAUNCHER_SCRIPT_NAME);
+
+async function getCanonicalUserDesktop() {
+  // Ask Windows directly; this resolves to the OneDrive-redirected path when
+  // that redirection is active on the current account.
+  try {
+    const r = await runPSCapture(`[Environment]::GetFolderPath('Desktop')`);
+    const p = (r.stdout || '').trim();
+    if (p) return p;
+  } catch (_) { /* fall through */ }
+  return path.join(os.homedir(), 'Desktop');
+}
+
+async function listDesktopLocations() {
+  const seen = new Set();
+  const out = [];
+  const canonical = await getCanonicalUserDesktop();
+  const push = (kind, p) => {
+    if (!p) return;
+    const key = p.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ kind, path: p });
+  };
+  push('user', canonical);
+  push('user', path.join(os.homedir(), 'Desktop'));
+  if (process.env.OneDrive)         push('onedrive', path.join(process.env.OneDrive, 'Desktop'));
+  if (process.env.OneDriveConsumer) push('onedrive', path.join(process.env.OneDriveConsumer, 'Desktop'));
+  if (process.env.OneDriveCommercial) push('onedrive', path.join(process.env.OneDriveCommercial, 'Desktop'));
+  push('public', path.join(process.env.PUBLIC || 'C:\\Users\\Public', 'Desktop'));
+  return out;
+}
+
+async function inspectShortcut(lnkPath) {
+  const esc = s => String(s).replace(/'/g, "''");
+  try {
+    const r = await runPSCapture(`
+      try {
+        $s = New-Object -ComObject WScript.Shell
+        $sc = $s.CreateShortcut('${esc(lnkPath)}')
+        @{ target = [string]$sc.TargetPath; arguments = [string]$sc.Arguments } | ConvertTo-Json -Compress
+      } catch { Write-Output '' }
+    `);
+    const out = (r.stdout || '').trim();
+    if (!out) return null;
+    return JSON.parse(out);
+  } catch (_) {
+    return null;
+  }
+}
+
+function shortcutMatchesCurrentApp(info, expectedScript) {
+  if (!info) return false;
+  const target = (info.target || '').toLowerCase();
+  const argsStr = (info.arguments || '').toLowerCase();
+  // Our shortcuts launch powershell.exe -File <expectedScript>. Either condition
+  // alone could match an unrelated PowerShell shortcut, so require both.
+  const targetOk = target.endsWith('\\powershell.exe') || target === 'powershell.exe';
+  const argsOk = argsStr.includes(expectedScript.toLowerCase());
+  return targetOk && argsOk;
+}
+
+async function findExistingShortcuts() {
+  const expectedScript = LAUNCHER_SCRIPT_PATH();
+  const locations = await listDesktopLocations();
+  const found = [];
+  for (const loc of locations) {
+    const lnk = path.join(loc.path, SHORTCUT_FILENAME);
+    if (!fs.existsSync(lnk)) continue;
+    const info = await inspectShortcut(lnk);
+    found.push({
+      kind: loc.kind,
+      path: lnk,
+      // null = inspection failed; treat conservatively as "unknown but present".
+      valid: info ? shortcutMatchesCurrentApp(info, expectedScript) : null,
+      target: info ? info.target : null,
+      arguments: info ? info.arguments : null
+    });
+  }
+  return found;
+}
+
+// ============================================================
 // IPC: create-shortcut (current user's desktop, one-click re-launch)
 // ============================================================
 ipcMain.handle('create-shortcut', async () => {
-  const desktop = path.join(os.homedir(), 'Desktop');
-  const shortcutPath = path.join(desktop, `Launch Zoom as ${FIX_USER}.lnk`);
+  const desktop = await getCanonicalUserDesktop();
+  const shortcutPath = path.join(desktop, SHORTCUT_FILENAME);
   const iconPath = getIconPath();
 
-  const scriptDir = path.join(app.getPath('appData'), '1132 Fixer');
-  const scriptPath = path.join(scriptDir, `launch-zoom-as-${FIX_USER}.ps1`);
+  const scriptPath = LAUNCHER_SCRIPT_PATH();
+  const scriptDir = path.dirname(scriptPath);
   try {
     fs.mkdirSync(scriptDir, { recursive: true });
     const scriptContent =
@@ -1185,24 +1309,47 @@ ipcMain.handle('create-shortcut', async () => {
 });
 
 ipcMain.handle('shortcut-exists', async () => {
-  const desktop = path.join(os.homedir(), 'Desktop');
-  const shortcutPath = path.join(desktop, `Launch Zoom as ${FIX_USER}.lnk`);
-  return { exists: fs.existsSync(shortcutPath), path: shortcutPath };
+  const found = await findExistingShortcuts();
+  // valid === null means we found the shortcut but COM inspection failed —
+  // err on the side of "present" so we don't accidentally re-prompt. Only
+  // valid === true is treated as a confirmed match.
+  const anyValid = found.some(f => f.valid === true);
+  const anyKnownStale = found.some(f => f.valid === false);
+  const primary = found.find(f => f.kind === 'user') || found[0] || null;
+  return {
+    exists: found.length > 0,
+    valid: anyValid && !anyKnownStale,
+    stale: anyKnownStale,
+    path: primary ? primary.path : null,
+    locations: found
+  };
 });
 
 ipcMain.handle('show-shortcut-prompt', async () => {
-  const desktop = path.join(os.homedir(), 'Desktop');
-  const shortcutPath = path.join(desktop, `Launch Zoom as ${FIX_USER}.lnk`);
-  const exists = fs.existsSync(shortcutPath);
+  const found = await findExistingShortcuts();
+  const exists = found.length > 0;
+  const stale  = found.some(f => f.valid === false);
+  let title, message, buttons;
+  if (!exists) {
+    title   = 'Create Desktop Shortcut';
+    message = `Place a "Launch Zoom as ${FIX_USER}" shortcut on your desktop?`;
+    buttons = ['Yes, create shortcut', 'No thanks'];
+  } else if (stale) {
+    title   = 'Replace Stale Desktop Shortcut';
+    message = `An older "Launch Zoom as ${FIX_USER}" shortcut exists but points somewhere else. Replace it?`;
+    buttons = ['Replace shortcut', 'Keep existing'];
+  } else {
+    title   = 'Desktop Shortcut Already Exists';
+    message = `A "Launch Zoom as ${FIX_USER}" shortcut already exists on your desktop. Replace it?`;
+    buttons = ['Replace shortcut', 'Keep existing'];
+  }
   const result = await dialog.showMessageBox(mainWindow, {
     type: 'question',
-    buttons: exists ? ['Replace shortcut', 'Keep existing'] : ['Yes, create shortcut', 'No thanks'],
+    buttons,
     defaultId: exists ? 1 : 0,
     cancelId: 1,
-    title: exists ? 'Desktop Shortcut Already Exists' : 'Create Desktop Shortcut',
-    message: exists
-      ? `A "Launch Zoom as ${FIX_USER}" shortcut already exists on your desktop. Replace it?`
-      : `Place a "Launch Zoom as ${FIX_USER}" shortcut on your desktop?`,
+    title,
+    message,
     detail: `One-click re-launch of Zoom as ${FIX_USER}. Windows may ask for the ${FIX_USER} password the first time (saved for later).`
   });
   return result.response === 0;
@@ -1218,13 +1365,13 @@ ipcMain.handle('show-fix-confirm', async () => {
     message: `This will completely reset the local '${FIX_USER}' account.`,
     detail:
       `The fix will:\n` +
-      `  - Log off any active '${FIX_USER}' session\n` +
-      `  - Delete the local '${FIX_USER}' account\n` +
-      `  - Delete C:\\Users\\${FIX_USER} and any suffixed copies\n` +
-      `  - Wipe ProfileList registry entries for '${FIX_USER}'\n` +
-      `  - Recreate '${FIX_USER}' (password: ${FIX_PASS}) as a local admin\n` +
-      `  - Launch Zoom Workplace as '${FIX_USER}'\n` +
-      `  - Deploy "Apply Zoom Settings" helper on the new desktop\n\n` +
+      `  - Close any active Zoom / '${FIX_USER}' sessions safely\n` +
+      `  - Clean stale '${FIX_USER}' profile data when needed\n` +
+      `  - Recreate the local '${FIX_USER}' Zoom profile (password: ${FIX_PASS})\n` +
+      `  - Launch Zoom once as '${FIX_USER}' so Windows creates the profile\n` +
+      `  - Apply the required Zoom profile setup\n` +
+      `  - Relaunch Zoom using the refreshed '${FIX_USER}' profile\n\n` +
+      `No personal files, chats, contacts, or Zoom account data are copied.\n\n` +
       `Do NOT continue if you are currently signed in as '${FIX_USER}'.`
   });
   return result.response === 0;

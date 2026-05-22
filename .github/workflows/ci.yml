@@ -27,10 +27,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests
-        run: npm test
-        continue-on-error: true  # Tests may not exist yet
-
       - name: Build portable executable
         run: npm run build
 

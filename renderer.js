@@ -38,25 +38,29 @@ async function showInstructions() {
     addEmptyLine();
   }
 
-  addFileItem('HOW THIS FIX WORKS', 'header');
+  addFileItem('WHAT THIS DOES', 'header');
   addEmptyLine();
   addFileItem('Fully resets the local user1 account and launches a clean', '');
-  addFileItem('Zoom Workplace session under it. Destructive - do NOT run', '');
+  addFileItem('Zoom Workplace session under it. Destructive — do NOT run', '');
   addFileItem('while signed in AS user1.', '');
   addEmptyLine();
-  addFileItem('  1. Log off / kill any active user1 session', '');
-  addFileItem('  2. Remove leftover suffixed profile folders', '');
-  addFileItem('  3. Delete the user1 account, profile, and registry entries', '');
-  addFileItem('  4. Recreate user1 (password user1) as a local admin', '');
-  addFileItem('  5. Launch Zoom as user1 to materialize the profile', '');
-  addFileItem('  6. Deploy "Apply Zoom Settings" helper on user1 desktop', '');
-  addFileItem('  7. Apply per-user dark mode + mirror Zoom device prefs', '');
-  addFileItem('  8. Relaunch Zoom with the new settings', '');
+  addFileItem('  1. Checks Windows setup and required permissions', '');
+  addFileItem('  2. Closes any active Zoom / user1 sessions safely', '');
+  addFileItem('  3. Cleans stale user1 profile data when needed', '');
+  addFileItem('  4. Recreates the local user1 Zoom profile', '');
+  addFileItem('  5. Launches Zoom once as user1 so Windows creates the profile', '');
+  addFileItem('  6. Applies the required Zoom profile setup', '');
+  addFileItem('  7. Relaunches Zoom using the refreshed user1 profile', '');
   addEmptyLine();
-  addFileItem('Excluded: file/media transfer and Zoom group-policy edits.', '');
-  addEmptyLine();
-  addFileItem('You can also create a Desktop shortcut to launch Zoom as', '');
-  addFileItem('user1 in the future — uses the same 1132 Fixer icon.', '');
+  addFileItem('Notes:', '');
+  addFileItem('  • No personal files, chats, contacts, or Zoom account data', '');
+  addFileItem('    are copied.', '');
+  addFileItem('  • Windows Home may skip session enumeration when unavailable;', '');
+  addFileItem('    cleanup still continues safely.', '');
+  addFileItem('  • The optional Desktop shortcut is only created if one does', '');
+  addFileItem('    not already exist.', '');
+  addFileItem('  • The shortcut uses the 1132 Fixer icon and launches Zoom', '');
+  addFileItem('    as user1.', '');
 
   fixBtn.disabled = !elevated;
   shortcutBtn.disabled = !elevated;
@@ -99,7 +103,7 @@ async function runFix() {
     }
 
     const status = await window.electronAPI.shortcutExists();
-    if (status && status.exists) {
+    if (status && status.exists && status.valid) {
       addEmptyLine();
       addFileItem(`Desktop shortcut already present: ${status.path}`, 'success');
     } else {
@@ -143,7 +147,7 @@ function friendlyError(code) {
     case 'seclogon_disabled':
       return 'The Secondary Logon service is disabled. It is required to launch processes under another local account. Run this from an admin shell and retry:  sc.exe config seclogon start= demand  &  sc.exe start seclogon';
     case 'profile_not_materialized':
-      return 'The user1 profile did not appear in time. The account was created and Zoom was launched, but per-user prefs (dark mode, device IDs) were skipped.';
+      return 'The user1 profile did not appear in time. The account was created and Zoom was launched, but the per-user profile setup was skipped.';
     case 'tool_probe_failed':
       return 'The PowerShell tool probe failed. PowerShell itself may be missing or restricted by AppLocker/policy. The fix cannot continue.';
     default:
