@@ -94,14 +94,18 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function runProcess(exe, args, onLine) {
+function runProcess(exe, args, onLine, opts = {}) {
+  const { heartbeatMs = 0, heartbeatLabel = '', timeoutMs = 0 } = opts;
   return new Promise((resolve) => {
     let stdoutBuf = '';
     let stderrBuf = '';
+    let lastOutputAt = Date.now();
+    const started = Date.now();
     const child = spawn(exe, args, { windowsHide: true });
     const emit = (buf, kind) => {
       const text = buf.toString();
       if (kind === 'err') stderrBuf += text; else stdoutBuf += text;
+      lastOutputAt = Date.now();
       text.split(/\r?\n/).forEach(line => {
         const trimmed = line.replace(/\s+$/, '');
         if (trimmed) onLine(trimmed, kind);
@@ -109,22 +113,54 @@ function runProcess(exe, args, onLine) {
     };
     child.stdout.on('data', d => emit(d, 'out'));
     child.stderr.on('data', d => emit(d, 'err'));
+
+    let hbTimer = null;
+    if (heartbeatMs > 0) {
+      hbTimer = setInterval(() => {
+        const idleSec = Math.round((Date.now() - lastOutputAt) / 1000);
+        const elapsedSec = Math.round((Date.now() - started) / 1000);
+        if (idleSec >= Math.round(heartbeatMs / 1000)) {
+          const label = heartbeatLabel || exe;
+          onLine(`  ... still working (${label}; elapsed ${elapsedSec}s, idle ${idleSec}s)`, 'out');
+        }
+      }, heartbeatMs);
+    }
+
+    let killTimer = null;
+    let timedOut = false;
+    if (timeoutMs > 0) {
+      killTimer = setTimeout(() => {
+        timedOut = true;
+        onLine(`  TIMEOUT after ${Math.round(timeoutMs / 1000)}s — killing ${exe}`, 'err');
+        try { child.kill('SIGKILL'); } catch (_) {}
+      }, timeoutMs);
+    }
+
+    const cleanup = () => {
+      if (hbTimer) clearInterval(hbTimer);
+      if (killTimer) clearTimeout(killTimer);
+    };
+
     child.on('error', err => {
+      cleanup();
       onLine(`Failed to launch ${exe}: ${err.message}`, 'err');
-      resolve({ code: -1, stdout: stdoutBuf, stderr: stderrBuf });
+      resolve({ code: -1, stdout: stdoutBuf, stderr: stderrBuf, timedOut });
     });
-    child.on('close', code => resolve({ code, stdout: stdoutBuf, stderr: stderrBuf }));
+    child.on('close', code => {
+      cleanup();
+      resolve({ code, stdout: stdoutBuf, stderr: stderrBuf, timedOut });
+    });
   });
 }
 
-async function runPSScript(scriptContent, onLine) {
+async function runPSScript(scriptContent, onLine, opts = {}) {
   const tmp = path.join(os.tmpdir(),
     `fixer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
   await fs.promises.writeFile(tmp, scriptContent, 'utf8');
   try {
     return await runProcess('powershell.exe',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmp],
-      onLine);
+      onLine, opts);
   } finally {
     fs.promises.unlink(tmp).catch(() => {});
   }
@@ -533,29 +569,99 @@ async function resolveUserProfilePath(username, maxWaitSec, send) {
 // Robust profile-folder delete helper, inlined into PS scripts that need it.
 // ============================================================
 const PS_REMOVE_PROFILE_HELPER = `
+function Unload-UserHive {
+    param([string]$Sid)
+    if (-not $Sid) { return }
+    $hkuPath = 'Registry::HKEY_USERS\\' + $Sid
+    if (Test-Path $hkuPath) {
+        Write-Host ("    Unloading HKU\\" + $Sid + " (NTUSER.DAT)")
+        # GC + collect to release any RegistryKey handles PS may still hold.
+        [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+        $rc = Start-Process reg.exe -ArgumentList @('unload', ('HKU\\' + $Sid)) -Wait -WindowStyle Hidden -PassThru
+        Write-Host ("    reg unload exit: " + $rc.ExitCode)
+    }
+}
 function Remove-ProfileFolder {
-    param([Parameter(Mandatory=$true)][string]$Path)
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [string]$Sid = ''
+    )
     $ErrorActionPreference = 'Continue'
     if (-not [System.IO.Directory]::Exists($Path)) { Write-Host "  Already gone: $Path"; return }
     Write-Host "  Deleting: $Path"
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    Start-Process takeown.exe -ArgumentList @('/F',$Path,'/A','/R','/D','Y') -Wait -WindowStyle Hidden
-    Start-Process icacls.exe -ArgumentList @($Path,'/grant','*S-1-5-32-544:(OI)(CI)F','/T','/C','/Q') -Wait -WindowStyle Hidden
-    Start-Process attrib.exe -ArgumentList @('-r','-h','-s',$Path,'/S','/D') -Wait -WindowStyle Hidden
-    # Use cmd's rd /s /q rather than robocopy /MIR. Default Windows user
-    # profiles contain XP-compat junction points (Application Data, Cookies,
-    # Local Settings, etc.) with explicit DENY-Everyone ACEs. robocopy /MIR
-    # follows them and stalls; .NET Directory.Delete throws on them. rd /s /q
-    # is the canonical Win32 profile-delete approach: it removes junction
-    # points themselves rather than recursing into them.
+
+    # Unload the user's NTUSER.DAT hive first — otherwise the file is open
+    # and rd /s /q will leave it behind, even with full admin ownership.
+    Unload-UserHive -Sid $Sid
+
+    # PASS 1: rd /s /q FIRST.
+    # Default Windows user profiles contain XP-compat junction points
+    # (Application Data, Cookies, Local Settings, My Documents, etc.) with
+    # explicit DENY-Everyone ACEs. rd /s /q is the only built-in that
+    # removes junction reparse points themselves rather than recursing into
+    # them. Running takeown /R or icacls /T from the profile root FIRST
+    # makes both tools chase those junctions back into AppData and stall
+    # for many minutes — that was the "hung on delete user1" symptom.
     $cmdExe = Join-Path $env:SystemRoot 'System32\\cmd.exe'
     $rdArgs = '/c rd /s /q "' + $Path + '"'
-    $rc = Start-Process -FilePath $cmdExe -ArgumentList $rdArgs -Wait -WindowStyle Hidden -PassThru
-    Write-Host ("    rd exit: " + $rc.ExitCode)
-    # Fallback: if rd left anything behind (e.g. file in use), try .NET Delete.
+    Write-Host "    Pass 1: rd /s /q ..."
+    $rc1 = Start-Process -FilePath $cmdExe -ArgumentList $rdArgs -Wait -WindowStyle Hidden -PassThru
+    Write-Host ("    rd pass-1 exit: " + $rc1.ExitCode)
+    if (-not [System.IO.Directory]::Exists($Path)) {
+        $sw.Stop()
+        Write-Host ("  RESULT: gone in {0:N1}s (pass 1)" -f $sw.Elapsed.TotalSeconds)
+        return
+    }
+
+    # PASS 2: targeted ownership + ACL grant — non-recursive on the root,
+    # then walk top-level children explicitly while SKIPPING reparse
+    # points. This fixes ACL/ownership on real residue without chasing
+    # junctions.
+    Write-Host "    Pass 1 left residue; running targeted takeown/icacls/attrib (no junction chase)..."
+    Start-Process takeown.exe -ArgumentList @('/F',$Path,'/A','/D','Y') -Wait -WindowStyle Hidden | Out-Null
+    Start-Process icacls.exe -ArgumentList @($Path,'/grant','*S-1-5-32-544:(OI)(CI)F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
+    Start-Process attrib.exe -ArgumentList @('-r','-h','-s',$Path,'/D') -Wait -WindowStyle Hidden | Out-Null
+
+    $kids = @()
+    try {
+        $kids = Get-ChildItem -LiteralPath $Path -Force -EA SilentlyContinue
+    } catch {}
+    foreach ($k in $kids) {
+        $isReparse = $false
+        try { $isReparse = (($k.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) } catch {}
+        if ($isReparse) {
+            Write-Host ("    skip junction: " + $k.Name)
+            # Remove the junction entry itself (does not recurse into target).
+            try {
+                Start-Process $cmdExe -ArgumentList ('/c rd /q "' + $k.FullName + '"') -Wait -WindowStyle Hidden | Out-Null
+            } catch {}
+            continue
+        }
+        Write-Host ("    fix ACL + attrib: " + $k.Name)
+        try {
+            if ($k.PSIsContainer) {
+                Start-Process takeown.exe -ArgumentList @('/F',$k.FullName,'/A','/R','/D','Y') -Wait -WindowStyle Hidden | Out-Null
+                Start-Process icacls.exe -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:(OI)(CI)F','/T','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
+                Start-Process attrib.exe -ArgumentList @('-r','-h','-s',$k.FullName,'/S','/D') -Wait -WindowStyle Hidden | Out-Null
+            } else {
+                Start-Process takeown.exe -ArgumentList @('/F',$k.FullName,'/A') -Wait -WindowStyle Hidden | Out-Null
+                Start-Process icacls.exe -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
+                Start-Process attrib.exe -ArgumentList @('-r','-h','-s',$k.FullName) -Wait -WindowStyle Hidden | Out-Null
+            }
+        } catch {}
+    }
+
+    # PASS 3: rd /s /q again now that ACLs are corrected.
+    Write-Host "    Pass 3: rd /s /q (retry) ..."
+    $rc2 = Start-Process -FilePath $cmdExe -ArgumentList $rdArgs -Wait -WindowStyle Hidden -PassThru
+    Write-Host ("    rd pass-3 exit: " + $rc2.ExitCode)
+
+    # PASS 4: final .NET fallback for any single locked file.
     if ([System.IO.Directory]::Exists($Path)) {
         try { [System.IO.Directory]::Delete($Path,$true) } catch { Write-Host ("    .NET Delete: " + $_.Exception.Message) }
     }
+
     $sw.Stop()
     if ([System.IO.Directory]::Exists($Path)) {
         Write-Host ("  RESULT: STILL PRESENT after {0:N1}s" -f $sw.Elapsed.TotalSeconds)
@@ -649,7 +755,7 @@ ipcMain.handle('run-fix', async (event) => {
       Write-Host "  Found: $($f.FullName)"
       Remove-ProfileFolder -Path $f.FullName
     }
-  `, send);
+  `, send, { heartbeatMs: 5000, heartbeatLabel: 'suffixed-profile cleanup', timeoutMs: 300000 });
 
   // ============================================================
   // STEP 3: Delete the existing user1 account, profile folder,
@@ -657,8 +763,19 @@ ipcMain.handle('run-fix', async (event) => {
   // ============================================================
   send('[3/8] Removing existing account and profile...', 'header');
   const accountExisted = await userExists(FIX_USER);
+
+  // Resolve SID BEFORE deleting the account. Once `net user /delete` runs,
+  // NTAccount lookup fails. We still need the SID to unload the user's
+  // NTUSER.DAT hive before deleting the profile folder.
+  let preDeleteSid = '';
   if (accountExisted) {
-    const del = await runProcess('net.exe', ['user', FIX_USER, '/delete'], send);
+    preDeleteSid = await resolveSID(FIX_USER);
+    send(`  Resolved SID: ${preDeleteSid || '(none)'}`, 'out');
+  }
+
+  if (accountExisted) {
+    const del = await runProcess('net.exe', ['user', FIX_USER, '/delete'], send,
+      { heartbeatMs: 5000, heartbeatLabel: 'net user /delete', timeoutMs: 60000 });
     if (del.code !== 0) {
       send(`ERROR: failed to delete account '${FIX_USER}'.`, 'err');
       return { success: false, error: 'delete_user_failed', warnings };
@@ -670,17 +787,24 @@ ipcMain.handle('run-fix', async (event) => {
 
   const sourceProfile = `C:\\Users\\${FIX_USER}`;
   if (fs.existsSync(sourceProfile)) {
+    send(`  Removing profile folder ${sourceProfile} (rd /s /q first; ACL fix only on residue)...`, 'out');
     const delProfile = await runPSScript(`
       ${PS_REMOVE_PROFILE_HELPER}
       $p = '${sourceProfile}'
-      Remove-ProfileFolder -Path $p
+      $sid = '${preDeleteSid}'
+      Remove-ProfileFolder -Path $p -Sid $sid
       if (Test-Path $p) {
         Write-Host "  ERROR: $p still exists - a handle may still be open."
         Write-Host "         Reboot once and re-run."
         exit 1
       }
       Write-Host "  Profile folder deleted."
-    `, send);
+    `, send, { heartbeatMs: 5000, heartbeatLabel: 'profile delete', timeoutMs: 480000 });
+    if (delProfile.timedOut) {
+      send('ERROR: profile delete timed out after 8 minutes. A handle is likely still open (Zoom, antivirus, search indexer).', 'err');
+      send('  Try: reboot, then re-run the fix.', 'err');
+      return { success: false, error: 'delete_profile_timeout', warnings };
+    }
     if (delProfile.code !== 0) {
       send('ERROR: profile folder could not be removed. Reboot and try again.', 'err');
       return { success: false, error: 'delete_profile_failed', warnings };
@@ -707,7 +831,7 @@ ipcMain.handle('run-fix', async (event) => {
       Write-Host "  Removing leftover: $($_.FullName)"
       Remove-ProfileFolder -Path $_.FullName
     }
-  `, send);
+  `, send, { heartbeatMs: 5000, heartbeatLabel: 'leftover cleanup', timeoutMs: 300000 });
 
   // ============================================================
   // STEP 4: Recreate the account, add to Administrators,
