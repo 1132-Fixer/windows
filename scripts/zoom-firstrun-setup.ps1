@@ -28,6 +28,24 @@ function Log {
     Write-Host $Message
 }
 
+# ----------------------------------------------------------------
+# Camera + microphone consent — belt-and-braces.
+# The main fix step (grant-media-consent.ps1) writes these at the
+# moment the fix runs. But the HKU hive for user1 may not have been
+# loaded then (race vs. the first Zoom launch). Re-asserting from
+# inside user1's own session — where HKCU IS HKU\<user1-sid> — is
+# guaranteed to take effect.
+# ----------------------------------------------------------------
+Log "Asserting camera + microphone consent for desktop apps..."
+foreach ($dev in @('webcam','microphone')) {
+    foreach ($leaf in @('', '\NonPackaged')) {
+        $p = "HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$dev$leaf"
+        if (-not (Test-Path $p)) { New-Item -Path $p -Force -EA SilentlyContinue | Out-Null }
+        New-ItemProperty -Path $p -Name 'Value' -PropertyType String -Value 'Allow' -Force -EA SilentlyContinue | Out-Null
+    }
+}
+Log "  camera + microphone consent asserted in HKCU."
+
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Windows.Forms

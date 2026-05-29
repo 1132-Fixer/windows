@@ -111,6 +111,34 @@ If the fix fails, check that:
 - Your Windows account has permission to create local users
 - Security software is not blocking user creation or `runas`
 
+### Camera or microphone does not work as `user1`
+
+As of **v5.3.6**, the fixer grants Windows camera + microphone consent
+to desktop apps for the newly created `user1` automatically. If camera
+or mic still does not work in Zoom under `user1`, the cause is almost
+always one of these — none of which a Zoom-error fixer can override:
+
+| Cause | What to do |
+|---|---|
+| **Windows organization / MDM policy blocks camera or microphone** | The Fix Receipt panel will show `BLOCKED BY WINDOWS POLICY`. Ask your Windows administrator. Or use a non-managed personal device. |
+| **Hardware privacy shutter is closed** | Lenovo ThinkShutter, Dell webcam slider, function-key camera disable (F-key with camera icon). Slide it open / toggle the key. |
+| **Third-party antivirus webcam shield** | Bitdefender, Kaspersky, ESET, Norton, and similar AV suites gate camera access separately from Windows. Open the AV app and allow Zoom (or temporarily disable the webcam shield to confirm). |
+| **Camera driver failure** | Open Device Manager → Cameras. If the camera shows a warning icon, reinstall the driver from the laptop vendor (not Windows Update). |
+| **FrameServer service Disabled** | The fixer auto-bumps this from Disabled to Manual. If the Fix Receipt shows `Frame Server: DISABLED and could not be re-enabled`, run `Set-Service FrameServer -StartupType Manual` from an admin PowerShell. |
+| **Hive race on first run only** | If the Fix Receipt shows `HKU hive: per-user write skipped`, double-click the **Apply Zoom Settings** shortcut on the user1 desktop. The first-run script reasserts consent from inside `user1`'s own session and will fix it. |
+
+To verify Windows itself is letting `user1` use the camera, sign into
+Windows as `user1` and open:
+
+```text
+Settings → Privacy & security → Camera
+```
+
+Both the top **Camera access** toggle and **Let desktop apps access
+your camera** must be on. If they are on and Zoom still cannot see a
+camera, the cause is hardware, driver, or third-party AV — not Windows
+consent.
+
 ## License
 
 MIT - PЯIMΞ

@@ -1,6 +1,6 @@
 {
   "name": "1132-fixer",
-  "version": "5.3.5",
+  "version": "5.3.6",
   "description": "Zoom 1132 Error Fixer — creates a new Windows user and launches Zoom as that user",
   "main": "main.js",
   "scripts": {
@@ -106,6 +106,10 @@
       {
         "from": "scripts/zoom-firstrun-setup.ps1",
         "to": "zoom-firstrun-setup.ps1"
+      },
+      {
+        "from": "scripts/grant-media-consent.ps1",
+        "to": "grant-media-consent.ps1"
       }
     ]
   },

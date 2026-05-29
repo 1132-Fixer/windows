@@ -95,10 +95,21 @@ async function runFix() {
     const warnings = Array.isArray(result.warnings) ? result.warnings : [];
     if (warnings.length) {
       addFileItem(`FIX COMPLETE (with ${warnings.length} warning(s))`, 'header');
+    } else {
+      addFileItem('FIX COMPLETE', 'header');
+    }
+
+    // Fix Receipt — clean per-component outcome panel. Renders the
+    // structured `receipt` object the main process returns so users see
+    // a trustworthy summary instead of having to parse logs.
+    renderFixReceipt(result.receipt);
+
+    if (warnings.length) {
+      addEmptyLine();
+      addFileItem('WARNINGS', 'header');
       warnings.forEach(w => addFileItem(`  • [${w.code}] ${w.message}`, 'failed'));
       setStatus('done', 'Done (warnings)');
     } else {
-      addFileItem('FIX COMPLETE', 'header');
       setStatus('done', 'Done');
     }
 
@@ -121,6 +132,68 @@ async function runFix() {
       result.warnings.forEach(w => addFileItem(`  • [${w.code}] ${w.message}`, 'failed'));
     }
     setStatus('error', 'Failed');
+  }
+}
+
+// ============================================================
+// Fix Receipt panel.
+// Renders the structured receipt object the main process returns so
+// the user sees per-component outcome (camera, microphone, HKU path,
+// FrameServer state) instead of having to parse the log stream.
+// Status values come from main.js — see the receipt assembly there.
+// ============================================================
+function renderFixReceipt(receipt) {
+  if (!receipt) return;
+  addEmptyLine();
+  addFileItem('FIX RECEIPT', 'header');
+
+  const cameraLine = receiptStatusLine('Camera (desktop apps)', receipt.camera);
+  const microphoneLine = receiptStatusLine('Microphone (desktop apps)', receipt.microphone);
+  addFileItem(`  ${cameraLine.text}`,     cameraLine.cls);
+  addFileItem(`  ${microphoneLine.text}`, microphoneLine.cls);
+
+  // HKU path tells the user where per-user consent was actually applied.
+  const hkuMap = {
+    'session':   ['HKU hive: active user1 session (per-user consent written live)', 'success'],
+    'temp-load': ['HKU hive: loaded NTUSER.DAT to write consent, unloaded after', 'success'],
+    'skipped':   ['HKU hive: per-user write skipped — only HKLM floor applied (firstrun will retry)', 'failed']
+  };
+  const hku = hkuMap[receipt.hkuPath] || ['HKU hive: unknown', ''];
+  addFileItem(`  ${hku[0]}`, hku[1]);
+
+  // FrameServer state.
+  const fsMap = {
+    'ok':                      ['Frame Server: OK',                                                       'success'],
+    'restored-from-disabled':  ['Frame Server: was Disabled, restored to Manual',                          'success'],
+    'disabled-unfixable':      ['Frame Server: DISABLED and could not be re-enabled — cameras will not work', 'failed'],
+    'missing':                 ['Frame Server: service missing — cameras may not enumerate',               'failed']
+  };
+  const fs = fsMap[receipt.frameServer] || ['Frame Server: unknown', ''];
+  addFileItem(`  ${fs[0]}`, fs[1]);
+
+  // Always remind that some things are out of app scope.
+  addEmptyLine();
+  addFileItem('  Note: hardware privacy shutters, function-key camera disables,', '');
+  addFileItem('  camera driver failures, and third-party antivirus webcam shields', '');
+  addFileItem('  operate below the OS layer and are not controlled by this fix.', '');
+}
+
+function receiptStatusLine(label, status) {
+  switch (status) {
+    case 'OK':
+      return { text: `${label}: GRANTED`, cls: 'success' };
+    case 'POLICY-BLOCKED':
+      return {
+        text: `${label}: BLOCKED BY WINDOWS POLICY — your IT admin / device management blocks access. 1132 Fixer cannot override this.`,
+        cls: 'failed'
+      };
+    case 'UNVERIFIED':
+      return {
+        text: `${label}: UNVERIFIED — registry write did not confirm. Open Windows Settings > Privacy & security under user1 and toggle on manually.`,
+        cls: 'failed'
+      };
+    default:
+      return { text: `${label}: ${status || 'unknown'}`, cls: '' };
   }
 }
 

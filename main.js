@@ -120,6 +120,12 @@ function getFirstRunScriptPath() {
     : path.join(__dirname, 'scripts', 'zoom-firstrun-setup.ps1');
 }
 
+function getMediaConsentScriptPath() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'grant-media-consent.ps1')
+    : path.join(__dirname, 'scripts', 'grant-media-consent.ps1');
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -1048,6 +1054,111 @@ ipcMain.handle('run-fix', async (event) => {
         Write-Host "  WARNING: HKU\\$sid not loaded; skipping Windows dark mode."
       }
     `, send);
+
+    // Grant camera + microphone consent for desktop (non-packaged) apps so
+    // Zoom can access them under user1 without manual Settings > Privacy
+    // trips. Delegated to scripts/grant-media-consent.ps1 (bundled via
+    // extraResources). Script emits KEY=VALUE diagnostic lines that we
+    // parse below; logic lives in PS for testability + reuse from CLI.
+    const consentScript = getMediaConsentScriptPath();
+    if (!fs.existsSync(consentScript)) {
+      send(`  WARNING: grant-media-consent.ps1 not found at ${consentScript}; skipping consent grant.`, 'err');
+      warnings.push({ code: 'consent_script_missing', message: `Bundled media-consent helper missing at ${consentScript}.` });
+    } else {
+      send('  Granting camera + microphone consent for desktop apps...', 'out');
+      const consentResult = {
+        cam_user: null, mic_user: null, cam_hklm: null, mic_hklm: null,
+        hku_already_loaded: false, hku_loaded_temp: false,
+        hku_unload_ok: false, hku_unload_failed: null,
+        hku_load_failed: null,
+        gpo_deny_camera: false, gpo_deny_microphone: false,
+        frameserver_restored: false, frameserver_disabled: false, frameserver_missing: false
+      };
+      const consent = await runProcess('powershell.exe',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', consentScript,
+         '-Sid', userSID, '-User', FIX_USER, '-ProfilePath', newUserProfile],
+        (line, kind) => {
+          send(`    ${line}`, kind);
+          const t = (line || '').trim();
+          // Parse structured markers
+          if (t === 'GPO_DENY_CAMERA') {
+            consentResult.gpo_deny_camera = true;
+            warnings.push({ code: 'gpo_deny_camera', message: 'Camera access is blocked by Windows organization/privacy policy (LetAppsAccessCamera = Force Deny). 1132 Fixer cannot override this. Ask your Windows administrator or use a non-managed device.' });
+          } else if (t === 'GPO_DENY_MICROPHONE') {
+            consentResult.gpo_deny_microphone = true;
+            warnings.push({ code: 'gpo_deny_microphone', message: 'Microphone access is blocked by Windows organization/privacy policy (LetAppsAccessMicrophone = Force Deny). 1132 Fixer cannot override this. Ask your Windows administrator or use a non-managed device.' });
+          } else if (t === 'HKU_ALREADY_LOADED=YES') {
+            consentResult.hku_already_loaded = true;
+          } else if (t === 'HKU_LOADED_TEMP=YES') {
+            consentResult.hku_loaded_temp = true;
+          } else if (t.startsWith('HKU_LOAD_FAILED=')) {
+            consentResult.hku_load_failed = t.slice(16);
+            warnings.push({ code: 'consent_hku_load_failed', message: `HKU\\${userSID} hive could not be loaded for per-user consent: ${t.slice(16)}. First-run reassertion in zoom-firstrun-setup.ps1 will retry from inside user1's session.` });
+          } else if (t === 'HKU_UNLOAD_OK=YES') {
+            consentResult.hku_unload_ok = true;
+          } else if (t.startsWith('HKU_UNLOAD_FAILED=')) {
+            consentResult.hku_unload_failed = t.slice(18);
+            warnings.push({ code: 'consent_hku_unload_failed', message: `HKU\\${userSID} hive could not be unloaded after consent write: ${t.slice(18)}. NTUSER.DAT may stay locked until reboot.` });
+          } else if (t === 'HKU_NOT_LOADED') {
+            // Legacy marker — only push warning if no specific HKU_LOAD_FAILED already emitted.
+            if (!consentResult.hku_load_failed) {
+              warnings.push({ code: 'consent_hku_not_loaded', message: `HKU\\${userSID} hive was not loaded and could not be loaded for per-user consent. Per-user camera/mic consent skipped at main step; first-run will retry.` });
+            }
+          } else if (t === 'FRAMESERVER_RESTORED') {
+            consentResult.frameserver_restored = true;
+          } else if (t === 'FRAMESERVER_DISABLED') {
+            consentResult.frameserver_disabled = true;
+            warnings.push({ code: 'frameserver_disabled', message: 'Windows Camera Frame Server service is Disabled and could not be re-enabled. Cameras will not enumerate for any desktop app until FrameServer is set to Manual or Automatic.' });
+          } else if (t === 'FRAMESERVER_MISSING') {
+            consentResult.frameserver_missing = true;
+            warnings.push({ code: 'frameserver_missing', message: 'FrameServer service not present on this Windows build (unusual on Win10/11) — cameras may not enumerate.' });
+          } else if (t.startsWith('ERROR=')) {
+            warnings.push({ code: 'consent_script_error', message: t.slice(6) });
+          } else if (t.startsWith('HKLM_WRITE_FAIL=')) {
+            warnings.push({ code: 'consent_hklm_write_fail', message: `HKLM consent write failed: ${t.slice(16)}` });
+          } else if (t.startsWith('HKU_WRITE_FAIL=')) {
+            warnings.push({ code: 'consent_hku_write_fail', message: `HKU consent write failed: ${t.slice(15)}` });
+          } else if (t.startsWith('CAM_USER_GRANTED=')) consentResult.cam_user = t.slice(17) === 'YES';
+          else if   (t.startsWith('MIC_USER_GRANTED=')) consentResult.mic_user = t.slice(17) === 'YES';
+          else if   (t.startsWith('CAM_HKLM_GRANTED=')) consentResult.cam_hklm = t.slice(17) === 'YES';
+          else if   (t.startsWith('MIC_HKLM_GRANTED=')) consentResult.mic_hklm = t.slice(17) === 'YES';
+        },
+        { heartbeatMs: 5000, heartbeatLabel: 'media-consent', timeoutMs: 30000 });
+      if (consent.code !== 0) {
+        warnings.push({ code: 'consent_exit_nonzero', message: `grant-media-consent.ps1 exited with code ${consent.code}.` });
+      }
+      // Policy is authoritative — if GPO denies, registry-level claim of
+      // "fixed" is misleading. Treat policy-denied as NOT-OK, separate
+      // status from registry-not-verified.
+      const camPolicyBlock = consentResult.gpo_deny_camera;
+      const micPolicyBlock = consentResult.gpo_deny_microphone;
+      const camRegOk = consentResult.cam_user === true || consentResult.cam_hklm === true;
+      const micRegOk = consentResult.mic_user === true || consentResult.mic_hklm === true;
+      const camStatus = camPolicyBlock ? 'POLICY-BLOCKED'
+                      : camRegOk        ? 'OK'
+                      :                   'UNVERIFIED';
+      const micStatus = micPolicyBlock ? 'POLICY-BLOCKED'
+                      : micRegOk        ? 'OK'
+                      :                   'UNVERIFIED';
+      send(`  Consent: camera=${camStatus}, microphone=${micStatus} (per-user cam=${consentResult.cam_user}, mic=${consentResult.mic_user}; HKLM cam=${consentResult.cam_hklm}, mic=${consentResult.mic_hklm})`,
+           (camStatus === 'OK' && micStatus === 'OK') ? 'out' : 'err');
+      if (camStatus === 'UNVERIFIED') warnings.push({ code: 'camera_consent_unverified', message: 'Camera consent write did not verify. user1 may need to enable Camera access manually in Settings > Privacy & security > Camera, OR the FrameServer service may be Disabled.' });
+      if (micStatus === 'UNVERIFIED') warnings.push({ code: 'mic_consent_unverified',    message: 'Microphone consent write did not verify. user1 may need to enable Microphone access manually in Settings > Privacy & security > Microphone.' });
+      // Stash receipt fields on the response so renderer can show a clean
+      // outcome panel rather than parsing logs.
+      // (Exposed below in the final return alongside warnings.)
+      var consentReceipt = {
+        camera: camStatus,
+        microphone: micStatus,
+        hkuPath: consentResult.hku_already_loaded ? 'session'
+              : consentResult.hku_loaded_temp     ? 'temp-load'
+              :                                     'skipped',
+        frameServer: consentResult.frameserver_disabled ? 'disabled-unfixable'
+                  :  consentResult.frameserver_restored ? 'restored-from-disabled'
+                  :  consentResult.frameserver_missing  ? 'missing'
+                  :                                       'ok'
+      };
+    }
   } else {
     send(`  WARNING: could not resolve SID for '${FIX_USER}'; skipping dark mode.`, 'err');
     warnings.push({ code: 'sid_unresolved', message: `Could not translate '${FIX_USER}' to a SID; dark mode skipped.` });
@@ -1163,7 +1274,13 @@ ipcMain.handle('run-fix', async (event) => {
   send('  1. Sign into Zoom on first launch.', 'out');
   send('  2. Double-click "Apply Zoom Settings" on the desktop to', 'out');
   send('     push mirror-off, dual monitors, mute-on-join, etc.', 'out');
-  return { success: true, warnings };
+  return {
+    success: true,
+    warnings,
+    // typeof guard — consentReceipt is set inside the consent-script block;
+    // if that block was skipped (script missing), receipt stays undefined.
+    receipt: (typeof consentReceipt !== 'undefined') ? consentReceipt : null
+  };
 });
 
 // ============================================================
