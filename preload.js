@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   shortcutExists: () => ipcRenderer.invoke('shortcut-exists'),
   isElevated: () => ipcRenderer.invoke('is-elevated'),
   preflight: () => ipcRenderer.invoke('preflight'),
+  preflightScan: () => ipcRenderer.invoke('preflight-scan'),
+  supportReport: (context) => ipcRenderer.invoke('support-report', context),
   onFixLog: (cb) => {
     const handler = (_, data) => cb(data);
     ipcRenderer.on('fix-log', handler);

@@ -5,6 +5,29 @@ All notable changes to 1132 Fixer (Windows) are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Slice C: Premium UX
+
+### Added
+- **Preflight Scan screen.** New initial view replaces the static instruction list with an 8-card environment grid: Administrator, Zoom Workplace, Helper account (`user1`), Camera policy, Microphone policy, User registry hive (HKU), Camera Frame Server, App version. Each card is tagged Ready / Repairable / Warning / Blocked. `FIX NOW` is gated on no blocked cards.
+- **New IPC handler `preflight-scan`** in `main.js` extending `preflightCheck()` with read-only probes for helper-user state, GPO `LetAppsAccess{Camera,Microphone}` policy, FrameServer service state, and HKU hive load state. Pure read — never mutates.
+- **Staged progress UI.** Five-pill tracker (`Preparing → Verifying → Consent → Launch → Verify`) advances live by parsing `[N/8]` headers from the existing `fix-log` stream. Raw log auto-collapses behind an "Advanced Details" expander during the run and re-expands on completion.
+- **Fix Receipt polish.** The receipt panel introduced in v5.3.6 is now rendered as styled status cards (camera, microphone, HKU path, FrameServer) with status-colored left borders and inline icons.
+- **Support Report generator.** New `support-report` IPC handler builds a sanitized markdown bundle (version, OS, preflight summary, last receipt, last ~80 log lines). Usernames, profile paths (`C:\Users\<you>`), and SIDs are redacted before display. Renderer adds a footer Support Report button with a Copy-to-clipboard modal.
+- **Design tokens.** CSS custom properties for surfaces (`--bg`, `--panel`, `--border`), text (`--text`, `--muted`), status palette (`--success/warning/danger/accent/info` with bg + bd pairs), radii, shadow scale, and spacing scale. All inline styles reference tokens — no hardcoded colors.
+- **Fluent-inspired dark glass refresh.** `backdrop-filter: blur(10px)`, soft borders, depth shadows, refined typography (Segoe UI Variable with Cascadia Code monospace).
+- **Brand asset pack** under `assets/brand/`: `logo-mark.svg` (shield + wrench monogram, gradient source for any rasterized derivative), `tray.svg` (16/24/32px tray variant), and `status-{success,warning,error,running}.svg` as canonical icon sources.
+- **Accessibility pass.** Global `:focus-visible` rings, ARIA roles (`status`, `log`, `list`, `dialog`, `radiogroup`), `aria-live="polite"` on the status badge / preflight grid / log region, `aria-busy` on the preflight grid during scan, `aria-labels` on every icon-only button, keyboard activation (`Enter`/`Space`) on `.fb-choice` divs, and `Escape` to close either modal. Status palette tested for WCAG AA contrast against `--panel` surfaces.
+
+### Scope-locked (intentionally untouched)
+- `scripts/grant-media-consent.ps1` — consent logic from v5.3.6 unchanged.
+- `scripts/zoom-firstrun-setup.ps1` — first-run reassertion unchanged.
+- `main.js` consent flow (Step 7) — only extended with new read-only IPC handlers (`preflight-scan`, `support-report`); `run-fix` body untouched.
+- Static `user1`/`user1` helper-account model — tracked in upstream issue #33 (deferred to v5.4.x).
+- `electron-builder` signing config — separate work.
+
+### Out of scope (proposal only, captured in PR body)
+- New Repair Mode selector (Standard / Media-Only / Clean-Profile / Full-Reset).
+
 ## [5.3.6] - 2026-05-29
 
 ### Fixed

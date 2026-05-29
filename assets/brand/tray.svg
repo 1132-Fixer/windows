@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Tray-render variant of logo-mark — simpler silhouette for 16/24/32px.
+  Use this as the source for any tray.ico rasterization.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="1132 Fixer tray icon">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffd700"/>
+      <stop offset="100%" stop-color="#f5a623"/>
+    </linearGradient>
+  </defs>
+  <path d="M16 2 L28 7 L28 17 C28 23 22 28 16 30 C10 28 4 23 4 17 L4 7 Z"
+        fill="url(#g)"/>
+  <path d="M21 11 a3.5 3.5 0 1 0 -2 5 L11 24 a1.5 1.5 0 0 0 2.1 2.1 L21 18 a3.5 3.5 0 0 0 4 -5 L23 15 L21 13 L19 11 Z"
+        fill="#0b1020"/>
+</svg>

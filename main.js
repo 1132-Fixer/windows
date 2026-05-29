@@ -1556,3 +1556,206 @@ ipcMain.handle('submit-feedback', async (event, type, text) => {
     return { success: false, error: err.message };
   }
 });
+
+// ============================================================
+// IPC: preflight-scan — Slice C premium UX surface.
+// Builds on preflightCheck() with extra read-only probes the
+// Preflight Scan screen needs: user1 account state, GPO media
+// policy, FrameServer service state, HKU hive load state.
+// Pure read — never mutates. Status enum:
+//   'ready'      = green, nothing to do
+//   'repairable' = amber, FIX NOW will repair
+//   'warning'    = yellow, advisory, fix can still run
+//   'blocked'    = red, manual action required first
+// ============================================================
+ipcMain.handle('preflight-scan', async () => {
+  const pre = await preflightCheck();
+  const cards = {};
+
+  // --- Admin --------------------------------------------------
+  cards.admin = pre.info.elevated
+    ? { status: 'ready', label: 'Administrator', message: 'Running elevated.' }
+    : { status: 'blocked', label: 'Administrator', message: 'Not elevated. Close and re-launch with Run as administrator.' };
+
+  // --- Zoom ---------------------------------------------------
+  cards.zoom = fs.existsSync(ZOOM_PATH)
+    ? { status: 'ready', label: 'Zoom Workplace', message: ZOOM_PATH }
+    : { status: 'blocked', label: 'Zoom Workplace', message: `Not found at ${ZOOM_PATH}. Install the machine-wide MSI.` };
+
+  // --- Helper user (user1) ------------------------------------
+  const helperExists = await userExists(FIX_USER);
+  const helperProfileDir = `C:\\Users\\${FIX_USER}`;
+  const helperProfileExists = fs.existsSync(helperProfileDir);
+  if (!helperExists && !helperProfileExists) {
+    cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' will be created on FIX NOW.` };
+  } else if (helperExists && helperProfileExists) {
+    cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' exists with profile. FIX NOW will rebuild it.` };
+  } else if (helperExists) {
+    cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' account exists but no profile yet. FIX NOW will reset.` };
+  } else {
+    cards.helperUser = { status: 'warning', label: 'Helper account', message: `Stale profile folder at ${helperProfileDir} with no account. FIX NOW will clean it up.` };
+  }
+
+  // --- Cam / Mic policy + FrameServer + HKU (single PS round trip)
+  const probe = await runPSCapture(`
+    $out = @{}
+    function GetPolicy([string]$name) {
+      try {
+        $v = Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\AppPrivacy' -Name $name -EA Stop
+        return [int]$v.$name
+      } catch { return -1 }
+    }
+    $out['cam_policy'] = GetPolicy 'LetAppsAccessCamera'
+    $out['mic_policy'] = GetPolicy 'LetAppsAccessMicrophone'
+    try {
+      $svc = Get-Service FrameServer -EA Stop
+      $out['fs_status']    = [string]$svc.Status
+      $out['fs_starttype'] = [string]$svc.StartType
+    } catch {
+      $out['fs_status']    = 'MISSING'
+      $out['fs_starttype'] = 'MISSING'
+    }
+    # HKU hive — informational only (renderer maps to 'will load temp' vs 'already loaded')
+    $sid = $null
+    try { $sid = (New-Object Security.Principal.NTAccount('${FIX_USER}')).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
+    if ($sid) {
+      $null = reg query "HKU\\$sid" 2>$null
+      $out['hku_loaded'] = ($LASTEXITCODE -eq 0)
+      $out['hku_sid']    = $sid
+    } else {
+      $out['hku_loaded'] = $false
+      $out['hku_sid']    = ''
+    }
+    $out | ConvertTo-Json -Compress
+  `);
+
+  let probeData = {};
+  try { probeData = JSON.parse((probe.stdout || '').trim() || '{}'); } catch (_) { /* leave empty */ }
+
+  const policyCard = (label, val) => {
+    // val: 0 = Force Allow, 1 = User in control, 2 = Force Deny, -1 = no policy
+    if (val === 2) return { status: 'blocked',   label, message: `Blocked by Windows organization/privacy policy (Force Deny). 1132 Fixer cannot override this.` };
+    if (val === 0) return { status: 'ready',     label, message: 'Allowed by policy (Force Allow).' };
+    if (val === 1) return { status: 'ready',     label, message: 'Under user control (no Force Deny).' };
+    if (val === -1) return { status: 'ready',    label, message: 'No restrictive policy detected.' };
+    return { status: 'warning', label, message: 'Could not read policy registry.' };
+  };
+  cards.camPolicy = policyCard('Camera policy',     probeData.cam_policy);
+  cards.micPolicy = policyCard('Microphone policy', probeData.mic_policy);
+
+  // FrameServer
+  const fsStatus = probeData.fs_status;
+  const fsStart  = probeData.fs_starttype;
+  if (fsStatus === 'MISSING') {
+    cards.frameServer = { status: 'blocked', label: 'Camera Frame Server', message: 'Service not present on this Windows build — cameras will not enumerate.' };
+  } else if (fsStart === 'Disabled') {
+    cards.frameServer = { status: 'repairable', label: 'Camera Frame Server', message: 'Disabled. FIX NOW will set it to Manual so cameras can enumerate.' };
+  } else if (fsStatus === 'Running' || fsStart === 'Manual' || fsStart === 'Automatic') {
+    cards.frameServer = { status: 'ready', label: 'Camera Frame Server', message: `${fsStatus} / ${fsStart}.` };
+  } else {
+    cards.frameServer = { status: 'warning', label: 'Camera Frame Server', message: `${fsStatus} / ${fsStart} — unexpected state.` };
+  }
+
+  // HKU hive
+  if (probeData.hku_sid) {
+    cards.hku = probeData.hku_loaded
+      ? { status: 'ready',      label: 'User registry hive', message: `HKU\\${probeData.hku_sid} active — consent will write live.` }
+      : { status: 'repairable', label: 'User registry hive', message: `HKU\\${probeData.hku_sid} not loaded — FIX NOW will mount NTUSER.DAT, write consent, then unmount.` };
+  } else {
+    cards.hku = { status: 'ready', label: 'User registry hive', message: `No '${FIX_USER}' SID yet — fresh create, nothing to mount.` };
+  }
+
+  // App version
+  cards.version = { status: 'ready', label: 'App version', message: `1132 Fixer v${app.getVersion()}` };
+
+  // Roll up overall readiness for renderer convenience.
+  const statuses = Object.values(cards).map(c => c.status);
+  let overall = 'ready';
+  if (statuses.includes('blocked'))           overall = 'blocked';
+  else if (statuses.includes('repairable'))   overall = 'repairable';
+  else if (statuses.includes('warning'))      overall = 'warning';
+
+  return {
+    cards,
+    overall,
+    canRunFix: !statuses.includes('blocked'),
+    blockers: pre.blockers,
+    warnings: pre.warnings,
+    info: pre.info
+  };
+});
+
+// ============================================================
+// IPC: support-report — sanitized markdown bundle for support.
+// Caller passes the renderer-held context (last receipt, log tail);
+// main process adds version/OS/preflight and sanitizes user-identifying
+// strings before returning. Renderer presents Copy button.
+// ============================================================
+ipcMain.handle('support-report', async (_event, context = {}) => {
+  const { receipt = null, logTail = '', stage = '' } = context;
+  const version = app.getVersion();
+  const osLine = `Windows ${os.release()}`;
+  const elevated = await isElevatedSync();
+  let preflight = null;
+  try { preflight = await preflightCheck(); } catch (_) {}
+
+  const currentUser = (os.userInfo().username || '').trim();
+  const homeDir = (os.homedir() || '').trim();
+
+  const sanitize = (text) => {
+    if (!text || typeof text !== 'string') return '';
+    let out = text;
+    // SID pattern (S-1-5-21-x-y-z-w)
+    out = out.replace(/S-1-5-21-\d+-\d+-\d+-\d+/g, 'S-1-5-21-XXXX-XXXX-XXXX-XXXX');
+    // Current user home path (case-insensitive)
+    if (homeDir) {
+      const safe = homeDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      out = out.replace(new RegExp(safe, 'gi'), 'C:\\Users\\<you>');
+    }
+    // C:\Users\<currentUser>  (in case homedir-replace missed casing)
+    if (currentUser) {
+      const safe = currentUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      out = out.replace(new RegExp(`C:\\\\Users\\\\${safe}`, 'gi'), 'C:\\Users\\<you>');
+      // Bare username at word boundary (avoid replacing inside "user1")
+      out = out.replace(new RegExp(`\\b${safe}\\b`, 'gi'), '<you>');
+    }
+    return out;
+  };
+
+  const md = [];
+  md.push('## 1132 Fixer — Support Report');
+  md.push('');
+  md.push(`- **App version:** ${version}`);
+  md.push(`- **OS:** ${osLine}`);
+  md.push(`- **Administrator:** ${elevated ? 'YES' : 'NO'}`);
+  if (stage) md.push(`- **Last stage reached:** ${stage}`);
+  md.push('');
+  if (preflight) {
+    md.push('### Preflight summary');
+    md.push(`- OK: ${preflight.ok}`);
+    md.push(`- Blockers: ${preflight.blockers.length} — ${preflight.blockers.map(b => b.code).join(', ') || 'none'}`);
+    md.push(`- Warnings: ${preflight.warnings.length} — ${preflight.warnings.map(w => w.code).join(', ') || 'none'}`);
+    if (preflight.info && preflight.info.seclogon) {
+      md.push(`- Secondary Logon: ${preflight.info.seclogon.status} / ${preflight.info.seclogon.startType}`);
+    }
+    md.push('');
+  }
+  if (receipt) {
+    md.push('### Last fix receipt');
+    md.push('```');
+    md.push(`camera:      ${receipt.camera || 'n/a'}`);
+    md.push(`microphone:  ${receipt.microphone || 'n/a'}`);
+    md.push(`hkuPath:     ${receipt.hkuPath || 'n/a'}`);
+    md.push(`frameServer: ${receipt.frameServer || 'n/a'}`);
+    md.push('```');
+    md.push('');
+  }
+  if (logTail) {
+    md.push('### Recent log (sanitized — last ~80 lines)');
+    md.push('```');
+    const tail = logTail.split(/\r?\n/).slice(-80).join('\n');
+    md.push(sanitize(tail));
+    md.push('```');
+  }
+  return { success: true, markdown: md.join('\n') };
+});
