@@ -1,23 +1,25 @@
 // ============================================================
-// 1132 Fixer renderer — Slice C premium UX
+// 1132 Fixer renderer
 //
 // View model:
-//   preflight  -> shows preflight card grid + FIX NOW gate
-//   running    -> shows 5-stage tracker; raw log collapses to Advanced Details
-//   done       -> shows receipt; raw log re-expands by default
+//   preflight  -> static numbered instruction list. CHECK & FIX
+//                 opens the wizard modal which walks preflight
+//                 cards one at a time and ends with a FIX NOW
+//                 confirm step.
+//   running    -> 5-stage tracker; raw log collapses to Advanced Details
+//   done       -> receipt; raw log re-expands by default
 // ============================================================
 
-const fileList    = document.getElementById('fileList');
-const fixBtn      = document.getElementById('fixBtn');
-const shortcutBtn = document.getElementById('shortcutBtn');
-const checkEnvBtn = document.getElementById('checkEnvBtn');
-const preflightView = document.getElementById('preflightView');
-const runningView   = document.getElementById('runningView');
-const preflightGrid = document.getElementById('preflightGrid');
-const stageTracker  = document.getElementById('stageTracker');
-const receiptPanel  = document.getElementById('receiptPanel');
-const logToggle     = document.getElementById('logToggle');
-const logToggleLabel= document.getElementById('logToggleLabel');
+const fileList        = document.getElementById('fileList');
+const fixBtn          = document.getElementById('fixBtn');
+const shortcutBtn     = document.getElementById('shortcutBtn');
+const preflightView   = document.getElementById('preflightView');
+const runningView     = document.getElementById('runningView');
+const instructionList = document.getElementById('instructionList');
+const stageTracker    = document.getElementById('stageTracker');
+const receiptPanel    = document.getElementById('receiptPanel');
+const logToggle       = document.getElementById('logToggle');
+const logToggleLabel  = document.getElementById('logToggleLabel');
 
 let isRunning = false;
 let lastReceipt = null;
@@ -141,80 +143,82 @@ logToggle.addEventListener('click', () => {
 });
 
 // ============================================================
-// Preflight Scan
+// Status icon SVGs — shared between wizard + receipt.
+// Inline strings so the renderer ships nothing extra.
 // ============================================================
-const PF_BADGE = {
+const STATUS_BADGE = {
   ready:      'READY',
   repairable: 'REPAIRABLE',
   warning:    'WARNING',
   blocked:    'BLOCKED'
 };
 
-const PF_ICONS = {
-  ready:      svgCheck(),
-  repairable: svgWrench(),
-  warning:    svgWarn(),
-  blocked:    svgBlock()
-};
+function svgCheck(klass)  { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`; }
+function svgWrench(klass) { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#f5a623" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-7-7 8-8 .7 1.3z"/><line x1="9" y1="15" x2="4.5" y2="19.5"/></svg>`; }
+function svgWarn(klass)   { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#f5c518" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>`; }
+function svgBlock(klass)  { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`; }
 
-// Inline SVG so we don't ship extra files. data: URIs allowed by CSP.
-function svgCheck()  { return `<svg class="pf-card-icon" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`; }
-function svgWrench() { return `<svg class="pf-card-icon" viewBox="0 0 24 24" fill="none" stroke="#f5a623" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-7-7 8-8 .7 1.3z"/><line x1="9" y1="15" x2="4.5" y2="19.5"/></svg>`; }
-function svgWarn()   { return `<svg class="pf-card-icon" viewBox="0 0 24 24" fill="none" stroke="#f5c518" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>`; }
-function svgBlock()  { return `<svg class="pf-card-icon" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`; }
-
-function renderPreflightCard(card) {
-  const wrap = document.createElement('div');
-  wrap.className = 'pf-card';
-  wrap.setAttribute('data-status', card.status);
-  wrap.setAttribute('role', 'listitem');
-  const head = document.createElement('div');
-  head.className = 'pf-card-head';
-  head.innerHTML = `${PF_ICONS[card.status] || svgCheck()}
-    <span class="pf-card-label">${escapeHtml(card.label)}</span>
-    <span class="pf-card-badge">${PF_BADGE[card.status] || ''}</span>`;
-  const msg = document.createElement('div');
-  msg.className = 'pf-card-msg';
-  msg.textContent = card.message;
-  wrap.appendChild(head);
-  wrap.appendChild(msg);
-  return wrap;
+function iconForStatus(status, klass) {
+  switch (status) {
+    case 'ready':      return svgCheck(klass);
+    case 'repairable': return svgWrench(klass);
+    case 'warning':    return svgWarn(klass);
+    case 'blocked':    return svgBlock(klass);
+    default:           return svgCheck(klass);
+  }
 }
 
-const PREFLIGHT_ORDER = ['admin', 'zoom', 'helperUser', 'camPolicy', 'micPolicy', 'hku', 'frameServer', 'version'];
+// ============================================================
+// Initial instruction list — re-renders the pre-Slice C content.
+// Replaces the old 8-card preflight grid on landing. Preflight
+// itself runs inside the wizard modal triggered by CHECK & FIX.
+// ============================================================
+function showInstructions(elevated) {
+  instructionList.innerHTML = '';
+  const add = (text, cls) => {
+    const div = document.createElement('div');
+    div.className = 'file-item ' + (cls || '');
+    div.textContent = text;
+    instructionList.appendChild(div);
+  };
+  const addEmpty = () => {
+    const div = document.createElement('div');
+    div.className = 'file-item empty-line';
+    div.innerHTML = '&nbsp;';
+    instructionList.appendChild(div);
+  };
 
-async function runPreflightScan() {
-  setStatus('scanning', 'Scanning');
-  preflightGrid.setAttribute('aria-busy', 'true');
-  preflightGrid.innerHTML = '<div class="pf-empty">Scanning environment…</div>';
-  fixBtn.disabled = true;
-  shortcutBtn.disabled = true;
-  try {
-    const result = await window.electronAPI.preflightScan();
-    preflightGrid.innerHTML = '';
-    for (const key of PREFLIGHT_ORDER) {
-      const card = result.cards[key];
-      if (!card) continue;
-      preflightGrid.appendChild(renderPreflightCard(card));
-    }
-    preflightGrid.setAttribute('aria-busy', 'false');
-
-    const elevated = result.cards.admin && result.cards.admin.status === 'ready';
-    fixBtn.disabled = !result.canRunFix;
-    shortcutBtn.disabled = !elevated;
-
-    if (result.overall === 'blocked') {
-      setStatus('error', 'Blocked');
-    } else if (result.overall === 'repairable' || result.overall === 'warning') {
-      setStatus('warn', 'Action needed');
-    } else {
-      setStatus('done', 'Ready');
-    }
-  } catch (err) {
-    preflightGrid.innerHTML = `<div class="pf-empty">Preflight failed: ${escapeHtml(err.message || String(err))}</div>`;
-    preflightGrid.setAttribute('aria-busy', 'false');
-    setStatus('error', 'Error');
+  if (!elevated) {
+    add('NOT RUNNING AS ADMINISTRATOR', 'error');
+    add('→ Close this app and right-click → Run as administrator', 'error');
+    addEmpty();
   }
+  add('WHAT THIS DOES', 'header');
+  addEmpty();
+  add('Fully resets the local user1 account and launches a clean', '');
+  add('Zoom Workplace session under it. Destructive — do NOT run', '');
+  add('while signed in AS user1.', '');
+  addEmpty();
+  add('  1. Checks Windows setup and required permissions', '');
+  add('  2. Closes any active Zoom / user1 sessions safely', '');
+  add('  3. Cleans stale user1 profile data when needed', '');
+  add('  4. Recreates the local user1 Zoom profile', '');
+  add('  5. Launches Zoom once as user1 so Windows creates the profile', '');
+  add('  6. Applies the required Zoom profile setup', '');
+  add('  7. Relaunches Zoom using the refreshed user1 profile', '');
+  addEmpty();
+  add('Notes:', '');
+  add('  • No personal files, chats, contacts, or Zoom account data', '');
+  add('    are copied.', '');
+  add('  • Windows Home may skip session enumeration when unavailable;', '');
+  add('    cleanup still continues safely.', '');
+  add('  • The optional Desktop shortcut is only created if one does', '');
+  add('    not already exist.', '');
+  add('  • The shortcut uses the 1132 Fixer icon and launches Zoom', '');
+  add('    as user1.', '');
+  addEmpty();
+  add('Click CHECK & FIX to walk through environment checks one at a time', 'header');
+  add('and confirm the fix before any changes are made.', '');
 }
 
 // ============================================================
@@ -454,13 +458,6 @@ function friendlyError(code) {
 // ============================================================
 // Re-scan / shortcut helpers
 // ============================================================
-async function checkEnvironment() {
-  if (isRunning) return;
-  showView('preflight');
-  setStageTracker(false);
-  await runPreflightScan();
-}
-
 async function createShortcut(showHeader) {
   if (showHeader) {
     addEmptyLine();
@@ -472,16 +469,184 @@ async function createShortcut(showHeader) {
 }
 
 // ============================================================
+// Wizard — guided preflight walkthrough.
+// On open: calls preflightScan IPC, builds an ordered step list.
+// Each step is one preflight card; final step is the FIX NOW
+// confirmation summary. Blocked status disables Next so the user
+// must Cancel; Repairable/Warning are passable.
+// ============================================================
+const PREFLIGHT_ORDER = ['admin', 'zoom', 'helperUser', 'camPolicy', 'micPolicy', 'hku', 'frameServer', 'version'];
+
+const wizardOverlay  = document.getElementById('wizardOverlay');
+const wizardStepLbl  = document.getElementById('wizardStepLabel');
+const wizardDots     = document.getElementById('wizardDots');
+const wizardBody     = document.getElementById('wizardBody');
+const wizardIcon     = document.getElementById('wizardIcon');
+const wizardLabel    = document.getElementById('wizardLabel');
+const wizardBadge    = document.getElementById('wizardBadge');
+const wizardMsg      = document.getElementById('wizardMsg');
+const wizardHint     = document.getElementById('wizardHint');
+const wizardSummary  = document.getElementById('wizardSummary');
+const wizardConfNote = document.getElementById('wizardConfirmNote');
+const wizardBackBtn  = document.getElementById('wizardBack');
+const wizardNextBtn  = document.getElementById('wizardNext');
+const wizardCancel   = document.getElementById('wizardCancel');
+
+let wizardSteps = [];
+let wizardIdx   = 0;
+let wizardCanRunFix = false;
+let releaseWizardTrap = null;
+
+function statusHint(status) {
+  switch (status) {
+    case 'ready':      return 'No action needed.';
+    case 'repairable': return 'FIX NOW will repair this automatically.';
+    case 'warning':    return 'Advisory — FIX NOW can still proceed.';
+    case 'blocked':    return 'Cannot proceed. Use Cancel and resolve this manually.';
+    default:           return '';
+  }
+}
+
+async function openWizard() {
+  if (isRunning) return;
+  wizardOverlay.classList.add('show');
+  wizardSteps = [];
+  wizardIdx = 0;
+  wizardCanRunFix = false;
+  releaseWizardTrap = installFocusTrap(wizardOverlay);
+  wizardLabel.textContent = 'Loading…';
+  wizardMsg.textContent = 'Reading environment…';
+  wizardBadge.textContent = '';
+  wizardIcon.innerHTML = '';
+  wizardBody.setAttribute('data-status', 'ready');
+  wizardSummary.classList.remove('active');
+  wizardConfNote.style.display = 'none';
+  wizardNextBtn.disabled = true;
+  wizardBackBtn.disabled = true;
+  wizardStepLbl.textContent = 'Loading…';
+  wizardDots.innerHTML = '';
+  setStatus('scanning', 'Checking');
+  try {
+    const result = await window.electronAPI.preflightScan();
+    for (const key of PREFLIGHT_ORDER) {
+      const card = result.cards[key];
+      if (card) wizardSteps.push(card);
+    }
+    // Append synthetic confirm step
+    wizardSteps.push({ key: '__confirm__', label: 'CONFIRM FIX', status: (result.canRunFix ? 'ready' : 'blocked'), message: '' });
+    wizardCanRunFix = !!result.canRunFix;
+
+    // Set status badge to reflect overall outcome.
+    if (result.overall === 'blocked')         setStatus('error', 'Blocked');
+    else if (result.overall === 'repairable' || result.overall === 'warning') setStatus('warn', 'Action needed');
+    else                                       setStatus('done', 'Ready');
+
+    renderWizardStep(0);
+  } catch (err) {
+    wizardLabel.textContent = 'Preflight failed';
+    wizardMsg.textContent = err && err.message ? err.message : String(err);
+    wizardBody.setAttribute('data-status', 'blocked');
+    wizardNextBtn.disabled = true;
+    setStatus('error', 'Error');
+  }
+}
+
+function closeWizard() {
+  wizardOverlay.classList.remove('show');
+  if (releaseWizardTrap) { releaseWizardTrap(); releaseWizardTrap = null; }
+}
+
+function renderWizardStep(i) {
+  if (!wizardSteps.length) return;
+  wizardIdx = Math.max(0, Math.min(i, wizardSteps.length - 1));
+  const step = wizardSteps[wizardIdx];
+  const isConfirm = step.key === '__confirm__';
+  const total = wizardSteps.length;
+  wizardStepLbl.textContent = `Step ${wizardIdx + 1} of ${total}`;
+
+  // Dots — colored by each step's status, current one ringed.
+  wizardDots.innerHTML = '';
+  wizardSteps.forEach((s, idx) => {
+    const d = document.createElement('div');
+    let cls = 'wz-dot';
+    if (idx === wizardIdx)                        cls += ' current';
+    else if (s.status === 'blocked')              cls += ' fail';
+    else if (s.status === 'warning')              cls += ' warn';
+    else                                          cls += ' done';
+    d.className = cls;
+    wizardDots.appendChild(d);
+  });
+
+  wizardBody.setAttribute('data-status', step.status);
+  wizardIcon.innerHTML = iconForStatus(step.status, 'wz-icon');
+  wizardLabel.textContent = step.label || step.key;
+  wizardBadge.textContent = STATUS_BADGE[step.status] || '';
+
+  if (isConfirm) {
+    // Final step — show summary list + the confirm note.
+    wizardMsg.textContent = wizardCanRunFix
+      ? 'Review the environment summary below. Click FIX NOW to apply changes.'
+      : 'One or more environment checks are BLOCKED. The fix cannot run. Cancel and resolve the blockers, then re-open the wizard.';
+    wizardHint.textContent = '';
+    wizardSummary.classList.add('active');
+    wizardSummary.innerHTML = '';
+    for (let k = 0; k < wizardSteps.length - 1; k++) {
+      const s = wizardSteps[k];
+      const row = document.createElement('div');
+      row.className = 'wz-summary-row';
+      row.setAttribute('data-status', s.status);
+      row.setAttribute('role', 'listitem');
+      row.innerHTML = `${iconForStatus(s.status, 'wz-icon')}
+        <span class="wz-summary-label">${escapeHtml(s.label || s.key)}</span>
+        <span class="wz-summary-status">${STATUS_BADGE[s.status] || ''}</span>`;
+      wizardSummary.appendChild(row);
+    }
+    wizardConfNote.style.display = 'block';
+    wizardConfNote.classList.toggle('danger', !wizardCanRunFix);
+    wizardNextBtn.textContent = 'FIX NOW';
+    wizardNextBtn.disabled = !wizardCanRunFix;
+  } else {
+    wizardSummary.classList.remove('active');
+    wizardConfNote.style.display = 'none';
+    wizardMsg.textContent = step.message || '';
+    wizardHint.textContent = statusHint(step.status);
+    wizardNextBtn.textContent = 'Next';
+    // Blocked status forces Cancel. Other statuses pass through.
+    wizardNextBtn.disabled = (step.status === 'blocked');
+  }
+  wizardBackBtn.disabled = (wizardIdx === 0);
+}
+
+function wizardNext() {
+  if (!wizardSteps.length) return;
+  const step = wizardSteps[wizardIdx];
+  if (step.key === '__confirm__') {
+    if (!wizardCanRunFix) return;
+    closeWizard();
+    runFix();
+    return;
+  }
+  renderWizardStep(wizardIdx + 1);
+}
+
+function wizardBack() {
+  if (wizardIdx > 0) renderWizardStep(wizardIdx - 1);
+}
+
+wizardNextBtn.addEventListener('click', wizardNext);
+wizardBackBtn.addEventListener('click', wizardBack);
+wizardCancel.addEventListener('click', closeWizard);
+
+// ============================================================
 // Bootstrap
 // ============================================================
 window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnExit').addEventListener('click', () => window.electronAPI.quitApp());
-  fixBtn.addEventListener('click', runFix);
+  fixBtn.addEventListener('click', openWizard);
   shortcutBtn.addEventListener('click', async () => {
     const proceed = await window.electronAPI.showShortcutPrompt();
     if (proceed) await createShortcut(true);
   });
-  checkEnvBtn.addEventListener('click', checkEnvironment);
 
   window.electronAPI.onFixLog(({ line, kind }) => {
     const cls = kind === 'err' ? 'failed'
@@ -491,10 +656,14 @@ window.addEventListener('DOMContentLoaded', async () => {
     addFileItem(line, cls);
   });
 
-  // Initial state: preflight view.
+  // Initial state: instruction view.
   showView('preflight');
   setStageTracker(false);
-  await runPreflightScan();
+  const elevated = await window.electronAPI.isElevated();
+  showInstructions(elevated);
+  fixBtn.disabled  = !elevated;
+  shortcutBtn.disabled = !elevated;
+  setStatus(elevated ? '' : 'error', elevated ? 'Ready' : 'Not Admin');
 });
 
 // ============================================================
@@ -689,10 +858,11 @@ supportCopyBtn.addEventListener('click', async () => {
   }
 });
 
-// Esc closes either modal.
+// Esc closes any open modal.
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    if (supportOverlay.classList.contains('show')) closeSupportReport();
-    if (document.getElementById('fbOverlay').classList.contains('show')) closeFeedback();
+    if (wizardOverlay.classList.contains('show'))                          closeWizard();
+    if (supportOverlay.classList.contains('show'))                         closeSupportReport();
+    if (document.getElementById('fbOverlay').classList.contains('show'))   closeFeedback();
   }
 });

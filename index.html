@@ -740,6 +740,132 @@
       flex-wrap: wrap;
     }
     .sr-copy-status { font-size: 11.5px; color: var(--success); min-height: 14px; }
+
+    /* ============================================================
+       WIZARD MODAL — guided preflight walkthrough
+       Card-per-step, Back/Next/FIX NOW. Re-uses .fb-overlay shell
+       so focus trap + Escape behavior compose cleanly.
+       ============================================================ */
+    .wz-card { width: 560px; max-width: 95%; }
+    .wz-step-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 1px;
+      margin-bottom: var(--s-3);
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    .wz-dots { display: flex; gap: 5px; }
+    .wz-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--border-strong);
+      transition: background 0.2s;
+    }
+    .wz-dot.done { background: var(--success); }
+    .wz-dot.warn { background: var(--warning); }
+    .wz-dot.fail { background: var(--danger); }
+    .wz-dot.current { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+    .wz-body {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      padding: var(--s-4);
+      min-height: 150px;
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-2);
+    }
+    .wz-body[data-status="ready"]      { border-color: var(--success-bd); }
+    .wz-body[data-status="repairable"] { border-color: var(--accent-bd);  }
+    .wz-body[data-status="warning"]    { border-color: var(--warning-bd); }
+    .wz-body[data-status="blocked"]    { border-color: var(--danger-bd);  }
+    .wz-head {
+      display: flex;
+      align-items: center;
+      gap: var(--s-2);
+    }
+    .wz-icon { width: 22px; height: 22px; flex-shrink: 0; }
+    .wz-label {
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.6px;
+      color: var(--text);
+      text-transform: uppercase;
+    }
+    .wz-badge {
+      margin-left: auto;
+      font-size: 10px;
+      font-weight: 800;
+      padding: 4px 9px;
+      border-radius: var(--r-pill);
+      letter-spacing: 1px;
+      border: 1px solid transparent;
+    }
+    .wz-body[data-status="ready"]      .wz-badge { color: var(--success); background: var(--success-bg); border-color: var(--success-bd); }
+    .wz-body[data-status="repairable"] .wz-badge { color: var(--accent);  background: var(--accent-bg);  border-color: var(--accent-bd); }
+    .wz-body[data-status="warning"]    .wz-badge { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-bd); }
+    .wz-body[data-status="blocked"]    .wz-badge { color: var(--danger);  background: var(--danger-bg);  border-color: var(--danger-bd); }
+    .wz-msg {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-top: var(--s-2);
+    }
+    .wz-hint {
+      font-size: 11.5px;
+      color: var(--dim);
+      font-style: italic;
+      margin-top: auto;
+    }
+    .wz-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-top: var(--s-3);
+      flex-wrap: wrap;
+    }
+    .wz-actions-right { display: flex; gap: 8px; }
+    .wz-summary {
+      display: none;
+      flex-direction: column;
+      gap: var(--s-2);
+    }
+    .wz-summary.active { display: flex; }
+    .wz-summary-row {
+      display: flex;
+      align-items: center;
+      gap: var(--s-2);
+      padding: 8px var(--s-3);
+      background: var(--panel-3);
+      border-left: 3px solid var(--border-strong);
+      border-radius: var(--r-sm);
+      font-size: 12px;
+    }
+    .wz-summary-row[data-status="ready"]      { border-left-color: var(--success); }
+    .wz-summary-row[data-status="repairable"] { border-left-color: var(--accent);  }
+    .wz-summary-row[data-status="warning"]    { border-left-color: var(--warning); }
+    .wz-summary-row[data-status="blocked"]    { border-left-color: var(--danger);  }
+    .wz-summary-label { color: var(--text); font-weight: 600; }
+    .wz-summary-status { margin-left: auto; color: var(--muted); font-size: 11px; letter-spacing: 0.6px; }
+    .wz-confirm-note {
+      font-size: 12.5px;
+      color: var(--text);
+      background: var(--accent-bg);
+      border: 1px solid var(--accent-bd);
+      border-radius: var(--r-sm);
+      padding: 10px 12px;
+      line-height: 1.5;
+    }
+    .wz-confirm-note.danger {
+      color: var(--text);
+      background: var(--danger-bg);
+      border-color: var(--danger-bd);
+    }
   </style>
 </head>
 <body>
@@ -762,18 +888,12 @@
   <div class="main" role="main">
 
     <!-- ============================================================
-         Preflight Scan view (initial)
+         Instruction view (initial) — static numbered explanation.
+         Replaces the 8-card preflight grid in v5.3.7. Preflight now
+         runs inside a guided modal triggered by the CHECK & FIX button.
          ============================================================ -->
-    <section class="view active" id="preflightView" aria-label="Preflight environment scan">
-      <div class="pf-head">
-        <div>
-          <div class="pf-title">PREFLIGHT SCAN</div>
-          <div class="pf-subtitle">Read-only environment check. No changes are made until you click FIX NOW.</div>
-        </div>
-      </div>
-      <div class="pf-grid" id="preflightGrid" role="list" aria-live="polite" aria-busy="true">
-        <div class="pf-empty">Scanning environment…</div>
-      </div>
+    <section class="view active" id="preflightView" aria-label="What this app does">
+      <div class="file-list" id="instructionList" role="region" aria-label="What this app does"></div>
     </section>
 
     <!-- ============================================================
@@ -805,8 +925,7 @@
     </section>
 
     <div class="button-container">
-      <button id="fixBtn" class="btn btn-primary" disabled aria-label="Run the fix">FIX NOW</button>
-      <button id="checkEnvBtn" class="btn" title="Re-run the read-only environment scan. No changes made.">Re-scan</button>
+      <button id="fixBtn" class="btn btn-primary" disabled aria-label="Run a guided environment check, then the fix">CHECK &amp; FIX</button>
       <button id="shortcutBtn" class="btn">Desktop Shortcut</button>
     </div>
 
@@ -940,6 +1059,42 @@
         <div style="display:flex; gap:8px;">
           <button class="fb-btn fb-btn-cancel" id="supportClose">Close</button>
           <button class="fb-btn fb-btn-submit" id="supportCopy">Copy to clipboard</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       Wizard modal — guided preflight walkthrough
+       Steps 1..N = preflight cards (Admin/Zoom/Helper/CamPolicy/MicPolicy/HKU/FrameServer/Version).
+       Final step = summary + FIX NOW confirm.
+       ============================================================ -->
+  <div class="fb-overlay" id="wizardOverlay" role="dialog" aria-modal="true" aria-labelledby="wizardTitle">
+    <div class="fb-card wz-card">
+      <div class="fb-title" id="wizardTitle">Check &amp; Fix</div>
+      <div class="wz-step-meta">
+        <span id="wizardStepLabel">Step 1 of 8</span>
+        <div class="wz-dots" id="wizardDots" aria-hidden="true"></div>
+      </div>
+      <div class="wz-body" id="wizardBody" data-status="ready" aria-live="polite">
+        <div class="wz-head">
+          <span id="wizardIcon" aria-hidden="true"></span>
+          <span class="wz-label" id="wizardLabel">Loading…</span>
+          <span class="wz-badge" id="wizardBadge"></span>
+        </div>
+        <div class="wz-msg" id="wizardMsg">Reading environment…</div>
+        <div class="wz-hint" id="wizardHint"></div>
+        <div class="wz-summary" id="wizardSummary" role="list"></div>
+        <div class="wz-confirm-note" id="wizardConfirmNote" style="display:none;">
+          About to recreate the local <strong>user1</strong> account and relaunch Zoom under it.
+          Do <strong>not</strong> proceed while signed in AS <em>user1</em>.
+        </div>
+      </div>
+      <div class="wz-actions">
+        <button class="fb-btn fb-btn-cancel" id="wizardCancel">Cancel</button>
+        <div class="wz-actions-right">
+          <button class="fb-btn fb-btn-cancel" id="wizardBack" disabled>Back</button>
+          <button class="fb-btn fb-btn-submit" id="wizardNext">Next</button>
         </div>
       </div>
     </div>
