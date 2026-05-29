@@ -139,6 +139,23 @@ your camera** must be on. If they are on and Zoom still cannot see a
 camera, the cause is hardware, driver, or third-party AV — not Windows
 consent.
 
+## Release & CI Setup
+
+Local development uses `npm run build` (portable x64) and `npm run release` (NSIS installer + auto-publish to the Releases repo).
+
+The `release` script invokes `electron-builder --publish always`, which **requires a GitHub Personal Access Token** so the build can create the release on `PrimeUpYourLife/1132-Fixer-Windows-Releases` and upload the artifact:
+
+| Variable | Where | Scope |
+|---|---|---|
+| `GH_TOKEN` | local shell **or** GitHub Actions repo secret named `GH_TOKEN` | `repo` (write access to the Releases repo) |
+
+The `build` script (`electron-builder --win portable --x64`) also auto-detects CI and will attempt to publish if a draft release exists. To make CI green without publishing, either:
+
+1. Set `GH_TOKEN` as a repo secret on `1132-Fixer-Windows` and let CI publish, **or**
+2. Change the CI workflow to invoke `electron-builder --win portable --x64 --publish never` for non-release branches.
+
+Local builds never hit this path — `--publish never` is the default outside CI.
+
 ## License
 
 MIT - PЯIMΞ

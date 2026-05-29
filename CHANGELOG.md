@@ -5,7 +5,7 @@ All notable changes to 1132 Fixer (Windows) are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — Slice C: Premium UX
+## [5.3.7] - 2026-05-29 — Slice C: Premium UX
 
 ### Added
 - **Preflight Scan screen.** New initial view replaces the static instruction list with an 8-card environment grid: Administrator, Zoom Workplace, Helper account (`user1`), Camera policy, Microphone policy, User registry hive (HKU), Camera Frame Server, App version. Each card is tagged Ready / Repairable / Warning / Blocked. `FIX NOW` is gated on no blocked cards.
