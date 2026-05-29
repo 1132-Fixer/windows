@@ -1701,6 +1701,15 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
 
   const currentUser = (os.userInfo().username || '').trim();
   const homeDir = (os.homedir() || '').trim();
+  const hostname = (os.hostname() || '').trim();
+  const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // Belt-and-braces: never redact the operator name when it collides with
+  // the public helper-account constant FIX_USER ('user1'). The bare-username
+  // regex would otherwise corrupt every legitimate "Account 'user1' created"
+  // log line. preflightCheck() already blocks this case via 'running_as_target',
+  // but defense-in-depth keeps the sanitizer safe even if that gate moves.
+  const safeToRedactBareUser = currentUser && currentUser.toLowerCase() !== FIX_USER.toLowerCase();
 
   const sanitize = (text) => {
     if (!text || typeof text !== 'string') return '';
@@ -1709,15 +1718,23 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
     out = out.replace(/S-1-5-21-\d+-\d+-\d+-\d+/g, 'S-1-5-21-XXXX-XXXX-XXXX-XXXX');
     // Current user home path (case-insensitive)
     if (homeDir) {
-      const safe = homeDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      out = out.replace(new RegExp(safe, 'gi'), 'C:\\Users\\<you>');
+      out = out.replace(new RegExp(escRe(homeDir), 'gi'), 'C:\\Users\\<you>');
     }
     // C:\Users\<currentUser>  (in case homedir-replace missed casing)
     if (currentUser) {
-      const safe = currentUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      out = out.replace(new RegExp(`C:\\\\Users\\\\${safe}`, 'gi'), 'C:\\Users\\<you>');
-      // Bare username at word boundary (avoid replacing inside "user1")
-      out = out.replace(new RegExp(`\\b${safe}\\b`, 'gi'), '<you>');
+      const safeUser = escRe(currentUser);
+      out = out.replace(new RegExp(`C:\\\\Users\\\\${safeUser}`, 'gi'), 'C:\\Users\\<you>');
+      if (safeToRedactBareUser) {
+        // Bare username at word boundary. Guarded above so we never strip
+        // the public 'user1' helper-account name from the log.
+        out = out.replace(new RegExp(`\\b${safeUser}\\b`, 'gi'), '<you>');
+      }
+    }
+    // Machine name — appears in stale "user1.MACHINENAME" profile-folder
+    // residue and in Windows path enumerations. Redact bare hostname; the
+    // \b boundary keeps it from mangling unrelated substrings.
+    if (hostname) {
+      out = out.replace(new RegExp(`\\b${escRe(hostname)}\\b`, 'gi'), '<host>');
     }
     return out;
   };

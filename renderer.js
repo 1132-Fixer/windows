@@ -303,6 +303,59 @@ function escapeHtml(s) {
 }
 
 // ============================================================
+// Focus trap — modals.
+// Cycles Tab / Shift+Tab inside the overlay, restores focus to the
+// element that opened the modal on close. Handles 0 / 1 focusable
+// element without throwing (Tab becomes a no-op rather than an error).
+// ============================================================
+const FOCUSABLE_SEL =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function getFocusable(root) {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll(FOCUSABLE_SEL)).filter(el => {
+    // Skip elements that aren't actually rendered (display:none ancestors).
+    return el.offsetParent !== null || el === document.activeElement;
+  });
+}
+
+function installFocusTrap(overlay) {
+  if (!overlay) return () => {};
+  const opener = (document.activeElement instanceof HTMLElement) ? document.activeElement : null;
+
+  const handler = (e) => {
+    if (e.key !== 'Tab') return;
+    const items = getFocusable(overlay);
+    if (items.length === 0) { e.preventDefault(); return; }
+    if (items.length === 1) { e.preventDefault(); items[0].focus(); return; }
+    const first = items[0];
+    const last  = items[items.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey) {
+      if (active === first || !overlay.contains(active)) { e.preventDefault(); last.focus(); }
+    } else {
+      if (active === last || !overlay.contains(active)) { e.preventDefault(); first.focus(); }
+    }
+  };
+  overlay.addEventListener('keydown', handler);
+
+  // Focus the first focusable on open, deferred so layout settles.
+  setTimeout(() => {
+    const items = getFocusable(overlay);
+    if (items.length) items[0].focus();
+  }, 0);
+
+  return function release() {
+    overlay.removeEventListener('keydown', handler);
+    // Restore focus to the opener so keyboard users land back where they
+    // were. Guard against the opener having been removed from the DOM.
+    if (opener && document.contains(opener) && typeof opener.focus === 'function') {
+      try { opener.focus(); } catch (_) { /* opener no longer focusable */ }
+    }
+  };
+}
+
+// ============================================================
 // Run Fix flow
 // ============================================================
 async function runFix() {
@@ -470,13 +523,15 @@ window.addEventListener('DOMContentLoaded', async () => {
 // ============================================================
 const ratings = { ease: 0, resolved: 0, recommend: 0, overall: 0 };
 let feedbackMode = '';
+let releaseFeedbackTrap = null;
 
 function showSection(id) {
   document.querySelectorAll('.fb-section').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
 }
 function openFeedback() {
-  document.getElementById('fbOverlay').classList.add('show');
+  const overlay = document.getElementById('fbOverlay');
+  overlay.classList.add('show');
   showSection('fbChoose');
   feedbackMode = '';
   document.querySelectorAll('.fb-textarea').forEach(t => { t.value = ''; });
@@ -484,8 +539,12 @@ function openFeedback() {
   document.querySelectorAll('.fb-status').forEach(s => { s.textContent = ''; s.className = 'fb-status'; });
   Object.keys(ratings).forEach(k => { ratings[k] = 0; });
   loadSysInfo();
+  releaseFeedbackTrap = installFocusTrap(overlay);
 }
-function closeFeedback() { document.getElementById('fbOverlay').classList.remove('show'); }
+function closeFeedback() {
+  document.getElementById('fbOverlay').classList.remove('show');
+  if (releaseFeedbackTrap) { releaseFeedbackTrap(); releaseFeedbackTrap = null; }
+}
 
 async function loadSysInfo() {
   try {
@@ -590,10 +649,13 @@ const supportCloseBtn  = document.getElementById('supportClose');
 const supportCopyStat  = document.getElementById('supportCopyStatus');
 const btnSupportReport = document.getElementById('btnSupportReport');
 
+let releaseSupportTrap = null;
+
 async function openSupportReport() {
   supportOverlay.classList.add('show');
   supportTextArea.value = 'Generating sanitized report…';
   supportCopyStat.textContent = '';
+  releaseSupportTrap = installFocusTrap(supportOverlay);
   try {
     const result = await window.electronAPI.supportReport({
       receipt: lastReceipt,
@@ -606,7 +668,10 @@ async function openSupportReport() {
   }
 }
 
-function closeSupportReport() { supportOverlay.classList.remove('show'); }
+function closeSupportReport() {
+  supportOverlay.classList.remove('show');
+  if (releaseSupportTrap) { releaseSupportTrap(); releaseSupportTrap = null; }
+}
 
 btnSupportReport.addEventListener('click', openSupportReport);
 supportCloseBtn.addEventListener('click', closeSupportReport);

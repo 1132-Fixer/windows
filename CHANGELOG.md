@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Out of scope (proposal only, captured in PR body)
 - New Repair Mode selector (Standard / Media-Only / Clean-Profile / Full-Reset).
 
+### Post-review hardening
+- **Focus trap** on both modals (`#fbOverlay`, `#supportOverlay`). Tab / Shift+Tab cycle within the active modal, Escape still closes, focus restores to the element that opened the modal. Handles the 0- and 1-focusable edge cases without throwing.
+- **Machine-name redaction** in the Support Report — `os.hostname()` replaced with `<host>` at word boundaries (catches the `user1.MACHINENAME` residue pattern from step-2 cleanup).
+- **Defensive sanitizer guard** — the bare-username regex is skipped when the operator's username collides with the public helper-account constant (`FIX_USER === 'user1'`), so we never corrupt legitimate `'user1'` log lines. preflightCheck() already blocks that case via `running_as_target`; this is belt-and-braces.
+
 ## [5.3.6] - 2026-05-29
 
 ### Fixed
