@@ -5,18 +5,20 @@ All notable changes to 1132 Fixer (Windows) are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — UX iteration on top of v5.3.7
+## [5.3.8] - 2026-05-29 — Guided CHECK & FIX wizard
 
-Direct-to-master rework of the v5.3.7 initial view. The package version
-intentionally stays at `5.3.7`; this is a UX iteration rather than a new
-release. The published v5.3.7 artifact on the Releases repo is unchanged.
+Release-hygiene cut. The wizard work landed direct-to-master at commit
+`762a649` while package.json was still `5.3.7`, so source diverged from
+the published v5.3.7 artifact (which contains the 8-card grid). This
+release brings them back into alignment. The v5.3.7 release / tag are
+intentionally left untouched.
 
 ### Changed
 - **Initial view replaces the 8-card preflight grid with the pre-Slice C
   numbered instruction list.** Same content that v5.3.5 shipped, restored
-  inside the new tokenized panel.
+  inside the v5.3.7 tokenized panel.
 - **`FIX NOW` and `Re-scan` are unified into one `CHECK & FIX` button.**
-  Clicking it now opens a guided wizard modal instead of running the fix
+  Clicking it opens a guided wizard modal instead of running the fix
   directly or refreshing a card grid.
 
 ### Added
@@ -27,11 +29,18 @@ release. The published v5.3.7 artifact on the Releases repo is unchanged.
   the user must Cancel and resolve the blocker. Final step is a summary
   list plus the `FIX NOW` confirmation; only enabled when no card is
   Blocked. Reuses the existing `preflight-scan` IPC handler unchanged.
+- **Esc closes the wizard** (consistent with the feedback and support
+  modals). Focus trap from v5.3.7 composes cleanly.
 
 ### Removed
 - The 8-card grid view (`#preflightGrid`) and the standalone `Re-scan`
   button. The grid CSS classes (`.pf-card`, `.pf-grid`) are retained as
-  dead style for now to keep the diff focused; harmless until cleaned up.
+  dead style for now to keep the diff focused; tracked for cleanup.
+
+### Includes
+- All v5.3.6 media-consent hardening.
+- All v5.3.7 Slice C foundation (design tokens, glass refresh, stage
+  tracker, Fix Receipt cards, Support Report, focus trap, sanitizer).
 
 ## [5.3.7] - 2026-05-29 — Slice C: Premium UX
 
