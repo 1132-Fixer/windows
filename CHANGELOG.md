@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.9] - 2026-05-30 — Premium wizard flow + FIX NOW freeze fix
+
 ### Added
+- **Premium guided wizard flow.** The wizard now owns the intro: an
+  Overview step (status: ready, ~2.6s auto-dwell) is prepended ahead of
+  the 8 preflight cards, and the wizard auto-opens on launch when the
+  app is running elevated. A linear progress bar at the top of the card
+  tracks overall position (step N of total) and tints accent / warning
+  / danger as the worst-seen status degrades. Each auto-advancing step
+  now shows a thin countdown bar that fills 0→100% over the exact
+  auto-advance interval so users have continuous visual feedback. Steps
+  fade-and-slide in on render. Per-step auto-advance interval is
+  configurable via `step.autoMs` (defaults to 1.4s; intro uses 2.6s).
+  Existing safeties preserved: blocked steps halt auto-advance, Back
+  disables auto-advance for the session, FIX NOW still requires the
+  native consent dialog. Harness extended to 15/15 covering intro step
+  invariants and confirm-position offset.
 - **Wizard auto-advance.** After CHECK & FIX opens the wizard, each
   non-blocked check step auto-advances after 1.6s so the user lands on
   the CONFIRM FIX summary without N manual Next clicks. The final

@@ -30,8 +30,11 @@ function makeEl() {
 
 // --- Wizard state machine (mirror of renderer.js lines 495-685) --------
 const PREFLIGHT_ORDER = ['admin', 'zoom', 'helperUser', 'camPolicy', 'micPolicy', 'hku', 'frameServer', 'version'];
-const WIZARD_AUTO_MS = 1600;
+const WIZARD_AUTO_MS  = 1400;
+const WIZARD_INTRO_MS = 2600;
 const WIZARD_SCAN_TIMEOUT_MS = 60000;
+
+const INTRO_STEP = { key: '__intro__', label: 'OVERVIEW', status: 'ready', message: '', autoMs: WIZARD_INTRO_MS };
 
 let isRunning = false;
 let wizardSteps = [];
@@ -76,6 +79,7 @@ async function openWizard() {
   try {
     const result = await Promise.race([scanPromise, timeoutPromise]);
     if (gen !== wizardGen) return;
+    wizardSteps.push({ ...INTRO_STEP });
     for (const key of PREFLIGHT_ORDER) {
       const card = result.cards[key];
       if (card) wizardSteps.push(card);
@@ -107,10 +111,11 @@ function renderWizardStep(i) {
 
   const isLast = (wizardIdx >= wizardSteps.length - 1);
   if (!wizardAutoDisabled && !isConfirm && !isLast && step.status !== 'blocked') {
+    const autoMs = (typeof step.autoMs === 'number' && step.autoMs > 0) ? step.autoMs : WIZARD_AUTO_MS;
     wizardAutoTimer = setTimeout(() => {
       wizardAutoTimer = null;
       renderWizardStep(wizardIdx + 1);
-    }, WIZARD_AUTO_MS);
+    }, autoMs);
   }
 }
 
@@ -197,10 +202,11 @@ async function test(name, fn) {
   await test('all-ready scan auto-walks to confirm, no fix auto-runs', async () => {
     mockPreflightScan = async () => ({ cards: makeCards(), canRunFix: true, overall: 'ready' });
     await openWizard();
-    // Walk through every auto-advance tick.
-    for (let i = 0; i < 9; i++) await tick(WIZARD_AUTO_MS + 50);
+    // Walk through every auto-advance tick (intro is longer, then 8
+    // preflight steps). Use the slowest interval to cover both.
+    for (let i = 0; i < 10; i++) await tick(WIZARD_INTRO_MS + 50);
     // Should land on confirm step with no auto-fix.
-    assert.equal(wizardIdx, 8, 'lands on confirm (index 8)');
+    assert.equal(wizardIdx, 9, 'lands on confirm (index 9 after intro + 8 cards)');
     assert.equal(wizardSteps[wizardIdx].key, '__confirm__');
     assert.equal(runFixCalled, 0, 'fix did not auto-run');
     assert.equal(showFixConfirmCalled, 0, 'native confirm not invoked without click');
@@ -211,7 +217,7 @@ async function test(name, fn) {
   await test('FIX NOW click triggers native confirm + runFix', async () => {
     mockPreflightScan = async () => ({ cards: makeCards(), canRunFix: true, overall: 'ready' });
     await openWizard();
-    for (let i = 0; i < 9; i++) await tick(WIZARD_AUTO_MS + 50);
+    for (let i = 0; i < 10; i++) await tick(WIZARD_INTRO_MS + 50);
     await wizardNext(); // simulate FIX NOW click
     assert.equal(showFixConfirmCalled, 1, 'native dialog invoked');
     assert.equal(runFixCalled, 1, 'fix ran once');
@@ -222,7 +228,7 @@ async function test(name, fn) {
     mockPreflightScan = async () => ({ cards: makeCards(), canRunFix: true, overall: 'ready' });
     mockShowFixConfirm = async () => false;
     await openWizard();
-    for (let i = 0; i < 9; i++) await tick(WIZARD_AUTO_MS + 50);
+    for (let i = 0; i < 10; i++) await tick(WIZARD_INTRO_MS + 50);
     await wizardNext();
     assert.equal(showFixConfirmCalled, 1);
     assert.equal(runFixCalled, 0, 'fix blocked by native dialog');
@@ -233,7 +239,7 @@ async function test(name, fn) {
     const cards = makeCards({ zoom: { status: 'blocked', label: 'Zoom Workplace', message: 'Not installed' } });
     mockPreflightScan = async () => ({ cards, canRunFix: false, overall: 'blocked' });
     await openWizard();
-    for (let i = 0; i < 9; i++) await tick(WIZARD_AUTO_MS + 50);
+    for (let i = 0; i < 10; i++) await tick(WIZARD_INTRO_MS + 50);
     assert.equal(wizardSteps[wizardIdx].label, 'Zoom Workplace', 'parked on blocked step');
     assert.equal(wizardAutoTimer, null, 'no auto timer armed on blocked step');
   });
@@ -258,7 +264,7 @@ async function test(name, fn) {
     const cards = makeCards({ helperUser: { status: 'warning', label: 'Helper account', message: 'w' } });
     mockPreflightScan = async () => ({ cards, canRunFix: true, overall: 'warning' });
     await openWizard();
-    for (let i = 0; i < 9; i++) await tick(WIZARD_AUTO_MS + 50);
+    for (let i = 0; i < 10; i++) await tick(WIZARD_INTRO_MS + 50);
     assert.equal(wizardSteps[wizardIdx].key, '__confirm__');
     assert.equal(wizardCanRunFix, true);
   });
@@ -267,14 +273,14 @@ async function test(name, fn) {
   await test('cancel during auto-advance clears pending timer', async () => {
     mockPreflightScan = async () => ({ cards: makeCards(), canRunFix: true, overall: 'ready' });
     await openWizard();
-    await tick(WIZARD_AUTO_MS / 2); // mid-flight
+    await tick(WIZARD_INTRO_MS / 2); // mid-flight on the intro step
     assert.notEqual(wizardAutoTimer, null, 'timer is armed pre-cancel');
     closeWizard();
     assert.equal(wizardAutoTimer, null, 'timer cleared after cancel');
     assert.equal(wizardOverlay.classList.contains('show'), false, 'overlay hidden');
     // Wait past when the timer would have fired -> must not advance.
     const idxBefore = wizardIdx;
-    await tick(WIZARD_AUTO_MS + 200);
+    await tick(WIZARD_INTRO_MS + 200);
     assert.equal(wizardIdx, idxBefore, 'no advance after cancel');
   });
 
@@ -282,12 +288,13 @@ async function test(name, fn) {
   await test('Back disables auto-advance for the rest of the session', async () => {
     mockPreflightScan = async () => ({ cards: makeCards(), canRunFix: true, overall: 'ready' });
     await openWizard();
-    await tick(WIZARD_AUTO_MS + 50); // advance to step 1
+    // First auto-advance fires on the intro step -> WIZARD_INTRO_MS.
+    await tick(WIZARD_INTRO_MS + 50);
     assert.ok(wizardIdx >= 1);
     wizardBack();
     assert.equal(wizardAutoDisabled, true);
     const idxAfterBack = wizardIdx;
-    await tick(WIZARD_AUTO_MS * 3);
+    await tick(WIZARD_INTRO_MS * 2);
     assert.equal(wizardIdx, idxAfterBack, 'no further auto-advance after Back');
     assert.equal(wizardAutoTimer, null);
   });
@@ -296,12 +303,14 @@ async function test(name, fn) {
   await test('reopen wizard after cancel resets state', async () => {
     mockPreflightScan = async () => ({ cards: makeCards(), canRunFix: true, overall: 'ready' });
     await openWizard();
-    await tick(WIZARD_AUTO_MS + 50);
+    await tick(WIZARD_INTRO_MS + 50);
     closeWizard();
     await openWizard();
     assert.equal(wizardIdx, 0, 'fresh idx');
     assert.equal(wizardAutoDisabled, false, 'auto re-enabled');
-    assert.equal(wizardSteps.length, 9, 'cards rebuilt');
+    assert.equal(wizardSteps.length, 10, 'cards rebuilt (intro + 8 preflight + confirm)');
+    assert.equal(wizardSteps[0].key, '__intro__', 'intro is step 0');
+    assert.equal(wizardSteps[wizardSteps.length - 1].key, '__confirm__', 'confirm is last');
   });
 
   // --- Scan timeout surfaces error without infinite loading ------------
@@ -364,6 +373,18 @@ async function test(name, fn) {
     // openWizard should catch internally and log scan_failed.
     assert.equal(threw, false, 'openWizard swallowed the error');
     assert.ok(events.some(e => e.type === 'scan_failed'), 'scan_failed event emitted');
+  });
+
+  // --- Intro step is always first + always ready -----------------------
+  await test('intro step is prepended, always ready, advances normally', async () => {
+    mockPreflightScan = async () => ({ cards: makeCards(), canRunFix: true, overall: 'ready' });
+    await openWizard();
+    assert.equal(wizardSteps[0].key, '__intro__', 'intro at index 0');
+    assert.equal(wizardSteps[0].status, 'ready', 'intro is always ready');
+    assert.equal(wizardSteps[0].autoMs, WIZARD_INTRO_MS, 'intro uses longer autoMs');
+    // After intro's autoMs, should have advanced to step 1.
+    await tick(WIZARD_INTRO_MS + 50);
+    assert.equal(wizardIdx, 1, 'intro auto-advanced to step 1');
   });
 
   // --- isRunning guard blocks wizard re-entry --------------------------

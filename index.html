@@ -746,7 +746,64 @@
        Card-per-step, Back/Next/FIX NOW. Re-uses .fb-overlay shell
        so focus trap + Escape behavior compose cleanly.
        ============================================================ */
-    .wz-card { width: 560px; max-width: 95%; }
+    .wz-card { width: 580px; max-width: 95%; }
+
+    /* Overall progress bar (top of card). Status-tinted via the active
+       step's wz-body[data-status] mirrored onto the card root. */
+    .wz-progress {
+      height: 4px;
+      width: 100%;
+      background: var(--border);
+      border-radius: var(--r-pill);
+      overflow: hidden;
+      margin: var(--s-2) 0 var(--s-3) 0;
+      position: relative;
+    }
+    .wz-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--accent-strong, var(--accent)));
+      border-radius: var(--r-pill);
+      transition: width 360ms cubic-bezier(0.2, 0.8, 0.2, 1), background 220ms;
+      box-shadow: 0 0 12px var(--accent-bg);
+    }
+    .wz-card[data-overall="warning"] .wz-progress-fill { background: var(--warning); box-shadow: 0 0 12px var(--warning-bg); }
+    .wz-card[data-overall="blocked"] .wz-progress-fill { background: var(--danger);  box-shadow: 0 0 12px var(--danger-bg); }
+    .wz-card[data-overall="ready"]   .wz-progress-fill { background: var(--success); box-shadow: 0 0 12px var(--success-bg); }
+
+    /* Auto-advance countdown bar (bottom of body). Animates 0→100% width
+       over WIZARD_AUTO_MS when .running is applied. Cleared instantly
+       on Back/Cancel/blocked-step. */
+    .wz-countdown {
+      height: 2px;
+      width: 100%;
+      background: transparent;
+      margin-top: var(--s-3);
+      overflow: hidden;
+      border-radius: var(--r-pill);
+      opacity: 0;
+      transition: opacity 180ms;
+    }
+    .wz-countdown.visible { opacity: 1; background: rgba(255,255,255,0.04); }
+    .wz-countdown-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      border-radius: var(--r-pill);
+    }
+    .wz-countdown.running .wz-countdown-fill {
+      width: 100%;
+      transition: width var(--wz-auto-ms, 1600ms) linear;
+    }
+
+    /* Smooth body crossfade between steps. The renderer toggles
+       .wz-enter on each render; the CSS animation handles the rest. */
+    @keyframes wzStepEnter {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .wz-body.wz-enter { animation: wzStepEnter 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+
     .wz-step-meta {
       display: flex;
       justify-content: space-between;
@@ -1072,8 +1129,15 @@
   <div class="fb-overlay" id="wizardOverlay" role="dialog" aria-modal="true" aria-labelledby="wizardTitle">
     <div class="fb-card wz-card">
       <div class="fb-title" id="wizardTitle">Check &amp; Fix</div>
+
+      <!-- Overall progress bar (step N of total). Status-tinted via
+           wz-card[data-status] inheritance from the active step. -->
+      <div class="wz-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="wz-progress-fill" id="wizardProgress"></div>
+      </div>
+
       <div class="wz-step-meta">
-        <span id="wizardStepLabel">Step 1 of 8</span>
+        <span id="wizardStepLabel">Loading…</span>
         <div class="wz-dots" id="wizardDots" aria-hidden="true"></div>
       </div>
       <div class="wz-body" id="wizardBody" data-status="ready" aria-live="polite">
@@ -1088,6 +1152,13 @@
         <div class="wz-confirm-note" id="wizardConfirmNote" style="display:none;">
           About to recreate the local <strong>user1</strong> account and relaunch Zoom under it.
           Do <strong>not</strong> proceed while signed in AS <em>user1</em>.
+        </div>
+
+        <!-- Auto-advance countdown bar. Width animates 0→100% over
+             WIZARD_AUTO_MS via the .running modifier so the user has
+             a visual sense of when the next step will arrive. -->
+        <div class="wz-countdown" id="wizardCountdown" aria-hidden="true">
+          <div class="wz-countdown-fill" id="wizardCountdownFill"></div>
         </div>
       </div>
       <div class="wz-actions">
