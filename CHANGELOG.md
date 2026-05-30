@@ -5,6 +5,32 @@ All notable changes to 1132 Fixer (Windows) are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Wizard auto-advance.** After CHECK & FIX opens the wizard, each
+  non-blocked check step auto-advances after 1.6s so the user lands on
+  the CONFIRM FIX summary without N manual Next clicks. The final
+  CONFIRM FIX step is never auto-advanced — `FIX NOW` is destructive
+  and requires an explicit click. A blocked step also halts
+  auto-advance so the user reads the failure and Cancels. Clicking Back
+  disables auto-advance for the rest of the wizard session so the user
+  can step through manually. Hint text shows "Auto-advancing… click
+  Back to pause." while the timer is armed.
+
+### Fixed
+- **Wizard no longer hangs on "Loading…" when PowerShell probes stall.**
+  The `preflight-scan` IPC handler runs two `powershell.exe` capture
+  scripts (tool inventory + cam/mic/HKU/FrameServer probe) and neither
+  had a timeout. On machines where Defender or another AV throttled
+  PowerShell startup, both spawns would sit indefinitely with no
+  child-process output, leaving the wizard frozen on its loading state
+  with only Cancel as an escape. Each probe now caps at 20s and degrades
+  to a `warning` card with a probe-timeout message instead of blocking
+  the wizard. The renderer also imposes a 60s overall safety timeout on
+  `preflightScan()` so any unexpected IPC hang surfaces a user-readable
+  error instead of a perpetual spinner.
+
 ## [5.3.8] - 2026-05-29 — Guided CHECK & FIX wizard
 
 Release-hygiene cut. The wizard work landed direct-to-master at commit

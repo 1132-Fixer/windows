@@ -230,9 +230,9 @@ async function runPSScriptDetachedIO(scriptContent) {
   });
 }
 
-async function runPSCapture(scriptContent) {
+async function runPSCapture(scriptContent, opts = {}) {
   const noop = () => {};
-  return runPSScript(scriptContent, noop);
+  return runPSScript(scriptContent, noop, opts);
 }
 
 function isElevatedSync() {
@@ -321,17 +321,19 @@ async function preflightCheck() {
       $r['seclogon_starttype'] = 'MISSING'
     }
     $r | ConvertTo-Json -Compress
-  `);
+  `, { timeoutMs: 20000 });
   let presence = null;
   try {
     const parsed = JSON.parse((probe.stdout || '').trim() || '{}');
     if (parsed && typeof parsed === 'object') presence = parsed;
   } catch (_) { /* presence stays null */ }
   if (presence === null) {
-    // PS probe failed entirely. Treat all required tools as missing.
+    // PS probe failed (or timed out). Treat all required tools as missing.
     blockers.push({
-      code: 'tool_probe_failed',
-      message: 'PowerShell probe failed — could not verify Windows tools. Treating powershell.exe as unavailable.'
+      code: probe.timedOut ? 'tool_probe_timeout' : 'tool_probe_failed',
+      message: probe.timedOut
+        ? 'PowerShell probe timed out after 20s — Windows tool inventory unavailable. Antivirus or Defender may be blocking powershell.exe.'
+        : 'PowerShell probe failed — could not verify Windows tools. Treating powershell.exe as unavailable.'
     });
     presence = {};
     for (const t of REQUIRED_TOOLS) presence[t] = false;
@@ -1627,12 +1629,25 @@ ipcMain.handle('preflight-scan', async () => {
       $out['hku_sid']    = ''
     }
     $out | ConvertTo-Json -Compress
-  `);
+  `, { timeoutMs: 20000 });
 
   let probeData = {};
-  try { probeData = JSON.parse((probe.stdout || '').trim() || '{}'); } catch (_) { /* leave empty */ }
+  let probeFailed = false;
+  if (probe.timedOut) {
+    probeFailed = true;
+  } else {
+    try {
+      probeData = JSON.parse((probe.stdout || '').trim() || '{}');
+    } catch (_) {
+      probeFailed = true;
+    }
+  }
+  const probeFailMsg = probe.timedOut
+    ? 'Probe timed out after 20s — Windows Defender or another AV may be holding PowerShell. FIX NOW can still run, but skip this check first.'
+    : 'PowerShell probe failed — could not read this value. FIX NOW can still run.';
 
   const policyCard = (label, val) => {
+    if (probeFailed) return { status: 'warning', label, message: probeFailMsg };
     // val: 0 = Force Allow, 1 = User in control, 2 = Force Deny, -1 = no policy
     if (val === 2) return { status: 'blocked',   label, message: `Blocked by Windows organization/privacy policy (Force Deny). 1132 Fixer cannot override this.` };
     if (val === 0) return { status: 'ready',     label, message: 'Allowed by policy (Force Allow).' };
@@ -1644,20 +1659,26 @@ ipcMain.handle('preflight-scan', async () => {
   cards.micPolicy = policyCard('Microphone policy', probeData.mic_policy);
 
   // FrameServer
-  const fsStatus = probeData.fs_status;
-  const fsStart  = probeData.fs_starttype;
-  if (fsStatus === 'MISSING') {
-    cards.frameServer = { status: 'blocked', label: 'Camera Frame Server', message: 'Service not present on this Windows build — cameras will not enumerate.' };
-  } else if (fsStart === 'Disabled') {
-    cards.frameServer = { status: 'repairable', label: 'Camera Frame Server', message: 'Disabled. FIX NOW will set it to Manual so cameras can enumerate.' };
-  } else if (fsStatus === 'Running' || fsStart === 'Manual' || fsStart === 'Automatic') {
-    cards.frameServer = { status: 'ready', label: 'Camera Frame Server', message: `${fsStatus} / ${fsStart}.` };
+  if (probeFailed) {
+    cards.frameServer = { status: 'warning', label: 'Camera Frame Server', message: probeFailMsg };
   } else {
-    cards.frameServer = { status: 'warning', label: 'Camera Frame Server', message: `${fsStatus} / ${fsStart} — unexpected state.` };
+    const fsStatus = probeData.fs_status;
+    const fsStart  = probeData.fs_starttype;
+    if (fsStatus === 'MISSING') {
+      cards.frameServer = { status: 'blocked', label: 'Camera Frame Server', message: 'Service not present on this Windows build — cameras will not enumerate.' };
+    } else if (fsStart === 'Disabled') {
+      cards.frameServer = { status: 'repairable', label: 'Camera Frame Server', message: 'Disabled. FIX NOW will set it to Manual so cameras can enumerate.' };
+    } else if (fsStatus === 'Running' || fsStart === 'Manual' || fsStart === 'Automatic') {
+      cards.frameServer = { status: 'ready', label: 'Camera Frame Server', message: `${fsStatus} / ${fsStart}.` };
+    } else {
+      cards.frameServer = { status: 'warning', label: 'Camera Frame Server', message: `${fsStatus} / ${fsStart} — unexpected state.` };
+    }
   }
 
   // HKU hive
-  if (probeData.hku_sid) {
+  if (probeFailed) {
+    cards.hku = { status: 'warning', label: 'User registry hive', message: probeFailMsg };
+  } else if (probeData.hku_sid) {
     cards.hku = probeData.hku_loaded
       ? { status: 'ready',      label: 'User registry hive', message: `HKU\\${probeData.hku_sid} active — consent will write live.` }
       : { status: 'repairable', label: 'User registry hive', message: `HKU\\${probeData.hku_sid} not loaded — FIX NOW will mount NTUSER.DAT, write consent, then unmount.` };

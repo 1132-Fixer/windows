@@ -496,6 +496,15 @@ let wizardSteps = [];
 let wizardIdx   = 0;
 let wizardCanRunFix = false;
 let releaseWizardTrap = null;
+let wizardAutoTimer = null;
+let wizardAutoDisabled = false;
+let wizardGen = 0;
+const WIZARD_AUTO_MS = 1600;
+const WIZARD_SCAN_TIMEOUT_MS = 60000;
+
+function clearWizardAuto() {
+  if (wizardAutoTimer) { clearTimeout(wizardAutoTimer); wizardAutoTimer = null; }
+}
 
 function statusHint(status) {
   switch (status) {
@@ -509,10 +518,12 @@ function statusHint(status) {
 
 async function openWizard() {
   if (isRunning) return;
+  const gen = ++wizardGen;
   wizardOverlay.classList.add('show');
   wizardSteps = [];
   wizardIdx = 0;
   wizardCanRunFix = false;
+  wizardAutoDisabled = false;
   releaseWizardTrap = installFocusTrap(wizardOverlay);
   wizardLabel.textContent = 'Loading…';
   wizardMsg.textContent = 'Reading environment…';
@@ -526,8 +537,23 @@ async function openWizard() {
   wizardStepLbl.textContent = 'Loading…';
   wizardDots.innerHTML = '';
   setStatus('scanning', 'Checking');
+
+  // Race the IPC against a 60s ceiling. Both halves need explicit cleanup
+  // to avoid orphan unhandled rejections: (1) clear the setTimeout if IPC
+  // wins, (2) swallow late IPC rejection if the timeout wins.
+  let timeoutId;
+  const scanPromise = window.electronAPI.preflightScan();
+  scanPromise.catch(() => {}); // attach silent handler for the timeout-wins path
+  const timeoutPromise = new Promise((_, rej) => {
+    timeoutId = setTimeout(
+      () => rej(new Error('Preflight scan timed out after 60s. Antivirus may be blocking powershell.exe. Cancel and retry, or run from an unrestricted admin shell.')),
+      WIZARD_SCAN_TIMEOUT_MS
+    );
+  });
+
   try {
-    const result = await window.electronAPI.preflightScan();
+    const result = await Promise.race([scanPromise, timeoutPromise]);
+    if (gen !== wizardGen) return; // wizard was closed/reopened while we awaited
     for (const key of PREFLIGHT_ORDER) {
       const card = result.cards[key];
       if (card) wizardSteps.push(card);
@@ -543,21 +569,27 @@ async function openWizard() {
 
     renderWizardStep(0);
   } catch (err) {
+    if (gen !== wizardGen) return; // stale failure — wizard already closed
     wizardLabel.textContent = 'Preflight failed';
     wizardMsg.textContent = err && err.message ? err.message : String(err);
     wizardBody.setAttribute('data-status', 'blocked');
     wizardNextBtn.disabled = true;
     setStatus('error', 'Error');
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
 function closeWizard() {
+  wizardGen++; // invalidate any in-flight openWizard awaits
+  clearWizardAuto();
   wizardOverlay.classList.remove('show');
   if (releaseWizardTrap) { releaseWizardTrap(); releaseWizardTrap = null; }
 }
 
 function renderWizardStep(i) {
   if (!wizardSteps.length) return;
+  clearWizardAuto();
   wizardIdx = Math.max(0, Math.min(i, wizardSteps.length - 1));
   const step = wizardSteps[wizardIdx];
   const isConfirm = step.key === '__confirm__';
@@ -615,6 +647,21 @@ function renderWizardStep(i) {
     wizardNextBtn.disabled = (step.status === 'blocked');
   }
   wizardBackBtn.disabled = (wizardIdx === 0);
+
+  // Auto-advance: walk through non-blocked check steps so the user lands
+  // on the CONFIRM FIX summary without N manual clicks. Confirm step
+  // requires an explicit FIX NOW click (destructive action). Blocked
+  // steps stay put — user must read and Cancel. Once the user clicks
+  // Back, auto-advance is disabled for the rest of the wizard session
+  // so they can step through manually.
+  const isLast = (wizardIdx >= wizardSteps.length - 1);
+  if (!wizardAutoDisabled && !isConfirm && !isLast && step.status !== 'blocked') {
+    wizardHint.textContent = `${statusHint(step.status)} Auto-advancing… click Back to pause.`.trim();
+    wizardAutoTimer = setTimeout(() => {
+      wizardAutoTimer = null;
+      renderWizardStep(wizardIdx + 1);
+    }, WIZARD_AUTO_MS);
+  }
 }
 
 function wizardNext() {
@@ -630,6 +677,8 @@ function wizardNext() {
 }
 
 function wizardBack() {
+  // Manual navigation disables auto-advance for the rest of the session.
+  wizardAutoDisabled = true;
   if (wizardIdx > 0) renderWizardStep(wizardIdx - 1);
 }
 
