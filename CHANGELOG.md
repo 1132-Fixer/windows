@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Back to pause." while the timer is armed.
 
 ### Fixed
+- **FIX NOW no longer freezes the app after the wizard summary.** `runFix()`
+  referenced a `checkEnvBtn` global that was removed when the 8-card
+  preflight grid was replaced by the wizard (Slice C / wizard refactor).
+  Clicking FIX NOW on the confirm step threw a `ReferenceError` after the
+  native consent dialog, killing the run before stage tracking or IPC
+  started. The app appeared stuck on the intro screen with a stale
+  "Action needed" badge. Removed the two dead `checkEnvBtn.disabled`
+  writes in `renderer.js` so `runFix()` proceeds to the running view.
 - **Wizard no longer hangs on "Loading…" when PowerShell probes stall.**
   The `preflight-scan` IPC handler runs two `powershell.exe` capture
   scripts (tool inventory + cam/mic/HKU/FrameServer probe) and neither

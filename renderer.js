@@ -371,7 +371,6 @@ async function runFix() {
   isRunning = true;
   fixBtn.disabled = true;
   shortcutBtn.disabled = true;
-  checkEnvBtn.disabled = true;
   setStatus('scanning', 'Running');
 
   // Switch to running view.
@@ -391,7 +390,6 @@ async function runFix() {
   isRunning = false;
   fixBtn.disabled = false;
   shortcutBtn.disabled = false;
-  checkEnvBtn.disabled = false;
 
   addEmptyLine();
   if (result.success) {
