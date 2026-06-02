@@ -851,25 +851,91 @@ ipcMain.handle('run-fix', async (event) => {
     send(`  ${sourceProfile} did not exist - nothing to delete.`, 'out');
   }
 
+  // Wider ProfileList sweep. Match entries TWO ways:
+  //   1. ProfileImagePath points at C:\Users\user1 (or user1.SOMETHING).
+  //   2. PSChildName == preDeleteSid OR preDeleteSid + ".bak".
+  //
+  // The second match catches the post-1132-reset failure mode where UPS
+  // renamed the live <sid> key to <sid>.bak (Event 1515) and minted a
+  // fresh <sid> key whose ProfileImagePath now references
+  // C:\Users\TEMP.<machine>.NNN. A path-only match misses the broken
+  // primary key, leaving Windows to keep falling back to TEMP profiles.
+  //
+  // Folder sweep also widened: any ProfileImagePath we removed becomes
+  // an orphan folder candidate, regardless of name shape.
   await runPSScript(`
     ${PS_REMOVE_PROFILE_HELPER}
     $u = '${FIX_USER}'
+    $preDeleteSid = '${preDeleteSid}'
     $base = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList'
     $cleaned = 0
+    $orphanPaths = New-Object System.Collections.Generic.HashSet[string]
     Get-ChildItem $base -EA SilentlyContinue | ForEach-Object {
+      $name = $_.PSChildName
       $p = (Get-ItemProperty $_.PSPath -EA SilentlyContinue).ProfileImagePath
-      if ($p -and ($p -ieq ('C:\\Users\\' + $u) -or $p -like ('C:\\Users\\' + $u + '.*'))) {
-        Write-Host "  Removing ProfileList entry: $($_.PSChildName)  ->  $p"
+      $matchByPath = $p -and ($p -ieq ('C:\\Users\\' + $u) -or $p -like ('C:\\Users\\' + $u + '.*'))
+      $matchBySid  = $preDeleteSid -and ($name -ieq $preDeleteSid -or $name -ieq ($preDeleteSid + '.bak'))
+      if ($matchByPath -or $matchBySid) {
+        if ($p) { [void]$orphanPaths.Add($p) }
+        Write-Host "  Removing ProfileList entry: $name  ->  $p"
         Remove-Item $_.PSPath -Recurse -Force -EA SilentlyContinue
         $cleaned += 1
       }
     }
     Write-Host ("  Cleaned $cleaned ProfileList entries.")
+    foreach ($orphan in $orphanPaths) {
+      if (Test-Path $orphan) {
+        Write-Host "  Removing orphan folder (from ProfileList): $orphan"
+        Remove-ProfileFolder -Path $orphan
+      }
+    }
     Get-ChildItem 'C:\\Users' -Directory -Force -EA 0 | Where-Object { $_.Name -ieq $u -or $_.Name -match ('^' + [Regex]::Escape($u) + '\\.') } | ForEach-Object {
       Write-Host "  Removing leftover: $($_.FullName)"
       Remove-ProfileFolder -Path $_.FullName
     }
   `, send, { heartbeatMs: 5000, heartbeatLabel: 'leftover cleanup', timeoutMs: 300000 });
+
+  // ============================================================
+  // STEP 3b: Flush retained User Profile Service hive handles.
+  //
+  // ProfSvc (User Profile Service, hosted under svchost.exe) caches
+  // loaded registry hives. After a delete+recreate cycle, a stale
+  // handle into the deleted C:\Users\user1\AppData\Local\Microsoft\
+  // Windows\UsrClass.dat can survive and block the NEXT user1 logon's
+  // hive load (Event 1509: "Windows was unable to load ... UsrClass.dat").
+  // UPS responds by renaming the SID key to <sid>.bak and minting a
+  // TEMP profile (Event 1511/1515). Restarting ProfSvc forces it to
+  // drop every retained hive handle. Tolerate failure - ProfSvc lives
+  // in a shared svchost group; restart can be denied. Fall back to
+  // sc.exe stop/start, then reg flush as last resort.
+  // ============================================================
+  send('[3b/8] Flushing User Profile Service hive cache...', 'header');
+  await runPSScript(`
+    try {
+      $svc = Get-Service ProfSvc -EA Stop
+      if ($svc.Status -eq 'Running') {
+        try {
+          Restart-Service ProfSvc -Force -EA Stop
+          Write-Host '  ProfSvc restarted via Restart-Service.'
+        } catch {
+          Write-Host ('  Restart-Service failed: ' + $_.Exception.Message)
+          $stop  = & sc.exe stop  ProfSvc 2>&1
+          Start-Sleep -Seconds 2
+          $start = & sc.exe start ProfSvc 2>&1
+          Write-Host ('  sc.exe stop output:  ' + (($stop  | Out-String).Trim()))
+          Write-Host ('  sc.exe start output: ' + (($start | Out-String).Trim()))
+        }
+      } else {
+        Write-Host ('  ProfSvc status=' + $svc.Status + '; nothing to flush.')
+      }
+    } catch {
+      Write-Host ('  WARNING: could not inspect ProfSvc: ' + $_.Exception.Message)
+    }
+    # Belt-and-suspenders: flush HKLM hive writes so the next logon
+    # reads fresh ProfileList data, not cached.
+    & reg.exe flush HKLM 2>&1 | Out-Null
+    Write-Host '  HKLM flushed.'
+  `, send, { heartbeatMs: 5000, heartbeatLabel: 'profsvc flush', timeoutMs: 60000 });
 
   // ============================================================
   // STEP 4: Recreate the account, add to Administrators,
@@ -988,6 +1054,37 @@ ipcMain.handle('run-fix', async (event) => {
   const newUserProfile = profile.path;
   send(`  Profile source: ${profile.source}, path: ${newUserProfile}`, 'out');
   if (profile.sid) send(`  SID: ${profile.sid}`, 'out');
+
+  // Pre-seed ACLs on the freshly-created profile's registry hive files
+  // (NTUSER.DAT + UsrClass.dat). Without an explicit grant, NTFS
+  // inheritance on the new profile can leave SYSTEM/Administrators
+  // without traverse rights in edge cases (e.g. after nuke-acls.ps1
+  // runs broad-stroke against the user1 subtree). When UPS can't read
+  // UsrClass.dat on the next user1 logon it emits Event 1509 and falls
+  // back to a TEMP profile - exact failure mode observed in the wild
+  // and verified via Application log.
+  //
+  // Raw-SID grants (icacls `*` prefix) survive even if the account is
+  // later deleted; NTAccount lookup fails for deleted accounts but the
+  // ACE itself remains valid for the same SID on recreate.
+  if (profile.sid) {
+    await runPSScript(`
+      $sid = '${profile.sid}'
+      $base = '${newUserProfile}'
+      $targets = @(
+        (Join-Path $base 'NTUSER.DAT'),
+        (Join-Path $base 'AppData\\Local\\Microsoft\\Windows\\UsrClass.dat')
+      )
+      foreach ($f in $targets) {
+        if (Test-Path $f) {
+          $out = & icacls.exe $f /grant ('*' + $sid + ':(F)') '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' 2>&1
+          Write-Host ('  icacls ' + $f + ': ' + (($out | Out-String).Trim()))
+        } else {
+          Write-Host ('  (skipped, not yet present: ' + $f + ')')
+        }
+      }
+    `, send, { heartbeatMs: 5000, heartbeatLabel: 'hive acl seed', timeoutMs: 30000 });
+  }
 
   send('  Deploying first-run setup helper...', 'out');
   const firstRunSrc = getFirstRunScriptPath();

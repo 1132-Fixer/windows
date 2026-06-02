@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **TEMP-profile cascade after fix run.** Three changes in `main.js` prevent
+  Windows from minting `C:\Users\TEMP.<machine>.NNN` fallback profiles on
+  the next `user1` logon after the device-reset cycle.
+  - Widened ProfileList cleanup to match registry keys by SID (`<sid>` and
+    `<sid>.bak`) in addition to `ProfileImagePath`. Path-only matching
+    missed the post-failure shape where UPS had renamed the live key to
+    `<sid>.bak` and minted a new `<sid>` key pointing at a `TEMP.*`
+    folder, leaving the broken primary key behind across runs.
+  - New STEP 3b restarts `ProfSvc` (User Profile Service) after account
+    delete + ProfileList sweep. Drops retained hive handles into the
+    deleted `C:\Users\user1\...\UsrClass.dat` that otherwise survive the
+    delete and block the next logon's hive load (Event 1509 → 1515 →
+    1511 → TEMP profile). Falls back to `sc.exe stop/start` if
+    `Restart-Service` is denied (ProfSvc shares a svchost group), then
+    `reg flush HKLM` as belt-and-suspenders.
+  - New STEP 6 ACL seed: after the user1 profile materializes, raw-SID
+    `icacls /grant *<sid>:(F) *S-1-5-18:(F) *S-1-5-32-544:(F)` is applied
+    to `NTUSER.DAT` and `AppData\Local\Microsoft\Windows\UsrClass.dat`.
+    Raw-SID ACEs survive account deletion, so subsequent fix cycles
+    can't be denied hive read by stale NTFS inheritance from
+    `nuke-acls.ps1` runs.
+- **Two reusable PowerShell helpers added** under `tools/` for one-shot
+  recovery when a TEMP-profile cascade is already on disk:
+  `merge-user1-profiles.ps1` (inventory + additive robocopy merge of
+  stale `user1.MACHINE` / `TEMP.*` folders into canonical
+  `C:\Users\user1`, with `MoveFileEx`-based reboot-pending delete
+  fallback for locked hive files) and `repoint-profilelist.ps1`
+  (repoint a SID's `ProfileImagePath` and prune orphan `.bak` / junk
+  subkeys).
+
 ## [5.3.9] - 2026-05-30 — Premium wizard flow + FIX NOW freeze fix
 
 ### Added
