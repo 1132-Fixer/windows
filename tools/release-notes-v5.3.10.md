@@ -45,6 +45,6 @@ Deleted `tools/verify-wizard-autoflow.js` — verified the auto-advance flow tha
 ### Artifacts
 
 - `1132-Fixer-Portable-5.3.10.exe` — portable x64 build, self-contained, run as Administrator.
-- SHA256: `<fill after build>`
+- SHA256: `7b55d971c39c4f0861beb7f58786d6a5d54d49d1c35cf2af22c25859304e66bb`
 
-Built from commit `<fill after commit>`.
+Built from commit `741b2e0`.
