@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.10] - 2026-06-02 — TEMP-profile cascade prevention + wizard simplification
+
+### Changed
+- **Wizard reverted to manual step-through.** Rolled back the v5.3.9 premium
+  guided flow after it shipped more bugs than value (preflight hangs, stale
+  renders, dead `checkEnvBtn` refs). Removed: auto-open on launch, intro
+  overview step, auto-advance timer + countdown bar, generation guard /
+  60s scan-timeout race, step-enter reflow animation, status-tinted card
+  outline + overall progress bar. The wizard still walks all 8 preflight
+  checks with Back / Next / Cancel and ends in the FIX NOW confirmation;
+  user advances each step manually. Deleted dead verification harness
+  `tools/verify-wizard-autoflow.js`.
+
 ### Fixed
 - **TEMP-profile cascade after fix run.** Three changes in `main.js` prevent
   Windows from minting `C:\Users\TEMP.<machine>.NNN` fallback profiles on

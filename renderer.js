@@ -371,6 +371,7 @@ async function runFix() {
   isRunning = true;
   fixBtn.disabled = true;
   shortcutBtn.disabled = true;
+  checkEnvBtn.disabled = true;
   setStatus('scanning', 'Running');
 
   // Switch to running view.
@@ -390,6 +391,7 @@ async function runFix() {
   isRunning = false;
   fixBtn.disabled = false;
   shortcutBtn.disabled = false;
+  checkEnvBtn.disabled = false;
 
   addEmptyLine();
   if (result.success) {
@@ -476,9 +478,6 @@ async function createShortcut(showHeader) {
 const PREFLIGHT_ORDER = ['admin', 'zoom', 'helperUser', 'camPolicy', 'micPolicy', 'hku', 'frameServer', 'version'];
 
 const wizardOverlay  = document.getElementById('wizardOverlay');
-const wizardCard     = wizardOverlay.querySelector('.wz-card');
-const wizardProgFill = document.getElementById('wizardProgress');
-const wizardProgBar  = wizardOverlay.querySelector('.wz-progress');
 const wizardStepLbl  = document.getElementById('wizardStepLabel');
 const wizardDots     = document.getElementById('wizardDots');
 const wizardBody     = document.getElementById('wizardBody');
@@ -489,8 +488,6 @@ const wizardMsg      = document.getElementById('wizardMsg');
 const wizardHint     = document.getElementById('wizardHint');
 const wizardSummary  = document.getElementById('wizardSummary');
 const wizardConfNote = document.getElementById('wizardConfirmNote');
-const wizardCountdown     = document.getElementById('wizardCountdown');
-const wizardCountdownFill = document.getElementById('wizardCountdownFill');
 const wizardBackBtn  = document.getElementById('wizardBack');
 const wizardNextBtn  = document.getElementById('wizardNext');
 const wizardCancel   = document.getElementById('wizardCancel');
@@ -499,45 +496,6 @@ let wizardSteps = [];
 let wizardIdx   = 0;
 let wizardCanRunFix = false;
 let releaseWizardTrap = null;
-let wizardAutoTimer = null;
-let wizardAutoDisabled = false;
-let wizardGen = 0;
-const WIZARD_AUTO_MS       = 1400; // per-step auto-advance for normal checks
-const WIZARD_INTRO_MS      = 2600; // intro reads longer
-const WIZARD_SCAN_TIMEOUT_MS = 60000;
-
-// Intro step — surfaces the "what this does" overview inside the wizard
-// itself so the user lands directly in guided flow instead of reading a
-// static instruction list first. Always ready, always advances.
-const INTRO_STEP = {
-  key: '__intro__',
-  label: 'OVERVIEW',
-  status: 'ready',
-  message:
-    'This wizard will check your environment, then (with your explicit consent) ' +
-    'reset the local user1 account and launch a clean Zoom Workplace session under it. ' +
-    'No personal files, chats, or Zoom account data are copied.',
-  autoMs: WIZARD_INTRO_MS,
-};
-
-function clearWizardAuto() {
-  if (wizardAutoTimer) { clearTimeout(wizardAutoTimer); wizardAutoTimer = null; }
-  if (wizardCountdown) {
-    wizardCountdown.classList.remove('running');
-    wizardCountdown.classList.remove('visible');
-  }
-}
-
-// Map a step's status onto the overall progress bar tint.
-function progressOverallFor(steps, idx) {
-  let worst = 'ready';
-  for (let i = 0; i <= idx && i < steps.length; i++) {
-    const s = steps[i].status;
-    if (s === 'blocked') return 'blocked';
-    if (s === 'warning' && worst !== 'blocked') worst = 'warning';
-  }
-  return worst;
-}
 
 function statusHint(status) {
   switch (status) {
@@ -551,12 +509,10 @@ function statusHint(status) {
 
 async function openWizard() {
   if (isRunning) return;
-  const gen = ++wizardGen;
   wizardOverlay.classList.add('show');
   wizardSteps = [];
   wizardIdx = 0;
   wizardCanRunFix = false;
-  wizardAutoDisabled = false;
   releaseWizardTrap = installFocusTrap(wizardOverlay);
   wizardLabel.textContent = 'Loading…';
   wizardMsg.textContent = 'Reading environment…';
@@ -569,29 +525,9 @@ async function openWizard() {
   wizardBackBtn.disabled = true;
   wizardStepLbl.textContent = 'Loading…';
   wizardDots.innerHTML = '';
-  if (wizardProgFill) wizardProgFill.style.width = '0%';
-  if (wizardProgBar)  wizardProgBar.setAttribute('aria-valuenow', '0');
-  if (wizardCard)     wizardCard.setAttribute('data-overall', 'ready');
   setStatus('scanning', 'Checking');
-
-  // Race the IPC against a 60s ceiling. Both halves need explicit cleanup
-  // to avoid orphan unhandled rejections: (1) clear the setTimeout if IPC
-  // wins, (2) swallow late IPC rejection if the timeout wins.
-  let timeoutId;
-  const scanPromise = window.electronAPI.preflightScan();
-  scanPromise.catch(() => {}); // attach silent handler for the timeout-wins path
-  const timeoutPromise = new Promise((_, rej) => {
-    timeoutId = setTimeout(
-      () => rej(new Error('Preflight scan timed out after 60s. Antivirus may be blocking powershell.exe. Cancel and retry, or run from an unrestricted admin shell.')),
-      WIZARD_SCAN_TIMEOUT_MS
-    );
-  });
-
   try {
-    const result = await Promise.race([scanPromise, timeoutPromise]);
-    if (gen !== wizardGen) return; // wizard was closed/reopened while we awaited
-    // Prepend overview as step 0 so the wizard itself is the intro.
-    wizardSteps.push({ ...INTRO_STEP });
+    const result = await window.electronAPI.preflightScan();
     for (const key of PREFLIGHT_ORDER) {
       const card = result.cards[key];
       if (card) wizardSteps.push(card);
@@ -607,42 +543,26 @@ async function openWizard() {
 
     renderWizardStep(0);
   } catch (err) {
-    if (gen !== wizardGen) return; // stale failure — wizard already closed
     wizardLabel.textContent = 'Preflight failed';
     wizardMsg.textContent = err && err.message ? err.message : String(err);
     wizardBody.setAttribute('data-status', 'blocked');
     wizardNextBtn.disabled = true;
     setStatus('error', 'Error');
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 
 function closeWizard() {
-  wizardGen++; // invalidate any in-flight openWizard awaits
-  clearWizardAuto();
   wizardOverlay.classList.remove('show');
   if (releaseWizardTrap) { releaseWizardTrap(); releaseWizardTrap = null; }
 }
 
 function renderWizardStep(i) {
   if (!wizardSteps.length) return;
-  clearWizardAuto();
   wizardIdx = Math.max(0, Math.min(i, wizardSteps.length - 1));
   const step = wizardSteps[wizardIdx];
   const isConfirm = step.key === '__confirm__';
-  const isIntro   = step.key === '__intro__';
   const total = wizardSteps.length;
   wizardStepLbl.textContent = `Step ${wizardIdx + 1} of ${total}`;
-
-  // Overall progress bar — current step / total. Status-tint reflects
-  // the worst status seen so far so users see degradation visually.
-  if (wizardProgFill) {
-    const pct = Math.round(((wizardIdx + 1) / total) * 100);
-    wizardProgFill.style.width = pct + '%';
-    if (wizardProgBar) wizardProgBar.setAttribute('aria-valuenow', String(pct));
-  }
-  if (wizardCard) wizardCard.setAttribute('data-overall', progressOverallFor(wizardSteps, wizardIdx));
 
   // Dots — colored by each step's status, current one ringed.
   wizardDots.innerHTML = '';
@@ -661,13 +581,6 @@ function renderWizardStep(i) {
   wizardIcon.innerHTML = iconForStatus(step.status, 'wz-icon');
   wizardLabel.textContent = step.label || step.key;
   wizardBadge.textContent = STATUS_BADGE[step.status] || '';
-
-  // Re-trigger the step-enter animation by toggling the class.
-  wizardBody.classList.remove('wz-enter');
-  // Force reflow so the animation restarts on every render.
-
-  void wizardBody.offsetWidth;
-  wizardBody.classList.add('wz-enter');
 
   if (isConfirm) {
     // Final step — show summary list + the confirm note.
@@ -702,37 +615,6 @@ function renderWizardStep(i) {
     wizardNextBtn.disabled = (step.status === 'blocked');
   }
   wizardBackBtn.disabled = (wizardIdx === 0);
-
-  // Auto-advance: walk through non-blocked check steps so the user lands
-  // on the CONFIRM FIX summary without N manual clicks. Confirm step
-  // requires an explicit FIX NOW click (destructive action). Blocked
-  // steps stay put — user must read and Cancel. Once the user clicks
-  // Back, auto-advance is disabled for the rest of the wizard session
-  // so they can step through manually.
-  const isLast = (wizardIdx >= wizardSteps.length - 1);
-  if (!wizardAutoDisabled && !isConfirm && !isLast && step.status !== 'blocked') {
-    const autoMs = (typeof step.autoMs === 'number' && step.autoMs > 0) ? step.autoMs : WIZARD_AUTO_MS;
-    wizardHint.textContent = `${statusHint(step.status)} Auto-advancing… click Back to pause.`.trim();
-
-    // Drive the countdown bar via CSS variable so width animates 0→100%
-    // over exactly autoMs. Reset to 0 first, then flip .running on the
-    // next frame so the transition actually fires.
-    if (wizardCountdown && wizardCountdownFill) {
-      wizardCountdown.style.setProperty('--wz-auto-ms', autoMs + 'ms');
-      wizardCountdownFill.style.width = '0%';
-      wizardCountdown.classList.add('visible');
-      wizardCountdown.classList.remove('running');
-      void wizardCountdown.offsetWidth; // reflow
-      requestAnimationFrame(() => {
-        if (wizardAutoTimer) wizardCountdown.classList.add('running');
-      });
-    }
-
-    wizardAutoTimer = setTimeout(() => {
-      wizardAutoTimer = null;
-      renderWizardStep(wizardIdx + 1);
-    }, autoMs);
-  }
 }
 
 function wizardNext() {
@@ -748,8 +630,6 @@ function wizardNext() {
 }
 
 function wizardBack() {
-  // Manual navigation disables auto-advance for the rest of the session.
-  wizardAutoDisabled = true;
   if (wizardIdx > 0) renderWizardStep(wizardIdx - 1);
 }
 
@@ -784,16 +664,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   fixBtn.disabled  = !elevated;
   shortcutBtn.disabled = !elevated;
   setStatus(elevated ? '' : 'error', elevated ? 'Ready' : 'Not Admin');
-
-  // Premium wizard flow: when elevated, open the guided wizard
-  // automatically so the user lands in the prompt instead of a static
-  // instruction wall. Skip if not elevated, if a fix is already
-  // running, or if the wizard is already open (defensive).
-  if (elevated && !isRunning && !wizardOverlay.classList.contains('show')) {
-    setTimeout(() => {
-      if (!isRunning && !wizardOverlay.classList.contains('show')) openWizard();
-    }, 350);
-  }
 });
 
 // ============================================================
