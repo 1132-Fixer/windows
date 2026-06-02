@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `tools/sanitizer-smoke.js` — standalone PASS/FAIL smoke for the
+  support-report redaction logic. Mirrors `main.js` `sanitize()` exactly
+  and covers every redaction class (SID, home dir, username,
+  `user1` helper-account guard, hostname). Exits 0 on PASS, 1 on FAIL —
+  drop into CI or run manually before cutting a release.
+- `docs/zoom-1132-finding.md` — moves the root-cause memo (Zoom error
+  1132 follows the Windows user account / SID / DPAPI, not hardware
+  identifiers) out of an ad-hoc `MEMORY.md` at the repo root into the
+  `docs/` tree alongside the other governance / QA docs.
+
 ## [5.3.10] - 2026-06-02 — TEMP-profile cascade prevention + wizard simplification
 
 ### Changed
