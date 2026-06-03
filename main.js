@@ -1055,6 +1055,46 @@ ipcMain.handle('run-fix', async (event) => {
   send(`  Profile source: ${profile.source}, path: ${newUserProfile}`, 'out');
   if (profile.sid) send(`  SID: ${profile.sid}`, 'out');
 
+  // ============================================================
+  // STEP 6-guard: Verify the launch landed in the REAL C:\Users\user1
+  // profile and log the effective environment.
+  //
+  // The Zoom 1132 fix only works if the session's identity is the freshly
+  // minted user1 profile at C:\Users\user1. If the User Profile Service fell
+  // back to a TEMP profile (Event 1511/1515) or a suffixed profile
+  // (user1.MACHINE), then USERPROFILE/APPDATA/LOCALAPPDATA point at the wrong
+  // tree, Zoom writes its DPAPI keys there, and the ban persists silently.
+  // Surface the resolved environment and flag any non-canonical profile so
+  // the operator sees it instead of a false "success".
+  // ============================================================
+  const expectedProfile = `C:\\Users\\${FIX_USER}`;
+  const launchedEnv = {
+    USERPROFILE:  newUserProfile,
+    APPDATA:      path.join(newUserProfile, 'AppData', 'Roaming'),
+    LOCALAPPDATA: path.join(newUserProfile, 'AppData', 'Local')
+  };
+  send('  Launched-profile environment:', 'out');
+  send(`    USERPROFILE   = ${launchedEnv.USERPROFILE}`, 'out');
+  send(`    APPDATA       = ${launchedEnv.APPDATA}`, 'out');
+  send(`    LOCALAPPDATA  = ${launchedEnv.LOCALAPPDATA}`, 'out');
+
+  const profilePathClean = newUserProfile.toLowerCase() === expectedProfile.toLowerCase();
+  const profileIsCanonical = profilePathClean && profile.source !== 'folder-suffixed';
+  if (profileIsCanonical) {
+    send(`  Verified: profile is the real ${expectedProfile} (source: ${profile.source}).`, 'out');
+  } else {
+    send(`  WARNING: Zoom did NOT land in ${expectedProfile}.`, 'err');
+    send(`           Resolved: ${newUserProfile} (source: ${profile.source}).`, 'err');
+    send('           Windows fell back to a TEMP/suffixed profile - the 1132', 'err');
+    send('           identity may not be clean. Remediation: reboot once, then', 'err');
+    send('           re-run the fix (the ProfSvc hive-handle flush only fully', 'err');
+    send('           releases stale handles across a reboot).', 'err');
+    warnings.push({
+      code: 'temp_or_suffixed_profile',
+      message: `Zoom resolved to '${newUserProfile}' (source: ${profile.source}) instead of '${expectedProfile}'. Windows fell back to a TEMP/suffixed profile, so the 1132 device identity may not be clean. Reboot and re-run the fix so the User Profile Service drops stale hive handles before the next launch.`
+    });
+  }
+
   // Pre-seed ACLs on the freshly-created profile's registry hive files
   // (NTUSER.DAT + UsrClass.dat). Without an explicit grant, NTFS
   // inheritance on the new profile can leave SYSTEM/Administrators
