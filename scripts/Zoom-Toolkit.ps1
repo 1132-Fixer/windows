@@ -35,9 +35,14 @@ if (-not (Test-IsAdmin)) {
   if ($DoAll)     { $argsList += "-DoAll" }
   if ($Reinstall) { $argsList += "-Reinstall" }
 
-  Start-Process -FilePath "powershell.exe" -Verb RunAs -WindowStyle Normal -ArgumentList @(
+  # NOTE: the `@(...) + $argsList` MUST be wrapped in parentheses. Without them
+  # PowerShell binds only the literal array to -ArgumentList and then parses the
+  # bare `+` as a positional argument, throwing "A positional parameter cannot be
+  # found that accepts argument '+'." — so the UAC relaunch never happens and
+  # -DoAll/-Reinstall are silently dropped.
+  Start-Process -FilePath "powershell.exe" -Verb RunAs -WindowStyle Normal -ArgumentList (@(
     "-NoProfile","-ExecutionPolicy","Bypass","-NoExit","-File","`"$PSCommandPath`""
-  ) + $argsList
+  ) + $argsList)
   exit
 }
 
@@ -575,7 +580,11 @@ Invoke-UninstallZoom_InstallerExe
 
 # 2) MSI product code cleanup (clean removal by GUID)
 $msiItems = Get-ZoomMsiGuidsFromRegistry
-if ($msiItems.Count -gt 0) {
+# Wrap in @() before .Count: Get-ZoomMsiGuidsFromRegistry returns $null when no
+# Zoom MSI GUID products are registered (per-user EXE install, or already
+# removed), and under `Set-StrictMode -Version Latest` a bare $null.Count is a
+# terminating error that would abort before the deep wipe ever runs.
+if (@($msiItems).Count -gt 0) {
   Uninstall-ZoomMsiGuids -items $msiItems
 } else {
   Add-Action "MSIUninstall" "(none)" "NoZoomMSIProductsFound"
