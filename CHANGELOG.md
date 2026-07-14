@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **CI on `master` has been red on every run since at least 2026-05-29.** The
+  `build*` scripts called `electron-builder` without an explicit `--publish`
+  flag. electron-builder auto-detects CI and, because `package.json` carries a
+  `publish` block, tried to publish on its own — failing every `master` push
+  with `GitHub Personal Access Token is not set, neither programmatically, nor
+  using env "GH_TOKEN"`. It never surfaced on pull requests because
+  electron-builder skips publishing for `pull_request` events, so the break was
+  invisible from PR checks. `build`, `build:installer` and `build:all` now pass
+  `--publish never` — building is not publishing; only `npm run release`
+  (`--publish always`) and the tag-triggered `release.yml` publish. This is
+  option 2 of the two fixes the README had documented but never applied.
+  No effect on shipped artifacts — v5.3.11's binaries are unchanged.
+
+### Changed
+- `README.md` — "Release & CI Setup" rewritten: documents the tag-triggered
+  release flow, the `package.json` / `package-lock.json` sync requirement that
+  `npm ci` enforces (the reason v5.3.10 skipped the pipeline), the build-vs-publish
+  split, the full secret table (`RELEASES_PAT`, `GH_ISSUES_TOKEN`, `GH_TOKEN`,
+  `CSC_*`), and an explicit warning never to hardcode a token in `config.js`.
+
 ## [5.3.11] - 2026-07-14 — FIX NOW crash fix + secret hygiene + toolkit repairs
 
 ### Fixed
