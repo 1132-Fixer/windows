@@ -82,6 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI artifact names corrected from the stale `CleanState-Sentinel-*` to
   `1132-Fixer-Portable` / `1132-Fixer-Installer`, and the CI header comment now
   names this project. CI also runs `npm test` before building.
+- **Actions artifact uploads no longer fail a build or a release.** They are
+  `continue-on-error: true` in both `ci.yml` and `release.yml`. Actions artifact
+  storage is a quota-limited bucket *separate* from release assets, and it is
+  currently exhausted — so these convenience uploads were failing runs whose
+  compile, tests, and (in `release.yml`) actual release publish had all
+  succeeded. `release.yml`'s copy is also reduced from 90- to 30-day retention;
+  the real deliverables live on the Releases repo as release assets.
 
 ## [5.3.10] - 2026-06-02 — TEMP-profile cascade prevention + wizard simplification
 

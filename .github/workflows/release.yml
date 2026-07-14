@@ -167,11 +167,16 @@ jobs:
         run: |
           node scripts/validate-release-assets.mjs "v${{ steps.version.outputs.VERSION }}"
 
+      # Convenience copy only — the real deliverables are already published as
+      # release assets on the Releases repo by the step above. Actions artifact
+      # storage is a separate, quota-limited bucket, so a quota exhaustion here
+      # must never fail a release that has already shipped successfully.
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4.3.1
+        continue-on-error: true
         with:
           name: release-v${{ steps.version.outputs.VERSION }}
           path: |
             dist/*.exe
             dist/checksums-sha256.txt
-          retention-days: 90
+          retention-days: 30
