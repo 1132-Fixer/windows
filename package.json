@@ -9,9 +9,9 @@
     "inject-config": "node scripts/inject-config.js",
     "test": "node tools/sanitizer-smoke.js",
     "postinstall": "node scripts/postinstall.js",
-    "build": "node scripts/inject-config.js && electron-builder --win portable --x64",
-    "build:installer": "node scripts/inject-config.js && electron-builder --win nsis --x64",
-    "build:all": "node scripts/inject-config.js && electron-builder --win --x64",
+    "build": "node scripts/inject-config.js && electron-builder --win portable --x64 --publish never",
+    "build:installer": "node scripts/inject-config.js && electron-builder --win nsis --x64 --publish never",
+    "build:all": "node scripts/inject-config.js && electron-builder --win --x64 --publish never",
     "release": "node scripts/inject-config.js && electron-builder --win nsis --x64 --publish always"
   },
   "author": "High Texas",
