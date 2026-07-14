@@ -7,16 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.11] - 2026-07-14 — FIX NOW crash fix + secret hygiene + toolkit repairs
+
+### Fixed
+- **FIX NOW silently did nothing — regression reintroduced by v5.3.10.**
+  `runFix()` in `renderer.js` still wrote to a `checkEnvBtn` global that was
+  deleted along with the 8-card preflight grid. v5.3.9 removed those two dead
+  writes, but the v5.3.10 wizard rollback reverted the whole v5.3.9 changeset
+  and brought them back. Clicking **FIX NOW** threw
+  `ReferenceError: checkEnvBtn is not defined` at the top of `runFix()` —
+  *before* the `run-fix` IPC call — so the fix never ran at all. Because the
+  wizard invokes `runFix()` un-awaited, it surfaced only as an unhandled
+  promise rejection: no error shown, `isRunning` stuck `true`, and CHECK & FIX
+  disabled for the rest of the session. Removed the dead writes and wrapped the
+  flow in `try`/`catch`/`finally` so any future throw is surfaced to the user
+  and the run lock is always released.
+- **`scripts/Zoom-Toolkit.ps1` self-elevation never worked.** The UAC relaunch
+  passed `-ArgumentList @(...) + $argsList` with the concatenation *outside* the
+  parameter value, so PowerShell parsed the bare `+` as a positional argument
+  and `Start-Process` threw "A positional parameter cannot be found that accepts
+  argument '+'." Every non-elevated run failed to relaunch, and `-DoAll` /
+  `-Reinstall` were silently dropped. Now parenthesised.
+- **`scripts/Zoom-Toolkit.ps1` aborted before the deep wipe on some machines.**
+  `Get-ZoomMsiGuidsFromRegistry` returns `$null` when no Zoom MSI GUID products
+  are registered (per-user EXE install, or Zoom already partly removed), and
+  under `Set-StrictMode -Version Latest` the bare `$msiItems.Count` was a
+  terminating error — so `-DoAll` died before `DeepWipe-Zoom` and report writing
+  ever ran. Now `@($msiItems).Count`.
+- **`tools/repoint-profilelist.ps1` deleted ProfileList keys it was meant to
+  keep.** The cleanup pass read each key's `ProfileImagePath` into `$p` but never
+  tested it, so — despite the banner saying "with empty ProfileImagePath" — it
+  hard-deleted *every* `*1098*` key that wasn't the target SID, including
+  legitimate profile registrations. Now only removes keys whose
+  `ProfileImagePath` is actually empty, and logs the ones it keeps.
+- **`scripts/zoom-firstrun-setup.ps1` logged a misleading failure every run.**
+  `Echo cancellation` was listed both as a toggle and as a dropdown. It is a
+  dropdown, so the toggle pass always logged
+  `FAILED (no Toggle pattern): Echo cancellation` before the dropdown pass set
+  it correctly — noise in the exact logs users paste into support reports.
+  Removed the dead toggle entry; behavior is unchanged.
+
+### Security
+- **Removed the hardcoded GitHub feedback token from `src/main/config.js`.** The
+  token was committed in plaintext to a public repo, so it is permanently
+  exposed via git history and must be rotated. `config.js` now resolves the
+  token from `process.env.GH_ISSUES_TOKEN` or a gitignored, build-time-generated
+  `src/main/config.generated.js` — never from source. Builds without a token
+  still succeed; in-app feedback degrades to "Feedback service not configured".
+  To restore feedback: rotate the token, then add it as a `GH_ISSUES_TOKEN`
+  repository secret (consumed by `release.yml`).
+
 ### Added
+- `scripts/inject-config.js` — writes the gitignored
+  `src/main/config.generated.js` from `GH_ISSUES_TOKEN` / `GH_ISSUES_REPO` at
+  build time, so a feedback token can be baked into a build without ever
+  entering source control. Wired into every `build*` / `release` script and into
+  the `release.yml` build step.
+- `scripts/postinstall.js` — self-heals Electron's binary setup. Locked-down
+  environments (CI sandboxes, allow-scripts policies) block *dependency*
+  lifecycle scripts, so Electron's own `postinstall` never runs and the app dies
+  at launch with "Electron failed to install correctly". This re-runs Electron's
+  installer when `path.txt` is missing. Idempotent, and never fails an install.
 - `tools/sanitizer-smoke.js` — standalone PASS/FAIL smoke for the
   support-report redaction logic. Mirrors `main.js` `sanitize()` exactly
   and covers every redaction class (SID, home dir, username,
-  `user1` helper-account guard, hostname). Exits 0 on PASS, 1 on FAIL —
-  drop into CI or run manually before cutting a release.
+  `user1` helper-account guard, hostname). Exits 0 on PASS, 1 on FAIL.
+  Now wired to `npm test` and run by CI.
 - `docs/zoom-1132-finding.md` — moves the root-cause memo (Zoom error
   1132 follows the Windows user account / SID / DPAPI, not hardware
   identifiers) out of an ad-hoc `MEMORY.md` at the repo root into the
   `docs/` tree alongside the other governance / QA docs.
+
+### Changed
+- CI artifact names corrected from the stale `CleanState-Sentinel-*` to
+  `1132-Fixer-Portable` / `1132-Fixer-Installer`, and the CI header comment now
+  names this project. CI also runs `npm test` before building.
+- **Actions artifact uploads no longer fail a build or a release.** They are
+  `continue-on-error: true` in both `ci.yml` and `release.yml`. Actions artifact
+  storage is a quota-limited bucket *separate* from release assets, and it is
+  currently exhausted — so these convenience uploads were failing runs whose
+  compile, tests, and (in `release.yml`) actual release publish had all
+  succeeded. `release.yml`'s copy is also reduced from 90- to 30-day retention;
+  the real deliverables live on the Releases repo as release assets.
 
 ## [5.3.10] - 2026-06-02 — TEMP-profile cascade prevention + wizard simplification
 

@@ -78,12 +78,20 @@ jobs:
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # In-app feedback token. Optional: when this secret is absent the build
+          # still succeeds and the feedback form degrades to "not configured".
+          # The token is NEVER committed — see src/main/config.js.
+          GH_ISSUES_TOKEN: ${{ secrets.GH_ISSUES_TOKEN }}
         run: |
           # Unset empty CSC_LINK so electron-builder doesn't try to resolve it as a file
           if ([string]::IsNullOrEmpty($env:CSC_LINK)) {
             Remove-Item Env:CSC_LINK -ErrorAction SilentlyContinue
             Remove-Item Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
           }
+          # Bake the feedback token into src/main/config.generated.js from the
+          # env var above. This workflow calls electron-builder directly rather
+          # than `npm run build`, so the inject step must be invoked explicitly.
+          node scripts/inject-config.js
           # -p never: this workflow handles release creation via action-gh-release;
           # electron-builder's own publish would target a different repo and conflict.
           npx electron-builder --win --x64 -p never
@@ -159,11 +167,16 @@ jobs:
         run: |
           node scripts/validate-release-assets.mjs "v${{ steps.version.outputs.VERSION }}"
 
+      # Convenience copy only — the real deliverables are already published as
+      # release assets on the Releases repo by the step above. Actions artifact
+      # storage is a separate, quota-limited bucket, so a quota exhaustion here
+      # must never fail a release that has already shipped successfully.
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4.3.1
+        continue-on-error: true
         with:
           name: release-v${{ steps.version.outputs.VERSION }}
           path: |
             dist/*.exe
             dist/checksums-sha256.txt
-          retention-days: 90
+          retention-days: 30

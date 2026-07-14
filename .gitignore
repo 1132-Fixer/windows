@@ -1,3 +1,6 @@
+# Build-time injected secrets — never commit (see scripts/inject-config.js)
+src/main/config.generated.js
+
 # Dependencies
 node_modules/
 

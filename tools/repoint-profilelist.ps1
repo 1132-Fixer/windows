@@ -36,9 +36,17 @@ Get-ChildItem $base | Where-Object {
     $_.PSChildName -like "*1098*" -and $_.PSChildName -ne $sid
 } | ForEach-Object {
     $p = (Get-ItemProperty $_.PSPath -EA 0).ProfileImagePath
-    Write-Host "  Found extra: $($_.PSChildName)  ->  ProfileImagePath='$p'"
-    Remove-Item $_.PSPath -Recurse -Force
-    Write-Host "    REMOVED"
+    # Only delete keys whose ProfileImagePath is EMPTY (the stated intent).
+    # The original code read $p but never tested it, so it hard-deleted every
+    # *1098* key that wasn't exactly $sid — including legitimate profile
+    # registrations with a valid non-empty path.
+    if ([string]::IsNullOrWhiteSpace($p)) {
+        Write-Host "  Found spurious (empty ProfileImagePath): $($_.PSChildName)"
+        Remove-Item $_.PSPath -Recurse -Force
+        Write-Host "    REMOVED"
+    } else {
+        Write-Host "  Keeping $($_.PSChildName)  ->  ProfileImagePath='$p' (non-empty)"
+    }
 }
 
 Write-Host ''

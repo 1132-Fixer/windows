@@ -371,7 +371,6 @@ async function runFix() {
   isRunning = true;
   fixBtn.disabled = true;
   shortcutBtn.disabled = true;
-  checkEnvBtn.disabled = true;
   setStatus('scanning', 'Running');
 
   // Switch to running view.
@@ -386,54 +385,68 @@ async function runFix() {
   addFileItem('STARTING FIX...', 'header');
   addEmptyLine();
 
-  const result = await window.electronAPI.runFix();
+  try {
+    const result = await window.electronAPI.runFix();
 
-  isRunning = false;
-  fixBtn.disabled = false;
-  shortcutBtn.disabled = false;
-  checkEnvBtn.disabled = false;
+    addEmptyLine();
+    if (result && result.success) {
+      const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+      if (warnings.length) {
+        addFileItem(`FIX COMPLETE (with ${warnings.length} warning(s))`, 'header');
+        finalizeStages('warn');
+        setStatus('warn', 'Done (warnings)');
+      } else {
+        addFileItem('FIX COMPLETE', 'header');
+        finalizeStages('ok');
+        setStatus('done', 'Done');
+      }
+      renderFixReceipt(result.receipt, warnings);
 
-  addEmptyLine();
-  if (result.success) {
-    const warnings = Array.isArray(result.warnings) ? result.warnings : [];
-    if (warnings.length) {
-      addFileItem(`FIX COMPLETE (with ${warnings.length} warning(s))`, 'header');
-      finalizeStages('warn');
-      setStatus('warn', 'Done (warnings)');
+      if (warnings.length) {
+        addEmptyLine();
+        addFileItem('WARNINGS', 'header');
+        warnings.forEach(w => addFileItem(`  • [${w.code}] ${w.message}`, 'failed'));
+      }
+      // Re-expand log on completion so users can scroll back.
+      setLogExpanded(true);
+
+      const status = await window.electronAPI.shortcutExists();
+      if (status && status.exists && status.valid) {
+        addEmptyLine();
+        addFileItem(`Desktop shortcut already present: ${status.path}`, 'success');
+      } else {
+        const wantShortcut = await window.electronAPI.showShortcutPrompt();
+        if (wantShortcut) await createShortcut(false);
+      }
     } else {
-      addFileItem('FIX COMPLETE', 'header');
-      finalizeStages('ok');
-      setStatus('done', 'Done');
+      const res = result || {};
+      addFileItem(`FIX FAILED: ${friendlyError(res.error)}`, 'failed');
+      if (Array.isArray(res.blockers) && res.blockers.length) {
+        res.blockers.forEach(b => addFileItem(`  • [${b.code}] ${b.message}`, 'failed'));
+      }
+      if (Array.isArray(res.warnings) && res.warnings.length) {
+        res.warnings.forEach(w => addFileItem(`  • [${w.code}] ${w.message}`, 'failed'));
+      }
+      finalizeStages('fail');
+      setStatus('error', 'Failed');
+      setLogExpanded(true);
     }
-    renderFixReceipt(result.receipt, warnings);
-
-    if (warnings.length) {
-      addEmptyLine();
-      addFileItem('WARNINGS', 'header');
-      warnings.forEach(w => addFileItem(`  • [${w.code}] ${w.message}`, 'failed'));
-    }
-    // Re-expand log on completion so users can scroll back.
-    setLogExpanded(true);
-
-    const status = await window.electronAPI.shortcutExists();
-    if (status && status.exists && status.valid) {
-      addEmptyLine();
-      addFileItem(`Desktop shortcut already present: ${status.path}`, 'success');
-    } else {
-      const wantShortcut = await window.electronAPI.showShortcutPrompt();
-      if (wantShortcut) await createShortcut(false);
-    }
-  } else {
-    addFileItem(`FIX FAILED: ${friendlyError(result.error)}`, 'failed');
-    if (Array.isArray(result.blockers) && result.blockers.length) {
-      result.blockers.forEach(b => addFileItem(`  • [${b.code}] ${b.message}`, 'failed'));
-    }
-    if (Array.isArray(result.warnings) && result.warnings.length) {
-      result.warnings.forEach(w => addFileItem(`  • [${w.code}] ${w.message}`, 'failed'));
-    }
+  } catch (err) {
+    // The fix IPC (or a renderer helper it calls) threw. Surface it instead
+    // of dying as a silent unhandled rejection — runFix() is invoked
+    // un-awaited from the wizard, so without this the UI would just freeze.
+    addEmptyLine();
+    addFileItem(`FIX FAILED: ${(err && err.message) || 'Unexpected error in the fix flow.'}`, 'failed');
     finalizeStages('fail');
     setStatus('error', 'Failed');
     setLogExpanded(true);
+  } finally {
+    // Always release the run lock and re-enable controls — even on a throw.
+    // A stuck `isRunning`/disabled button was the exact failure mode of the
+    // old dead-`checkEnvBtn` reference that wedged CHECK & FIX after one click.
+    isRunning = false;
+    fixBtn.disabled = false;
+    shortcutBtn.disabled = false;
   }
 }
 

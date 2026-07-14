@@ -1,4 +1,4 @@
-# CleanState Sentinel - Continuous Integration
+# 1132 Fixer - Continuous Integration
 # Runs on every push and PR to validate builds
 
 name: CI
@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run tests
+        run: npm test
+
       - name: Build portable executable
         run: npm run build
 
@@ -38,17 +41,22 @@ jobs:
           echo "=== Build Output ==="
           dir dist
 
+      # Debug conveniences only. Actions artifact storage is a quota-limited
+      # bucket shared across the account; when it fills up, these uploads fail.
+      # That must not red a build whose compile + tests actually passed.
       - name: Upload portable artifact
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
-          name: CleanState-Sentinel-Portable
+          name: 1132-Fixer-Portable
           path: dist/*Portable*.exe
           retention-days: 7
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
-          name: CleanState-Sentinel-Installer
+          name: 1132-Fixer-Installer
           path: dist/*Setup*.exe
           retention-days: 7
 

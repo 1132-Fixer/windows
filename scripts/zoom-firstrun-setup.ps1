@@ -72,7 +72,9 @@ $DesiredToggles = @{
     'Hear incoming call ringtones on an additional device'       = $false
     'Automatically adjust microphone volume'                     = $false
     'High-fidelity music mode'                                   = $false
-    'Echo cancellation'                                          = $true
+    # 'Echo cancellation' is a DROPDOWN (Auto/Low/Medium/High), handled in
+    # $DesiredDropdowns below. Listing it here too made the toggle pass log a
+    # misleading "FAILED (no Toggle pattern): Echo cancellation" every run.
     'Stereo audio'                                               = $true
     'Live performance audio'                                     = $false
     'Automatically sync headset buttons'                         = $false
