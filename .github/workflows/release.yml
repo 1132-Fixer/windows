@@ -153,6 +153,27 @@ jobs:
           draft: false
           make_latest: true
           generate_release_notes: true
+          # Prepended above the auto-generated notes. GitHub attaches "Source code
+          # (zip/tar.gz)" to every release and provides no way to hide them
+          # (https://github.com/orgs/community/discussions/6003). On a downloads-only
+          # repo those archives contain no source at all, so point users at the right
+          # file explicitly rather than let them guess.
+          body: |
+            ## Download
+
+            | File | Use this one if |
+            |---|---|
+            | **1132-Fixer-Setup-${{ steps.version.outputs.VERSION }}.exe** | **Most people.** Standard installer — adds Start Menu / desktop shortcuts and enables auto-update. |
+            | **1132-Fixer-Portable-${{ steps.version.outputs.VERSION }}.exe** | You want no install — just run it. |
+
+            Right-click → **Run as administrator**. Requires Windows 10/11 with Zoom Workplace installed machine-wide.
+
+            > **Ignore the "Source code (zip / tar.gz)" links below.** GitHub adds those
+            > to every release automatically and they cannot be turned off. This is a
+            > downloads-only repo, so they contain no application source — the code lives
+            > in [1132-Fixer-Windows](https://github.com/PrimeUpYourLife/1132-Fixer-Windows).
+
+            ---
           files: |
             dist/*Setup*.exe
             dist/*Portable*.exe

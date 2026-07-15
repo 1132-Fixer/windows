@@ -81,19 +81,30 @@ jobs:
               }
             }
 
-            // Hide auto-generated source code archives (zip/tar.gz)
-            // Uses GitHub API's exclude_source_code_archives flag
+            // Ensure this release is flagged "Latest".
+            //
+            // NOTE: this block used to also send `exclude_source_code_archives: true`
+            // and log "Source code archives hidden." That was a false success.
+            // GitHub has NO way to hide the auto-generated "Source code" zip/tar.gz
+            // archives — no API parameter, no repo setting, no checkbox. It is a
+            // long-standing, still-unimplemented feature request:
+            //   https://github.com/orgs/community/discussions/6003
+            // The REST API silently ignores unknown body fields and returns 200, so
+            // the call always "succeeded" while doing nothing, and the try/catch
+            // never fired. Verified: the release object has no such field.
+            //
+            // Mitigation instead lives in release.yml, which puts a Download table
+            // at the top of the release notes telling users which .exe to take and
+            // to ignore the Source code links.
             try {
               await github.request('PATCH /repos/{owner}/{repo}/releases/{release_id}', {
                 owner, repo,
                 release_id: release.id,
-                make_latest: 'true',
-                exclude_source_code_archives: true
+                make_latest: 'true'
               });
-              console.log('Source code archives hidden.');
+              console.log('Release marked as latest.');
             } catch (e) {
-              console.log('Note: Could not hide source code archives — ' + e.message);
-              console.log('(GitHub may not support this on your plan)');
+              console.log('Note: could not mark release as latest — ' + e.message);
             }
 
             console.log(`\nDone: kept ${kept}, deleted ${deleted}`);
