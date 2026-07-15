@@ -1,5 +1,12 @@
-# Build-time injected secrets — never commit (see scripts/inject-config.js)
+# Build-time injected config — never commit (see scripts/inject-config.js)
 src/main/config.generated.js
+
+# Secrets. The feedback proxy's GH_ISSUES_TOKEN lives in .env locally and in the
+# deploy platform's env vars in production — never in this repo, and never in
+# the desktop app (it would ship inside app.asar). See feedback-proxy/README.md.
+.env
+.env.*
+!.env.example
 
 # Dependencies
 node_modules/

@@ -1,0 +1,15 @@
+{
+  "name": "1132-fixer-feedback-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Server-side holder for the GitHub issues token, so the desktop app never ships a credential",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

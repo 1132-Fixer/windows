@@ -83,6 +83,7 @@
       "!dist/**",
       "!build/**",
       "!node_modules/.cache/**",
+      "!feedback-proxy/**",
       "!scripts/**",
       "!legacy/**",
       "!tools/**",

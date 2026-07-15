@@ -172,36 +172,43 @@ own** if a `publish` block exists in `package.json` — which made every `master
 fail with `GitHub Personal Access Token is not set ... "GH_TOKEN"`. The explicit
 `--publish never` on the build scripts is what keeps CI green without needing a token.
 
-### Secrets
+### Secrets and variables
 
-| Variable | Where | Purpose |
-|---|---|---|
-| `RELEASES_PAT` | Actions secret on `1132-Fixer-Windows` | Lets `release.yml` create the release + upload assets on the Releases repo. **Required.** |
-| `GH_ISSUES_TOKEN` | Actions secret on `1132-Fixer-Windows` | Optional. Baked into the build by `scripts/inject-config.js` to enable in-app feedback. Without it the build still succeeds and feedback reports "Feedback service not configured". |
-| `GH_TOKEN` | local shell only | Only needed if you run `npm run release` by hand instead of tagging. |
-| `CSC_LINK` / `CSC_KEY_PASSWORD` | Actions secrets | Optional code signing. |
+| Name | Kind | Where | Purpose |
+|---|---|---|---|
+| `RELEASES_PAT` | **secret** | Actions secret on `1132-Fixer-Windows` | Lets `release.yml` create the release + upload assets on the Releases repo. **Required.** |
+| `FEEDBACK_PROXY_URL` | *variable* | Actions **variable** on `1132-Fixer-Windows` | Optional. Public url of the feedback proxy. Not a secret. Without it, builds still succeed and feedback reports "not configured". |
+| `GH_ISSUES_TOKEN` | **secret** | **the proxy's env only** — never here, never in the app | Read by `feedback-proxy/`. Set it on Railway (or wherever it's hosted). |
+| `GH_TOKEN` | **secret** | local shell only | Only needed if you run `npm run release` by hand instead of tagging. |
+| `CSC_LINK` / `CSC_KEY_PASSWORD` | **secret** | Actions secrets | Optional code signing. |
 
-**Never hardcode a token in `src/main/config.js`.** It resolves `GH_ISSUES_TOKEN` from
-the environment or from a gitignored, build-time-generated `config.generated.js`.
+### Never put a secret in the app
 
-This repo is private, so the danger is *not* git history — it's that `config.js` is
-bundled into the packaged app, and the app ships as a **public installer**. Anything
-hardcoded here lands in `app.asar` inside every published `.exe`, where asar stores
-file contents uncompressed. Pulling it back out takes about a minute:
+**`src/main/config.js` must never contain a credential.** It carries only
+`FEEDBACK_PROXY_URL` — a public endpoint.
+
+This is not paranoia. This repo is private, so the danger was never git history — it's
+that `config.js` is bundled into the packaged app, and the app ships as a **public
+installer**. Anything hardcoded there lands in `app.asar` inside every published
+`.exe`, where asar stores file contents uncompressed. Pulling it back out takes about
+a minute:
 
 ```bash
 7za x 1132-Fixer-Portable-5.3.10.exe -oext
 grep -a "GH_ISSUES_TOKEN" ext/resources/app.asar
+# -> GH_ISSUES_TOKEN: 'github_pat_11A674FI...'
 ```
 
-That is how the token hardcoded up to v5.3.10 leaked.
+That is exactly how the token hardcoded up to v5.3.10 leaked, and why **injecting at
+build time was not a fix** — it kept the secret out of git, but it still shipped.
 
-> **Injecting at build time keeps the secret out of source control, but does not make
-> it secret.** It is still in the shipped `.exe` and extractable with the command
-> above. That is tolerable only because the token is scoped to Issues:write on one
-> repo — worst case is issue spam, and you rotate. If it must be genuinely secret,
-> route feedback through a server-side proxy instead of embedding a credential in a
-> desktop app.
+The fix is architectural: the token lives in [`feedback-proxy/`](feedback-proxy/), and
+the app just calls it. `scripts/inject-config.js` **fails the build** if the injected
+value looks like a token or is plaintext http, so a credential cannot reach a build by
+accident again.
+
+To rotate the feedback token now: change the env var on the proxy and redeploy. The
+client never changes and no release is needed.
 
 ## License
 
