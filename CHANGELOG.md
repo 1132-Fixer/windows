@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.12] - 2026-07-15 — credential-free client
+
+Ships the work merged after v5.3.11. The headline: **the app no longer contains a
+GitHub token**, so the installer is no longer worth unpacking for secrets. Anyone
+still on v5.3.11 or earlier is running a build with a live token inside it — that
+token has since been revoked, which also means in-app feedback is broken on those
+builds until users update to this one.
+
+Feedback in this release is relayed through the deployed proxy at
+`FEEDBACK_PROXY_URL`, verified end to end (issue #84 created via the live
+service). No behaviour change to the fix flow itself.
+
 ### Security
 - **The app no longer ships a credential at all.** Feedback is now relayed
   through a new `feedback-proxy/` service that holds the GitHub token
