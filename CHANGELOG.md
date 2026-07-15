@@ -7,7 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **The app no longer ships a credential at all.** Feedback is now relayed
+  through a new `feedback-proxy/` service that holds the GitHub token
+  server-side; the app POSTs plain JSON to a **public url**. A url is not a
+  credential, so it is safe to hardcode and safe to extract.
+
+  This replaces the v5.3.11 approach (inject the token at build time), which was
+  never sufficient — it kept the secret out of *git*, but the token still shipped
+  inside every build. `config.js` is bundled into `app.asar`, and asar stores
+  file contents **uncompressed**, so the token was recoverable from the public
+  installer in about a minute:
+
+      7za x 1132-Fixer-Portable-5.3.10.exe -oext
+      grep -a "GH_ISSUES_TOKEN" ext/resources/app.asar
+      -> GH_ISSUES_TOKEN: 'github_pat_11A674FI...'
+
+  `src/main/config.js` now exposes only `FEEDBACK_PROXY_URL` and has no token
+  field whatsoever. `scripts/inject-config.js` **hard-fails the build** if the
+  injected value looks like a GitHub token (`ghp_` / `github_pat_`) or is
+  plaintext http — a secret cannot reach a build by accident again.
+  `release.yml` now reads `${{ vars.FEEDBACK_PROXY_URL }}` (a *variable*, not a
+  secret), so no token secret is needed in CI.
+
+  Honest scope: the proxy endpoint is public and unauthenticated by design — any
+  shared key shipped in the client would be exactly as extractable as the token
+  was. So issue spam remains the worst case, as before. What changes is that the
+  token itself can no longer be obtained or reused, abuse is throttled
+  (5/hour/IP, 8 KB body cap, strict field validation), the client can no longer
+  forge issue bodies or labels, and the whole thing can be disabled or patched by
+  redeploying — with no client update and no rotation.
+
+### Added
+- **`feedback-proxy/`** — zero-dependency Node service (built-in `http` + global
+  `fetch`). `GET /health` reports liveness without revealing the token;
+  `POST /feedback` validates `{type, text, version, os}`, builds the issue
+  title/body/label itself, and relays to the GitHub API. Never returns GitHub's
+  response body to the client (it can carry repo/token detail) — failures are
+  logged server-side and answered generically. Ships with `npm test`: a
+  12-check smoke that runs the real server against a stubbed GitHub with a fake
+  token, asserting among other things that no client response ever contains the
+  token and that clients cannot choose their own labels.
+
 ### Fixed
+- **`feedback-proxy` oversized-payload handling.** The 8 KB cap called
+  `req.destroy()` before writing a response, so clients got a socket hang up
+  instead of a clean `413`. It now stops buffering but keeps draining, and
+  answers properly. Caught by the smoke test before it ever shipped.
 - **CI on `master` has been red on every run since at least 2026-05-29.** The
   `build*` scripts called `electron-builder` without an explicit `--publish`
   flag. electron-builder auto-detects CI and, because `package.json` carries a

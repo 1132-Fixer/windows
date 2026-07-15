@@ -1613,40 +1613,62 @@ ipcMain.handle('get-system-info', () => {
   };
 });
 
+// Feedback is relayed through feedback-proxy/, which holds the GitHub token
+// server-side. The app ships NO credential: it posts plain JSON to a public
+// url. Anything embedded here would be extractable from app.asar in the
+// shipped installer, which is exactly how the old hardcoded token leaked.
+// The proxy builds the issue title/body/labels itself, so a tampered client
+// can't forge labels or issue content.
 ipcMain.handle('submit-feedback', async (event, type, text) => {
   try {
     const version = app.getVersion();
-    const title = `[${type}] ${text.substring(0, 80)}${text.length > 80 ? '...' : ''}`;
-    const body = `**Type:** ${type}\n**App Version:** ${version}\n**OS:** Windows ${os.release()}\n\n---\n\n${text}`;
-
-    const token = config.GH_ISSUES_TOKEN;
-    if (!token) {
+    const endpoint = config.FEEDBACK_PROXY_URL;
+    if (!endpoint) {
       return { success: false, error: 'Feedback service not configured' };
     }
 
-    const label = type === 'User Rating' ? 'user-rating' : type.toLowerCase().replace(' ', '-');
-    const postData = JSON.stringify({ title, body, labels: [label] });
+    let url;
+    try {
+      url = new URL('/feedback', endpoint);
+    } catch (_) {
+      return { success: false, error: 'Feedback service misconfigured' };
+    }
+    // Refuse to send user text over plaintext http (localhost aside, for dev).
+    if (url.protocol !== 'https:' && url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') {
+      return { success: false, error: 'Feedback service must use https' };
+    }
+
+    const postData = JSON.stringify({
+      type,
+      text,
+      version,
+      os: `Windows ${os.release()}`
+    });
 
     return new Promise((resolve) => {
-      const req = https.request({
-        hostname: 'api.github.com',
-        path: `/repos/${config.GH_ISSUES_REPO}/issues`,
+      const transport = url.protocol === 'https:' ? https : require('http');
+      const req = transport.request({
+        hostname: url.hostname,
+        port: url.port || (url.protocol === 'https:' ? 443 : 80),
+        path: url.pathname,
         method: 'POST',
+        timeout: 15000,
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
           'User-Agent': `1132Fixer/${version}`,
-          'Accept': 'application/vnd.github+json',
           'Content-Length': Buffer.byteLength(postData)
         }
       }, (res) => {
         let data = '';
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
-          if (res.statusCode === 201) resolve({ success: true });
-          else resolve({ success: false, error: 'Submission failed' });
+          if (res.statusCode === 201) return resolve({ success: true });
+          if (res.statusCode === 429) return resolve({ success: false, error: 'Too many submissions — try again later.' });
+          if (res.statusCode === 503) return resolve({ success: false, error: 'Feedback service not configured' });
+          resolve({ success: false, error: 'Submission failed' });
         });
       });
+      req.on('timeout', () => { req.destroy(); resolve({ success: false, error: 'Feedback service timed out' }); });
       req.on('error', () => resolve({ success: false, error: 'Network error' }));
       req.write(postData);
       req.end();

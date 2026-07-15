@@ -78,10 +78,11 @@ jobs:
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          # In-app feedback token. Optional: when this secret is absent the build
-          # still succeeds and the feedback form degrades to "not configured".
-          # The token is NEVER committed — see src/main/config.js.
-          GH_ISSUES_TOKEN: ${{ secrets.GH_ISSUES_TOKEN }}
+          # Public feedback proxy endpoint — NOT a secret. The GitHub token now
+          # lives server-side in feedback-proxy/, so no credential is ever baked
+          # into a build. Optional: when unset, the build still succeeds and the
+          # feedback form reports "not configured". See src/main/config.js.
+          FEEDBACK_PROXY_URL: ${{ vars.FEEDBACK_PROXY_URL }}
         run: |
           # Unset empty CSC_LINK so electron-builder doesn't try to resolve it as a file
           if ([string]::IsNullOrEmpty($env:CSC_LINK)) {
