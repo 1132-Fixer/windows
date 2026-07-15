@@ -1,10 +1,27 @@
 /**
  * 1132 Fixer - Build Configuration (secret-free)
  *
- * The GitHub feedback token is NEVER hardcoded in this file. Committing a
- * token to a public repo leaks it permanently (it stays in git history even
- * after deletion) and lets anyone spam the issue tracker with it. Instead the
- * token is supplied at build/run time from one of, in priority order:
+ * The GitHub feedback token is NEVER hardcoded in this file.
+ *
+ * This repo is private, so a token committed here is not exposed via git —
+ * but that is NOT why it's unsafe. This file is bundled into the packaged app
+ * (it is not excluded by the "files" globs in package.json), and the app ships
+ * as a PUBLIC installer. Anything hardcoded here lands in app.asar inside that
+ * installer, where asar stores file contents uncompressed. Extracting it takes
+ * about a minute:
+ *
+ *     7za x 1132-Fixer-Portable-X.Y.Z.exe -oext
+ *     grep -a "GH_ISSUES_TOKEN" ext/resources/app.asar
+ *
+ * That is exactly how the previously hardcoded token leaked out of v5.3.10.
+ *
+ * NOTE: build-time injection keeps the secret out of source control, but it
+ * does NOT make it secret — the token is still inside the shipped .exe and
+ * extractable by the command above. It is only tolerable because the token is
+ * scoped to Issues:write on one repo (worst case: issue spam). If it ever needs
+ * to be genuinely secret, route feedback through a server-side proxy instead.
+ *
+ * The token is supplied at build/run time from one of, in priority order:
  *
  *   1. process.env.GH_ISSUES_TOKEN          (dev: `set GH_ISSUES_TOKEN=... && npm start`)
  *   2. src/main/config.generated.js         (build: written by scripts/inject-config.js,

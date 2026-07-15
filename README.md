@@ -182,8 +182,26 @@ fail with `GitHub Personal Access Token is not set ... "GH_TOKEN"`. The explicit
 | `CSC_LINK` / `CSC_KEY_PASSWORD` | Actions secrets | Optional code signing. |
 
 **Never hardcode a token in `src/main/config.js`.** It resolves `GH_ISSUES_TOKEN` from
-the environment or from a gitignored, build-time-generated `config.generated.js`. A
-token committed here lands in the public git history permanently.
+the environment or from a gitignored, build-time-generated `config.generated.js`.
+
+This repo is private, so the danger is *not* git history — it's that `config.js` is
+bundled into the packaged app, and the app ships as a **public installer**. Anything
+hardcoded here lands in `app.asar` inside every published `.exe`, where asar stores
+file contents uncompressed. Pulling it back out takes about a minute:
+
+```bash
+7za x 1132-Fixer-Portable-5.3.10.exe -oext
+grep -a "GH_ISSUES_TOKEN" ext/resources/app.asar
+```
+
+That is how the token hardcoded up to v5.3.10 leaked.
+
+> **Injecting at build time keeps the secret out of source control, but does not make
+> it secret.** It is still in the shipped `.exe` and extractable with the command
+> above. That is tolerable only because the token is scoped to Issues:write on one
+> repo — worst case is issue spam, and you rotate. If it must be genuinely secret,
+> route feedback through a server-side proxy instead of embedding a credential in a
+> desktop app.
 
 ## License
 

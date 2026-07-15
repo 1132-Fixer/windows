@@ -69,14 +69,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Removed the dead toggle entry; behavior is unchanged.
 
 ### Security
-- **Removed the hardcoded GitHub feedback token from `src/main/config.js`.** The
-  token was committed in plaintext to a public repo, so it is permanently
-  exposed via git history and must be rotated. `config.js` now resolves the
-  token from `process.env.GH_ISSUES_TOKEN` or a gitignored, build-time-generated
-  `src/main/config.generated.js` — never from source. Builds without a token
-  still succeed; in-app feedback degrades to "Feedback service not configured".
-  To restore feedback: rotate the token, then add it as a `GH_ISSUES_TOKEN`
-  repository secret (consumed by `release.yml`).
+- **Removed the hardcoded GitHub feedback token from `src/main/config.js`.**
+  This repo is private, so the token was *not* exposed via git — but that was
+  never the risk. `config.js` is bundled into the packaged app, and the app ships
+  as a **public installer**, so the token landed in `app.asar` inside every
+  published `.exe`. asar stores file contents uncompressed, so extracting it from
+  the public v5.3.10 download takes about a minute:
+
+      7za x 1132-Fixer-Portable-5.3.10.exe -oext
+      grep -a "GH_ISSUES_TOKEN" ext/resources/app.asar
+
+  Verified — the token is present in the published v5.3.10 artifact and must be
+  rotated. `config.js` now resolves the token from `process.env.GH_ISSUES_TOKEN`
+  or a gitignored, build-time-generated `src/main/config.generated.js` — never
+  from source. Builds without a token still succeed; in-app feedback degrades to
+  "Feedback service not configured". To restore it: rotate the token, then add it
+  as a `GH_ISSUES_TOKEN` repository secret (consumed by `release.yml`).
+
+  **Build-time injection does not make the token secret** — it is still inside
+  the shipped `.exe` and extractable by the command above. That is only
+  acceptable because the token is scoped to Issues:write on a single repo (worst
+  case: issue spam). A server-side proxy is the only way to make it truly secret.
 
 ### Added
 - `scripts/inject-config.js` — writes the gitignored
