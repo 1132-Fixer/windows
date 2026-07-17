@@ -114,6 +114,10 @@
       padding: 14px 24px 0;
       position: relative;
       z-index: 1;
+      /* The whole header doubles as the window drag region — the frameless
+         window was previously impossible to move at all. Interactive
+         children opt out below. */
+      -webkit-app-region: drag;
     }
     .header-top {
       display: flex;
@@ -121,7 +125,6 @@
       align-items: center;
       width: 100%;
       margin-bottom: var(--s-2);
-      -webkit-app-region: no-drag;
     }
     .logo {
       display: flex;
@@ -178,97 +181,115 @@
     .view.active { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: var(--s-3); }
 
     /* ============================================================
-       PREFLIGHT VIEW — status card grid
+       UPDATE BANNER — slim strip under the header. Driven by the
+       'update-status' IPC events; hidden unless something is happening.
        ============================================================ */
-    .pf-head {
-      display: flex;
+    .update-banner {
+      display: none;
       align-items: center;
-      justify-content: space-between;
       gap: var(--s-3);
+      margin: 0 var(--s-5);
+      padding: 8px var(--s-4);
+      background: var(--info-bg);
+      border: 1px solid var(--info-bd);
+      border-radius: var(--r-md);
+      font-size: 12.5px;
+      color: var(--info);
+      position: relative;
+      z-index: 1;
+      -webkit-app-region: no-drag;
     }
-    .pf-title {
-      font-size: 14px;
-      font-weight: 800;
-      letter-spacing: 1.5px;
-      color: var(--text);
-    }
-    .pf-subtitle {
-      font-size: 11px;
-      color: var(--muted);
+    .update-banner.visible { display: flex; }
+    .ub-msg { flex: 1; line-height: 1.4; }
+    .ub-btn {
+      padding: 5px 14px;
+      border-radius: var(--r-pill);
+      border: 1px solid var(--info-bd);
+      background: transparent;
+      color: var(--info);
+      font-size: 11.5px;
+      font-weight: 700;
+      cursor: pointer;
       letter-spacing: 0.5px;
+      transition: all 0.2s;
+      flex-shrink: 0;
     }
-    .pf-grid {
-      flex: 1;
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: var(--s-3);
-      overflow-y: auto;
-      padding-right: 4px;
-      align-content: start;
+    .ub-btn:hover { background: var(--info-bg); color: var(--text); }
+    .ub-btn.primary { background: var(--info); color: #0a1020; border-color: var(--info); }
+    .ub-progress {
+      width: 120px;
+      height: 4px;
+      background: rgba(255,255,255,0.08);
+      border-radius: var(--r-pill);
+      overflow: hidden;
+      flex-shrink: 0;
     }
-    .pf-grid::-webkit-scrollbar { width: 8px; }
-    .pf-grid::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
-    .pf-card {
+    .ub-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--info);
+      border-radius: var(--r-pill);
+      transition: width 0.4s ease;
+    }
+
+    /* ============================================================
+       HOME VIEW — one-line pitch + live environment checklist.
+       The checklist auto-runs on launch; no wizard, no extra clicks.
+       ============================================================ */
+    .home-intro {
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.55;
+      padding: var(--s-3) var(--s-4);
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: var(--r-md);
-      padding: var(--s-3) var(--s-4);
-      backdrop-filter: blur(10px);
-      box-shadow: var(--shadow-sm);
-      transition: border-color 0.2s, transform 0.15s;
-      min-height: 92px;
+    }
+    .home-intro strong { color: var(--text); }
+    .chk-list {
+      flex: 1;
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: var(--s-2);
+      overflow-y: auto;
+      padding-right: 4px;
+      min-height: 0;
     }
-    .pf-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
-    .pf-card-head {
+    .chk-list::-webkit-scrollbar { width: 8px; }
+    .chk-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+    .chk-row {
       display: flex;
       align-items: center;
-      gap: var(--s-2);
+      gap: var(--s-3);
+      padding: 9px var(--s-3);
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--border-strong);
+      border-radius: var(--r-sm);
+      font-size: 12.5px;
     }
-    .pf-card-icon {
-      width: 18px;
-      height: 18px;
-      flex-shrink: 0;
-    }
-    .pf-card-label {
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.6px;
-      color: var(--text);
-      text-transform: uppercase;
-    }
-    .pf-card-badge {
-      margin-left: auto;
+    .chk-row[data-status="ready"]      { border-left-color: var(--success); }
+    .chk-row[data-status="repairable"] { border-left-color: var(--accent); }
+    .chk-row[data-status="warning"]    { border-left-color: var(--warning); }
+    .chk-row[data-status="blocked"]    { border-left-color: var(--danger); }
+    .chk-row[data-status="pending"]    { border-left-color: var(--border-strong); opacity: 0.65; }
+    .chk-icon { width: 16px; height: 16px; flex-shrink: 0; }
+    .chk-label { font-weight: 700; color: var(--text); min-width: 160px; }
+    .chk-msg { color: var(--muted); flex: 1; line-height: 1.4; }
+    .chk-badge {
       font-size: 9.5px;
       font-weight: 800;
       padding: 3px 8px;
       border-radius: var(--r-pill);
       letter-spacing: 1px;
       border: 1px solid transparent;
+      flex-shrink: 0;
     }
-    .pf-card-msg {
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.45;
-    }
-    .pf-card[data-status="ready"]      { border-color: var(--success-bd); }
-    .pf-card[data-status="ready"]      .pf-card-badge { color: var(--success); background: var(--success-bg); border-color: var(--success-bd); }
-    .pf-card[data-status="repairable"] { border-color: var(--accent-bd); }
-    .pf-card[data-status="repairable"] .pf-card-badge { color: var(--accent); background: var(--accent-bg); border-color: var(--accent-bd); }
-    .pf-card[data-status="warning"]    { border-color: var(--warning-bd); }
-    .pf-card[data-status="warning"]    .pf-card-badge { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-bd); }
-    .pf-card[data-status="blocked"]    { border-color: var(--danger-bd); }
-    .pf-card[data-status="blocked"]    .pf-card-badge { color: var(--danger); background: var(--danger-bg); border-color: var(--danger-bd); }
-
-    .pf-empty {
-      grid-column: 1 / -1;
-      text-align: center;
-      padding: 40px 20px;
-      color: var(--muted);
-      font-size: 13px;
-    }
+    .chk-row[data-status="ready"]      .chk-badge { color: var(--success); background: var(--success-bg); border-color: var(--success-bd); }
+    .chk-row[data-status="repairable"] .chk-badge { color: var(--accent); background: var(--accent-bg); border-color: var(--accent-bd); }
+    .chk-row[data-status="warning"]    .chk-badge { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-bd); }
+    .chk-row[data-status="blocked"]    .chk-badge { color: var(--danger); background: var(--danger-bg); border-color: var(--danger-bd); }
+    .chk-row[data-status="pending"]    .chk-badge { color: var(--muted); background: var(--panel-3); border-color: var(--border); }
 
     /* ============================================================
        STAGE TRACKER — Preparing → Verifying → Consent → Launch → Verify
@@ -490,6 +511,12 @@
       box-shadow: 0 0 50px rgba(245,197,24,0.4), 0 6px 24px rgba(0,0,0,0.5);
     }
     .btn-primary:active:not(:disabled) { transform: scale(0.97); }
+    /* Cancelable pre-fix countdown state — same button, one click total. */
+    .btn-primary.counting {
+      background: linear-gradient(145deg, #ffb84d, var(--accent-hot));
+      animation: pulse 1s ease-in-out infinite;
+      letter-spacing: 1px;
+    }
 
     /* ============================================================
        STATUS BADGE
@@ -506,7 +533,6 @@
       background: var(--success-bg);
       padding: 10px 22px;
       border-radius: var(--r-pill);
-      -webkit-app-region: no-drag;
     }
     .status-dot {
       width: 10px;
@@ -741,188 +767,6 @@
     }
     .sr-copy-status { font-size: 11.5px; color: var(--success); min-height: 14px; }
 
-    /* ============================================================
-       WIZARD MODAL — guided preflight walkthrough
-       Card-per-step, Back/Next/FIX NOW. Re-uses .fb-overlay shell
-       so focus trap + Escape behavior compose cleanly.
-       ============================================================ */
-    .wz-card { width: 580px; max-width: 95%; }
-
-    /* Overall progress bar (top of card). Status-tinted via the active
-       step's wz-body[data-status] mirrored onto the card root. */
-    .wz-progress {
-      height: 4px;
-      width: 100%;
-      background: var(--border);
-      border-radius: var(--r-pill);
-      overflow: hidden;
-      margin: var(--s-2) 0 var(--s-3) 0;
-      position: relative;
-    }
-    .wz-progress-fill {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, var(--accent), var(--accent-strong, var(--accent)));
-      border-radius: var(--r-pill);
-      transition: width 360ms cubic-bezier(0.2, 0.8, 0.2, 1), background 220ms;
-      box-shadow: 0 0 12px var(--accent-bg);
-    }
-    .wz-card[data-overall="warning"] .wz-progress-fill { background: var(--warning); box-shadow: 0 0 12px var(--warning-bg); }
-    .wz-card[data-overall="blocked"] .wz-progress-fill { background: var(--danger);  box-shadow: 0 0 12px var(--danger-bg); }
-    .wz-card[data-overall="ready"]   .wz-progress-fill { background: var(--success); box-shadow: 0 0 12px var(--success-bg); }
-
-    /* Auto-advance countdown bar (bottom of body). Animates 0→100% width
-       over WIZARD_AUTO_MS when .running is applied. Cleared instantly
-       on Back/Cancel/blocked-step. */
-    .wz-countdown {
-      height: 2px;
-      width: 100%;
-      background: transparent;
-      margin-top: var(--s-3);
-      overflow: hidden;
-      border-radius: var(--r-pill);
-      opacity: 0;
-      transition: opacity 180ms;
-    }
-    .wz-countdown.visible { opacity: 1; background: rgba(255,255,255,0.04); }
-    .wz-countdown-fill {
-      height: 100%;
-      width: 0%;
-      background: var(--accent);
-      border-radius: var(--r-pill);
-    }
-    .wz-countdown.running .wz-countdown-fill {
-      width: 100%;
-      transition: width var(--wz-auto-ms, 1600ms) linear;
-    }
-
-    /* Smooth body crossfade between steps. The renderer toggles
-       .wz-enter on each render; the CSS animation handles the rest. */
-    @keyframes wzStepEnter {
-      from { opacity: 0; transform: translateY(4px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-    .wz-body.wz-enter { animation: wzStepEnter 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
-
-    .wz-step-meta {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 11px;
-      color: var(--muted);
-      letter-spacing: 1px;
-      margin-bottom: var(--s-3);
-      text-transform: uppercase;
-      font-weight: 700;
-    }
-    .wz-dots { display: flex; gap: 5px; }
-    .wz-dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: var(--border-strong);
-      transition: background 0.2s;
-    }
-    .wz-dot.done { background: var(--success); }
-    .wz-dot.warn { background: var(--warning); }
-    .wz-dot.fail { background: var(--danger); }
-    .wz-dot.current { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
-    .wz-body {
-      background: var(--panel-2);
-      border: 1px solid var(--border);
-      border-radius: var(--r-md);
-      padding: var(--s-4);
-      min-height: 150px;
-      display: flex;
-      flex-direction: column;
-      gap: var(--s-2);
-    }
-    .wz-body[data-status="ready"]      { border-color: var(--success-bd); }
-    .wz-body[data-status="repairable"] { border-color: var(--accent-bd);  }
-    .wz-body[data-status="warning"]    { border-color: var(--warning-bd); }
-    .wz-body[data-status="blocked"]    { border-color: var(--danger-bd);  }
-    .wz-head {
-      display: flex;
-      align-items: center;
-      gap: var(--s-2);
-    }
-    .wz-icon { width: 22px; height: 22px; flex-shrink: 0; }
-    .wz-label {
-      font-size: 14px;
-      font-weight: 800;
-      letter-spacing: 0.6px;
-      color: var(--text);
-      text-transform: uppercase;
-    }
-    .wz-badge {
-      margin-left: auto;
-      font-size: 10px;
-      font-weight: 800;
-      padding: 4px 9px;
-      border-radius: var(--r-pill);
-      letter-spacing: 1px;
-      border: 1px solid transparent;
-    }
-    .wz-body[data-status="ready"]      .wz-badge { color: var(--success); background: var(--success-bg); border-color: var(--success-bd); }
-    .wz-body[data-status="repairable"] .wz-badge { color: var(--accent);  background: var(--accent-bg);  border-color: var(--accent-bd); }
-    .wz-body[data-status="warning"]    .wz-badge { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-bd); }
-    .wz-body[data-status="blocked"]    .wz-badge { color: var(--danger);  background: var(--danger-bg);  border-color: var(--danger-bd); }
-    .wz-msg {
-      font-size: 13px;
-      color: var(--muted);
-      line-height: 1.5;
-      margin-top: var(--s-2);
-    }
-    .wz-hint {
-      font-size: 11.5px;
-      color: var(--dim);
-      font-style: italic;
-      margin-top: auto;
-    }
-    .wz-actions {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 10px;
-      margin-top: var(--s-3);
-      flex-wrap: wrap;
-    }
-    .wz-actions-right { display: flex; gap: 8px; }
-    .wz-summary {
-      display: none;
-      flex-direction: column;
-      gap: var(--s-2);
-    }
-    .wz-summary.active { display: flex; }
-    .wz-summary-row {
-      display: flex;
-      align-items: center;
-      gap: var(--s-2);
-      padding: 8px var(--s-3);
-      background: var(--panel-3);
-      border-left: 3px solid var(--border-strong);
-      border-radius: var(--r-sm);
-      font-size: 12px;
-    }
-    .wz-summary-row[data-status="ready"]      { border-left-color: var(--success); }
-    .wz-summary-row[data-status="repairable"] { border-left-color: var(--accent);  }
-    .wz-summary-row[data-status="warning"]    { border-left-color: var(--warning); }
-    .wz-summary-row[data-status="blocked"]    { border-left-color: var(--danger);  }
-    .wz-summary-label { color: var(--text); font-weight: 600; }
-    .wz-summary-status { margin-left: auto; color: var(--muted); font-size: 11px; letter-spacing: 0.6px; }
-    .wz-confirm-note {
-      font-size: 12.5px;
-      color: var(--text);
-      background: var(--accent-bg);
-      border: 1px solid var(--accent-bd);
-      border-radius: var(--r-sm);
-      padding: 10px 12px;
-      line-height: 1.5;
-    }
-    .wz-confirm-note.danger {
-      color: var(--text);
-      background: var(--danger-bg);
-      border-color: var(--danger-bd);
-    }
   </style>
 </head>
 <body>
@@ -942,15 +786,28 @@
     </div>
   </div>
 
+  <!-- Update banner — hidden unless the auto-updater has news. -->
+  <div class="update-banner" id="updateBanner" role="status" aria-live="polite">
+    <div class="ub-progress" id="ubProgress" style="display:none;"><div class="ub-progress-fill" id="ubProgressFill"></div></div>
+    <span class="ub-msg" id="ubMsg"></span>
+    <button class="ub-btn primary" id="ubRestart" style="display:none;">Restart now</button>
+    <button class="ub-btn" id="ubLater" style="display:none;">After I'm done</button>
+  </div>
+
   <div class="main" role="main">
 
     <!-- ============================================================
-         Instruction view (initial) — static numbered explanation.
-         Replaces the 8-card preflight grid in v5.3.7. Preflight now
-         runs inside a guided modal triggered by the CHECK & FIX button.
+         Home view (initial) — one-line pitch + live environment
+         checklist. The checklist runs automatically on launch; the
+         FIX NOW button is a single click, no wizard, no dialogs.
          ============================================================ -->
-    <section class="view active" id="preflightView" aria-label="What this app does">
-      <div class="file-list" id="instructionList" role="region" aria-label="What this app does"></div>
+    <section class="view active" id="homeView" aria-label="Environment checks">
+      <div class="home-intro">
+        Fully resets the local <strong>user1</strong> helper account and launches a clean
+        Zoom Workplace session under it. No personal files, chats, contacts, or Zoom
+        account data are touched. Do <strong>not</strong> run while signed in AS user1.
+      </div>
+      <div class="chk-list" id="checkList" role="list" aria-label="Environment checks"></div>
     </section>
 
     <!-- ============================================================
@@ -982,12 +839,12 @@
     </section>
 
     <div class="button-container">
-      <button id="fixBtn" class="btn btn-primary" disabled aria-label="Run a guided environment check, then the fix">CHECK &amp; FIX</button>
+      <button id="fixBtn" class="btn btn-primary" disabled aria-label="Run the full fix now">FIX NOW</button>
       <button id="shortcutBtn" class="btn">Desktop Shortcut</button>
     </div>
 
     <p style="text-align:center; color: var(--accent); font-size: 11px; font-weight: 600; letter-spacing: 0.5px;">
-      Creates a Windows user and launches Zoom as that user
+      One click — checks run automatically, then the fix applies end to end
     </p>
   </div>
 
@@ -1116,56 +973,6 @@
         <div style="display:flex; gap:8px;">
           <button class="fb-btn fb-btn-cancel" id="supportClose">Close</button>
           <button class="fb-btn fb-btn-submit" id="supportCopy">Copy to clipboard</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ============================================================
-       Wizard modal — guided preflight walkthrough
-       Steps 1..N = preflight cards (Admin/Zoom/Helper/CamPolicy/MicPolicy/HKU/FrameServer/Version).
-       Final step = summary + FIX NOW confirm.
-       ============================================================ -->
-  <div class="fb-overlay" id="wizardOverlay" role="dialog" aria-modal="true" aria-labelledby="wizardTitle">
-    <div class="fb-card wz-card">
-      <div class="fb-title" id="wizardTitle">Check &amp; Fix</div>
-
-      <!-- Overall progress bar (step N of total). Status-tinted via
-           wz-card[data-status] inheritance from the active step. -->
-      <div class="wz-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-        <div class="wz-progress-fill" id="wizardProgress"></div>
-      </div>
-
-      <div class="wz-step-meta">
-        <span id="wizardStepLabel">Loading…</span>
-        <div class="wz-dots" id="wizardDots" aria-hidden="true"></div>
-      </div>
-      <div class="wz-body" id="wizardBody" data-status="ready" aria-live="polite">
-        <div class="wz-head">
-          <span id="wizardIcon" aria-hidden="true"></span>
-          <span class="wz-label" id="wizardLabel">Loading…</span>
-          <span class="wz-badge" id="wizardBadge"></span>
-        </div>
-        <div class="wz-msg" id="wizardMsg">Reading environment…</div>
-        <div class="wz-hint" id="wizardHint"></div>
-        <div class="wz-summary" id="wizardSummary" role="list"></div>
-        <div class="wz-confirm-note" id="wizardConfirmNote" style="display:none;">
-          About to recreate the local <strong>user1</strong> account and relaunch Zoom under it.
-          Do <strong>not</strong> proceed while signed in AS <em>user1</em>.
-        </div>
-
-        <!-- Auto-advance countdown bar. Width animates 0→100% over
-             WIZARD_AUTO_MS via the .running modifier so the user has
-             a visual sense of when the next step will arrive. -->
-        <div class="wz-countdown" id="wizardCountdown" aria-hidden="true">
-          <div class="wz-countdown-fill" id="wizardCountdownFill"></div>
-        </div>
-      </div>
-      <div class="wz-actions">
-        <button class="fb-btn fb-btn-cancel" id="wizardCancel">Cancel</button>
-        <div class="wz-actions-right">
-          <button class="fb-btn fb-btn-cancel" id="wizardBack" disabled>Back</button>
-          <button class="fb-btn fb-btn-submit" id="wizardNext">Next</button>
         </div>
       </div>
     </div>

@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.0] - 2026-07-17 — reliable updates, working uninstall, one-click flow
+
+Addresses the field reports of freezes, glitches, updates that never complete,
+and a broken uninstall.
+
+### Fixed
+- **Updates no longer yank the app out from under you.** The old updater called
+  `quitAndInstall` 2 seconds after the download finished — with no UI, even
+  while the destructive fix flow was mid-run. That was the "app randomly
+  closed / froze / update never completed" report. Update state is now shown in
+  a banner: when the app is idle, a visible 10-second countdown precedes the
+  restart (with "Restart now" / "After I'm done" buttons); once a fix has
+  started or completed, the update **never** auto-restarts — it installs when
+  you exit the app.
+- **Double-launch after update.** `installer.nsh` used to `Exec` the app after
+  every silent install *and* electron-updater relaunched it — two elevated
+  instances racing each other. The extra `Exec` is gone and the app now holds a
+  single-instance lock (a second launch just focuses the existing window).
+- **Stuck update downloads.** Differential (blockmap) downloads from GitHub are
+  disabled; the updater always fetches the full installer, which is the
+  reliable path.
+- **Uninstall now works.** The installer was per-user while the app's manifest
+  requires Administrator: when a standard user elevated with a *different*
+  admin account, the app and its uninstall registry entry landed in that
+  admin's profile — invisible and un-uninstallable from the user's own
+  account. The install is now **per-machine** (Program Files, HKLM uninstall
+  entry visible to every account). The installer also kills a running instance
+  before **uninstall** (`customUnInit`) — previously locked files made
+  uninstall silently fail — and cleans up the old per-user copy on upgrade.
+- **The window can be moved now.** The frameless window had no drag region and
+  was `alwaysOnTop`, so it sat immovable above everything — including the Zoom
+  window the fix launches. The header is now a drag region and always-on-top
+  is gone. The window also waits for `ready-to-show` (no white flash) and
+  no longer checks for updates in dev/portable runs (which always errored).
+- **Renderer no longer bogs down during long fixes.** Log lines are batched
+  into one DOM write per frame and the log DOM is capped at 400 rows;
+  previously every robocopy/PowerShell line appended a node and forced a
+  reflow, which read as "app freezes".
+- Window icon path was wrong in dev runs (`icon.ico` at repo root).
+
+### Changed
+- **One click, end to end.** The CHECK & FIX wizard (9 steps of Next), the
+  native confirm dialog, and the shortcut prompt are gone. The environment
+  checklist now runs **automatically** on launch (and re-runs on window focus)
+  and renders inline on the landing screen. FIX NOW is a single click with a
+  3-second cancelable countdown on the button itself; the desktop shortcut is
+  created automatically after a successful fix if missing.
+- Installer is one-click (no directory picker / license page) — it was already
+  destined for one location and elevation.
+- Removed dead `styles.css` (unreferenced since the inline-token redesign).
+
 ## [5.3.12] - 2026-07-15 — credential-free client
 
 Ships the work merged after v5.3.11. The headline: **the app no longer contains a

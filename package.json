@@ -1,6 +1,6 @@
 {
   "name": "1132-fixer",
-  "version": "5.3.12",
+  "version": "5.4.0",
   "description": "Zoom 1132 Error Fixer — creates a new Windows user and launches Zoom as that user",
   "main": "main.js",
   "scripts": {
@@ -57,10 +57,10 @@
       "verifyUpdateCodeSignature": false
     },
     "nsis": {
-      "oneClick": false,
-      "perMachine": false,
+      "oneClick": true,
+      "perMachine": true,
       "allowElevation": true,
-      "allowToChangeInstallationDirectory": true,
+      "runAfterFinish": true,
       "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,
       "shortcutName": "1132 Fixer",
@@ -68,11 +68,9 @@
       "uninstallerIcon": "assets/icon.ico",
       "installerHeaderIcon": "assets/icon.ico",
       "include": "build/installer.nsh",
-      "license": "build/license.txt",
       "artifactName": "1132-Fixer-Setup-${version}.${ext}",
       "uninstallDisplayName": "1132 Fixer",
-      "deleteAppDataOnUninstall": false,
-      "menuCategory": "1132 Fixer"
+      "deleteAppDataOnUninstall": false
     },
     "portable": {
       "artifactName": "1132-Fixer-Portable-${version}.${ext}",

@@ -2,20 +2,21 @@
 // 1132 Fixer renderer
 //
 // View model:
-//   preflight  -> static numbered instruction list. CHECK & FIX
-//                 opens the wizard modal which walks preflight
-//                 cards one at a time and ends with a FIX NOW
-//                 confirm step.
-//   running    -> 5-stage tracker; raw log collapses to Advanced Details
-//   done       -> receipt; raw log re-expands by default
+//   home     -> one-line pitch + live environment checklist.
+//               The checklist runs AUTOMATICALLY on launch (and on
+//               window focus). FIX NOW is a single click: brief
+//               cancelable countdown on the button itself, then the
+//               whole flow runs end to end — no wizard, no dialogs.
+//   running  -> 5-stage tracker; raw log collapses to Advanced Details
+//   done     -> receipt; desktop shortcut auto-created; log re-expands
 // ============================================================
 
 const fileList        = document.getElementById('fileList');
 const fixBtn          = document.getElementById('fixBtn');
 const shortcutBtn     = document.getElementById('shortcutBtn');
-const preflightView   = document.getElementById('preflightView');
+const homeView        = document.getElementById('homeView');
 const runningView     = document.getElementById('runningView');
-const instructionList = document.getElementById('instructionList');
+const checkList       = document.getElementById('checkList');
 const stageTracker    = document.getElementById('stageTracker');
 const receiptPanel    = document.getElementById('receiptPanel');
 const logToggle       = document.getElementById('logToggle');
@@ -26,12 +27,16 @@ let lastReceipt = null;
 let lastStageLabel = '';
 const logBuffer = [];
 const LOG_BUFFER_MAX = 400;
+// Hard cap on log DOM nodes. Long robocopy/PowerShell output used to grow
+// the DOM without bound — thousands of nodes plus a forced reflow per line
+// was a real source of the "app freezes" reports.
+const LOG_DOM_MAX = 400;
 
 // ============================================================
 // View / stage helpers
 // ============================================================
 function showView(name) {
-  preflightView.classList.toggle('active', name === 'preflight');
+  homeView.classList.toggle('active', name === 'home');
   runningView.classList.toggle('active', name === 'running' || name === 'done');
 }
 
@@ -99,19 +104,47 @@ function finalizeStages(outcome) {
 }
 
 // ============================================================
-// Log region — backed by a ring buffer for the Support Report.
+// Log region — ring buffer for the Support Report + rAF-batched DOM
+// writes. Lines arrive from main in bursts (robocopy, icacls, PS);
+// appending + scrolling per line forced a reflow each time. Batching
+// into one frame keeps the renderer responsive during the fix.
 // ============================================================
+const pendingLogItems = [];
+let logFlushScheduled = false;
+
 function clearFileList() {
+  pendingLogItems.length = 0;
   fileList.innerHTML = '';
   logBuffer.length = 0;
 }
 
-function addFileItem(text, className = '') {
-  const div = document.createElement('div');
-  div.className = `file-item ${className}`;
-  div.textContent = text;
-  fileList.appendChild(div);
+function flushLogItems() {
+  logFlushScheduled = false;
+  if (!pendingLogItems.length) return;
+  const frag = document.createDocumentFragment();
+  for (const item of pendingLogItems.splice(0)) {
+    const div = document.createElement('div');
+    div.className = `file-item ${item.className}`;
+    div.textContent = item.text;
+    frag.appendChild(div);
+  }
+  fileList.appendChild(frag);
+  while (fileList.children.length > LOG_DOM_MAX) {
+    fileList.removeChild(fileList.firstChild);
+  }
   fileList.scrollTop = fileList.scrollHeight;
+}
+
+function queueLogItem(text, className) {
+  pendingLogItems.push({ text, className });
+  if (!logFlushScheduled) {
+    logFlushScheduled = true;
+    requestAnimationFrame(flushLogItems);
+  }
+}
+
+function addFileItem(text, className = '') {
+  queueLogItem(text, className);
   logBuffer.push(text);
   if (logBuffer.length > LOG_BUFFER_MAX) logBuffer.shift();
 
@@ -124,10 +157,7 @@ function addFileItem(text, className = '') {
 }
 
 function addEmptyLine() {
-  const div = document.createElement('div');
-  div.className = 'file-item empty-line';
-  div.innerHTML = '&nbsp;';
-  fileList.appendChild(div);
+  queueLogItem(' ', 'empty-line');
 }
 
 function setLogExpanded(expanded) {
@@ -143,20 +173,22 @@ logToggle.addEventListener('click', () => {
 });
 
 // ============================================================
-// Status icon SVGs — shared between wizard + receipt.
+// Status icon SVGs — shared between checklist + receipt.
 // Inline strings so the renderer ships nothing extra.
 // ============================================================
 const STATUS_BADGE = {
   ready:      'READY',
   repairable: 'REPAIRABLE',
   warning:    'WARNING',
-  blocked:    'BLOCKED'
+  blocked:    'BLOCKED',
+  pending:    'CHECKING'
 };
 
 function svgCheck(klass)  { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`; }
 function svgWrench(klass) { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#f5a623" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-7-7 8-8 .7 1.3z"/><line x1="9" y1="15" x2="4.5" y2="19.5"/></svg>`; }
 function svgWarn(klass)   { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#f5c518" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>`; }
 function svgBlock(klass)  { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`; }
+function svgDot(klass)    { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#6080a0" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/></svg>`; }
 
 function iconForStatus(status, klass) {
   switch (status) {
@@ -164,62 +196,91 @@ function iconForStatus(status, klass) {
     case 'repairable': return svgWrench(klass);
     case 'warning':    return svgWarn(klass);
     case 'blocked':    return svgBlock(klass);
+    case 'pending':    return svgDot(klass);
     default:           return svgCheck(klass);
   }
 }
 
 // ============================================================
-// Initial instruction list — re-renders the pre-Slice C content.
-// Replaces the old 8-card preflight grid on landing. Preflight
-// itself runs inside the wizard modal triggered by CHECK & FIX.
+// Environment checklist — runs automatically, no clicks required.
 // ============================================================
-function showInstructions(elevated) {
-  instructionList.innerHTML = '';
-  const add = (text, cls) => {
-    const div = document.createElement('div');
-    div.className = 'file-item ' + (cls || '');
-    div.textContent = text;
-    instructionList.appendChild(div);
-  };
-  const addEmpty = () => {
-    const div = document.createElement('div');
-    div.className = 'file-item empty-line';
-    div.innerHTML = '&nbsp;';
-    instructionList.appendChild(div);
-  };
+const CHECK_ORDER = [
+  { key: 'admin',       label: 'Administrator' },
+  { key: 'zoom',        label: 'Zoom Workplace' },
+  { key: 'helperUser',  label: 'Helper account' },
+  { key: 'camPolicy',   label: 'Camera policy' },
+  { key: 'micPolicy',   label: 'Microphone policy' },
+  { key: 'hku',         label: 'User registry hive' },
+  { key: 'frameServer', label: 'Camera Frame Server' }
+];
 
-  if (!elevated) {
-    add('NOT RUNNING AS ADMINISTRATOR', 'error');
-    add('→ Close this app and right-click → Run as administrator', 'error');
-    addEmpty();
-  }
-  add('WHAT THIS DOES', 'header');
-  addEmpty();
-  add('Fully resets the local user1 account and launches a clean', '');
-  add('Zoom Workplace session under it. Destructive — do NOT run', '');
-  add('while signed in AS user1.', '');
-  addEmpty();
-  add('  1. Checks Windows setup and required permissions', '');
-  add('  2. Closes any active Zoom / user1 sessions safely', '');
-  add('  3. Cleans stale user1 profile data when needed', '');
-  add('  4. Recreates the local user1 Zoom profile', '');
-  add('  5. Launches Zoom once as user1 so Windows creates the profile', '');
-  add('  6. Applies the required Zoom profile setup', '');
-  add('  7. Relaunches Zoom using the refreshed user1 profile', '');
-  addEmpty();
-  add('Notes:', '');
-  add('  • No personal files, chats, contacts, or Zoom account data', '');
-  add('    are copied.', '');
-  add('  • Windows Home may skip session enumeration when unavailable;', '');
-  add('    cleanup still continues safely.', '');
-  add('  • The optional Desktop shortcut is only created if one does', '');
-  add('    not already exist.', '');
-  add('  • The shortcut uses the 1132 Fixer icon and launches Zoom', '');
-  add('    as user1.', '');
-  addEmpty();
-  add('Click CHECK & FIX to walk through environment checks one at a time', 'header');
-  add('and confirm the fix before any changes are made.', '');
+let scanInProgress = false;
+let lastScanAt = 0;
+let canRunFix = false;
+
+function renderCheckRow(key, label, status, message) {
+  const row = document.createElement('div');
+  row.className = 'chk-row';
+  row.setAttribute('data-status', status);
+  row.setAttribute('data-key', key);
+  row.setAttribute('role', 'listitem');
+  row.innerHTML = `${iconForStatus(status, 'chk-icon')}
+    <span class="chk-label">${escapeHtml(label)}</span>
+    <span class="chk-msg">${escapeHtml(message)}</span>
+    <span class="chk-badge">${STATUS_BADGE[status] || ''}</span>`;
+  return row;
 }
+
+async function runEnvironmentScan() {
+  if (scanInProgress || isRunning) return;
+  scanInProgress = true;
+  lastScanAt = Date.now();
+  setStatus('scanning', 'Checking');
+  fixBtn.disabled = true;
+
+  // Show all rows immediately as pending so the screen never sits empty.
+  checkList.innerHTML = '';
+  for (const c of CHECK_ORDER) {
+    checkList.appendChild(renderCheckRow(c.key, c.label, 'pending', 'Checking…'));
+  }
+
+  try {
+    const result = await window.electronAPI.preflightScan();
+    checkList.innerHTML = '';
+    for (const c of CHECK_ORDER) {
+      const card = result.cards[c.key];
+      if (!card) continue;
+      checkList.appendChild(renderCheckRow(c.key, card.label || c.label, card.status, card.message || ''));
+    }
+    canRunFix = !!result.canRunFix;
+    if (result.overall === 'blocked') {
+      setStatus('error', 'Blocked');
+    } else if (result.overall === 'warning') {
+      setStatus('warn', 'Ready');
+    } else {
+      setStatus('done', 'Ready');
+    }
+    fixBtn.disabled = !canRunFix;
+  } catch (err) {
+    checkList.innerHTML = '';
+    checkList.appendChild(renderCheckRow('scan', 'Environment scan', 'blocked',
+      (err && err.message) ? err.message : 'Scan failed — restart the app as Administrator.'));
+    canRunFix = false;
+    setStatus('error', 'Error');
+    fixBtn.disabled = true;
+  } finally {
+    scanInProgress = false;
+  }
+}
+
+// Re-scan when the user comes back to the window (e.g. after installing
+// Zoom or fixing a blocker) — throttled, home view only.
+window.addEventListener('focus', () => {
+  if (isRunning || scanInProgress) return;
+  if (!homeView.classList.contains('active')) return;
+  if (Date.now() - lastScanAt < 10000) return;
+  runEnvironmentScan();
+});
 
 // ============================================================
 // Fix Receipt — styled cards
@@ -360,16 +421,56 @@ function installFocusTrap(overlay) {
 }
 
 // ============================================================
+// FIX NOW — one click. A short countdown runs ON the button itself
+// (click again to cancel) as the only guard before the destructive
+// flow. No wizard, no native confirm, no shortcut prompt.
+// ============================================================
+const FIX_COUNTDOWN_SECONDS = 3;
+let fixCountdownTimer = null;
+
+function cancelFixCountdown() {
+  if (fixCountdownTimer) {
+    clearInterval(fixCountdownTimer);
+    fixCountdownTimer = null;
+    fixBtn.textContent = 'FIX NOW';
+    fixBtn.classList.remove('counting');
+  }
+}
+
+function startFixCountdown() {
+  let remaining = FIX_COUNTDOWN_SECONDS;
+  fixBtn.classList.add('counting');
+  fixBtn.textContent = `STARTING IN ${remaining}… CLICK TO CANCEL`;
+  fixCountdownTimer = setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) {
+      cancelFixCountdown();
+      runFix();
+    } else {
+      fixBtn.textContent = `STARTING IN ${remaining}… CLICK TO CANCEL`;
+    }
+  }, 1000);
+}
+
+function onFixButtonClick() {
+  if (isRunning) return;
+  if (fixCountdownTimer) {
+    cancelFixCountdown();
+    return;
+  }
+  if (!canRunFix) return;
+  startFixCountdown();
+}
+
+// ============================================================
 // Run Fix flow
 // ============================================================
 async function runFix() {
   if (isRunning) return;
 
-  const confirmed = await window.electronAPI.showFixConfirm();
-  if (!confirmed) return;
-
   isRunning = true;
   fixBtn.disabled = true;
+  fixBtn.textContent = 'FIXING…';
   shortcutBtn.disabled = true;
   setStatus('scanning', 'Running');
 
@@ -410,13 +511,15 @@ async function runFix() {
       // Re-expand log on completion so users can scroll back.
       setLogExpanded(true);
 
+      // Desktop shortcut: created automatically when missing or stale —
+      // part of "one click does everything", no prompt.
       const status = await window.electronAPI.shortcutExists();
       if (status && status.exists && status.valid) {
         addEmptyLine();
         addFileItem(`Desktop shortcut already present: ${status.path}`, 'success');
       } else {
-        const wantShortcut = await window.electronAPI.showShortcutPrompt();
-        if (wantShortcut) await createShortcut(false);
+        addEmptyLine();
+        await createShortcut(true);
       }
     } else {
       const res = result || {};
@@ -433,8 +536,7 @@ async function runFix() {
     }
   } catch (err) {
     // The fix IPC (or a renderer helper it calls) threw. Surface it instead
-    // of dying as a silent unhandled rejection — runFix() is invoked
-    // un-awaited from the wizard, so without this the UI would just freeze.
+    // of dying as a silent unhandled rejection.
     addEmptyLine();
     addFileItem(`FIX FAILED: ${(err && err.message) || 'Unexpected error in the fix flow.'}`, 'failed');
     finalizeStages('fail');
@@ -442,10 +544,9 @@ async function runFix() {
     setLogExpanded(true);
   } finally {
     // Always release the run lock and re-enable controls — even on a throw.
-    // A stuck `isRunning`/disabled button was the exact failure mode of the
-    // old dead-`checkEnvBtn` reference that wedged CHECK & FIX after one click.
     isRunning = false;
     fixBtn.disabled = false;
+    fixBtn.textContent = 'FIX AGAIN';
     shortcutBtn.disabled = false;
   }
 }
@@ -469,11 +570,10 @@ function friendlyError(code) {
 }
 
 // ============================================================
-// Re-scan / shortcut helpers
+// Shortcut helper — direct create, no prompt.
 // ============================================================
 async function createShortcut(showHeader) {
   if (showHeader) {
-    addEmptyLine();
     addFileItem('CREATING DESKTOP SHORTCUT...', 'header');
   }
   const result = await window.electronAPI.createShortcut();
@@ -482,183 +582,105 @@ async function createShortcut(showHeader) {
 }
 
 // ============================================================
-// Wizard — guided preflight walkthrough.
-// On open: calls preflightScan IPC, builds an ordered step list.
-// Each step is one preflight card; final step is the FIX NOW
-// confirmation summary. Blocked status disables Next so the user
-// must Cancel; Repairable/Warning are passable.
+// Update banner — mirrors main-process 'update-status' events.
+// Main owns the real timers; this is display + two buttons.
 // ============================================================
-const PREFLIGHT_ORDER = ['admin', 'zoom', 'helperUser', 'camPolicy', 'micPolicy', 'hku', 'frameServer', 'version'];
+const updateBanner  = document.getElementById('updateBanner');
+const ubMsg         = document.getElementById('ubMsg');
+const ubRestart     = document.getElementById('ubRestart');
+const ubLater       = document.getElementById('ubLater');
+const ubProgress    = document.getElementById('ubProgress');
+const ubProgressFill= document.getElementById('ubProgressFill');
 
-const wizardOverlay  = document.getElementById('wizardOverlay');
-const wizardStepLbl  = document.getElementById('wizardStepLabel');
-const wizardDots     = document.getElementById('wizardDots');
-const wizardBody     = document.getElementById('wizardBody');
-const wizardIcon     = document.getElementById('wizardIcon');
-const wizardLabel    = document.getElementById('wizardLabel');
-const wizardBadge    = document.getElementById('wizardBadge');
-const wizardMsg      = document.getElementById('wizardMsg');
-const wizardHint     = document.getElementById('wizardHint');
-const wizardSummary  = document.getElementById('wizardSummary');
-const wizardConfNote = document.getElementById('wizardConfirmNote');
-const wizardBackBtn  = document.getElementById('wizardBack');
-const wizardNextBtn  = document.getElementById('wizardNext');
-const wizardCancel   = document.getElementById('wizardCancel');
+let ubTickTimer = null;
+let ubHideTimer = null;
 
-let wizardSteps = [];
-let wizardIdx   = 0;
-let wizardCanRunFix = false;
-let releaseWizardTrap = null;
-
-function statusHint(status) {
-  switch (status) {
-    case 'ready':      return 'No action needed.';
-    case 'repairable': return 'FIX NOW will repair this automatically.';
-    case 'warning':    return 'Advisory — FIX NOW can still proceed.';
-    case 'blocked':    return 'Cannot proceed. Use Cancel and resolve this manually.';
-    default:           return '';
-  }
+function ubClearTimers() {
+  if (ubTickTimer) { clearInterval(ubTickTimer); ubTickTimer = null; }
+  if (ubHideTimer) { clearTimeout(ubHideTimer); ubHideTimer = null; }
 }
 
-async function openWizard() {
-  if (isRunning) return;
-  wizardOverlay.classList.add('show');
-  wizardSteps = [];
-  wizardIdx = 0;
-  wizardCanRunFix = false;
-  releaseWizardTrap = installFocusTrap(wizardOverlay);
-  wizardLabel.textContent = 'Loading…';
-  wizardMsg.textContent = 'Reading environment…';
-  wizardBadge.textContent = '';
-  wizardIcon.innerHTML = '';
-  wizardBody.setAttribute('data-status', 'ready');
-  wizardSummary.classList.remove('active');
-  wizardConfNote.style.display = 'none';
-  wizardNextBtn.disabled = true;
-  wizardBackBtn.disabled = true;
-  wizardStepLbl.textContent = 'Loading…';
-  wizardDots.innerHTML = '';
-  setStatus('scanning', 'Checking');
-  try {
-    const result = await window.electronAPI.preflightScan();
-    for (const key of PREFLIGHT_ORDER) {
-      const card = result.cards[key];
-      if (card) wizardSteps.push(card);
-    }
-    // Append synthetic confirm step
-    wizardSteps.push({ key: '__confirm__', label: 'CONFIRM FIX', status: (result.canRunFix ? 'ready' : 'blocked'), message: '' });
-    wizardCanRunFix = !!result.canRunFix;
-
-    // Set status badge to reflect overall outcome.
-    if (result.overall === 'blocked')         setStatus('error', 'Blocked');
-    else if (result.overall === 'repairable' || result.overall === 'warning') setStatus('warn', 'Action needed');
-    else                                       setStatus('done', 'Ready');
-
-    renderWizardStep(0);
-  } catch (err) {
-    wizardLabel.textContent = 'Preflight failed';
-    wizardMsg.textContent = err && err.message ? err.message : String(err);
-    wizardBody.setAttribute('data-status', 'blocked');
-    wizardNextBtn.disabled = true;
-    setStatus('error', 'Error');
-  }
-}
-
-function closeWizard() {
-  wizardOverlay.classList.remove('show');
-  if (releaseWizardTrap) { releaseWizardTrap(); releaseWizardTrap = null; }
-}
-
-function renderWizardStep(i) {
-  if (!wizardSteps.length) return;
-  wizardIdx = Math.max(0, Math.min(i, wizardSteps.length - 1));
-  const step = wizardSteps[wizardIdx];
-  const isConfirm = step.key === '__confirm__';
-  const total = wizardSteps.length;
-  wizardStepLbl.textContent = `Step ${wizardIdx + 1} of ${total}`;
-
-  // Dots — colored by each step's status, current one ringed.
-  wizardDots.innerHTML = '';
-  wizardSteps.forEach((s, idx) => {
-    const d = document.createElement('div');
-    let cls = 'wz-dot';
-    if (idx === wizardIdx)                        cls += ' current';
-    else if (s.status === 'blocked')              cls += ' fail';
-    else if (s.status === 'warning')              cls += ' warn';
-    else                                          cls += ' done';
-    d.className = cls;
-    wizardDots.appendChild(d);
-  });
-
-  wizardBody.setAttribute('data-status', step.status);
-  wizardIcon.innerHTML = iconForStatus(step.status, 'wz-icon');
-  wizardLabel.textContent = step.label || step.key;
-  wizardBadge.textContent = STATUS_BADGE[step.status] || '';
-
-  if (isConfirm) {
-    // Final step — show summary list + the confirm note.
-    wizardMsg.textContent = wizardCanRunFix
-      ? 'Review the environment summary below. Click FIX NOW to apply changes.'
-      : 'One or more environment checks are BLOCKED. The fix cannot run. Cancel and resolve the blockers, then re-open the wizard.';
-    wizardHint.textContent = '';
-    wizardSummary.classList.add('active');
-    wizardSummary.innerHTML = '';
-    for (let k = 0; k < wizardSteps.length - 1; k++) {
-      const s = wizardSteps[k];
-      const row = document.createElement('div');
-      row.className = 'wz-summary-row';
-      row.setAttribute('data-status', s.status);
-      row.setAttribute('role', 'listitem');
-      row.innerHTML = `${iconForStatus(s.status, 'wz-icon')}
-        <span class="wz-summary-label">${escapeHtml(s.label || s.key)}</span>
-        <span class="wz-summary-status">${STATUS_BADGE[s.status] || ''}</span>`;
-      wizardSummary.appendChild(row);
-    }
-    wizardConfNote.style.display = 'block';
-    wizardConfNote.classList.toggle('danger', !wizardCanRunFix);
-    wizardNextBtn.textContent = 'FIX NOW';
-    wizardNextBtn.disabled = !wizardCanRunFix;
+function ubShow({ msg, restartBtn = false, laterBtn = false, progress = null }) {
+  updateBanner.classList.add('visible');
+  ubMsg.textContent = msg;
+  ubRestart.style.display = restartBtn ? '' : 'none';
+  ubLater.style.display = laterBtn ? '' : 'none';
+  if (progress === null) {
+    ubProgress.style.display = 'none';
   } else {
-    wizardSummary.classList.remove('active');
-    wizardConfNote.style.display = 'none';
-    wizardMsg.textContent = step.message || '';
-    wizardHint.textContent = statusHint(step.status);
-    wizardNextBtn.textContent = 'Next';
-    // Blocked status forces Cancel. Other statuses pass through.
-    wizardNextBtn.disabled = (step.status === 'blocked');
+    ubProgress.style.display = '';
+    ubProgressFill.style.width = `${Math.max(0, Math.min(100, progress))}%`;
   }
-  wizardBackBtn.disabled = (wizardIdx === 0);
 }
 
-function wizardNext() {
-  if (!wizardSteps.length) return;
-  const step = wizardSteps[wizardIdx];
-  if (step.key === '__confirm__') {
-    if (!wizardCanRunFix) return;
-    closeWizard();
-    runFix();
-    return;
+function ubHide() {
+  updateBanner.classList.remove('visible');
+}
+
+function handleUpdateStatus(data) {
+  if (!data || !data.state) return;
+  ubClearTimers();
+  const v = data.version ? `v${data.version}` : 'update';
+  switch (data.state) {
+    case 'downloading':
+      ubShow({ msg: `Downloading ${v} in the background… ${data.percent || 0}%`, progress: data.percent || 0 });
+      break;
+    case 'restarting': {
+      let remaining = data.seconds || 10;
+      const render = () => ubShow({
+        msg: `Update ${v} is ready — restarting in ${remaining}s to install.`,
+        restartBtn: true,
+        laterBtn: true
+      });
+      render();
+      ubTickTimer = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) { ubClearTimers(); return; }
+        render();
+      }, 1000);
+      break;
+    }
+    case 'deferred':
+      ubShow({
+        msg: `Update ${v} is ready — it installs automatically when you exit the app.`,
+        restartBtn: true
+      });
+      break;
+    case 'error':
+      ubShow({ msg: 'Update check failed — will retry on next launch.' });
+      ubHideTimer = setTimeout(ubHide, 6000);
+      break;
+    case 'idle':
+    default:
+      ubHide();
+      break;
   }
-  renderWizardStep(wizardIdx + 1);
 }
 
-function wizardBack() {
-  if (wizardIdx > 0) renderWizardStep(wizardIdx - 1);
-}
-
-wizardNextBtn.addEventListener('click', wizardNext);
-wizardBackBtn.addEventListener('click', wizardBack);
-wizardCancel.addEventListener('click', closeWizard);
+ubRestart.addEventListener('click', () => {
+  ubClearTimers();
+  ubShow({ msg: 'Installing update — the app will restart itself…' });
+  window.electronAPI.installUpdateNow();
+});
+ubLater.addEventListener('click', () => {
+  ubClearTimers();
+  window.electronAPI.deferUpdate();
+});
 
 // ============================================================
 // Bootstrap
 // ============================================================
 window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnExit').addEventListener('click', () => window.electronAPI.quitApp());
-  fixBtn.addEventListener('click', openWizard);
+  fixBtn.addEventListener('click', onFixButtonClick);
   shortcutBtn.addEventListener('click', async () => {
-    const proceed = await window.electronAPI.showShortcutPrompt();
-    if (proceed) await createShortcut(true);
+    // Direct create — no confirmation round-trip. Logs land in the running
+    // view's log region; flip to it so the result is visible.
+    if (isRunning) return;
+    showView('running');
+    logToggle.classList.add('visible');
+    setLogExpanded(true);
+    await createShortcut(true);
   });
 
   window.electronAPI.onFixLog(({ line, kind }) => {
@@ -669,18 +691,27 @@ window.addEventListener('DOMContentLoaded', async () => {
     addFileItem(line, cls);
   });
 
-  // Initial state: instruction view.
-  showView('preflight');
+  window.electronAPI.onUpdateStatus(handleUpdateStatus);
+
+  // Initial state: home view + auto-run the environment checklist.
+  showView('home');
   setStageTracker(false);
   const elevated = await window.electronAPI.isElevated();
-  showInstructions(elevated);
-  fixBtn.disabled  = !elevated;
-  shortcutBtn.disabled = !elevated;
-  setStatus(elevated ? '' : 'error', elevated ? 'Ready' : 'Not Admin');
+  if (!elevated) {
+    checkList.innerHTML = '';
+    checkList.appendChild(renderCheckRow('admin', 'Administrator', 'blocked',
+      'Not running as Administrator. Close this app, right-click it → Run as administrator.'));
+    fixBtn.disabled = true;
+    shortcutBtn.disabled = true;
+    setStatus('error', 'Not Admin');
+    return;
+  }
+  shortcutBtn.disabled = false;
+  runEnvironmentScan();
 });
 
 // ============================================================
-// Footer: app version + admin badge + buttons
+// Footer: app version + admin badge
 // ============================================================
 (async () => {
   try {
@@ -871,10 +902,10 @@ supportCopyBtn.addEventListener('click', async () => {
   }
 });
 
-// Esc closes any open modal.
+// Esc closes any open modal; also cancels a pending FIX countdown.
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    if (wizardOverlay.classList.contains('show'))                          closeWizard();
+    cancelFixCountdown();
     if (supportOverlay.classList.contains('show'))                         closeSupportReport();
     if (document.getElementById('fbOverlay').classList.contains('show'))   closeFeedback();
   }
