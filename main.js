@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -9,31 +9,105 @@ const config = require('./src/main/config');
 
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
+// Differential (blockmap) downloads from GitHub are a recurring source of
+// stuck / never-completing updates in the field. The full installer is small
+// enough that a plain download is the reliable choice.
+autoUpdater.disableDifferentialDownload = true;
 
-// Updater diagnostics. Surface every state transition to the main-process
-// console so a failure to update doesn't go unnoticed silently. None of
-// these listeners are allowed to crash — they only log.
+// ============================================================
+// Updater state machine.
+//
+// Old behavior force-called quitAndInstall() 2 seconds after the download
+// finished — even while the destructive fix flow was mid-run, and with no
+// UI at all. To the user that read as "the app randomly closed / froze /
+// the update never finished". New rules:
+//   - Everything is surfaced to the renderer via 'update-status' events.
+//   - App idle (no fix started): visible 10s countdown, then restart+install.
+//   - Fix running or already ran: NEVER auto-restart. Banner offers
+//     "Restart now"; otherwise autoInstallOnAppQuit installs on exit.
+// ============================================================
 const UPDATER = '[updater]';
+let fixInProgress = false;
+let fixHasRun = false;
+let updateDownloaded = false;
+let updateVersion = '';
+let updateRestartTimer = null;
+
+function sendUpdateStatus(payload) {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-status', payload);
+    }
+  } catch (_) { /* renderer gone — nothing to notify */ }
+}
+
+function cancelUpdateRestartCountdown() {
+  if (updateRestartTimer) {
+    clearTimeout(updateRestartTimer);
+    updateRestartTimer = null;
+  }
+}
+
 let _lastUpdaterProgressPct = -10;
 autoUpdater.on('checking-for-update', () => {
   console.log(`${UPDATER} checking-for-update`);
 });
 autoUpdater.on('update-available', (info) => {
-  console.log(`${UPDATER} update-available version=${info && info.version}`);
+  updateVersion = (info && info.version) || '';
+  console.log(`${UPDATER} update-available version=${updateVersion}`);
+  sendUpdateStatus({ state: 'downloading', version: updateVersion, percent: 0 });
 });
 autoUpdater.on('update-not-available', (info) => {
   console.log(`${UPDATER} update-not-available current=${info && info.version}`);
+  sendUpdateStatus({ state: 'idle' });
 });
 autoUpdater.on('error', (err) => {
   console.warn(`${UPDATER} error: ${(err && err.message) || err}`);
+  cancelUpdateRestartCountdown();
+  // Non-fatal: the app works without the update; retried on next launch.
+  sendUpdateStatus({ state: 'error' });
 });
 autoUpdater.on('download-progress', (p) => {
   const pct = Math.floor((p && p.percent) || 0);
-  if (pct - _lastUpdaterProgressPct >= 10 || pct >= 100) {
+  if (pct - _lastUpdaterProgressPct >= 5 || pct >= 100) {
     _lastUpdaterProgressPct = pct;
     const mb = (n) => Math.round((n || 0) / 1024 / 1024);
     console.log(`${UPDATER} download-progress ${pct}% (${mb(p && p.transferred)}MB / ${mb(p && p.total)}MB)`);
+    sendUpdateStatus({ state: 'downloading', version: updateVersion, percent: pct });
   }
+});
+autoUpdater.on('update-downloaded', (info) => {
+  updateDownloaded = true;
+  updateVersion = (info && info.version) || updateVersion;
+  console.log(`${UPDATER} update-downloaded version=${updateVersion}`);
+  if (fixInProgress || fixHasRun) {
+    // Never yank the app out from under a running or just-finished fix —
+    // that was the #1 "update didn't complete / app died mid-fix" report.
+    sendUpdateStatus({ state: 'deferred', version: updateVersion });
+  } else {
+    const seconds = 10;
+    sendUpdateStatus({ state: 'restarting', version: updateVersion, seconds });
+    updateRestartTimer = setTimeout(() => {
+      updateRestartTimer = null;
+      autoUpdater.quitAndInstall(true, true);
+    }, seconds * 1000);
+  }
+});
+
+ipcMain.handle('install-update-now', () => {
+  if (!updateDownloaded) return { success: false };
+  cancelUpdateRestartCountdown();
+  autoUpdater.quitAndInstall(true, true);
+  return { success: true };
+});
+
+ipcMain.handle('defer-update', () => {
+  cancelUpdateRestartCountdown();
+  if (updateDownloaded) {
+    // autoInstallOnAppQuit picks it up when the user exits.
+    sendUpdateStatus({ state: 'deferred', version: updateVersion });
+  }
+  return { success: true };
 });
 
 const FIX_USER = 'user1';
@@ -60,38 +134,65 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
     height: 700,
+    minWidth: 720,
+    minHeight: 560,
     backgroundColor: '#0a1020',
-    alwaysOnTop: true,
+    // NOTE: no alwaysOnTop. The old always-on-top + frameless window had no
+    // drag region either, so it sat immovable above everything — including
+    // the Zoom window this app launches. That's most of the "frozen/glitchy"
+    // feedback. The header is now a real drag region (see index.html).
     frame: false,
     titleBarStyle: 'hidden',
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true
     },
-    icon: path.join(__dirname, 'icon.ico')
+    // getIconPath() resolves packaged (resources/icon.ico) vs dev
+    // (assets/icon.ico); the old literal only existed when packaged.
+    icon: getIconPath()
   });
 
+  // Avoid the white flash / half-painted first frame on slower machines.
+  mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.loadFile('index.html');
   mainWindow.setMenu(null);
+}
+
+// Single-instance lock. Without it, the post-update relaunch (and users
+// double-clicking during the silent install) produced two elevated windows
+// fighting over the same PowerShell children.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
 }
 
 app.whenReady().then(() => {
   createWindow();
 
-  autoUpdater.on('update-downloaded', (info) => {
-    console.log(`${UPDATER} update-downloaded version=${info && info.version} — quitAndInstall in 2s`);
+  // Auto-update only makes sense for the packaged NSIS install. The portable
+  // exe has no installer to hand off to (electron-updater cannot update
+  // portable targets) and dev runs have no app-update.yml — both used to
+  // produce a red-herring updater error on every launch.
+  const isPortable = !!process.env.PORTABLE_EXECUTABLE_DIR;
+  if (app.isPackaged && !isPortable) {
     setTimeout(() => {
-      autoUpdater.quitAndInstall(true, true);
-    }, 2000);
-  });
-
-  setTimeout(() => {
-    autoUpdater.checkForUpdates().catch((err) => {
-      // Non-fatal: app continues without auto-update. Visible in logs now.
-      console.warn(`${UPDATER} checkForUpdates rejected: ${(err && err.message) || err}`);
-    });
-  }, 3000);
+      autoUpdater.checkForUpdates().catch((err) => {
+        // Non-fatal: app continues without auto-update. Visible in logs now.
+        console.warn(`${UPDATER} checkForUpdates rejected: ${(err && err.message) || err}`);
+      });
+    }, 3000);
+  } else {
+    console.log(`${UPDATER} skipped (packaged=${app.isPackaged}, portable=${isPortable})`);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -717,6 +818,21 @@ ipcMain.handle('preflight', async () => {
 // IPC: run-fix - the destructive flow
 // ============================================================
 ipcMain.handle('run-fix', async (event) => {
+  // A fix in progress must never be interrupted by an update restart.
+  cancelUpdateRestartCountdown();
+  fixInProgress = true;
+  fixHasRun = true;
+  try {
+    return await runFixFlow(event);
+  } finally {
+    fixInProgress = false;
+    if (updateDownloaded) {
+      sendUpdateStatus({ state: 'deferred', version: updateVersion });
+    }
+  }
+});
+
+async function runFixFlow(event) {
   const send = (line, kind = 'out') => event.sender.send('fix-log', { line, kind });
   const noop = () => {};
   const warnings = [];
@@ -1380,7 +1496,7 @@ ipcMain.handle('run-fix', async (event) => {
     // if that block was skipped (script missing), receipt stays undefined.
     receipt: (typeof consentReceipt !== 'undefined') ? consentReceipt : null
   };
-});
+}
 
 // ============================================================
 // Shortcut helpers.
@@ -1539,58 +1655,6 @@ ipcMain.handle('shortcut-exists', async () => {
     path: primary ? primary.path : null,
     locations: found
   };
-});
-
-ipcMain.handle('show-shortcut-prompt', async () => {
-  const found = await findExistingShortcuts();
-  const exists = found.length > 0;
-  const stale  = found.some(f => f.valid === false);
-  let title, message, buttons;
-  if (!exists) {
-    title   = 'Create Desktop Shortcut';
-    message = `Place a "Launch Zoom as ${FIX_USER}" shortcut on your desktop?`;
-    buttons = ['Yes, create shortcut', 'No thanks'];
-  } else if (stale) {
-    title   = 'Replace Stale Desktop Shortcut';
-    message = `An older "Launch Zoom as ${FIX_USER}" shortcut exists but points somewhere else. Replace it?`;
-    buttons = ['Replace shortcut', 'Keep existing'];
-  } else {
-    title   = 'Desktop Shortcut Already Exists';
-    message = `A "Launch Zoom as ${FIX_USER}" shortcut already exists on your desktop. Replace it?`;
-    buttons = ['Replace shortcut', 'Keep existing'];
-  }
-  const result = await dialog.showMessageBox(mainWindow, {
-    type: 'question',
-    buttons,
-    defaultId: exists ? 1 : 0,
-    cancelId: 1,
-    title,
-    message,
-    detail: `One-click re-launch of Zoom as ${FIX_USER}. Windows may ask for the ${FIX_USER} password the first time (saved for later).`
-  });
-  return result.response === 0;
-});
-
-ipcMain.handle('show-fix-confirm', async () => {
-  const result = await dialog.showMessageBox(mainWindow, {
-    type: 'warning',
-    buttons: ['Continue', 'Cancel'],
-    defaultId: 1,
-    cancelId: 1,
-    title: 'Confirm Fix - Destructive',
-    message: `This will completely reset the local '${FIX_USER}' account.`,
-    detail:
-      `The fix will:\n` +
-      `  - Close any active Zoom / '${FIX_USER}' sessions safely\n` +
-      `  - Clean stale '${FIX_USER}' profile data when needed\n` +
-      `  - Recreate the local '${FIX_USER}' Zoom profile (password: ${FIX_PASS})\n` +
-      `  - Launch Zoom once as '${FIX_USER}' so Windows creates the profile\n` +
-      `  - Apply the required Zoom profile setup\n` +
-      `  - Relaunch Zoom using the refreshed '${FIX_USER}' profile\n\n` +
-      `No personal files, chats, contacts, or Zoom account data are copied.\n\n` +
-      `Do NOT continue if you are currently signed in as '${FIX_USER}'.`
-  });
-  return result.response === 0;
 });
 
 ipcMain.handle('is-elevated', async () => {
