@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -110,6 +110,78 @@ ipcMain.handle('defer-update', () => {
   return { success: true };
 });
 
+// ============================================================
+// Portable-build update notice.
+//
+// electron-updater cannot update the portable target, so portable users
+// were silently pinned to whatever version they downloaded — forever.
+// Instead: fetch latest.yml from the public Releases repo (same feed the
+// NSIS updater uses), compare versions, and surface a "download it" banner.
+// Owner/repo mirror build.publish in package.json.
+// ============================================================
+const RELEASES_LATEST_URL = 'https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Releases/releases/latest';
+const LATEST_YML_URL = RELEASES_LATEST_URL + '/download/latest.yml';
+const UPDATE_RECHECK_MS = 4 * 60 * 60 * 1000; // long-open apps re-check every 4h
+
+// GitHub's /releases/latest/download/* is a 302 to the CDN; plain
+// https.get does not follow redirects, so walk them (bounded).
+function httpsGetText(url, redirectsLeft = 5) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers: { 'User-Agent': `1132Fixer/${app.getVersion()}` }, timeout: 15000 }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        if (redirectsLeft <= 0) return reject(new Error('too many redirects'));
+        return resolve(httpsGetText(new URL(res.headers.location, url).toString(), redirectsLeft - 1));
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode}`));
+      }
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => resolve(data));
+    });
+    req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    req.on('error', reject);
+  });
+}
+
+function isNewerVersion(candidate, current) {
+  const a = String(candidate).split('.').map(n => parseInt(n, 10) || 0);
+  const b = String(current).split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] || 0) - (b[i] || 0);
+    if (d !== 0) return d > 0;
+  }
+  return false;
+}
+
+async function checkPortableUpdate() {
+  try {
+    const body = await httpsGetText(LATEST_YML_URL);
+    const m = /^version:\s*(\S+)/m.exec(body || '');
+    if (!m) {
+      console.warn(`${UPDATER} portable check: latest.yml had no version line`);
+      return;
+    }
+    const latest = m[1].trim();
+    if (isNewerVersion(latest, app.getVersion())) {
+      console.log(`${UPDATER} portable check: v${latest} available (running v${app.getVersion()})`);
+      sendUpdateStatus({ state: 'manual', version: latest });
+    } else {
+      console.log(`${UPDATER} portable check: up to date (v${app.getVersion()})`);
+    }
+  } catch (err) {
+    // Non-fatal: offline or GitHub unreachable; retried on the next tick.
+    console.warn(`${UPDATER} portable check failed: ${(err && err.message) || err}`);
+  }
+}
+
+ipcMain.handle('open-download-page', () => {
+  shell.openExternal(RELEASES_LATEST_URL);
+  return { success: true };
+});
+
 const FIX_USER = 'user1';
 const FIX_PASS = 'user1';
 const ZOOM_PATH = 'C:\\Program Files\\Zoom\\bin\\Zoom.exe';
@@ -180,16 +252,29 @@ app.whenReady().then(() => {
 
   // Auto-update only makes sense for the packaged NSIS install. The portable
   // exe has no installer to hand off to (electron-updater cannot update
-  // portable targets) and dev runs have no app-update.yml — both used to
-  // produce a red-herring updater error on every launch.
+  // portable targets) — it gets a manual-download notice instead — and dev
+  // runs have no app-update.yml, which used to produce a red-herring updater
+  // error on every launch.
   const isPortable = !!process.env.PORTABLE_EXECUTABLE_DIR;
   if (app.isPackaged && !isPortable) {
-    setTimeout(() => {
+    const checkNow = () => {
       autoUpdater.checkForUpdates().catch((err) => {
         // Non-fatal: app continues without auto-update. Visible in logs now.
         console.warn(`${UPDATER} checkForUpdates rejected: ${(err && err.message) || err}`);
       });
-    }, 3000);
+    };
+    setTimeout(checkNow, 3000);
+    // Long-open sessions: re-check periodically. Skip while a fix is running
+    // (never surprise the destructive flow) or once a download already landed.
+    setInterval(() => {
+      if (updateDownloaded || fixInProgress) return;
+      checkNow();
+    }, UPDATE_RECHECK_MS);
+  } else if (app.isPackaged && isPortable) {
+    setTimeout(checkPortableUpdate, 3000);
+    setInterval(() => {
+      if (!fixInProgress) checkPortableUpdate();
+    }, UPDATE_RECHECK_MS);
   } else {
     console.log(`${UPDATER} skipped (packaged=${app.isPackaged}, portable=${isPortable})`);
   }
@@ -1856,12 +1941,36 @@ ipcMain.handle('preflight-scan', async () => {
       $out['hku_loaded'] = $false
       $out['hku_sid']    = ''
     }
+    # Helper-account health: existence + Administrators membership (SID-based,
+    # same technique as verifyAdminMembership — Get-LocalGroupMember chokes on
+    # orphaned SIDs, so fall back to net localgroup parsing).
+    $out['user1_exists'] = $false
+    try { if (Get-LocalUser -Name '${FIX_USER}' -EA SilentlyContinue) { $out['user1_exists'] = $true } } catch {}
+    $out['user1_admin'] = $false
+    if ($out['user1_exists']) {
+      try {
+        foreach ($m in (Get-LocalGroupMember -SID 'S-1-5-32-544' -EA Stop)) {
+          $mSid = $null
+          try { $mSid = $m.SID.Value } catch {}
+          if (($sid -and $mSid -and ($mSid -eq $sid)) -or ($m.Name -ieq '${FIX_USER}') -or ($m.Name -like ('*\\' + '${FIX_USER}'))) {
+            $out['user1_admin'] = $true; break
+          }
+        }
+      } catch {
+        try {
+          $lg = (net localgroup administrators) 2>&1 | Out-String
+          foreach ($l in ($lg -split "\`r?\`n")) {
+            $t = $l.Trim()
+            if ($t -ieq '${FIX_USER}' -or $t -like ('*\\' + '${FIX_USER}')) { $out['user1_admin'] = $true; break }
+          }
+        } catch {}
+      }
+    }
     $out | ConvertTo-Json -Compress
   `, { timeoutMs: 20000 });
 
-  const [pre, helperExists, probe] = await Promise.all([
+  const [pre, probe] = await Promise.all([
     preflightCheck(),
-    userExists(FIX_USER),
     probePromise
   ]);
   const cards = {};
@@ -1875,19 +1984,6 @@ ipcMain.handle('preflight-scan', async () => {
   cards.zoom = fs.existsSync(ZOOM_PATH)
     ? { status: 'ready', label: 'Zoom Workplace', message: ZOOM_PATH }
     : { status: 'blocked', label: 'Zoom Workplace', message: `Not found at ${ZOOM_PATH}. Install the machine-wide MSI.` };
-
-  // --- Helper user (user1) ------------------------------------
-  const helperProfileDir = `C:\\Users\\${FIX_USER}`;
-  const helperProfileExists = fs.existsSync(helperProfileDir);
-  if (!helperExists && !helperProfileExists) {
-    cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' will be created on FIX NOW.` };
-  } else if (helperExists && helperProfileExists) {
-    cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' exists with profile. FIX NOW will rebuild it.` };
-  } else if (helperExists) {
-    cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' account exists but no profile yet. FIX NOW will reset.` };
-  } else {
-    cards.helperUser = { status: 'warning', label: 'Helper account', message: `Stale profile folder at ${helperProfileDir} with no account. FIX NOW will clean it up.` };
-  }
 
   let probeData = {};
   let probeFailed = false;
@@ -1903,6 +1999,30 @@ ipcMain.handle('preflight-scan', async () => {
   const probeFailMsg = probe.timedOut
     ? 'Probe timed out after 20s — Windows Defender or another AV may be holding PowerShell. FIX NOW can still run, but skip this check first.'
     : 'PowerShell probe failed — could not read this value. FIX NOW can still run.';
+
+  // --- Helper user (user1) ------------------------------------
+  // A user1 that exists WITH a profile AND admin rights is the normal,
+  // healthy state after a successful fix — report it green. Amber is
+  // reserved for states FIX NOW actually has to repair.
+  const helperProfileDir = `C:\\Users\\${FIX_USER}`;
+  const helperProfileExists = fs.existsSync(helperProfileDir);
+  if (probeFailed) {
+    cards.helperUser = { status: 'warning', label: 'Helper account', message: probeFailMsg };
+  } else {
+    const helperExists = !!probeData.user1_exists;
+    const helperAdmin  = !!probeData.user1_admin;
+    if (!helperExists && !helperProfileExists) {
+      cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' will be created on FIX NOW.` };
+    } else if (helperExists && helperProfileExists && helperAdmin) {
+      cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' is set up — admin rights and profile present. FIX NOW rebuilds it fresh.` };
+    } else if (helperExists && helperProfileExists) {
+      cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' exists but is not in Administrators. FIX NOW will repair it.` };
+    } else if (helperExists) {
+      cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' account exists but no profile yet. FIX NOW will reset.` };
+    } else {
+      cards.helperUser = { status: 'warning', label: 'Helper account', message: `Stale profile folder at ${helperProfileDir} with no account. FIX NOW will clean it up.` };
+    }
+  }
 
   const policyCard = (label, val) => {
     if (probeFailed) return { status: 'warning', label, message: probeFailMsg };
@@ -1937,9 +2057,12 @@ ipcMain.handle('preflight-scan', async () => {
   if (probeFailed) {
     cards.hku = { status: 'warning', label: 'User registry hive', message: probeFailMsg };
   } else if (probeData.hku_sid) {
+    // Not-loaded is the NORMAL state while user1 is logged off — mounting the
+    // hive is part of the fix procedure, not a defect to repair. Both states
+    // are green; the message says which path FIX NOW takes.
     cards.hku = probeData.hku_loaded
-      ? { status: 'ready',      label: 'User registry hive', message: `HKU\\${probeData.hku_sid} active — consent will write live.` }
-      : { status: 'repairable', label: 'User registry hive', message: `HKU\\${probeData.hku_sid} not loaded — FIX NOW will mount NTUSER.DAT, write consent, then unmount.` };
+      ? { status: 'ready', label: 'User registry hive', message: `HKU\\${probeData.hku_sid} active — consent will write live.` }
+      : { status: 'ready', label: 'User registry hive', message: `Hive not loaded (normal while '${FIX_USER}' is logged off) — FIX NOW will mount NTUSER.DAT, write consent, then unmount.` };
   } else {
     cards.hku = { status: 'ready', label: 'User registry hive', message: `No '${FIX_USER}' SID yet — fresh create, nothing to mount.` };
   }

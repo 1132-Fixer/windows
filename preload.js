@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   installUpdateNow: () => ipcRenderer.invoke('install-update-now'),
   deferUpdate: () => ipcRenderer.invoke('defer-update'),
+  openDownloadPage: () => ipcRenderer.invoke('open-download-page'),
   quitApp: () => ipcRenderer.invoke('quit-app'),
   submitFeedback: (type, text) => ipcRenderer.invoke('submit-feedback', type, text),
   getVersion: () => ipcRenderer.invoke('get-version'),
