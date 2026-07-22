@@ -588,6 +588,7 @@ async function createShortcut(showHeader) {
 const updateBanner  = document.getElementById('updateBanner');
 const ubMsg         = document.getElementById('ubMsg');
 const ubRestart     = document.getElementById('ubRestart');
+const ubDownload    = document.getElementById('ubDownload');
 const ubLater       = document.getElementById('ubLater');
 const ubProgress    = document.getElementById('ubProgress');
 const ubProgressFill= document.getElementById('ubProgressFill');
@@ -600,10 +601,11 @@ function ubClearTimers() {
   if (ubHideTimer) { clearTimeout(ubHideTimer); ubHideTimer = null; }
 }
 
-function ubShow({ msg, restartBtn = false, laterBtn = false, progress = null }) {
+function ubShow({ msg, restartBtn = false, downloadBtn = false, laterBtn = false, progress = null }) {
   updateBanner.classList.add('visible');
   ubMsg.textContent = msg;
   ubRestart.style.display = restartBtn ? '' : 'none';
+  ubDownload.style.display = downloadBtn ? '' : 'none';
   ubLater.style.display = laterBtn ? '' : 'none';
   if (progress === null) {
     ubProgress.style.display = 'none';
@@ -646,6 +648,14 @@ function handleUpdateStatus(data) {
         restartBtn: true
       });
       break;
+    case 'manual':
+      // Portable build: cannot self-update; offer the download page.
+      ubShow({
+        msg: `Update ${v} is available. This portable version can't update itself — download the new one.`,
+        downloadBtn: true,
+        laterBtn: true
+      });
+      break;
     case 'error':
       ubShow({ msg: 'Update check failed — will retry on next launch.' });
       ubHideTimer = setTimeout(ubHide, 6000);
@@ -662,8 +672,16 @@ ubRestart.addEventListener('click', () => {
   ubShow({ msg: 'Installing update — the app will restart itself…' });
   window.electronAPI.installUpdateNow();
 });
+ubDownload.addEventListener('click', () => {
+  window.electronAPI.openDownloadPage();
+  ubShow({ msg: 'Download page opened in your browser — grab the newest version there.' });
+  ubHideTimer = setTimeout(ubHide, 8000);
+});
 ubLater.addEventListener('click', () => {
   ubClearTimers();
+  // Hide immediately; a downloaded NSIS update re-shows itself as 'deferred'
+  // via the main process, and the portable notice returns on the next 4h check.
+  ubHide();
   window.electronAPI.deferUpdate();
 });
 
