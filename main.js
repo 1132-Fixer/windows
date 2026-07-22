@@ -296,7 +296,7 @@ async function runPSScript(scriptContent, onLine, opts = {}) {
   await fs.promises.writeFile(tmp, scriptContent, 'utf8');
   try {
     return await runProcess('powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmp],
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp],
       onLine, opts);
   } finally {
     fs.promises.unlink(tmp).catch(() => {});
@@ -318,7 +318,7 @@ async function runPSScriptDetachedIO(scriptContent) {
   await fs.promises.writeFile(tmp, scriptContent, 'utf8');
   return new Promise((resolve) => {
     const child = spawn('powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmp],
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp],
       { windowsHide: true, stdio: 'ignore' });
     child.on('error', () => {
       fs.promises.unlink(tmp).catch(() => {});
@@ -336,15 +336,21 @@ async function runPSCapture(scriptContent, opts = {}) {
   return runPSScript(scriptContent, noop, opts);
 }
 
+// Elevation cannot change for the lifetime of the process, so probe once and
+// memoize. This check used to spawn net.exe on every preflight, every focus
+// re-scan, and twice at renderer bootstrap.
+let _elevatedPromise = null;
 function isElevatedSync() {
+  if (_elevatedPromise) return _elevatedPromise;
   // net.exe session is the standard Windows admin check: requires admin to enumerate sessions.
-  return new Promise(resolve => {
+  _elevatedPromise = new Promise(resolve => {
     const child = spawn('net.exe', ['session'], { windowsHide: true });
     child.stdout.on('data', () => {});
     child.stderr.on('data', () => {});
     child.on('error', () => resolve(false));
     child.on('close', code => resolve(code === 0));
   });
+  return _elevatedPromise;
 }
 
 function userExists(username) {
@@ -365,6 +371,27 @@ async function preflightCheck() {
   const blockers = [];
   const warnings = [];
   const info = {};
+
+  // Kick off the PowerShell tool probe FIRST — it dominates preflight
+  // wall-clock (~1-2s PS startup) and is independent of every other check,
+  // so the elevation probe and sync fs checks run under it for free.
+  const allTools = [...REQUIRED_TOOLS, ...OPTIONAL_TOOLS];
+  const probePromise = runPSCapture(`
+    $tools = @(${allTools.map(t => `'${t}'`).join(',')})
+    $r = @{}
+    foreach ($t in $tools) {
+      try { $r[$t] = [bool](Get-Command $t -EA SilentlyContinue) } catch { $r[$t] = $false }
+    }
+    $svc = Get-Service seclogon -EA SilentlyContinue
+    if ($svc) {
+      $r['seclogon_status']    = [string]$svc.Status
+      $r['seclogon_starttype'] = [string]$svc.StartType
+    } else {
+      $r['seclogon_status']    = 'MISSING'
+      $r['seclogon_starttype'] = 'MISSING'
+    }
+    $r | ConvertTo-Json -Compress
+  `, { timeoutMs: 20000 });
 
   // Elevation
   const elevated = await isElevatedSync();
@@ -406,23 +433,7 @@ async function preflightCheck() {
   }
 
   // Required + optional tools + Secondary Logon service (Start-Process -Credential needs it)
-  const allTools = [...REQUIRED_TOOLS, ...OPTIONAL_TOOLS];
-  const probe = await runPSCapture(`
-    $tools = @(${allTools.map(t => `'${t}'`).join(',')})
-    $r = @{}
-    foreach ($t in $tools) {
-      try { $r[$t] = [bool](Get-Command $t -EA SilentlyContinue) } catch { $r[$t] = $false }
-    }
-    $svc = Get-Service seclogon -EA SilentlyContinue
-    if ($svc) {
-      $r['seclogon_status']    = [string]$svc.Status
-      $r['seclogon_starttype'] = [string]$svc.StartType
-    } else {
-      $r['seclogon_status']    = 'MISSING'
-      $r['seclogon_starttype'] = 'MISSING'
-    }
-    $r | ConvertTo-Json -Compress
-  `, { timeoutMs: 20000 });
+  const probe = await probePromise;
   let presence = null;
   try {
     const parsed = JSON.parse((probe.stdout || '').trim() || '{}');
@@ -575,10 +586,12 @@ async function resolveSID(username) {
 // Falls back to `net localgroup` parsing. Returns { inGroup, method, raw }.
 // ============================================================
 async function verifyAdminMembership(username) {
-  const sid = await resolveSID(username);
+  // SID translation happens INSIDE the same PS process — a separate
+  // resolveSID() round trip costs a full powershell.exe startup.
   const r = await runPSCapture(`
     $user = '${username}'
-    $userSid = '${sid}'
+    $userSid = ''
+    try { $userSid = (New-Object System.Security.Principal.NTAccount($user)).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}
     $result = 'NO'
     $method = 'none'
     try {
@@ -606,12 +619,14 @@ async function verifyAdminMembership(username) {
     }
     Write-Output ("METHOD=" + $method)
     Write-Output ("RESULT=" + $result)
+    Write-Output ("SID=" + $userSid)
   `);
   const lines = (r.stdout || '').split(/\r?\n/).map(s => s.trim());
-  let method = 'unknown', result = 'NO';
+  let method = 'unknown', result = 'NO', sid = '';
   for (const l of lines) {
     if (l.startsWith('METHOD=')) method = l.slice(7);
     else if (l.startsWith('RESULT=')) result = l.slice(7);
+    else if (l.startsWith('SID=')) sid = l.slice(4);
   }
   return { inGroup: result === 'YES', method, sid };
 }
@@ -625,79 +640,79 @@ async function verifyAdminMembership(username) {
 async function resolveUserProfilePath(username, maxWaitSec, send) {
   const checkedPaths = [];
   const checkedKeys = [];
-  let lastSid = '';
   const literal = `C:\\Users\\${username}`;
 
+  // The whole poll loop runs INSIDE one PowerShell process. The old
+  // spawn-per-tick design paid ~0.5-1s of powershell.exe startup per second
+  // of wait, roughly doubling the effective interval and burning up to 30
+  // spawns. Internal loop: one spawn, 500ms ticks, same output protocol.
+  //
   // Use [System.IO.File]::Exists instead of Test-Path: Test-Path throws on
   // access-denied NTFS ACLs (which the freshly-created user1 profile commonly
   // has against the calling admin account), whereas File.Exists returns false.
-  const tickScript = `
+  const script = `
     $u = '${username}'
-    $sid = ''
-    try { $sid = (New-Object System.Security.Principal.NTAccount($u)).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}
-    Write-Output ("SID=" + $sid)
-
-    $regPath = ''
-    if ($sid) {
-      $key = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\' + $sid
-      Write-Output ("KEY=" + $key)
-      try {
-        $rp = (Get-ItemProperty -Path $key -EA SilentlyContinue).ProfileImagePath
-        if ($rp) { $regPath = $rp }
-      } catch {}
-    }
-    Write-Output ("REG=" + $regPath)
+    $literal = '${literal.replace(/'/g, "''")}'
+    $deadline = [DateTime]::UtcNow.AddSeconds(${Math.max(1, maxWaitSec)})
+    $sid = ''; $key = ''; $lastReg = ''; $match = ''
 
     function Profile-Has-NTUserDat([string]$dir) {
       if (-not $dir) { return $false }
       try { return [System.IO.File]::Exists((Join-Path $dir 'NTUSER.DAT')) } catch { return $false }
     }
 
-    if ($regPath -and (Profile-Has-NTUserDat $regPath)) {
-      Write-Output ("MATCH=registry|" + $regPath)
-      return
-    }
-    $literal = '${literal.replace(/'/g, "''")}'
-    if (Profile-Has-NTUserDat $literal) {
-      Write-Output ("MATCH=folder|" + $literal)
-      return
-    }
-    try {
-      $suf = Get-ChildItem 'C:\\Users' -Directory -Force -EA 0 |
-        Where-Object { $_.Name -match ('^' + [Regex]::Escape($u) + '\\.') -and (Profile-Has-NTUserDat $_.FullName) } |
-        Select-Object -First 1 -ExpandProperty FullName
-      if ($suf) { Write-Output ("MATCH=folder-suffixed|" + $suf) }
-    } catch {}
+    do {
+      if (-not $sid) {
+        try { $sid = (New-Object System.Security.Principal.NTAccount($u)).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}
+        if ($sid) { $key = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\' + $sid }
+      }
+      $regPath = ''
+      if ($key) {
+        try {
+          $rp = (Get-ItemProperty -Path $key -EA SilentlyContinue).ProfileImagePath
+          if ($rp) { $regPath = $rp; $lastReg = $rp }
+        } catch {}
+      }
+      if ($regPath -and (Profile-Has-NTUserDat $regPath)) { $match = 'registry|' + $regPath; break }
+      if (Profile-Has-NTUserDat $literal) { $match = 'folder|' + $literal; break }
+      try {
+        $suf = Get-ChildItem 'C:\\Users' -Directory -Force -EA 0 |
+          Where-Object { $_.Name -match ('^' + [Regex]::Escape($u) + '\\.') -and (Profile-Has-NTUserDat $_.FullName) } |
+          Select-Object -First 1 -ExpandProperty FullName
+        if ($suf) { $match = 'folder-suffixed|' + $suf; break }
+      } catch {}
+      Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    Write-Output ("SID=" + $sid)
+    Write-Output ("KEY=" + $key)
+    Write-Output ("REG=" + $lastReg)
+    Write-Output ("MATCH=" + $match)
   `;
 
-  for (let i = 0; i < maxWaitSec; i++) {
-    const r = await runPSCapture(tickScript);
-    let sid = '', key = '', regPath = '', matchSrc = '', matchPath = '';
-    for (const line of (r.stdout || '').split(/\r?\n/)) {
-      const t = line.trim();
-      if (t.startsWith('SID=')) sid = t.slice(4);
-      else if (t.startsWith('KEY=')) key = t.slice(4);
-      else if (t.startsWith('REG=')) regPath = t.slice(4);
-      else if (t.startsWith('MATCH=')) {
-        const pipe = t.indexOf('|', 6);
-        if (pipe > 0) { matchSrc = t.slice(6, pipe); matchPath = t.slice(pipe + 1); }
-      }
+  const r = await runPSCapture(script, { timeoutMs: (maxWaitSec + 20) * 1000 });
+  let lastSid = '', key = '', regPath = '', matchSrc = '', matchPath = '';
+  for (const line of (r.stdout || '').split(/\r?\n/)) {
+    const t = line.trim();
+    if (t.startsWith('SID=')) lastSid = t.slice(4);
+    else if (t.startsWith('KEY=')) key = t.slice(4);
+    else if (t.startsWith('REG=')) regPath = t.slice(4);
+    else if (t.startsWith('MATCH=')) {
+      const pipe = t.indexOf('|', 6);
+      if (pipe > 0) { matchSrc = t.slice(6, pipe); matchPath = t.slice(pipe + 1); }
     }
-    if (sid) lastSid = sid;
-    if (key && !checkedKeys.includes(key)) checkedKeys.push(key);
-    if (regPath && !checkedPaths.includes(regPath)) checkedPaths.push(regPath);
-    if (!checkedPaths.includes(literal)) checkedPaths.push(literal);
-
-    if (matchPath) {
-      if (!checkedPaths.includes(matchPath)) checkedPaths.push(matchPath);
-      if (matchSrc === 'registry')         send(`  Resolved via registry: ${matchPath}`, 'out');
-      else if (matchSrc === 'folder')      send(`  Resolved via folder scan: ${matchPath}`, 'out');
-      else                                 send(`  WARNING: Windows created suffixed profile '${matchPath}'.`, 'out');
-      return { path: matchPath, source: matchSrc, checkedPaths, checkedKeys, sid: lastSid };
-    }
-    await sleep(1000);
   }
+  if (key) checkedKeys.push(key);
+  if (regPath) checkedPaths.push(regPath);
+  checkedPaths.push(literal);
 
+  if (matchPath) {
+    if (!checkedPaths.includes(matchPath)) checkedPaths.push(matchPath);
+    if (matchSrc === 'registry')         send(`  Resolved via registry: ${matchPath}`, 'out');
+    else if (matchSrc === 'folder')      send(`  Resolved via folder scan: ${matchPath}`, 'out');
+    else                                 send(`  WARNING: Windows created suffixed profile '${matchPath}'.`, 'out');
+    return { path: matchPath, source: matchSrc, checkedPaths, checkedKeys, sid: lastSid };
+  }
   return { path: null, source: 'not_found', checkedPaths, checkedKeys, sid: lastSid };
 }
 
@@ -890,10 +905,41 @@ async function runFixFlow(event) {
       message: `Session logoff issues: ${realNotes.join(', ')}`
     });
   }
-  await sleep(3000);
-  await runProcess('taskkill.exe',
-    ['/F', '/FI', `USERNAME eq ${FIX_USER}`], noop);
-  await sleep(2000);
+  // Poll until no user1-owned processes remain, killing stragglers each tick.
+  // Replaces the old fixed sleep(3s) + second taskkill + sleep(2s): positive
+  // confirmation instead of hoping 5s was enough, and the common case
+  // (nothing was running) clears in well under a second.
+  const drain = await runPSCapture(`
+    $u = '${FIX_USER}'
+    $deadline = [DateTime]::UtcNow.AddSeconds(6)
+    $clear = $false
+    do {
+      $procs = @()
+      try {
+        # -IncludeUserName THROWS (terminating) without elevation; the fix
+        # flow is elevation-gated so this is the hot path, but fall back to
+        # the slower CIM GetOwner walk rather than silently reporting clear.
+        $procs = @(Get-Process -IncludeUserName -EA Stop |
+          Where-Object { $_.UserName -and (($_.UserName -split '\\\\')[-1] -ieq $u) } |
+          ForEach-Object { $_.Id })
+      } catch {
+        $procs = @(Get-CimInstance Win32_Process -EA SilentlyContinue |
+          Where-Object {
+            $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner -EA SilentlyContinue
+            $o -and ($o.User -ieq $u)
+          } |
+          ForEach-Object { $_.ProcessId })
+      }
+      if ($procs.Count -eq 0) { $clear = $true; break }
+      $procs | ForEach-Object { Stop-Process -Id $_ -Force -EA SilentlyContinue }
+      Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($clear) { Write-Output 'CLEAR' } else { Write-Output 'RESIDUAL' }
+  `, { timeoutMs: 20000 });
+  if ((drain.stdout || '').includes('RESIDUAL')) {
+    send(`  WARNING: some ${FIX_USER} processes survived repeated kills; continuing.`, 'err');
+    warnings.push({ code: 'kill_residual', message: `Some ${FIX_USER} processes were still alive after 6s of kill attempts.` });
+  }
 
   // ============================================================
   // STEP 2: Pre-clean any leftover suffixed profile folders
@@ -1122,24 +1168,26 @@ async function runFixFlow(event) {
   // launcher we have no other signal. Use Win32_Process via Get-CimInstance
   // + Invoke-CimMethod GetOwner (CimInstance has NO GetOwner method itself —
   // earlier code used $_.GetOwner() which always threw and forced a false
-  // negative). Poll up to ~9 s (Start-Process + CreateProcessWithLogonW can
-  // take a few seconds for the first launch on a brand-new profile).
-  let zoomSeen = false;
-  for (let i = 0; i < 12; i++) {
-    const r = await runPSCapture(`
+  // negative). Poll up to ~10s INSIDE one PS process — the old spawn-per-tick
+  // loop paid a powershell.exe startup for each of up to 12 checks, and the
+  // 400ms internal tick also spots Zoom sooner.
+  const zpoll = await runPSCapture(`
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    $hit = $false
+    do {
       try {
         $procs = Get-CimInstance Win32_Process -Filter "Name='Zoom.exe'" -EA SilentlyContinue
-        $hit = $false
         foreach ($p in $procs) {
           $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwner -EA SilentlyContinue
           if ($owner -and ($owner.User -ieq '${FIX_USER}')) { $hit = $true; break }
         }
-        if ($hit) { Write-Output 'YES' } else { Write-Output 'NO' }
-      } catch { Write-Output 'ERR' }
-    `);
-    if ((r.stdout || '').trim() === 'YES') { zoomSeen = true; break; }
-    await sleep(750);
-  }
+      } catch {}
+      if ($hit) { break }
+      Start-Sleep -Milliseconds 400
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($hit) { Write-Output 'YES' } else { Write-Output 'NO' }
+  `, { timeoutMs: 25000 });
+  const zoomSeen = (zpoll.stdout || '').includes('YES');
   if (!zoomSeen) {
     send(`ERROR: Zoom.exe is not running as '${FIX_USER}' after launch.`, 'err');
     send('  Likely causes: Secondary Logon disabled, password policy mismatch, or Zoom crashed on startup.', 'err');
@@ -1235,10 +1283,10 @@ async function runFixFlow(event) {
         send('    WARNING: shortcut creation failed.', 'err');
         warnings.push({ code: 'shortcut_failed', message: 'Could not create Apply Zoom Settings shortcut on user1 desktop.' });
       }
-      await runProcess('icacls.exe',
-        [firstRunDst, '/grant', `${FIX_USER}:(R)`, '/C'], noop);
-      await runProcess('icacls.exe',
-        [shortcutPath, '/grant', `${FIX_USER}:(RX)`, '/C'], noop);
+      await Promise.all([
+        runProcess('icacls.exe', [firstRunDst, '/grant', `${FIX_USER}:(R)`, '/C'], noop),
+        runProcess('icacls.exe', [shortcutPath, '/grant', `${FIX_USER}:(RX)`, '/C'], noop)
+      ]);
     } catch (err) {
       send(`    WARNING: firstrun deploy failed: ${err.message}`, 'err');
       warnings.push({ code: 'firstrun_deploy_failed', message: err.message });
@@ -1290,7 +1338,7 @@ async function runFixFlow(event) {
         frameserver_restored: false, frameserver_disabled: false, frameserver_missing: false
       };
       const consent = await runProcess('powershell.exe',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', consentScript,
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', consentScript,
          '-Sid', userSID, '-User', FIX_USER, '-ProfilePath', newUserProfile],
         (line, kind) => {
           send(`    ${line}`, kind);
@@ -1400,25 +1448,30 @@ async function runFixFlow(event) {
   }
 
   send('  Force-closing Zoom (full process tree)...', 'out');
-  const zoomProcs = [
-    'Zoom.exe', 'CptHost.exe', 'CptControl.exe', 'ZoomWebhook.exe',
-    'Zoom_launcher.exe', 'ZoomTeamChat.exe', 'airhost.exe'
-  ];
-  for (const proc of zoomProcs) {
-    await runProcess('taskkill.exe',
-      ['/F', '/IM', proc, '/FI', `USERNAME eq ${FIX_USER}`], noop);
-  }
-  await runPSScript(`
-    Get-CimInstance Win32_Process |
-      Where-Object {
-        if (-not $_.ExecutablePath) { return $false }
-        if ($_.ExecutablePath -notlike '*\\Zoom\\*') { return $false }
-        $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner -EA SilentlyContinue
-        return ($o -and ($o.User -ieq '${FIX_USER}'))
-      } |
-      ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
-  `, noop);
-  await sleep(4000);
+  // One PS pass replaces 7 serial taskkill spawns + a CIM sweep + a fixed
+  // sleep(4s). Kill by image name OR install path, then poll until the whole
+  // tree is confirmed gone — positive exit confirmation means file handles
+  // (Zoom.us.ini) are released, typically within ~1s instead of always 4s.
+  await runPSCapture(`
+    $u = '${FIX_USER}'
+    $names = @('Zoom.exe','CptHost.exe','CptControl.exe','ZoomWebhook.exe',
+               'Zoom_launcher.exe','ZoomTeamChat.exe','airhost.exe')
+    $deadline = [DateTime]::UtcNow.AddSeconds(8)
+    do {
+      $targets = @(Get-CimInstance Win32_Process -EA SilentlyContinue |
+        Where-Object {
+          ($names -contains $_.Name) -or
+          ($_.ExecutablePath -and $_.ExecutablePath -like '*\\Zoom\\*')
+        } |
+        Where-Object {
+          $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner -EA SilentlyContinue
+          $o -and ($o.User -ieq $u)
+        })
+      if ($targets.Count -eq 0) { break }
+      $targets | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
+      Start-Sleep -Milliseconds 300
+    } while ([DateTime]::UtcNow -lt $deadline)
+  `, { timeoutMs: 30000 });
   send('  Zoom closed.', 'out');
 
   if (fs.existsSync(zoomIni)) {
@@ -1470,10 +1523,10 @@ async function runFixFlow(event) {
     send(`  NOTE: ${srcZoomDir} not found. Skipping prefs copy.`, 'out');
   }
 
-  await sleep(2000);
-
   // ============================================================
   // STEP 8: Relaunch Zoom so the new prefs take effect.
+  // (No settle delay needed: prefs copy + icacls above are awaited and the
+  // Zoom tree was confirmed exited before the ini write.)
   // ============================================================
   send(`[8/8] Relaunching Zoom as '${FIX_USER}'...`, 'header');
   const relaunch = await runPSScriptDetachedIO(launchPs);
@@ -1512,15 +1565,20 @@ const SHORTCUT_FILENAME = `Launch Zoom as ${FIX_USER}.lnk`;
 const LAUNCHER_SCRIPT_NAME = `launch-zoom-as-${FIX_USER}.ps1`;
 const LAUNCHER_SCRIPT_PATH = () => path.join(app.getPath('appData'), '1132 Fixer', LAUNCHER_SCRIPT_NAME);
 
+// Cached: the canonical Desktop path cannot change mid-session, and this
+// used to cost a powershell.exe spawn on every shortcut check.
+let _canonicalDesktop = null;
 async function getCanonicalUserDesktop() {
+  if (_canonicalDesktop) return _canonicalDesktop;
   // Ask Windows directly; this resolves to the OneDrive-redirected path when
   // that redirection is active on the current account.
   try {
     const r = await runPSCapture(`[Environment]::GetFolderPath('Desktop')`);
     const p = (r.stdout || '').trim();
-    if (p) return p;
+    if (p) { _canonicalDesktop = p; return p; }
   } catch (_) { /* fall through */ }
-  return path.join(os.homedir(), 'Desktop');
+  _canonicalDesktop = path.join(os.homedir(), 'Desktop');
+  return _canonicalDesktop;
 }
 
 async function listDesktopLocations() {
@@ -1543,21 +1601,31 @@ async function listDesktopLocations() {
   return out;
 }
 
-async function inspectShortcut(lnkPath) {
+// Inspect MANY .lnk files in one PowerShell round trip (one WScript.Shell
+// COM instance, one spawn) instead of a spawn per shortcut. Returns a map
+// of lnkPath -> { target, arguments }; paths that failed inspection are absent.
+async function inspectShortcuts(lnkPaths) {
+  if (!lnkPaths.length) return {};
   const esc = s => String(s).replace(/'/g, "''");
+  const list = lnkPaths.map(p => `'${esc(p)}'`).join(',');
   try {
     const r = await runPSCapture(`
-      try {
-        $s = New-Object -ComObject WScript.Shell
-        $sc = $s.CreateShortcut('${esc(lnkPath)}')
-        @{ target = [string]$sc.TargetPath; arguments = [string]$sc.Arguments } | ConvertTo-Json -Compress
-      } catch { Write-Output '' }
+      $s = New-Object -ComObject WScript.Shell
+      $out = @{}
+      foreach ($p in @(${list})) {
+        try {
+          $sc = $s.CreateShortcut($p)
+          $out[$p] = @{ target = [string]$sc.TargetPath; arguments = [string]$sc.Arguments }
+        } catch {}
+      }
+      $out | ConvertTo-Json -Compress -Depth 3
     `);
     const out = (r.stdout || '').trim();
-    if (!out) return null;
-    return JSON.parse(out);
+    if (!out) return {};
+    const parsed = JSON.parse(out);
+    return (parsed && typeof parsed === 'object') ? parsed : {};
   } catch (_) {
-    return null;
+    return {};
   }
 }
 
@@ -1575,21 +1643,22 @@ function shortcutMatchesCurrentApp(info, expectedScript) {
 async function findExistingShortcuts() {
   const expectedScript = LAUNCHER_SCRIPT_PATH();
   const locations = await listDesktopLocations();
-  const found = [];
-  for (const loc of locations) {
-    const lnk = path.join(loc.path, SHORTCUT_FILENAME);
-    if (!fs.existsSync(lnk)) continue;
-    const info = await inspectShortcut(lnk);
-    found.push({
+  const present = locations
+    .map(loc => ({ kind: loc.kind, lnk: path.join(loc.path, SHORTCUT_FILENAME) }))
+    .filter(loc => fs.existsSync(loc.lnk));
+  if (!present.length) return [];
+  const infoMap = await inspectShortcuts(present.map(l => l.lnk));
+  return present.map(loc => {
+    const info = infoMap[loc.lnk] || null;
+    return {
       kind: loc.kind,
-      path: lnk,
+      path: loc.lnk,
       // null = inspection failed; treat conservatively as "unknown but present".
       valid: info ? shortcutMatchesCurrentApp(info, expectedScript) : null,
       target: info ? info.target : null,
       arguments: info ? info.arguments : null
-    });
-  }
-  return found;
+    };
+  });
 }
 
 // ============================================================
@@ -1627,7 +1696,7 @@ ipcMain.handle('create-shortcut', async () => {
 
   return new Promise((resolve) => {
     const child = spawn('powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps],
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps],
       { windowsHide: true }
     );
     let stderr = '';
@@ -1754,35 +1823,11 @@ ipcMain.handle('submit-feedback', async (event, type, text) => {
 //   'blocked'    = red, manual action required first
 // ============================================================
 ipcMain.handle('preflight-scan', async () => {
-  const pre = await preflightCheck();
-  const cards = {};
-
-  // --- Admin --------------------------------------------------
-  cards.admin = pre.info.elevated
-    ? { status: 'ready', label: 'Administrator', message: 'Running elevated.' }
-    : { status: 'blocked', label: 'Administrator', message: 'Not elevated. Close and re-launch with Run as administrator.' };
-
-  // --- Zoom ---------------------------------------------------
-  cards.zoom = fs.existsSync(ZOOM_PATH)
-    ? { status: 'ready', label: 'Zoom Workplace', message: ZOOM_PATH }
-    : { status: 'blocked', label: 'Zoom Workplace', message: `Not found at ${ZOOM_PATH}. Install the machine-wide MSI.` };
-
-  // --- Helper user (user1) ------------------------------------
-  const helperExists = await userExists(FIX_USER);
-  const helperProfileDir = `C:\\Users\\${FIX_USER}`;
-  const helperProfileExists = fs.existsSync(helperProfileDir);
-  if (!helperExists && !helperProfileExists) {
-    cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' will be created on FIX NOW.` };
-  } else if (helperExists && helperProfileExists) {
-    cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' exists with profile. FIX NOW will rebuild it.` };
-  } else if (helperExists) {
-    cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' account exists but no profile yet. FIX NOW will reset.` };
-  } else {
-    cards.helperUser = { status: 'warning', label: 'Helper account', message: `Stale profile folder at ${helperProfileDir} with no account. FIX NOW will clean it up.` };
-  }
-
-  // --- Cam / Mic policy + FrameServer + HKU (single PS round trip)
-  const probe = await runPSCapture(`
+  // All three probes (base preflight, user1 existence, policy/FrameServer/HKU)
+  // are independent and read-only — run them concurrently. This scan gates
+  // the FIX NOW button on every launch and window-focus, so serial spawns
+  // here were pure startup latency.
+  const probePromise = runPSCapture(`
     $out = @{}
     function GetPolicy([string]$name) {
       try {
@@ -1813,6 +1858,36 @@ ipcMain.handle('preflight-scan', async () => {
     }
     $out | ConvertTo-Json -Compress
   `, { timeoutMs: 20000 });
+
+  const [pre, helperExists, probe] = await Promise.all([
+    preflightCheck(),
+    userExists(FIX_USER),
+    probePromise
+  ]);
+  const cards = {};
+
+  // --- Admin --------------------------------------------------
+  cards.admin = pre.info.elevated
+    ? { status: 'ready', label: 'Administrator', message: 'Running elevated.' }
+    : { status: 'blocked', label: 'Administrator', message: 'Not elevated. Close and re-launch with Run as administrator.' };
+
+  // --- Zoom ---------------------------------------------------
+  cards.zoom = fs.existsSync(ZOOM_PATH)
+    ? { status: 'ready', label: 'Zoom Workplace', message: ZOOM_PATH }
+    : { status: 'blocked', label: 'Zoom Workplace', message: `Not found at ${ZOOM_PATH}. Install the machine-wide MSI.` };
+
+  // --- Helper user (user1) ------------------------------------
+  const helperProfileDir = `C:\\Users\\${FIX_USER}`;
+  const helperProfileExists = fs.existsSync(helperProfileDir);
+  if (!helperExists && !helperProfileExists) {
+    cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' will be created on FIX NOW.` };
+  } else if (helperExists && helperProfileExists) {
+    cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' exists with profile. FIX NOW will rebuild it.` };
+  } else if (helperExists) {
+    cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' account exists but no profile yet. FIX NOW will reset.` };
+  } else {
+    cards.helperUser = { status: 'warning', label: 'Helper account', message: `Stale profile folder at ${helperProfileDir} with no account. FIX NOW will clean it up.` };
+  }
 
   let probeData = {};
   let probeFailed = false;
