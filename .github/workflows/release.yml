@@ -48,10 +48,10 @@ jobs:
           echo "Tag format valid: $TAG"
 
       - name: Checkout code
-        uses: actions/checkout@v4.1.1
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4.0.2
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -145,7 +145,7 @@ jobs:
           Get-ChildItem -Path dist | Format-Table Name, Length, LastWriteTime
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2.0.8
+        uses: softprops/action-gh-release@v3.0.2
         with:
           name: 1132 Fixer v${{ steps.version.outputs.VERSION }}
           tag_name: v${{ steps.version.outputs.VERSION }}
@@ -194,7 +194,7 @@ jobs:
       # storage is a separate, quota-limited bucket, so a quota exhaustion here
       # must never fail a release that has already shipped successfully.
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4.3.1
+        uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
           name: release-v${{ steps.version.outputs.VERSION }}
