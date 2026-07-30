@@ -145,7 +145,7 @@ jobs:
           Get-ChildItem -Path dist | Format-Table Name, Length, LastWriteTime
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2.0.8
+        uses: softprops/action-gh-release@v3.0.2
         with:
           name: 1132 Fixer v${{ steps.version.outputs.VERSION }}
           tag_name: v${{ steps.version.outputs.VERSION }}
