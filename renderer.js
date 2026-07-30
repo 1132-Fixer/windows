@@ -43,6 +43,10 @@ function showView(name) {
 function setStatus(className, text) {
   const badge = document.getElementById('statusBadge');
   badge.className = 'status-badge' + (className ? ' ' + className : '');
+  document.getElementById('statusBadgeIcon').textContent =
+    className === 'error' ? '⨯' :
+    className === 'warn' ? '!' :
+    className === 'scanning' ? '↻' : '✓';
   document.getElementById('statusBadgeText').textContent = text;
 }
 
@@ -177,18 +181,18 @@ logToggle.addEventListener('click', () => {
 // Inline strings so the renderer ships nothing extra.
 // ============================================================
 const STATUS_BADGE = {
-  ready:      'READY',
-  repairable: 'REPAIRABLE',
-  warning:    'WARNING',
-  blocked:    'BLOCKED',
-  pending:    'CHECKING'
+  ready:      'Ready',
+  repairable: 'Repairable',
+  warning:    'Warning',
+  blocked:    'Blocked',
+  pending:    'Checking'
 };
 
-function svgCheck(klass)  { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`; }
-function svgWrench(klass) { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#f5a623" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-7-7 8-8 .7 1.3z"/><line x1="9" y1="15" x2="4.5" y2="19.5"/></svg>`; }
-function svgWarn(klass)   { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#f5c518" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>`; }
-function svgBlock(klass)  { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`; }
-function svgDot(klass)    { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="#6080a0" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/></svg>`; }
+function svgCheck(klass)  { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`; }
+function svgWrench(klass) { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-7-7 8-8 .7 1.3z"/><line x1="9" y1="15" x2="4.5" y2="19.5"/></svg>`; }
+function svgWarn(klass)   { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>`; }
+function svgBlock(klass)  { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`; }
+function svgDot(klass)    { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/></svg>`; }
 
 function iconForStatus(status, klass) {
   switch (status) {
@@ -341,10 +345,10 @@ function receiptCardHtml(label, value, status, iconSvg) {
 
 function iconForReceipt(s) {
   switch (s) {
-    case 'ok':   return `<svg class="receipt-icon" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`;
-    case 'warn': return `<svg class="receipt-icon" viewBox="0 0 24 24" fill="none" stroke="#f5c518" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>`;
-    case 'fail': return `<svg class="receipt-icon" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
-    default:     return `<svg class="receipt-icon" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16" x2="12" y2="16"/></svg>`;
+    case 'ok':   return `<svg class="receipt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`;
+    case 'warn': return `<svg class="receipt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>`;
+    case 'fail': return `<svg class="receipt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
+    default:     return `<svg class="receipt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16" x2="12" y2="16"/></svg>`;
   }
 }
 
@@ -432,7 +436,7 @@ function cancelFixCountdown() {
   if (fixCountdownTimer) {
     clearInterval(fixCountdownTimer);
     fixCountdownTimer = null;
-    fixBtn.textContent = 'FIX NOW';
+    fixBtn.textContent = 'Fix now';
     fixBtn.classList.remove('counting');
   }
 }
@@ -440,14 +444,14 @@ function cancelFixCountdown() {
 function startFixCountdown() {
   let remaining = FIX_COUNTDOWN_SECONDS;
   fixBtn.classList.add('counting');
-  fixBtn.textContent = `STARTING IN ${remaining}… CLICK TO CANCEL`;
+  fixBtn.textContent = `Starting in ${remaining}… Click to cancel`;
   fixCountdownTimer = setInterval(() => {
     remaining -= 1;
     if (remaining <= 0) {
       cancelFixCountdown();
       runFix();
     } else {
-      fixBtn.textContent = `STARTING IN ${remaining}… CLICK TO CANCEL`;
+      fixBtn.textContent = `Starting in ${remaining}… Click to cancel`;
     }
   }, 1000);
 }
@@ -470,7 +474,7 @@ async function runFix() {
 
   isRunning = true;
   fixBtn.disabled = true;
-  fixBtn.textContent = 'FIXING…';
+  fixBtn.textContent = 'Fixing…';
   shortcutBtn.disabled = true;
   setStatus('scanning', 'Running');
 
@@ -546,7 +550,7 @@ async function runFix() {
     // Always release the run lock and re-enable controls — even on a throw.
     isRunning = false;
     fixBtn.disabled = false;
-    fixBtn.textContent = 'FIX AGAIN';
+    fixBtn.textContent = 'Run again';
     shortcutBtn.disabled = false;
   }
 }
