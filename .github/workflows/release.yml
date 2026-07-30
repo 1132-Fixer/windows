@@ -48,7 +48,7 @@ jobs:
           echo "Tag format valid: $TAG"
 
       - name: Checkout code
-        uses: actions/checkout@v4.1.1
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v4.0.2
