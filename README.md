@@ -12,7 +12,6 @@
 <p align="center">
   <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-3A82F7?logo=windows11&amp;logoColor=white">
   <img alt="Setup and Portable" src="https://img.shields.io/badge/Builds-Setup%20%2B%20Portable-39D353">
-  <img alt="MIT license" src="https://img.shields.io/badge/License-MIT-8FC2FF">
   <a href="https://github.com/PrimeUpYourLife/1132-Fixer-Windows/actions/workflows/ci.yml"><img alt="Build status" src="https://github.com/PrimeUpYourLife/1132-Fixer-Windows/actions/workflows/ci.yml/badge.svg"></a>
 </p>
 
@@ -28,16 +27,16 @@
 
 Error 1132 can stay after Zoom is reinstalled. It may be tied to a Windows user profile.
 
-1132 Fixer uses a separate helper account named `user1`. It then opens Zoom under that account.
+1132 Fixer resets a separate helper account named `user1`. It then opens Zoom under that account.
 
 When you press **Fix now**, the app:
 
 1. Checks Windows, admin access, and the Zoom install.
-2. Creates or resets the local `user1` helper account.
-3. Opens Zoom Workplace as `user1`.
-4. Shows a clear result when the work is done.
-
-On later runs, the app keeps the `user1` profile. This lets the Zoom sign-in stay in place.
+2. Stops active `user1` sessions and removes the old helper profile.
+3. Recreates `user1` and applies safe session settings.
+4. Opens and checks Zoom Workplace as `user1`.
+5. Creates or repairs the desktop shortcut.
+6. Shows a clear result when the work is done.
 
 ## Main features
 
@@ -46,7 +45,7 @@ On later runs, the app keeps the `user1` profile. This lets the Zoom sign-in sta
 | ✅ Automatic checks | Finds blockers before the fix starts. |
 | 🖱️ One-click flow | Runs the full fix from one main button. |
 | 🧾 Fix receipt | Shows what worked and what needs attention. |
-| 🔗 Desktop shortcut | Opens Zoom as `user1` without reopening the fixer. |
+| 🔗 Desktop shortcut | Creates or repairs a shortcut that opens Zoom as `user1`. |
 | 🎥 Camera and microphone setup | Applies safe Windows desktop-app consent settings. |
 | 📋 Support report | Builds a redacted report you can review before sharing. |
 | 💬 Feedback & Report | Opens bug, rating, and general feedback choices. |
@@ -55,6 +54,9 @@ On later runs, the app keeps the `user1` profile. This lets the Zoom sign-in sta
 
 ## Important safety note
 
+> [!IMPORTANT]
+> 1132 Fixer deletes and recreates the local `user1` helper account. Anything stored in that helper profile is removed. It does not delete files or Zoom data from your normal Windows profile. Do not run it while signed in to Windows as `user1`.
+
 The app manages this local account:
 
 ```text
@@ -62,15 +64,15 @@ Username: user1
 Password: user1
 ```
 
+- `user1` is added to the local Administrators group.
 - Do not use `user1` as your normal Windows account.
-- Do not run the fixer while signed in to Windows as `user1`.
 - The app may ask for Windows admin approval.
-- Your normal files, chats, contacts, and Zoom account data stay unchanged.
 
 ## Requirements
 
-- Windows 10 or Windows 11
+- Windows 10 or Windows 11, x64
 - Administrator access
+- The Windows **Secondary Logon** service must be available
 - Zoom Workplace installed at:
 
   ```text
@@ -94,7 +96,7 @@ Password: user1
 - Support reports hide common private values such as usernames, profile paths, and SIDs.
 - Read the report before you attach it.
 
-The current feedback service sends accepted items to a private project issue tracker. A new Discord staff view, verified live rating, and **My Messages** inbox are being built. They are not live in the current app yet.
+The current feedback service sends accepted items to a private project issue tracker. A new Discord staff view, verified live rating, and **My Messages** inbox are being built. They are not part of v5.5.1.
 
 ## Quick help
 
@@ -167,7 +169,3 @@ The old `1132-Fixer-Windows-Releases` repo must stay online until existing app u
 ## Independent project
 
 1132 Fixer is not made by or linked to Zoom Video Communications, Inc.
-
-## License
-
-[MIT](LICENSE)
