@@ -1888,7 +1888,7 @@ ipcMain.handle('submit-feedback', async (event, type, text) => {
           if (res.statusCode === 400) {
             let code = '';
             try { code = JSON.parse(data).error || ''; } catch (_) { /* generic below */ }
-            if (code === 'bad_type') return resolve({ success: false, error: 'This app version sends a message type the service does not accept — please update the app.' });
+            if (code === 'bad_type') return resolve({ success: false, error: 'The support service can\'t accept this message type yet — please try again later.' });
             if (code === 'empty_text') return resolve({ success: false, error: 'Message is empty — write something first.' });
             return resolve({ success: false, error: 'Submission rejected — check the message and try again.' });
           }
