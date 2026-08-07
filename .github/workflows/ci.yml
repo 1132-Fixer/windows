@@ -30,6 +30,9 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Run feedback-proxy tests
+        run: node feedback-proxy/test.js
+
       - name: Build portable executable
         run: npm run build
 

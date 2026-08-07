@@ -12,6 +12,8 @@
 
 const { spawn } = require('child_process');
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 
 const FAKE_TOKEN = 'github_pat_FAKE_TOKEN_FOR_TESTS_ONLY';
 const PORT = 39117;
@@ -34,11 +36,15 @@ process.env.GH_ISSUES_REPO = 'PrimeUpYourLife/1132-Fixer-Windows';
 // Loading server.js starts it listening.
 require('./server.js');
 
-function req(method, path, body) {
+function req(method, path, body, extraHeaders) {
   return new Promise((resolve, reject) => {
     const data = body === undefined ? null : (typeof body === 'string' ? body : JSON.stringify(body));
+    const headers = Object.assign(
+      data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {},
+      extraHeaders || {}
+    );
     const r = http.request(
-      { host: '127.0.0.1', port: PORT, path, method, headers: data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {} },
+      { host: '127.0.0.1', port: PORT, path, method, headers },
       (res) => {
         let s = '';
         res.on('data', (c) => (s += c));
@@ -85,6 +91,22 @@ check('server builds the label; client cannot choose it', async () => {
   const last = captured[captured.length - 1];
   const sent = JSON.parse(last.opts.body);
   return Array.isArray(sent.labels) && sent.labels.length === 1 && sent.labels[0] === 'bug-report';
+});
+
+check('renderer contract: every type the app actually sends is accepted', async () => {
+  // Read the types straight out of renderer.js so client/server drift fails
+  // this test instead of shipping (the 'Contact' regression class). Each probe
+  // uses its own x-forwarded-for so the shared-IP rate budget is untouched.
+  const rendererSrc = fs.readFileSync(path.join(__dirname, '..', 'renderer.js'), 'utf8');
+  const types = [...new Set([...rendererSrc.matchAll(/submitFeedback\(\s*'([^']+)'/g)].map((m) => m[1]))];
+  if (!types.length) { console.log('   regex found no submitFeedback types — fix the test'); return false; }
+  for (let i = 0; i < types.length; i++) {
+    const r = await req('POST', '/feedback', { type: types[i], text: 'contract probe for ' + types[i] }, { 'x-forwarded-for': '10.99.0.' + (i + 1) });
+    if (r.status !== 201) { console.log(`   type '${types[i]}' -> ${r.status} ${r.body}`); return false; }
+    const sent = JSON.parse(captured[captured.length - 1].opts.body);
+    if (!Array.isArray(sent.labels) || sent.labels.length !== 1 || !sent.labels[0]) return false;
+  }
+  return true;
 });
 
 check('bogus type rejected (400)', async () => {

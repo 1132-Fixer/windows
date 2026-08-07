@@ -54,6 +54,7 @@ const TYPE_LABELS = new Map([
   ['Feature Request', 'feature-request'],
   ['User Rating', 'user-rating'],
   ['Feedback', 'feedback'],
+  ['Contact', 'contact'],
 ]);
 
 // --- Rate limiting (in-memory; adequate for a single instance) -------
