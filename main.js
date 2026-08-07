@@ -1648,11 +1648,22 @@ async function runFixFlow(event) {
 //   - The classic per-user Desktop (C:\Users\<name>\Desktop)
 //   - OneDrive-redirected Desktop (C:\Users\<name>\OneDrive\Desktop)
 //   - Public Desktop (C:\Users\Public\Desktop, visible to every account)
-// We scan all three for an existing "Launch Zoom as user1.lnk" so we don't
-// stack duplicates, and for creation we prefer the OS-canonical user Desktop
-// (which honors OneDrive redirection).
+// We scan all three for an existing "Open Zoom with 1132 Helper.lnk" so we
+// don't stack duplicates, and for creation we prefer the OS-canonical user
+// Desktop (which honors OneDrive redirection).
+//
+// The shortcut was renamed in the 2026-08-07 branding correction. Installs
+// made before that carry the old filename, which the scan would no longer
+// recognize — so the app would create the new shortcut and leave the old one
+// sitting beside it. LEGACY_SHORTCUT_FILENAMES is an EXPLICIT allowlist of
+// exact previous names, used for recognition and for cleanup after a
+// successful create. Exact names only: never a glob, never a prefix match, so
+// a user's own shortcuts are never touched.
 // ============================================================
-const SHORTCUT_FILENAME = `Launch Zoom as ${FIX_USER}.lnk`;
+const SHORTCUT_FILENAME = 'Open Zoom with 1132 Helper.lnk';
+const LEGACY_SHORTCUT_FILENAMES = [
+  `Launch Zoom as ${FIX_USER}.lnk`,
+];
 const LAUNCHER_SCRIPT_NAME = `launch-zoom-as-${FIX_USER}.ps1`;
 const LAUNCHER_SCRIPT_PATH = () => path.join(app.getPath('appData'), '1132 Fixer', LAUNCHER_SCRIPT_NAME);
 
@@ -1731,6 +1742,43 @@ function shortcutMatchesCurrentApp(info, expectedScript) {
   return targetOk && argsOk;
 }
 
+/**
+ * Legacy shortcuts (exact previous filenames only) present in the app's own
+ * three desktop locations. Used to recognize pre-rename installs and to clean
+ * them up after the renamed shortcut is created successfully.
+ */
+async function findLegacyShortcuts() {
+  const locations = await listDesktopLocations();
+  const out = [];
+  for (const loc of locations) {
+    for (const name of LEGACY_SHORTCUT_FILENAMES) {
+      const lnk = path.join(loc.path, name);
+      if (fs.existsSync(lnk)) out.push({ kind: loc.kind, path: lnk, name });
+    }
+  }
+  return out;
+}
+
+/**
+ * Remove the exact legacy shortcuts. Never throws: a shortcut we cannot delete
+ * (permissions on Public Desktop, file in use) is reported, not fatal — the
+ * user still has a working renamed shortcut.
+ */
+async function removeLegacyShortcuts() {
+  const found = await findLegacyShortcuts();
+  const removed = [];
+  const failed = [];
+  for (const s of found) {
+    try {
+      fs.unlinkSync(s.path);
+      removed.push(s.path);
+    } catch (err) {
+      failed.push({ path: s.path, error: err.message });
+    }
+  }
+  return { removed, failed };
+}
+
 async function findExistingShortcuts() {
   const expectedScript = LAUNCHER_SCRIPT_PATH();
   const locations = await listDesktopLocations();
@@ -1781,7 +1829,7 @@ ipcMain.handle('create-shortcut', async () => {
     `$sc.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${escape(scriptPath)}"'`,
     `$sc.IconLocation = '${escape(iconPath)}'`,
     `$sc.WorkingDirectory = [Environment]::GetFolderPath('UserProfile')`,
-    `$sc.Description = 'Launch Zoom as ${FIX_USER}'`,
+    `$sc.Description = 'Starts Zoom using the dedicated helper account created by 1132 Fixer.'`,
     "$sc.Save()"
   ].join('; ');
 
@@ -1793,9 +1841,20 @@ ipcMain.handle('create-shortcut', async () => {
     let stderr = '';
     child.stderr.on('data', d => { stderr += d.toString(); });
     child.on('error', err => resolve({ success: false, error: err.message }));
-    child.on('close', code => {
-      if (code === 0) resolve({ success: true, path: shortcutPath });
-      else resolve({ success: false, error: stderr.trim() || `Exit ${code}` });
+    child.on('close', async code => {
+      if (code !== 0) {
+        return resolve({ success: false, error: stderr.trim() || `Exit ${code}` });
+      }
+      // Only after the renamed shortcut exists do we clear the old one, so a
+      // failed create never leaves the user with no shortcut at all. Cleanup
+      // failure is reported, never fatal.
+      const cleanup = await removeLegacyShortcuts();
+      resolve({
+        success: true,
+        path: shortcutPath,
+        legacyRemoved: cleanup.removed,
+        legacyRemovalFailed: cleanup.failed
+      });
     });
   });
 });
