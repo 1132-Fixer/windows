@@ -837,15 +837,16 @@ document.querySelectorAll('.fb-rating-btns').forEach(group => {
 
 document.getElementById('fbViewReport').addEventListener('click', openSupportReport);
 
-// Consolidated message/support-request flow: pull the sanitized report into
-// the message body so one submission carries both. attachGen invalidates an
-// in-flight build when the modal is closed/reopened (openFeedback bumps it),
-// so a stale IPC completion can't write into a fresh form.
-const MAX_FEEDBACK_CHARS = 4000; // proxy MAX_TEXT_CHARS — keep in sync with feedback-proxy/server.js
+// Bug-report attach flow: pull the sanitized report into the bug description
+// so one submission carries both. attachGen invalidates an in-flight build
+// when the modal is closed/reopened (openFeedback bumps it), so a stale IPC
+// completion can't write into a fresh form. Budget leaves headroom under the
+// proxy's 4,000-char MAX_TEXT_CHARS for the auto-appended system-info block.
+const MAX_ATTACH_CHARS = 3700;
 let attachGen = 0;
 document.getElementById('fbAttachReport').addEventListener('click', async () => {
   const btn = document.getElementById('fbAttachReport');
-  const status = document.getElementById('fbContactStatus');
+  const status = document.getElementById('fbBugStatus');
   status.textContent = '';
   btn.disabled = true;
   btn.textContent = 'Attaching…';
@@ -859,12 +860,12 @@ document.getElementById('fbAttachReport').addEventListener('click', async () => 
     if (gen !== attachGen) return;
     const md = result && result.markdown;
     if (!md) throw new Error('report unavailable');
-    const ta = document.getElementById('fbContactText');
+    const ta = document.getElementById('fbBugText');
     const userText = ta.value.trim();
     let combined = userText ? userText + '\n\n---\n' + md : md;
-    if (combined.length > MAX_FEEDBACK_CHARS) {
+    if (combined.length > MAX_ATTACH_CHARS) {
       const marker = '\n…[report trimmed to fit the 4,000-character limit]';
-      combined = combined.slice(0, MAX_FEEDBACK_CHARS - marker.length) + marker;
+      combined = combined.slice(0, MAX_ATTACH_CHARS - marker.length) + marker;
       status.textContent = 'The report was trimmed to fit the 4,000-character limit.';
     }
     ta.value = combined;

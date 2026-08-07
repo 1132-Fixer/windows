@@ -875,7 +875,7 @@
     <div class="footer-content">
       <span class="badge version-badge" id="appVersion">v5.3</span>
       <div class="footer-meta">
-        <button class="badge feedback-badge" id="btnSupport" aria-label="Submit feedback or a support report">Submit Feedback / Report</button>
+        <button class="badge feedback-badge" id="btnSupport" aria-label="Submit feedback or a support report">Feedback &amp; Report</button>
         <button class="badge site-badge" id="btnVisitSite" aria-label="Open the 1132 Fixer website">Visit Website</button>
         <span class="badge admin-badge" id="adminBadge" role="status">Administrator</span>
       </div>
@@ -892,7 +892,7 @@
         <div class="fb-choices">
           <div class="fb-choice" data-mode="bug" tabindex="0" role="button">Bug Report</div>
           <div class="fb-choice" data-mode="rating" tabindex="0" role="button">Rate Your Experience</div>
-          <div class="fb-choice" data-mode="contact" tabindex="0" role="button">Send a Message / Support Request</div>
+          <div class="fb-choice" data-mode="contact" tabindex="0" role="button">Share Other Feedback</div>
         </div>
         <div class="fb-actions">
           <button class="fb-btn fb-btn-cancel" id="fbClose">Cancel</button>
@@ -902,11 +902,12 @@
       <div class="fb-section" id="fbBug">
         <button class="fb-btn-back" id="fbBugBack">Back</button>
         <div class="fb-title">Bug Report</div>
-        <div class="fb-label">Describe the issue (min 50 characters)</div>
+        <div class="fb-label">Describe the issue (min 50 characters, or attach a support report) &middot; <button type="button" class="fb-inline-link" id="fbViewReport">preview support report</button></div>
         <textarea class="fb-textarea" id="fbBugText" placeholder="What happened? What did you expect?" aria-label="Bug description"></textarea>
         <div class="fb-label">System Info (auto-attached)</div>
         <div class="fb-sysinfo" id="fbSysInfo">Loading...</div>
         <div class="fb-actions">
+          <button class="fb-btn fb-btn-cancel" id="fbAttachReport" aria-label="Attach sanitized support report to this bug report">Attach Support Report</button>
           <button class="fb-btn fb-btn-cancel" id="fbBugCancel">Cancel</button>
           <button class="fb-btn fb-btn-submit" id="fbBugSubmit" disabled>Submit</button>
         </div>
@@ -967,11 +968,10 @@
 
       <div class="fb-section" id="fbContact">
         <button class="fb-btn-back" id="fbContactBack">Back</button>
-        <div class="fb-title">Send a Message / Support Request</div>
-        <div class="fb-label">Your message (min 50 characters, or attach a support report) &middot; <button type="button" class="fb-inline-link" id="fbViewReport">preview support report</button></div>
+        <div class="fb-title">Share Other Feedback</div>
+        <div class="fb-label">Your message (min 50 characters)</div>
         <textarea class="fb-textarea" id="fbContactText" placeholder="What would you like to tell us?" aria-label="Message"></textarea>
         <div class="fb-actions">
-          <button class="fb-btn fb-btn-cancel" id="fbAttachReport" aria-label="Attach sanitized support report to this message">Attach Support Report</button>
           <button class="fb-btn fb-btn-cancel" id="fbContactCancel">Cancel</button>
           <button class="fb-btn fb-btn-submit" id="fbContactSubmit" disabled>Submit</button>
         </div>
