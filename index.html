@@ -131,9 +131,15 @@
       gap: 6px;
     }
     .logo img {
-      width: 56px;
-      height: 56px;
-      border-radius: var(--r-md);
+      display: block;
+      width: 72px;
+      height: 72px;
+      object-fit: contain;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      filter: none;
     }
     .logo-title {
       font-size: 24px;
@@ -800,7 +806,7 @@
       <button class="exit-badge" id="btnExit" aria-label="Exit application">Exit</button>
     </div>
     <div class="logo">
-      <img src="assets/icon.png" alt="">
+      <img src="assets/logo-transparent.png" alt="">
       <span class="logo-title">1132 Fixer</span>
       <div class="logo-sep" aria-hidden="true"></div>
       <span class="logo-desc">Zoom 1132 repair utility for Windows</span>
@@ -825,9 +831,8 @@
          ============================================================ -->
     <section class="view active" id="homeView" aria-label="Environment checks">
       <div class="home-intro">
-        Fully resets the local <strong>user1</strong> helper account and launches a clean
-        Zoom Workplace session under it. No personal files, chats, contacts, or Zoom
-        account data are touched. Do <strong>not</strong> run while signed in AS user1.
+        Resets the <strong>user1</strong> helper account and opens Zoom. Your files and Zoom data
+        stay unchanged. Do <strong>not</strong> run while signed in as user1.
       </div>
       <div class="chk-list" id="checkList" role="list" aria-label="Environment checks"></div>
     </section>
