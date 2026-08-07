@@ -1,226 +1,132 @@
 /**
- * 1132 Fixer — feedback proxy
+ * 1132 Fixer — support service (formerly the single-purpose feedback proxy).
  *
- * WHY THIS EXISTS
- * ---------------
- * The desktop app used to embed a GitHub PAT and POST issues to the API
- * directly. Anything embedded in an Electron app ships inside app.asar, which
- * stores file contents uncompressed — so the token was extractable from the
- * public installer in about a minute:
+ * Two personalities, chosen by DATABASE_URL:
  *
- *     7za x 1132-Fixer-Portable-5.3.10.exe -oext
- *     grep -a "GH_ISSUES_TOKEN" ext/resources/app.asar
+ *   unset -> LEGACY: exactly the original zero-dependency GitHub-issue proxy
+ *            (/health + POST /feedback). No 'pg' require, no /v1 routes.
+ *            This is the dark-deploy guarantee — deploying this code with no
+ *            new env vars changes nothing for installed clients.
  *
- * Build-time injection did not fix that; it only kept the secret out of source
- * control. The token still shipped inside every build.
- *
- * This service holds the token server-side. The app posts plain JSON to a
- * PUBLIC url — a url is not a credential — so the client ships with no secret
- * at all, and there is nothing to extract, leak, or rotate.
- *
- * THREAT MODEL (what this does and does not buy)
- * ----------------------------------------------
- * The endpoint is public and unauthenticated, because any shared key we shipped
- * would be exactly as extractable as the token was. So an attacker can still
- * spam issues — the same worst case as the leaked token. What changes:
- *
- *   - The token itself is no longer obtainable, so it cannot be reused
- *     elsewhere and its blast radius cannot grow beyond "open an issue".
- *   - Abuse is throttled here (rate limit + size caps + field validation).
- *   - You can disable or patch instantly by redeploying — no client update,
- *     no rotation, no waiting for users to upgrade.
- *   - The client cannot choose labels or forge issue bodies; this builds them.
- *
- * Zero dependencies: Node's built-in http + global fetch (Node 18+).
+ *   set   -> SUPPORT: migrations run before listen (fail closed), then the
+ *            /v1 case/rating/message API and /discord/interactions mount
+ *            alongside the unchanged legacy /feedback adapter. Discord
+ *            output additionally requires DISCORD_ENABLED=true (outbox flag).
  */
 'use strict';
 
 const http = require('http');
+const { json } = require('./lib/http');
+const legacy = require('./lib/legacy');
+const db = require('./lib/db');
 
 const PORT = process.env.PORT || 3000;
-const TOKEN = process.env.GH_ISSUES_TOKEN || '';
-const REPO = process.env.GH_ISSUES_REPO || 'PrimeUpYourLife/1132-Fixer-Windows';
 
-// --- Limits ---------------------------------------------------------
-const MAX_BODY_BYTES = 8 * 1024;       // reject oversized payloads outright
-const MAX_TEXT_CHARS = 4000;           // truncate long feedback rather than reject
-const RATE_MAX = 5;                    // requests per window per IP
-const RATE_WINDOW_MS = 60 * 60 * 1000; // 1 hour
-
-// The client may only pick from this set; anything else is rejected. Stops the
-// client inventing arbitrary labels on the issue tracker.
-const TYPE_LABELS = new Map([
-  ['Bug Report', 'bug-report'],
-  ['Feature Request', 'feature-request'],
-  ['User Rating', 'user-rating'],
-  ['Feedback', 'feedback'],
-  ['Contact', 'contact'],
-]);
-
-// --- Rate limiting (in-memory; adequate for a single instance) -------
-const hits = new Map(); // ip -> number[] of timestamps
-
-function rateLimited(ip, now) {
-  const arr = (hits.get(ip) || []).filter((t) => now - t < RATE_WINDOW_MS);
-  if (arr.length >= RATE_MAX) {
-    hits.set(ip, arr);
-    return true;
+async function dbState() {
+  if (!db.hasDb()) return 'off';
+  try {
+    await db.query('SELECT 1');
+    return 'ok';
+  } catch {
+    return 'off';
   }
-  arr.push(now);
-  hits.set(ip, arr);
-  return false;
 }
 
-// Bound memory: drop stale IP buckets periodically.
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, arr] of hits) {
-    const live = arr.filter((t) => now - t < RATE_WINDOW_MS);
-    if (live.length) hits.set(ip, live);
-    else hits.delete(ip);
-  }
-}, RATE_WINDOW_MS).unref();
-
-// --- Helpers --------------------------------------------------------
-function json(res, code, obj) {
-  const s = JSON.stringify(obj);
-  res.writeHead(code, {
-    'Content-Type': 'application/json',
-    'Content-Length': Buffer.byteLength(s),
-    'Cache-Control': 'no-store',
-  });
-  res.end(s);
-}
-
-function clientIp(req) {
-  const xf = req.headers['x-forwarded-for'];
-  if (typeof xf === 'string' && xf.length) return xf.split(',')[0].trim();
-  return req.socket.remoteAddress || 'unknown';
-}
-
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let size = 0;
-    let aborted = false;
-    const chunks = [];
-    req.on('data', (c) => {
-      // Once over the cap, keep draining but stop buffering. Do NOT destroy the
-      // socket here: destroying it before the handler writes a response gives
-      // the client a "socket hang up" instead of a clean 413.
-      if (aborted) return;
-      size += c.length;
-      if (size > MAX_BODY_BYTES) {
-        aborted = true;
-        chunks.length = 0;
-        reject(Object.assign(new Error('payload too large'), { code: 413 }));
-        return;
-      }
-      chunks.push(c);
-    });
-    req.on('end', () => {
-      if (!aborted) resolve(Buffer.concat(chunks).toString('utf8'));
-    });
-    req.on('error', reject);
+async function health(res) {
+  // Legacy shape (ok/service/configured) preserved; db field appended.
+  return json(res, 200, {
+    ok: true,
+    service: '1132-fixer-feedback-proxy',
+    configured: legacy.configured(),
+    db: await dbState(),
   });
 }
 
-// Strip control characters (keep \n and \t), then cap length.
-const CONTROL_CHARS = new RegExp('[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]', 'g');
-
-function clean(v, max) {
-  return String(v == null ? '' : v).replace(CONTROL_CHARS, '').slice(0, max).trim();
+async function readyz(res) {
+  if (!db.hasDb()) return json(res, 200, { ok: true, db: 'off' }); // legacy mode is always ready
+  const state = await dbState();
+  if (state === 'ok') return json(res, 200, { ok: true, db: 'ok' });
+  return json(res, 503, { ok: false, db: 'error' });
 }
 
-// --- Issue creation -------------------------------------------------
-async function createIssue({ type, text, version, os }) {
-  const label = TYPE_LABELS.get(type);
-  // Titles must be single-line: collapse newlines/whitespace from the excerpt
-  // (clean() keeps \n in the body on purpose, but a multi-line title reads as
-  // junk in the issue list and risks API rejection).
-  const titleText = text.slice(0, 80).replace(/\s+/g, ' ').trim();
-  const title = `[${type}] ${titleText}${text.length > 80 ? '...' : ''}`;
-  const body =
-    `**Type:** ${type}\n` +
-    `**App Version:** ${version || 'unknown'}\n` +
-    `**OS:** ${os || 'unknown'}\n\n` +
-    `---\n\n${text}\n\n` +
-    `<sub>Submitted via in-app feedback (feedback-proxy).</sub>`;
+async function routeV1(req, res, pathname, searchParams) {
+  // Lazy requires keep legacy mode free of any 'pg' dependency chain.
+  const auth = require('./lib/auth');
+  const cases = require('./lib/cases');
+  const ratings = require('./lib/ratings');
 
-  const r = await fetch(`https://api.github.com/repos/${REPO}/issues`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      Accept: 'application/vnd.github+json',
-      'Content-Type': 'application/json',
-      'User-Agent': '1132-fixer-feedback-proxy',
-    },
-    body: JSON.stringify({ title, body, labels: [label] }),
-  });
-
-  if (r.status === 201) {
-    const data = await r.json().catch(() => ({}));
-    return { ok: true, number: data.number };
+  if (req.method === 'POST' && pathname === '/v1/installations/register') {
+    return auth.register(req, res);
+  }
+  if (req.method === 'GET' && pathname === '/v1/ratings/badge') {
+    return ratings.badge(req, res); // public: the release README badge reads it
   }
 
-  // Deliberately do NOT surface GitHub's response to the client — it can carry
-  // repo or token detail. Log server-side, return something generic.
-  const detail = await r.text().catch(() => '');
-  console.error(`[feedback] github ${r.status}: ${detail.slice(0, 300)}`);
-  return { ok: false, status: r.status };
+  const inst = await auth.authenticate(req);
+  if (!inst) return json(res, 401, { ok: false, error: 'unauthorized' });
+
+  if (req.method === 'POST' && pathname === '/v1/tickets') return cases.create(req, res, inst);
+  if (req.method === 'GET' && pathname === '/v1/tickets') return cases.list(req, res, inst);
+  if (req.method === 'POST' && pathname === '/v1/ratings') return ratings.submit(req, res, inst);
+  if (req.method === 'GET' && pathname === '/v1/ratings/summary') {
+    return ratings.summary(req, res, searchParams);
+  }
+  const one = pathname.match(/^\/v1\/tickets\/(F-\d+)$/);
+  if (one && req.method === 'GET') return cases.get(req, res, inst, one[1]);
+  const msgs = pathname.match(/^\/v1\/tickets\/(F-\d+)\/messages$/);
+  if (msgs && req.method === 'GET') return cases.listMessages(req, res, inst, msgs[1], searchParams);
+  if (msgs && req.method === 'POST') return cases.addMessage(req, res, inst, msgs[1]);
+
+  return json(res, 404, { ok: false, error: 'not_found' });
 }
 
-// --- Server ---------------------------------------------------------
 const server = http.createServer(async (req, res) => {
   try {
-    if (req.method === 'GET' && (req.url === '/health' || req.url === '/')) {
-      // Report readiness without revealing whether the token is valid.
-      return json(res, 200, {
-        ok: true,
-        service: '1132-fixer-feedback-proxy',
-        configured: Boolean(TOKEN),
-      });
+    if (req.method === 'GET' && (req.url === '/health' || req.url === '/' || req.url === '/healthz')) {
+      return await health(res);
+    }
+    if (req.method === 'GET' && req.url === '/readyz') {
+      return await readyz(res);
+    }
+    if (req.method === 'POST' && req.url === '/feedback') {
+      return await legacy.handleFeedback(req, res);
     }
 
-    if (req.method !== 'POST' || req.url !== '/feedback') {
-      return json(res, 404, { ok: false, error: 'not_found' });
+    if (db.hasDb()) {
+      const u = new URL(req.url, 'http://localhost');
+      if (u.pathname.startsWith('/v1/')) {
+        return await routeV1(req, res, u.pathname, u.searchParams);
+      }
+      if (req.method === 'POST' && u.pathname === '/discord/interactions') {
+        return await require('./lib/interactions').handle(req, res);
+      }
     }
 
-    if (!TOKEN) {
-      console.error('[feedback] GH_ISSUES_TOKEN not set — refusing');
-      return json(res, 503, { ok: false, error: 'not_configured' });
-    }
-
-    const ip = clientIp(req);
-    if (rateLimited(ip, Date.now())) {
-      return json(res, 429, { ok: false, error: 'rate_limited' });
-    }
-
-    let payload;
-    try {
-      payload = JSON.parse(await readBody(req));
-    } catch (e) {
-      if (e && e.code === 413) return json(res, 413, { ok: false, error: 'too_large' });
-      return json(res, 400, { ok: false, error: 'bad_json' });
-    }
-
-    const type = clean(payload.type, 40);
-    const text = clean(payload.text, MAX_TEXT_CHARS);
-    const version = clean(payload.version, 20);
-    const os = clean(payload.os, 60);
-
-    if (!TYPE_LABELS.has(type)) return json(res, 400, { ok: false, error: 'bad_type' });
-    if (!text) return json(res, 400, { ok: false, error: 'empty_text' });
-
-    const result = await createIssue({ type, text, version, os });
-    if (result.ok) return json(res, 201, { ok: true, number: result.number });
-    return json(res, 502, { ok: false, error: 'upstream_failed' });
+    return json(res, 404, { ok: false, error: 'not_found' });
   } catch (err) {
     console.error('[feedback] unhandled: ' + (err && err.message));
     return json(res, 500, { ok: false, error: 'internal' });
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`[feedback-proxy] listening on :${PORT}`);
-  console.log(`[feedback-proxy] repo=${REPO} token=${TOKEN ? 'present' : 'ABSENT (503s until set)'}`);
-});
+async function boot() {
+  if (db.hasDb()) {
+    try {
+      await db.migrate();
+    } catch (e) {
+      // Fail closed: never serve /v1 against a half-migrated schema.
+      console.error('[db] migration failed: ' + e.message);
+      process.exit(1);
+    }
+    require('./lib/outbox').startWorker();
+  }
+  server.listen(PORT, () => {
+    console.log(`[feedback-proxy] listening on :${PORT}`);
+    console.log(`[feedback-proxy] repo=${legacy.repo()} token=${legacy.configured() ? 'present' : 'ABSENT (503s until set)'}`);
+    console.log(`[support] db=${db.hasDb() ? 'configured' : 'off (legacy mode)'} discord_dispatch=${process.env.DISCORD_ENABLED === 'true' ? 'on' : 'off'} pepper=${process.env.INSTALL_CREDENTIAL_PEPPER ? 'present' : 'absent'}`);
+  });
+}
+
+const ready = boot();
+
+module.exports = { server, ready };
