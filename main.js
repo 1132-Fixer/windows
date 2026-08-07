@@ -306,6 +306,16 @@ function getIconPath() {
     : path.join(__dirname, 'assets', 'icon.ico');
 }
 
+// The helper shortcut carries its own mark (two-user handoff), distinct from
+// the application icon. Resolved the same way as getIconPath(): an INSTALLED
+// path in both modes, so a created .lnk never points into a worktree or temp
+// directory that will not exist on the user's machine tomorrow.
+function getHelperIconPath() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, '1132-helper-shortcut.ico')
+    : path.join(__dirname, 'assets', '1132-helper-shortcut.ico');
+}
+
 function getFirstRunScriptPath() {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'zoom-firstrun-setup.ps1')
@@ -1806,7 +1816,7 @@ async function findExistingShortcuts() {
 ipcMain.handle('create-shortcut', async () => {
   const desktop = await getCanonicalUserDesktop();
   const shortcutPath = path.join(desktop, SHORTCUT_FILENAME);
-  const iconPath = getIconPath();
+  const iconPath = getHelperIconPath();
 
   const scriptPath = LAUNCHER_SCRIPT_PATH();
   const scriptDir = path.dirname(scriptPath);

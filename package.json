@@ -108,6 +108,10 @@
         "to": "icon.ico"
       },
       {
+        "from": "assets/1132-helper-shortcut.ico",
+        "to": "1132-helper-shortcut.ico"
+      },
+      {
         "from": "scripts/zoom-firstrun-setup.ps1",
         "to": "zoom-firstrun-setup.ps1"
       },
