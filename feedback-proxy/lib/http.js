@@ -6,6 +6,8 @@
  */
 'use strict';
 
+const crypto = require('crypto');
+
 function json(res, code, obj) {
   const s = JSON.stringify(obj);
   res.writeHead(code, {
@@ -87,4 +89,15 @@ function createRateLimiter(max, windowMs) {
   };
 }
 
-module.exports = { json, clientIp, readBody, clean, createRateLimiter };
+/**
+ * Standard error shape for the support API (spec pack):
+ *   { error: { code, message, requestId } }
+ * The legacy /feedback contract keeps its own { ok:false, error } shape.
+ */
+function fail(res, status, code, message) {
+  const requestId = 'req_' + crypto.randomBytes(4).toString('hex').toUpperCase();
+  json(res, status, { error: { code, message, requestId } });
+  return requestId;
+}
+
+module.exports = { json, fail, clientIp, readBody, clean, createRateLimiter };

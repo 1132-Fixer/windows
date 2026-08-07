@@ -1,319 +1,384 @@
 /**
- * Cases: tickets, messages, state machine (plan §6), audit events.
+ * Support cases (operator schema: support_cases / case_messages / case_events).
  *
- * Public identifier is the case_ref ('F-0001'); internal uuids, Discord ids,
- * priority, and assignee never appear in client responses (plan §14).
+ * Public identifier is the random case id ('FX-…'). Client responses never
+ * contain database ids, Discord ids, priority, assignee, or internal
+ * messages (visibility = 'internal' is filtered in SQL, not in JS).
+ *
+ * State machine (framework spec): user replies move waiting_for_user ->
+ * in_review and resolved -> reopened; spam locks the case for users; staff
+ * transitions come only through verified Discord interactions. Every state
+ * change bumps support_cases.version (optimistic lock for stale buttons)
+ * and writes a case_events row.
  */
 'use strict';
 
 const db = require('./db');
+const ids = require('./ids');
 const outbox = require('./outbox');
-const { json, readBody, clean } = require('./http');
+const { withIdempotency } = require('./idempotency');
+const { json, fail, readBody, clean } = require('./http');
 
-const MAX_BODY_BYTES = 16 * 1024;
-const SUBJECT_MAX = 200;
-const MESSAGE_MAX = 8000;
-const IDEM_KEY_MAX = 100;
+const MAX_BODY_BYTES = 32 * 1024;
+const SUBJECT_MIN = 3;
+const SUBJECT_MAX = 120;
+const SUMMARY_MAX = 8000;
+const KINDS = new Set(['bug', 'feedback']); // rating_feedback is created only by ratings routing
+const TOPICS = new Set(['compliment', 'suggestion', 'concern', 'general', 'other']);
 
-// ---- helpers -------------------------------------------------------
+// ---- serialization --------------------------------------------------
 
-function toClientTicket(t) {
+function toClientCase(c) {
   return {
-    id: t.case_ref,
-    type: t.type,
-    subject: t.subject,
-    status: t.status,
-    close_reason: t.close_reason || null,
-    app_version: t.app_version || null,
-    created_at: t.created_at,
-    updated_at: t.updated_at,
+    caseId: c.public_id,
+    kind: c.kind,
+    state: c.state,
+    subject: c.subject,
+    appVersion: c.app_version,
+    createdAt: c.created_at,
+    updatedAt: c.updated_at,
   };
 }
 
 function toClientMessage(m) {
-  return { sequence: Number(m.sequence), author: m.author, body: m.body, created_at: m.created_at };
+  return { author: m.author, body: m.body, createdAt: m.created_at, delivery: m.delivery };
 }
 
-function idemKeyOf(req) {
-  return clean(req.headers['idempotency-key'], IDEM_KEY_MAX);
-}
+// ---- shared helpers -------------------------------------------------
 
-async function readJson(req, res) {
+async function readRaw(req, res) {
   try {
-    return JSON.parse((await readBody(req, MAX_BODY_BYTES)).toString('utf8'));
+    return await readBody(req, MAX_BODY_BYTES);
   } catch (e) {
-    if (e && e.code === 413) json(res, 413, { ok: false, error: 'too_large' });
-    else json(res, 400, { ok: false, error: 'bad_json' });
+    if (e && e.code === 413) fail(res, 413, 'too_large', 'Request body is too large.');
+    else fail(res, 400, 'bad_request', 'Could not read the request.');
     return null;
   }
 }
 
-function addEvent(client, ticketId, event, detail) {
+function parseJson(raw, res) {
+  try {
+    return JSON.parse(raw.toString('utf8'));
+  } catch {
+    fail(res, 400, 'bad_json', 'Send a JSON body.');
+    return null;
+  }
+}
+
+function requireIdemKey(req, res) {
+  const key = clean(req.headers['idempotency-key'], 100);
+  if (!key) fail(res, 400, 'missing_idempotency_key', 'Send an Idempotency-Key header.');
+  return key || null;
+}
+
+/** Error body in the standard shape, for responses stored/replayed by the idempotency layer. */
+function errBody(code, message) {
+  const crypto = require('crypto');
+  return { error: { code, message, requestId: 'req_' + crypto.randomBytes(4).toString('hex').toUpperCase() } };
+}
+
+function addCaseEvent(client, caseId, actorType, actorRef, eventType, data) {
   return client.query(
-    'INSERT INTO ticket_events (ticket_id, event, detail) VALUES ($1, $2, $3)',
-    [ticketId, event, detail ? JSON.stringify(detail) : null]
+    'INSERT INTO case_events (case_id, actor_type, actor_ref, event_type, data) ' +
+      'VALUES ($1, $2, $3, $4, $5)',
+    [caseId, actorType, actorRef, eventType, JSON.stringify(data || {})]
   );
-}
-
-async function nextCaseRef(client) {
-  const { rows } = await client.query("SELECT nextval('ticket_case_seq') AS n");
-  return 'F-' + String(rows[0].n).padStart(4, '0');
-}
-
-async function nextSequence(client, ticketId) {
-  const { rows } = await client.query(
-    'SELECT coalesce(max(sequence), 0) + 1 AS n FROM ticket_messages WHERE ticket_id = $1',
-    [ticketId]
-  );
-  return Number(rows[0].n);
-}
-
-/** Plan §6: what a user reply does to the case status. */
-function userReplyStatus(status) {
-  if (status === 'WAITING_FOR_USER') return 'USER_REPLIED';
-  if (status === 'RESOLVED') return 'USER_REPLIED'; // reopen
-  return status;
 }
 
 /**
- * Insert a ticket + optional first user message + audit event + outbox alert,
- * all on the caller's transaction client. Also used by ratings.js for the
- * negative-rating case path.
+ * Insert a case + first user message + audit event + outbox alert on the
+ * caller's transaction. Also used by ratings.js (kind 'rating_feedback')
+ * and the feedback route.
  */
-async function insertTicket(client, installation, fields, idemKey) {
-  const caseRef = await nextCaseRef(client);
+async function insertCase(client, inst, fields, idemKey) {
+  const publicId = ids.newCaseId();
   const { rows } = await client.query(
-    'INSERT INTO tickets (case_ref, installation_id, type, subject, app_version, os_info, idempotency_key) ' +
-      'VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-    [caseRef, installation.id, fields.type, fields.subject,
-     fields.app_version || null, fields.os_info || null, idemKey || null]
+    'INSERT INTO support_cases ' +
+      '(public_id, installation_id, kind, source, app_version, subject, summary, environment, diagnostics_consent) ' +
+      'VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *',
+    [publicId, inst.id, fields.kind, inst.source, fields.appVersion || inst.app_version,
+     fields.subject, fields.summary, JSON.stringify(fields.environment || {}),
+     Boolean(fields.diagnosticsConsent)]
   );
-  const t = rows[0];
-  if (fields.body) {
-    await client.query(
-      "INSERT INTO ticket_messages (ticket_id, sequence, author, body) VALUES ($1, 1, 'user', $2)",
-      [t.id, fields.body]
-    );
-  }
-  await addEvent(client, t.id, 'created', { type: fields.type, by: 'user' });
-  await outbox.enqueue(client, 'ticket.created', {
-    ticket_id: t.id,
-    case_ref: caseRef,
-    type: fields.type,
-    subject: fields.subject,
-    app_version: fields.app_version || null,
-    os_info: fields.os_info || null,
-    installation_public_id: installation.public_id,
-    body: fields.body || null,
-    created_at: t.created_at.toISOString(),
+  const c = rows[0];
+  await client.query(
+    "INSERT INTO case_messages (case_id, author, visibility, body, delivery, available_at, idempotency_key) " +
+      "VALUES ($1, 'user', 'user', $2, 'available', now(), $3)",
+    [c.id, fields.summary, idemKey + ':initial']
+  );
+  await addCaseEvent(client, c.id, 'user', inst.public_id, 'case.created', { kind: fields.kind });
+  await outbox.enqueue(client, 'case', c.id, 'case.created', {
+    case_id: c.id,
+    public_id: c.public_id,
+    kind: c.kind,
+    state: c.state,
+    priority: c.priority,
+    source: c.source,
+    app_version: c.app_version,
+    subject: c.subject,
+    summary: c.summary,
+    environment: fields.environment || {},
+    created_at: c.created_at.toISOString(),
   });
-  return t;
+  return c;
 }
 
-// ---- client route handlers ----------------------------------------
+/** Framework §case-state: what a user reply does to the case. */
+function userReplyState(state) {
+  if (state === 'waiting_for_user') return 'in_review';
+  if (state === 'resolved') return 'reopened';
+  return null; // unchanged
+}
+
+async function setState(client, caseRow, toState, actorType, actorRef) {
+  await client.query(
+    'UPDATE support_cases SET state = $1, version = version + 1, updated_at = now(), ' +
+      "resolved_at = CASE WHEN $1 = 'resolved' THEN now() ELSE resolved_at END WHERE id = $2",
+    [toState, caseRow.id]
+  );
+  await addCaseEvent(client, caseRow.id, actorType, actorRef, 'state.changed',
+    { from: caseRow.state, to: toState });
+}
+
+// ---- client route handlers ------------------------------------------
 
 async function create(req, res, inst) {
-  const payload = await readJson(req, res);
+  const raw = await readRaw(req, res);
+  if (!raw) return;
+  const idemKey = requireIdemKey(req, res);
+  if (!idemKey) return;
+  const payload = parseJson(raw, res);
   if (!payload) return;
-  const idemKey = idemKeyOf(req);
-  if (!idemKey) return json(res, 400, { ok: false, error: 'missing_idempotency_key' });
 
-  const type = clean(payload.type, 20);
-  // Rating cases are created only by the /v1/ratings routing rule, never directly.
-  if (type !== 'bug' && type !== 'message') {
-    return json(res, 400, { ok: false, error: 'bad_type' });
+  const kind = clean(payload.type, 20);
+  if (!KINDS.has(kind)) {
+    return fail(res, 400, 'validation_failed', 'type must be bug or feedback.');
   }
-  const subject = clean(payload.subject, SUBJECT_MAX);
-  if (!subject) return json(res, 400, { ok: false, error: 'empty_subject' });
+  const subject = clean(payload.title, SUBJECT_MAX);
+  if (subject.length < SUBJECT_MIN) {
+    return fail(res, 400, 'validation_failed', `title must be ${SUBJECT_MIN}-${SUBJECT_MAX} characters.`);
+  }
+  const summary = clean(payload.description, SUMMARY_MAX);
+  if (!summary) return fail(res, 400, 'validation_failed', 'description is required.');
+
+  const environment = {};
+  for (const k of ['impact', 'steps', 'expectedResult', 'actualResult', 'os']) {
+    const v = clean(payload[k], 1000);
+    if (v) environment[k] = v;
+  }
   const fields = {
-    type,
-    subject,
-    body: clean(payload.body, MESSAGE_MAX) || null,
-    app_version: clean(payload.app_version, 40) || null,
-    os_info: clean(payload.os_info, 120) || null,
+    kind, subject, summary, environment,
+    appVersion: clean(payload.appVersion, 40) || null,
+    diagnosticsConsent: payload.diagnosticsConsent === true,
   };
 
-  const findExisting = async () => {
-    const { rows } = await db.query(
-      'SELECT * FROM tickets WHERE installation_id = $1 AND idempotency_key = $2',
-      [inst.id, idemKey]
-    );
-    return rows[0] || null;
-  };
+  return withIdempotency(res, inst, idemKey, raw, async (client) => {
+    const c = await insertCase(client, inst, fields, idemKey);
+    return { status: 201, body: { case: toClientCase(c) } };
+  });
+}
 
-  let ticket = await findExisting(); // retry returns the SAME ticket (plan §14)
-  if (!ticket) {
-    try {
-      ticket = await db.tx((client) => insertTicket(client, inst, fields, idemKey));
-    } catch (e) {
-      if (e.code === '23505') ticket = await findExisting(); // lost a concurrent race
-      if (!ticket) throw e;
-    }
+/** POST /api/v1/feedback — compliments are counted, everything else is a case. */
+async function feedback(req, res, inst) {
+  const raw = await readRaw(req, res);
+  if (!raw) return;
+  const idemKey = requireIdemKey(req, res);
+  if (!idemKey) return;
+  const payload = parseJson(raw, res);
+  if (!payload) return;
+
+  const topic = clean(payload.topic, 20);
+  if (!TOPICS.has(topic)) {
+    return fail(res, 400, 'validation_failed',
+      'topic must be compliment, suggestion, concern, general, or other.');
   }
-  return json(res, 201, { ok: true, ticket: toClientTicket(ticket) });
+  const message = clean(payload.message, 4000);
+  if (topic !== 'compliment' && !message) {
+    return fail(res, 400, 'validation_failed', 'message is required.');
+  }
+
+  if (topic === 'compliment') {
+    // Operator routing rule: positive compliment -> saved and counted,
+    // NO case, NO Discord message, NO alert.
+    return withIdempotency(res, inst, idemKey, raw, async (client) => {
+      await client.query(
+        'INSERT INTO positive_feedback (installation_id, source, app_version, body, idempotency_key) ' +
+          'VALUES ($1, $2, $3, $4, $5)',
+        [inst.id, inst.source, clean(payload.appVersion, 40) || inst.app_version, message || null, idemKey]
+      );
+      return { status: 201, body: { saved: true, topic: 'compliment' } };
+    });
+  }
+
+  const fields = {
+    kind: 'feedback',
+    subject: `Feedback — ${topic}`,
+    summary: message,
+    environment: {},
+    appVersion: clean(payload.appVersion, 40) || null,
+  };
+  return withIdempotency(res, inst, idemKey, raw, async (client) => {
+    const c = await insertCase(client, inst, fields, idemKey);
+    return { status: 201, body: { case: toClientCase(c) } };
+  });
+}
+
+async function unreadCount(installationId) {
+  const { rows } = await db.query(
+    "SELECT count(*)::int AS n FROM case_messages m JOIN support_cases c ON c.id = m.case_id " +
+      "WHERE c.installation_id = $1 AND m.visibility = 'user' AND m.author <> 'user' AND m.delivery <> 'read'",
+    [installationId]
+  );
+  return rows[0].n;
 }
 
 async function list(req, res, inst) {
   const { rows } = await db.query(
-    'SELECT * FROM tickets WHERE installation_id = $1 ORDER BY updated_at DESC LIMIT 100',
+    'SELECT * FROM support_cases WHERE installation_id = $1 ORDER BY updated_at DESC LIMIT 100',
     [inst.id]
   );
-  return json(res, 200, { ok: true, tickets: rows.map(toClientTicket) });
+  return json(res, 200, { cases: rows.map(toClientCase), unreadCount: await unreadCount(inst.id) });
 }
 
-async function getTicketRow(inst, caseRef) {
+async function getCaseRow(inst, casePublicId) {
   const { rows } = await db.query(
-    'SELECT * FROM tickets WHERE case_ref = $1 AND installation_id = $2',
-    [caseRef, inst.id]
+    'SELECT * FROM support_cases WHERE public_id = $1 AND installation_id = $2',
+    [casePublicId, inst.id]
   );
   return rows[0] || null;
 }
 
-async function get(req, res, inst, caseRef) {
-  const t = await getTicketRow(inst, caseRef);
-  if (!t) return json(res, 404, { ok: false, error: 'not_found' });
-  return json(res, 200, { ok: true, ticket: toClientTicket(t) });
-}
-
-async function listMessages(req, res, inst, caseRef, searchParams) {
-  const t = await getTicketRow(inst, caseRef);
-  if (!t) return json(res, 404, { ok: false, error: 'not_found' });
-  const after = Math.max(0, Number(searchParams.get('after')) || 0);
+async function get(req, res, inst, casePublicId) {
+  const c = await getCaseRow(inst, casePublicId);
+  if (!c) return fail(res, 404, 'not_found', 'No such case.');
   const { rows } = await db.query(
-    'SELECT sequence, author, body, created_at FROM ticket_messages ' +
-      'WHERE ticket_id = $1 AND sequence > $2 ORDER BY sequence',
-    [t.id, after]
+    "SELECT author, body, delivery, created_at FROM case_messages " +
+      "WHERE case_id = $1 AND visibility = 'user' ORDER BY created_at",
+    [c.id]
   );
-  // The client has now seen these staff replies — that is what "delivered"
-  // means (plan §14: stored and available to Windows).
+  // Delivered = stored and available to the client (plan non-negotiable).
   await db.query(
-    "UPDATE ticket_messages SET delivered_to_client = true " +
-      "WHERE ticket_id = $1 AND sequence > $2 AND author = 'staff' AND NOT delivered_to_client",
-    [t.id, after]
+    "UPDATE case_messages SET delivery = 'available', available_at = now() " +
+      "WHERE case_id = $1 AND visibility = 'user' AND author <> 'user' AND delivery = 'queued'",
+    [c.id]
   );
-  return json(res, 200, { ok: true, messages: rows.map(toClientMessage) });
+  return json(res, 200, { case: toClientCase(c), messages: rows.map(toClientMessage) });
 }
 
-async function addMessage(req, res, inst, caseRef) {
-  const payload = await readJson(req, res);
+async function addMessage(req, res, inst, casePublicId) {
+  const raw = await readRaw(req, res);
+  if (!raw) return;
+  const idemKey = requireIdemKey(req, res);
+  if (!idemKey) return;
+  const payload = parseJson(raw, res);
   if (!payload) return;
-  const idemKey = idemKeyOf(req);
-  if (!idemKey) return json(res, 400, { ok: false, error: 'missing_idempotency_key' });
-  const body = clean(payload.body, MESSAGE_MAX);
-  if (!body) return json(res, 400, { ok: false, error: 'empty_body' });
+  const body = clean(payload.body, SUMMARY_MAX);
+  if (!body) return fail(res, 400, 'validation_failed', 'body is required.');
 
-  let out;
-  try {
-    out = await db.tx(async (client) => {
-      const { rows } = await client.query(
-        'SELECT * FROM tickets WHERE case_ref = $1 AND installation_id = $2 FOR UPDATE',
-        [caseRef, inst.id]
-      );
-      const t = rows[0];
-      if (!t) return { error: [404, 'not_found'] };
-      if (t.status === 'CLOSED') return { error: [409, 'closed'] }; // staff must reopen
-
-      const dup = await client.query(
-        'SELECT sequence, author, body, created_at FROM ticket_messages ' +
-          'WHERE ticket_id = $1 AND idempotency_key = $2',
-        [t.id, idemKey]
-      );
-      if (dup.rows[0]) return { message: dup.rows[0], status: t.status };
-
-      const seq = await nextSequence(client, t.id);
-      const ins = await client.query(
-        "INSERT INTO ticket_messages (ticket_id, sequence, author, body, idempotency_key) " +
-          "VALUES ($1, $2, 'user', $3, $4) RETURNING sequence, author, body, created_at",
-        [t.id, seq, body, idemKey]
-      );
-      const newStatus = userReplyStatus(t.status);
-      if (newStatus !== t.status) {
-        await client.query('UPDATE tickets SET status = $1, updated_at = now() WHERE id = $2',
-          [newStatus, t.id]);
-        await addEvent(client, t.id, 'status.changed', { from: t.status, to: newStatus, by: 'user' });
-      } else {
-        await client.query('UPDATE tickets SET updated_at = now() WHERE id = $1', [t.id]);
-      }
-      await addEvent(client, t.id, 'message.user', { sequence: seq });
-      await outbox.enqueue(client, 'message.user', {
-        ticket_id: t.id, case_ref: caseRef, sequence: seq, body,
-      });
-      return { message: ins.rows[0], status: newStatus };
+  return withIdempotency(res, inst, idemKey, raw, async (client) => {
+    const { rows } = await client.query(
+      'SELECT * FROM support_cases WHERE public_id = $1 AND installation_id = $2 FOR UPDATE',
+      [casePublicId, inst.id]
+    );
+    const c = rows[0];
+    if (!c) return { status: 404, body: errBody('not_found', 'No such case.') };
+    if (c.state === 'spam') {
+      return { status: 409, body: errBody('case_locked', 'This case does not accept replies.') };
+    }
+    const ins = await client.query(
+      "INSERT INTO case_messages (case_id, author, visibility, body, delivery, available_at, idempotency_key) " +
+        "VALUES ($1, 'user', 'user', $2, 'available', now(), $3) RETURNING author, body, delivery, created_at",
+      [c.id, body, idemKey]
+    );
+    const to = userReplyState(c.state);
+    if (to) await setState(client, c, to, 'user', inst.public_id);
+    else await client.query('UPDATE support_cases SET updated_at = now() WHERE id = $1', [c.id]);
+    await addCaseEvent(client, c.id, 'user', inst.public_id, 'message.created', {});
+    await outbox.enqueue(client, 'message', c.id, 'message.created', {
+      case_id: c.id, public_id: c.public_id, author: 'user', body,
     });
-  } catch (e) {
-    if (e.code !== '23505') throw e;
-    // Concurrent retry with the same key: return the row the winner inserted.
-    const t = await getTicketRow(inst, caseRef);
-    const dup = t && (await db.query(
-      'SELECT sequence, author, body, created_at FROM ticket_messages ' +
-        'WHERE ticket_id = $1 AND idempotency_key = $2',
-      [t.id, idemKey]
-    )).rows[0];
-    if (!dup) throw e;
-    out = { message: dup, status: t.status };
-  }
-  if (out.error) return json(res, out.error[0], { ok: false, error: out.error[1] });
-  return json(res, 201, { ok: true, message: toClientMessage(out.message), status: out.status });
+    return {
+      status: 201,
+      body: { caseId: c.public_id, state: to || c.state, message: toClientMessage(ins.rows[0]) },
+    };
+  });
 }
 
-// ---- staff operations (called from Discord interactions) -----------
+async function markRead(req, res, inst, casePublicId) {
+  const c = await getCaseRow(inst, casePublicId);
+  if (!c) return fail(res, 404, 'not_found', 'No such case.');
+  await db.query(
+    "UPDATE case_messages SET delivery = 'read', read_at = now() " +
+      "WHERE case_id = $1 AND visibility = 'user' AND author <> 'user' AND delivery <> 'read'",
+    [c.id]
+  );
+  return json(res, 200, { caseId: c.public_id, unreadCount: await unreadCount(inst.id) });
+}
+
+// ---- staff operations (verified Discord interactions only) ----------
 
 function staffError(code) {
   return Object.assign(new Error(code), { staff: true, code });
 }
 
 const STAFF_STATUS_WORDS = new Map([
-  ['', 'WAITING_FOR_USER'],
-  ['waiting', 'WAITING_FOR_USER'],
-  ['review', 'IN_PROGRESS'],
-  ['resolve', 'RESOLVED'],
+  ['', 'waiting_for_user'],
+  ['waiting', 'waiting_for_user'],
+  ['review', 'in_review'],
+  ['resolve', 'resolved'],
 ]);
 
-async function lockTicketByRef(client, caseRef) {
+async function lockCase(client, casePublicId) {
   const { rows } = await client.query(
-    'SELECT * FROM tickets WHERE case_ref = $1 FOR UPDATE', [caseRef]
+    'SELECT * FROM support_cases WHERE public_id = $1 FOR UPDATE', [casePublicId]
   );
   if (!rows[0]) throw staffError('case_not_found');
-  if (rows[0].status === 'CLOSED') throw staffError('case_closed');
+  if (rows[0].state === 'spam') throw staffError('case_locked');
   return rows[0];
 }
 
-/** Staff reply from the Discord modal: store message + optional transition. */
-async function staffReply(caseRef, body, statusWord) {
+/** Current version, for embedding into the reply modal's custom_id. */
+async function currentVersion(casePublicId) {
+  const { rows } = await db.query(
+    'SELECT version FROM support_cases WHERE public_id = $1', [casePublicId]
+  );
+  if (!rows[0]) throw staffError('case_not_found');
+  return rows[0].version;
+}
+
+/**
+ * Staff reply from the Discord modal. expectedVersion is the case version
+ * captured when the modal was opened — a mismatch means the case changed
+ * underneath the form (optimistic lock, spec pack requirement).
+ */
+async function staffReply(casePublicId, { body, statusWord, staffUserId, interactionId, expectedVersion }) {
   const to = STAFF_STATUS_WORDS.get(statusWord);
   if (!to) throw staffError('bad_status_word');
   return db.tx(async (client) => {
-    const t = await lockTicketByRef(client, caseRef);
-    const seq = await nextSequence(client, t.id);
+    const c = await lockCase(client, casePublicId);
+    if (c.version !== expectedVersion) throw staffError('stale_version');
     await client.query(
-      "INSERT INTO ticket_messages (ticket_id, sequence, author, body) VALUES ($1, $2, 'staff', $3)",
-      [t.id, seq, body]
+      "INSERT INTO case_messages (case_id, author, visibility, body, staff_discord_user_id, idempotency_key) " +
+        "VALUES ($1, 'staff', 'user', $2, $3, $4)",
+      [c.id, body, staffUserId, 'discord:' + interactionId]
     );
-    await addEvent(client, t.id, 'message.staff', { sequence: seq });
-    if (to !== t.status) {
-      await client.query('UPDATE tickets SET status = $1, updated_at = now() WHERE id = $2', [to, t.id]);
-      await addEvent(client, t.id, 'status.changed', { from: t.status, to, by: 'staff' });
-    } else {
-      await client.query('UPDATE tickets SET updated_at = now() WHERE id = $1', [t.id]);
-    }
-    return { sequence: seq, status: to };
+    await addCaseEvent(client, c.id, 'staff', staffUserId, 'message.created', {});
+    if (to !== c.state) await setState(client, c, to, 'staff', staffUserId);
+    else await client.query('UPDATE support_cases SET updated_at = now() WHERE id = $1', [c.id]);
+    return { caseId: c.public_id, state: to };
   });
 }
 
-/** Resolve button. */
-async function staffResolve(caseRef) {
+/** Resolve button. Idempotent: an already resolved case stays resolved. */
+async function staffResolve(casePublicId, staffUserId) {
   return db.tx(async (client) => {
-    const t = await lockTicketByRef(client, caseRef);
-    if (t.status !== 'RESOLVED') {
-      await client.query("UPDATE tickets SET status = 'RESOLVED', updated_at = now() WHERE id = $1", [t.id]);
-      await addEvent(client, t.id, 'status.changed', { from: t.status, to: 'RESOLVED', by: 'staff' });
-    }
-    return { status: 'RESOLVED' };
+    const c = await lockCase(client, casePublicId);
+    if (c.state !== 'resolved') await setState(client, c, 'resolved', 'staff', staffUserId);
+    return { caseId: c.public_id, state: 'resolved' };
   });
 }
 
 module.exports = {
-  create, list, get, listMessages, addMessage,
-  insertTicket, staffReply, staffResolve,
-  SUBJECT_MAX, MESSAGE_MAX,
+  create, feedback, list, get, addMessage, markRead,
+  insertCase, staffReply, staffResolve, currentVersion,
 };
