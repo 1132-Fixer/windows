@@ -15,7 +15,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const FAKE_TOKEN = 'github_pat_FAKE_TOKEN_FOR_TESTS_ONLY';
+const FAKE_TOKEN = 'not-a-token__1132-fixer-test-fixture__no-credential-here';
 const PORT = 39117;
 
 // --- Stub GitHub: intercept fetch before loading the server ----------
