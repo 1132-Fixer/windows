@@ -791,7 +791,8 @@ async function loadSysInfo() {
   }
 }
 
-document.getElementById('btnFeedback').addEventListener('click', openFeedback);
+document.getElementById('btnSupport').addEventListener('click', openFeedback);
+document.getElementById('btnVisitSite').addEventListener('click', () => window.electronAPI.openWebsite());
 ['fbClose', 'fbBugCancel', 'fbRatingCancel', 'fbContactCancel'].forEach(id => {
   document.getElementById(id).addEventListener('click', closeFeedback);
 });
@@ -804,6 +805,7 @@ document.querySelectorAll('.fb-choice').forEach(el => {
     if      (feedbackMode === 'bug')     showSection('fbBug');
     else if (feedbackMode === 'rating')  showSection('fbRating');
     else if (feedbackMode === 'contact') showSection('fbContact');
+    else if (feedbackMode === 'report')  { closeFeedback(); openSupportReport(); }
   };
   el.addEventListener('click', activate);
   el.addEventListener('keydown', (e) => {
@@ -882,7 +884,6 @@ const supportTextArea  = document.getElementById('supportText');
 const supportCopyBtn   = document.getElementById('supportCopy');
 const supportCloseBtn  = document.getElementById('supportClose');
 const supportCopyStat  = document.getElementById('supportCopyStatus');
-const btnSupportReport = document.getElementById('btnSupportReport');
 
 let releaseSupportTrap = null;
 
@@ -908,7 +909,6 @@ function closeSupportReport() {
   if (releaseSupportTrap) { releaseSupportTrap(); releaseSupportTrap = null; }
 }
 
-btnSupportReport.addEventListener('click', openSupportReport);
 supportCloseBtn.addEventListener('click', closeSupportReport);
 supportCopyBtn.addEventListener('click', async () => {
   try {
