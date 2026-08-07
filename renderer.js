@@ -754,7 +754,8 @@ window.addEventListener('DOMContentLoaded', async () => {
 })();
 
 // ============================================================
-// Feedback modal (unchanged behavior)
+// Feedback modal — single Submit Feedback / Report entry: chooser (bug /
+// rating / message+support-request), attach-report flow, report preview link
 // ============================================================
 const ratings = { ease: 0, resolved: 0, recommend: 0, overall: 0 };
 let feedbackMode = '';
@@ -770,6 +771,7 @@ function openFeedback() {
   showSection('fbChoose');
   feedbackMode = '';
   document.querySelectorAll('.fb-textarea').forEach(t => { t.value = ''; });
+  attachGen++;
   const attachBtn = document.getElementById('fbAttachReport');
   attachBtn.disabled = false;
   attachBtn.textContent = 'Attach Support Report';
@@ -836,27 +838,43 @@ document.querySelectorAll('.fb-rating-btns').forEach(group => {
 document.getElementById('fbViewReport').addEventListener('click', openSupportReport);
 
 // Consolidated message/support-request flow: pull the sanitized report into
-// the message body so one submission carries both.
+// the message body so one submission carries both. attachGen invalidates an
+// in-flight build when the modal is closed/reopened (openFeedback bumps it),
+// so a stale IPC completion can't write into a fresh form.
+const MAX_FEEDBACK_CHARS = 4000; // proxy MAX_TEXT_CHARS — keep in sync with feedback-proxy/server.js
+let attachGen = 0;
 document.getElementById('fbAttachReport').addEventListener('click', async () => {
   const btn = document.getElementById('fbAttachReport');
+  const status = document.getElementById('fbContactStatus');
+  status.textContent = '';
   btn.disabled = true;
   btn.textContent = 'Attaching…';
+  const gen = attachGen;
   try {
     const result = await window.electronAPI.supportReport({
       receipt: lastReceipt,
       logTail: logBuffer.join('\n'),
       stage:   lastStageLabel
     });
+    if (gen !== attachGen) return;
     const md = result && result.markdown;
     if (!md) throw new Error('report unavailable');
     const ta = document.getElementById('fbContactText');
-    ta.value = (ta.value.trim() ? ta.value.trim() + '\n\n' : '') + '---\n' + md;
+    const userText = ta.value.trim();
+    let combined = userText ? userText + '\n\n---\n' + md : md;
+    if (combined.length > MAX_FEEDBACK_CHARS) {
+      const marker = '\n…[report trimmed to fit the 4,000-character limit]';
+      combined = combined.slice(0, MAX_FEEDBACK_CHARS - marker.length) + marker;
+      status.textContent = 'The report was trimmed to fit the 4,000-character limit.';
+    }
+    ta.value = combined;
     ta.dispatchEvent(new Event('input'));
-    btn.textContent = 'Report attached';
+    btn.textContent = 'Report attached'; // stays disabled: one attach per open
   } catch (err) {
+    if (gen !== attachGen) return;
     btn.disabled = false;
     btn.textContent = 'Attach Support Report';
-    document.getElementById('fbContactStatus').textContent = 'Could not build the report — try again.';
+    status.textContent = 'Could not build the report — try again.';
   }
 });
 
@@ -957,7 +975,9 @@ supportCopyBtn.addEventListener('click', async () => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     cancelFixCountdown();
-    if (supportOverlay.classList.contains('show'))                         closeSupportReport();
-    if (document.getElementById('fbOverlay').classList.contains('show'))   closeFeedback();
+    // Close only the topmost overlay — the report preview can now sit on top
+    // of the feedback modal, and closing both would wipe the user's draft.
+    if      (supportOverlay.classList.contains('show'))                    closeSupportReport();
+    else if (document.getElementById('fbOverlay').classList.contains('show')) closeFeedback();
   }
 });

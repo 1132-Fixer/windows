@@ -593,6 +593,9 @@
       flex-wrap: wrap;
     }
     .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px; /* STYLEGUIDE minimum target size */
       font-size: 12px;
       font-weight: 600;
       letter-spacing: 0.2px;
@@ -610,7 +613,7 @@
     .version-badge { cursor: default; }
     .version-badge:hover { transform: none; color: var(--muted); }
     .feedback-badge { color: var(--accent); border-color: var(--accent-bd); background: var(--accent-bg); }
-    .support-badge { color: var(--info); border-color: var(--info-bd); background: var(--info-bg); }
+    .site-badge { color: var(--info); border-color: var(--info-bd); background: var(--info-bg); }
 
     .footer-meta {
       display: flex;
@@ -672,7 +675,9 @@
     .fb-section.active { display: block; }
     .fb-label { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: var(--s-2); }
     .fb-inline-link {
-      background: none; border: none; padding: 0;
+      display: inline-flex; align-items: center;
+      min-height: 44px; /* STYLEGUIDE minimum target size */
+      background: none; border: none; padding: 0 4px;
       font: inherit; color: var(--accent);
       text-decoration: underline; cursor: pointer;
     }
@@ -724,6 +729,7 @@
     }
     .fb-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: var(--s-4); }
     .fb-btn {
+      min-height: 44px; /* STYLEGUIDE minimum target size */
       padding: 10px 22px;
       border-radius: var(--r-sm);
       border: 1px solid transparent;
@@ -962,7 +968,7 @@
       <div class="fb-section" id="fbContact">
         <button class="fb-btn-back" id="fbContactBack">Back</button>
         <div class="fb-title">Send a Message / Support Request</div>
-        <div class="fb-label">Your message (min 50 characters) &middot; <button type="button" class="fb-inline-link" id="fbViewReport">preview support report</button></div>
+        <div class="fb-label">Your message (min 50 characters, or attach a support report) &middot; <button type="button" class="fb-inline-link" id="fbViewReport">preview support report</button></div>
         <textarea class="fb-textarea" id="fbContactText" placeholder="What would you like to tell us?" aria-label="Message"></textarea>
         <div class="fb-actions">
           <button class="fb-btn fb-btn-cancel" id="fbAttachReport" aria-label="Attach sanitized support report to this message">Attach Support Report</button>
