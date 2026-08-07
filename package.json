@@ -7,7 +7,7 @@
     "start": "electron .",
     "dev": "electron . --enable-logging",
     "inject-config": "node scripts/inject-config.js",
-    "test": "node tools/sanitizer-smoke.js",
+    "test": "node tools/sanitizer-smoke.js && node tools/shortcut-legacy-smoke.js",
     "postinstall": "node scripts/postinstall.js",
     "build": "node scripts/inject-config.js && electron-builder --win portable --x64 --publish never",
     "build:installer": "node scripts/inject-config.js && electron-builder --win nsis --x64 --publish never",
@@ -106,6 +106,10 @@
       {
         "from": "assets/icon.ico",
         "to": "icon.ico"
+      },
+      {
+        "from": "assets/1132-helper-shortcut.ico",
+        "to": "1132-helper-shortcut.ico"
       },
       {
         "from": "scripts/zoom-firstrun-setup.ps1",

@@ -497,6 +497,19 @@
       flex-wrap: wrap;
     }
 
+    /* Decorative button artwork: the text supplies the accessible name, so the
+       image is aria-hidden and never carries meaning on its own. */
+    .btn-icon {
+      width: 24px;
+      height: 24px;
+      object-fit: contain;
+      vertical-align: middle;
+      margin-right: 8px;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
     .btn {
       padding: 12px 24px;
       border-radius: var(--r-sm);
@@ -867,7 +880,7 @@
 
     <div class="button-container">
       <button id="fixBtn" class="btn btn-primary" disabled aria-label="Run the full fix now">Fix now</button>
-      <button id="shortcutBtn" class="btn">Create desktop shortcut</button>
+      <button id="shortcutBtn" class="btn"><img class="btn-icon" src="assets/1132-helper-shortcut.png" alt="" aria-hidden="true" width="24" height="24">Create Zoom Helper Shortcut</button>
     </div>
 
     <p class="button-note">

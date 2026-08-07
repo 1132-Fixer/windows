@@ -578,11 +578,28 @@ function friendlyError(code) {
 // ============================================================
 async function createShortcut(showHeader) {
   if (showHeader) {
-    addFileItem('CREATING DESKTOP SHORTCUT...', 'header');
+    addFileItem('CREATING ZOOM HELPER SHORTCUT...', 'header');
   }
   const result = await window.electronAPI.createShortcut();
-  if (result.success) addFileItem(`Shortcut created: ${result.path}`, 'success');
-  else                addFileItem(`Shortcut failed: ${result.error}`, 'failed');
+  if (!result.success) {
+    addFileItem(`Shortcut failed: ${result.error}`, 'failed');
+    return;
+  }
+  addFileItem(`Shortcut created: ${result.path}`, 'success');
+
+  // An old shortcut we could not delete is the exact problem the rename
+  // cleanup exists to prevent, so it is never swallowed by the success line:
+  // the user is told which file to remove, in plain words.
+  const failed = result.legacyRemovalFailed || [];
+  if (failed.length) {
+    addFileItem(
+      `Could not remove ${failed.length === 1 ? 'the older shortcut' : `${failed.length} older shortcuts`} — delete ${failed.length === 1 ? 'it' : 'them'} by hand so you do not have two:`,
+      'failed'
+    );
+    for (const f of failed) addFileItem(`    ${f.path}`, 'failed');
+  } else if ((result.legacyRemoved || []).length) {
+    addFileItem(`Older shortcut removed: ${result.legacyRemoved.join(', ')}`, 'success');
+  }
 }
 
 // ============================================================
