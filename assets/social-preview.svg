@@ -15,7 +15,7 @@
   <rect width="1280" height="640" fill="url(#canvas)"/>
   <rect x="18" y="18" width="1244" height="604" rx="30" fill="none" stroke="#214A73" stroke-width="2"/>
   <image href="1132-fixer-logo-transparent.png" xlink:href="1132-fixer-logo-transparent.png" x="50" y="100" width="440" height="440" preserveAspectRatio="xMidYMid meet"/>
-  <rect x="478" y="140" width="7" height="362" rx="3.5" fill="url(#rule)"/>
+  <rect x="510" y="140" width="7" height="362" rx="3.5" fill="url(#rule)"/>
   <g font-family="DejaVu Sans, Arial, sans-serif">
     <text x="540" y="205" fill="#F7F9FD" font-size="54" font-weight="700" letter-spacing="5">1132 FIXER</text>
     <text x="540" y="292" fill="#4B93FF" font-size="66" font-weight="700" letter-spacing="1">FOR WINDOWS</text>
