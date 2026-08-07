@@ -131,9 +131,15 @@
       gap: 6px;
     }
     .logo img {
-      width: 56px;
-      height: 56px;
-      border-radius: var(--r-md);
+      display: block;
+      width: 72px;
+      height: 72px;
+      object-fit: contain;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      filter: none;
     }
     .logo-title {
       font-size: 24px;
@@ -593,6 +599,9 @@
       flex-wrap: wrap;
     }
     .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px; /* STYLEGUIDE minimum target size */
       font-size: 12px;
       font-weight: 600;
       letter-spacing: 0.2px;
@@ -610,7 +619,7 @@
     .version-badge { cursor: default; }
     .version-badge:hover { transform: none; color: var(--muted); }
     .feedback-badge { color: var(--accent); border-color: var(--accent-bd); background: var(--accent-bg); }
-    .support-badge { color: var(--info); border-color: var(--info-bd); background: var(--info-bg); }
+    .site-badge { color: var(--info); border-color: var(--info-bd); background: var(--info-bg); }
 
     .footer-meta {
       display: flex;
@@ -671,6 +680,13 @@
     .fb-section { display: none; }
     .fb-section.active { display: block; }
     .fb-label { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: var(--s-2); }
+    .fb-inline-link {
+      display: inline-flex; align-items: center;
+      min-height: 44px; /* STYLEGUIDE minimum target size */
+      background: none; border: none; padding: 0 4px;
+      font: inherit; color: var(--accent);
+      text-decoration: underline; cursor: pointer;
+    }
     .fb-textarea {
       width: 100%;
       min-height: 100px;
@@ -719,6 +735,7 @@
     }
     .fb-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: var(--s-4); }
     .fb-btn {
+      min-height: 44px; /* STYLEGUIDE minimum target size */
       padding: 10px 22px;
       border-radius: var(--r-sm);
       border: 1px solid transparent;
@@ -789,10 +806,10 @@
       <button class="exit-badge" id="btnExit" aria-label="Exit application">Exit</button>
     </div>
     <div class="logo">
-      <img src="assets/icon.png" alt="">
+      <img src="assets/logo-transparent.png" alt="">
       <span class="logo-title">1132 Fixer</span>
       <div class="logo-sep" aria-hidden="true"></div>
-      <span class="logo-desc">Zoom 1132 repair utility for Windows</span>
+      <span class="logo-desc">One-click fix for Zoom Error 1132</span>
     </div>
   </div>
 
@@ -814,9 +831,8 @@
          ============================================================ -->
     <section class="view active" id="homeView" aria-label="Environment checks">
       <div class="home-intro">
-        Fully resets the local <strong>user1</strong> helper account and launches a clean
-        Zoom Workplace session under it. No personal files, chats, contacts, or Zoom
-        account data are touched. Do <strong>not</strong> run while signed in AS user1.
+        Resets the <strong>user1</strong> helper account and opens Zoom. Your files and Zoom data
+        stay unchanged. Do <strong>not</strong> run while signed in as user1.
       </div>
       <div class="chk-list" id="checkList" role="list" aria-label="Environment checks"></div>
     </section>
@@ -864,8 +880,8 @@
     <div class="footer-content">
       <span class="badge version-badge" id="appVersion">v5.3</span>
       <div class="footer-meta">
-        <button class="badge support-badge" id="btnSupportReport" aria-label="Generate sanitized support report">Support Report</button>
-        <button class="badge feedback-badge" id="btnFeedback">Feedback</button>
+        <button class="badge feedback-badge" id="btnSupport" aria-label="Submit feedback or a support report">Feedback &amp; Report</button>
+        <button class="badge site-badge" id="btnVisitSite" aria-label="Open the 1132 Fixer website">Visit Website</button>
         <span class="badge admin-badge" id="adminBadge" role="status">Administrator</span>
       </div>
     </div>
@@ -881,7 +897,7 @@
         <div class="fb-choices">
           <div class="fb-choice" data-mode="bug" tabindex="0" role="button">Bug Report</div>
           <div class="fb-choice" data-mode="rating" tabindex="0" role="button">Rate Your Experience</div>
-          <div class="fb-choice" data-mode="contact" tabindex="0" role="button">Send a Message</div>
+          <div class="fb-choice" data-mode="contact" tabindex="0" role="button">Share Other Feedback</div>
         </div>
         <div class="fb-actions">
           <button class="fb-btn fb-btn-cancel" id="fbClose">Cancel</button>
@@ -891,11 +907,12 @@
       <div class="fb-section" id="fbBug">
         <button class="fb-btn-back" id="fbBugBack">Back</button>
         <div class="fb-title">Bug Report</div>
-        <div class="fb-label">Describe the issue (min 50 characters)</div>
+        <div class="fb-label">Describe the issue (min 50 characters, or attach a support report) &middot; <button type="button" class="fb-inline-link" id="fbViewReport">preview support report</button></div>
         <textarea class="fb-textarea" id="fbBugText" placeholder="What happened? What did you expect?" aria-label="Bug description"></textarea>
         <div class="fb-label">System Info (auto-attached)</div>
         <div class="fb-sysinfo" id="fbSysInfo">Loading...</div>
         <div class="fb-actions">
+          <button class="fb-btn fb-btn-cancel" id="fbAttachReport" aria-label="Attach sanitized support report to this bug report">Attach Support Report</button>
           <button class="fb-btn fb-btn-cancel" id="fbBugCancel">Cancel</button>
           <button class="fb-btn fb-btn-submit" id="fbBugSubmit" disabled>Submit</button>
         </div>
@@ -956,7 +973,7 @@
 
       <div class="fb-section" id="fbContact">
         <button class="fb-btn-back" id="fbContactBack">Back</button>
-        <div class="fb-title">Send a Message</div>
+        <div class="fb-title">Share Other Feedback</div>
         <div class="fb-label">Your message (min 50 characters)</div>
         <textarea class="fb-textarea" id="fbContactText" placeholder="What would you like to tell us?" aria-label="Message"></textarea>
         <div class="fb-actions">

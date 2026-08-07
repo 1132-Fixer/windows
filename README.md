@@ -1,215 +1,171 @@
 <p align="center">
-  <img src="assets/icon.png" alt="1132 Fixer" width="180">
+  <img src="assets/social-preview.png" alt="1132 Fixer for Windows — One-click fix for Zoom Error 1132" width="960">
 </p>
 
-<h1 align="center">1132 Fixer - Windows</h1>
+<h1 align="center">1132 Fixer for Windows</h1>
 
 <p align="center">
-  <strong>Fix Zoom Error 1132 device bans on Windows.</strong><br>
-  1132 Fixer helps you get back into Zoom by creating a fresh local Windows user and launching Zoom Workplace as that user.
+  <strong>One-click fix for Zoom Error 1132.</strong><br>
+  Opens Zoom Workplace with a separate local Windows helper account.
 </p>
 
 <p align="center">
-  <a href="https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Releases/releases/latest">Download Latest Release</a>
+  <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-3A82F7?logo=windows11&amp;logoColor=white">
+  <img alt="Setup and Portable" src="https://img.shields.io/badge/Builds-Setup%20%2B%20Portable-39D353">
+  <a href="https://github.com/PrimeUpYourLife/1132-Fixer-Windows/actions/workflows/ci.yml"><img alt="Build status" src="https://github.com/PrimeUpYourLife/1132-Fixer-Windows/actions/workflows/ci.yml/badge.svg"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Releases/releases/latest"><strong>Download Latest Release</strong></a>
+  &nbsp;•&nbsp;
+  <a href="https://1132-fixer.xyz/"><strong>Visit Website</strong></a>
 </p>
 
 ---
 
-## What It Does
+## What it does
 
-Zoom Error 1132 can behave like a device-level or user-profile-level restriction that persists even after uninstalling and reinstalling Zoom.
+Error 1132 can stay after Zoom is reinstalled. It may be tied to a Windows user profile.
 
-Instead of purging Zoom database files, this updated fixer uses a cleaner launch method:
+1132 Fixer resets a separate helper account named `user1`. It then opens Zoom under that account.
 
-- Creates a new local Windows user
-- Adds that user to the local Administrators group
-- Launches Zoom Workplace as that new user
-- Optionally creates a Desktop quick-launch shortcut for future use
+When you press **Fix now**, the app:
 
-## How It Works
+1. Checks Windows, admin access, and the Zoom install.
+2. Stops active `user1` sessions and removes the old helper profile.
+3. Recreates `user1` and applies safe session settings.
+4. Opens and checks Zoom Workplace as `user1`.
+5. Creates or repairs the desktop shortcut.
+6. Shows a clear result when the work is done.
 
-When you press **Fix Now**, the app will:
+## Main features
 
-1. Create or reset a local Windows user:
+| Feature | What it gives you |
+|---|---|
+| ✅ Automatic checks | Finds blockers before the fix starts. |
+| 🖱️ One-click flow | Runs the full fix from one main button. |
+| 🧾 Fix receipt | Shows what worked and what needs attention. |
+| 🔗 Desktop shortcut | Creates or repairs a shortcut that opens Zoom as `user1`. |
+| 🎥 Camera and microphone setup | Applies safe Windows desktop-app consent settings. |
+| 📋 Support report | Builds a redacted report you can review before sharing. |
+| 💬 Feedback & Report | Opens bug, rating, and general feedback choices. |
+| 🌐 Visit Website | Opens [1132-fixer.xyz](https://1132-fixer.xyz/). |
+| 📦 Two builds | Choose Setup or Portable. |
 
-   ```text
-   Username: user1
-   Password: user1
-   ```
+## Important safety note
 
-   If `user1` already exists, its password is reset to `user1` (the rest of the profile is preserved so Zoom sign-in state survives).
+> [!IMPORTANT]
+> 1132 Fixer deletes and recreates the local `user1` helper account. Anything stored in that helper profile is removed. It does not delete files or Zoom data from your normal Windows profile. Do not run it while signed in to Windows as `user1`.
 
-2. Ensure `user1` is in the local Administrators group
-3. Launch Zoom Workplace as `user1` from:
-
-   ```text
-   C:\Program Files\Zoom\bin\Zoom.exe
-   ```
-
-   The launch uses PowerShell `Start-Process -Credential`, so no console password prompt appears.
-
-4. Optionally place a quick-launch shortcut on your Desktop
-
-## Important Notice
-
-This fix creates a new Windows user on your computer.
-
-Default credentials:
+The app manages this local account:
 
 ```text
 Username: user1
 Password: user1
 ```
 
-The user is added to the local Administrators group so Zoom can run properly under that profile.
+- `user1` is added to the local Administrators group.
+- Do not use `user1` as your normal Windows account.
+- The app may ask for Windows admin approval.
 
-Windows may show permission prompts while the fix runs. You must approve those prompts for the fix to complete.
+## Requirements
 
-## Desktop Quick Launch
-
-1132 Fixer can also create a Desktop shortcut named:
-
-```text
-Launch Zoom as user1
-```
-
-This shortcut lets you launch Zoom using the created Windows user in the future without reopening the fixer app.
-
-The shortcut uses the same icon/logo as the 1132 Fixer app.
-
-## Install
-
-Download the latest **Setup .exe** from [Releases](https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Releases/releases/latest).
-
-Requires:
-
-- Windows 10 or Windows 11
-- Administrator privileges
-- Zoom Workplace installed at the default location
-
-## Usage
-
-1. Run **1132 Fixer**
-2. Read the notice explaining that a new Windows user will be created
-3. Press **Fix Now**
-4. Approve any Windows permission prompts
-5. Zoom Workplace launches as the new user
-6. Optionally create the Desktop quick-launch shortcut
-
-## Troubleshooting
-
-If the fix fails, check that:
-
-- You are running the app as Administrator
-- Zoom Workplace is installed
-- Zoom exists at:
+- Windows 10 or Windows 11, x64
+- Administrator access
+- The Windows **Secondary Logon** service must be available
+- Zoom Workplace installed at:
 
   ```text
   C:\Program Files\Zoom\bin\Zoom.exe
   ```
 
-- Your Windows account has permission to create local users
-- Security software is not blocking user creation or `runas`
+## Install and use
 
-### Camera or microphone does not work as `user1`
+1. Download the latest [Setup or Portable build](https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Releases/releases/latest).
+2. Open **1132 Fixer**.
+3. Read the safety note.
+4. Press **Fix now**.
+5. Approve any Windows prompt.
+6. Sign in to Zoom in the new session.
+7. Create the desktop shortcut if you want faster access next time.
 
-As of **v5.3.6**, the fixer grants Windows camera + microphone consent
-to desktop apps for the newly created `user1` automatically. If camera
-or mic still does not work in Zoom under `user1`, the cause is almost
-always one of these — none of which a Zoom-error fixer can override:
+## Privacy and support
 
-| Cause | What to do |
+- The fix runs on your PC.
+- The app does not send a report unless you press **Submit**.
+- Support reports hide common private values such as usernames, profile paths, and SIDs.
+- Read the report before you attach it.
+
+The current feedback service sends accepted items to a private project issue tracker. A new Discord staff view, verified live rating, and **My Messages** inbox are being built. They are not part of v5.5.1.
+
+## Quick help
+
+| Problem | Try this |
 |---|---|
-| **Windows organization / MDM policy blocks camera or microphone** | The Fix Receipt panel will show `BLOCKED BY WINDOWS POLICY`. Ask your Windows administrator. Or use a non-managed personal device. |
-| **Hardware privacy shutter is closed** | Lenovo ThinkShutter, Dell webcam slider, function-key camera disable (F-key with camera icon). Slide it open / toggle the key. |
-| **Third-party antivirus webcam shield** | Bitdefender, Kaspersky, ESET, Norton, and similar AV suites gate camera access separately from Windows. Open the AV app and allow Zoom (or temporarily disable the webcam shield to confirm). |
-| **Camera driver failure** | Open Device Manager → Cameras. If the camera shows a warning icon, reinstall the driver from the laptop vendor (not Windows Update). |
-| **FrameServer service Disabled** | The fixer auto-bumps this from Disabled to Manual. If the Fix Receipt shows `Frame Server: DISABLED and could not be re-enabled`, run `Set-Service FrameServer -StartupType Manual` from an admin PowerShell. |
-| **Hive race on first run only** | If the Fix Receipt shows `HKU hive: per-user write skipped`, double-click the **Apply Zoom Settings** shortcut on the user1 desktop. The first-run script reasserts consent from inside `user1`'s own session and will fix it. |
+| The app says admin access is missing | Close it, then choose **Run as administrator**. |
+| Zoom is not found | Install Zoom Workplace in the default folder. |
+| The fix button stays disabled | Read the check rows and fix the item marked in red. |
+| Security software blocks the fix | Allow the app to create the local helper account and start Zoom. |
+| Camera or microphone is missing | Check Windows privacy settings, the hardware shutter, the camera driver, and any antivirus webcam shield. |
+| A support report is too long | The app trims it and shows a clear notice. |
 
-To verify Windows itself is letting `user1` use the camera, sign into
-Windows as `user1` and open:
+<details>
+<summary><strong>Camera and microphone details</strong></summary>
+
+Open Windows as `user1`, then go to:
 
 ```text
 Settings → Privacy & security → Camera
 ```
 
-Both the top **Camera access** toggle and **Let desktop apps access
-your camera** must be on. If they are on and Zoom still cannot see a
-camera, the cause is hardware, driver, or third-party AV — not Windows
-consent.
+Turn on **Camera access** and **Let desktop apps access your camera**. Check the matching microphone page too.
 
-## Release & CI Setup
+If the controls are already on, check:
 
-### Cutting a release
+- the laptop camera shutter;
+- a camera function key;
+- antivirus webcam protection;
+- Device Manager for a driver warning;
+- an organization or MDM policy.
 
-Releases are built and published by CI, not from a laptop. The whole flow is:
+</details>
 
-```bash
-node scripts/bump-version.js patch   # 5.3.11 -> 5.3.12 (or minor/major)
-npm install --package-lock-only      # keep package-lock in sync — `npm ci` fails otherwise
-# commit + merge to master, then:
-git tag -a v5.3.12 -m "v5.3.12 — ..."
-git push origin v5.3.12
-```
+<details>
+<summary><strong>For developers and release managers</strong></summary>
 
-Pushing a `v*` tag triggers `.github/workflows/release.yml`, which builds **both**
-targets, refuses to publish unless *both* `*Setup*.exe` and `*Portable*.exe` exist,
-generates checksums, and creates the release on
-`PrimeUpYourLife/1132-Fixer-Windows-Releases` using the `RELEASES_PAT` secret.
-
-> Keep `package.json` and `package-lock.json` in sync. `release.yml` runs `npm ci`,
-> which hard-fails on a mismatch — this is why v5.3.10 never ran the pipeline and
-> was hand-published with only the Portable exe.
-
-### Build vs. publish
-
-`build`, `build:installer`, and `build:all` all pass `--publish never`: they only ever
-produce artifacts in `dist/`. Only `npm run release` (`--publish always`) publishes.
-
-This matters because **electron-builder auto-detects CI and will try to publish on its
-own** if a `publish` block exists in `package.json` — which made every `master` CI run
-fail with `GitHub Personal Access Token is not set ... "GH_TOKEN"`. The explicit
-`--publish never` on the build scripts is what keeps CI green without needing a token.
-
-### Secrets and variables
-
-| Name | Kind | Where | Purpose |
-|---|---|---|---|
-| `RELEASES_PAT` | **secret** | Actions secret on `1132-Fixer-Windows` | Lets `release.yml` create the release + upload assets on the Releases repo. **Required.** |
-| `FEEDBACK_PROXY_URL` | *variable* | Actions **variable** on `1132-Fixer-Windows` | Optional. Public url of the feedback proxy. Not a secret. Without it, builds still succeed and feedback reports "not configured". |
-| `GH_ISSUES_TOKEN` | **secret** | **the proxy's env only** — never here, never in the app | Read by `feedback-proxy/`. Set it on Railway (or wherever it's hosted). |
-| `GH_TOKEN` | **secret** | local shell only | Only needed if you run `npm run release` by hand instead of tagging. |
-| `CSC_LINK` / `CSC_KEY_PASSWORD` | **secret** | Actions secrets | Optional code signing. |
-
-### Never put a secret in the app
-
-**`src/main/config.js` must never contain a credential.** It carries only
-`FEEDBACK_PROXY_URL` — a public endpoint.
-
-This is not paranoia. This repo is private, so the danger was never git history — it's
-that `config.js` is bundled into the packaged app, and the app ships as a **public
-installer**. Anything hardcoded there lands in `app.asar` inside every published
-`.exe`, where asar stores file contents uncompressed. Pulling it back out takes about
-a minute:
+### Run checks
 
 ```bash
-7za x 1132-Fixer-Portable-5.3.10.exe -oext
-grep -a "GH_ISSUES_TOKEN" ext/resources/app.asar
-# -> GH_ISSUES_TOKEN: 'github_pat_11A674FI...'
+npm ci
+npm test
 ```
 
-That is exactly how the token hardcoded up to v5.3.10 leaked, and why **injecting at
-build time was not a fix** — it kept the secret out of git, but it still shipped.
+### Change the version
 
-The fix is architectural: the token lives in [`feedback-proxy/`](feedback-proxy/), and
-the app just calls it. `scripts/inject-config.js` **fails the build** if the injected
-value looks like a token or is plaintext http, so a credential cannot reach a build by
-accident again.
+```bash
+node scripts/bump-version.js patch
+npm install --package-lock-only
+```
 
-To rotate the feedback token now: change the env var on the proxy and redeploy. The
-client never changes and no release is needed.
+### Publish a release
 
-## License
+Push a `v*` tag. `.github/workflows/release.yml` builds Setup and Portable files, makes checksums, and publishes to `PrimeUpYourLife/1132-Fixer-Windows-Releases`.
 
-MIT - PЯIMΞ
+Keep these names in the right place:
+
+| Name | Where it belongs |
+|---|---|
+| `RELEASES_PAT` | GitHub Actions secret |
+| `FEEDBACK_PROXY_URL` | GitHub Actions variable |
+| `GH_ISSUES_TOKEN` | Railway service only |
+| `CSC_LINK` / `CSC_KEY_PASSWORD` | Optional signing secrets |
+
+Never place a token in app code or a packaged config file. Public `.exe` files can be unpacked and read.
+
+The old `1132-Fixer-Windows-Releases` repo must stay online until existing app updates and download links have moved safely.
+
+</details>
+
+## Independent project
+
+1132 Fixer is not made by or linked to Zoom Video Communications, Inc.

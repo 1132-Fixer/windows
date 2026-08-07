@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">1132 Fixer for Windows</title>
+  <desc id="desc">1132 Fixer logo and product information for Windows.</desc>
+  <defs>
+    <linearGradient id="canvas" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#08162B"/>
+      <stop offset="1" stop-color="#0B1B33"/>
+    </linearGradient>
+    <linearGradient id="rule" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFD05A"/>
+      <stop offset="0.5" stop-color="#FFAD1F"/>
+      <stop offset="1" stop-color="#FF8A00"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#canvas)"/>
+  <rect x="18" y="18" width="1244" height="604" rx="30" fill="none" stroke="#214A73" stroke-width="2"/>
+  <image href="1132-fixer-logo-transparent.png" xlink:href="1132-fixer-logo-transparent.png" x="50" y="100" width="440" height="440" preserveAspectRatio="xMidYMid meet"/>
+  <rect x="510" y="140" width="7" height="362" rx="3.5" fill="url(#rule)"/>
+  <g font-family="DejaVu Sans, Arial, sans-serif">
+    <text x="540" y="205" fill="#F7F9FD" font-size="54" font-weight="700" letter-spacing="5">1132 FIXER</text>
+    <text x="540" y="292" fill="#4B93FF" font-size="66" font-weight="700" letter-spacing="1">FOR WINDOWS</text>
+    <text x="540" y="367" fill="#F7F9FD" font-size="31" font-weight="700">One-click fix for Zoom Error 1132</text>
+    <text x="540" y="420" fill="#C7D3E8" font-size="27" font-weight="400">Windows 10/11 • Setup + Portable</text>
+  </g>
+</svg>

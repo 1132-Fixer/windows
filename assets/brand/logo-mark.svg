@@ -1,29 +1,5 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!--
-  1132 Fixer logo mark — wrench-over-shield monogram.
-  Single-color SVG with linear gradient; trims to 256x256 viewBox.
-  Source of truth for any rasterized derivatives (.ico, .png, social).
--->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="1132 Fixer">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%"   stop-color="#ffe066"/>
-      <stop offset="55%"  stop-color="#ffd700"/>
-      <stop offset="100%" stop-color="#f5a623"/>
-    </linearGradient>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%"   stop-color="#0b1020"/>
-      <stop offset="100%" stop-color="#050a14"/>
-    </linearGradient>
-  </defs>
-  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
-  <!-- Shield base -->
-  <path d="M128 28 L208 56 L208 132 C208 178 172 214 128 232 C84 214 48 178 48 132 L48 56 Z"
-        fill="none" stroke="url(#g)" stroke-width="10" stroke-linejoin="round"/>
-  <!-- Wrench -->
-  <g transform="translate(76 76) rotate(-30 52 52)" stroke="url(#g)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" fill="none">
-    <path d="M96 24 a32 32 0 1 0 -16 56 L24 136 a14 14 0 0 0 20 20 L100 100 a32 32 0 0 0 40 -40 L116 60 L96 80 L76 76 L72 56 Z"/>
-  </g>
-  <!-- 1132 wordmark micro -->
-  <text x="128" y="252" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-weight="900" font-size="22" fill="url(#g)" letter-spacing="6">1132</text>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 440 440" role="img" aria-labelledby="title desc">
+  <title id="title">1132 Fixer logo</title>
+  <desc id="desc">Blue gear with orange 1132 text and silver Fixer text on a transparent background.</desc>
+  <image href="1132-fixer-logo-transparent.png" xlink:href="1132-fixer-logo-transparent.png" width="440" height="440" preserveAspectRatio="xMidYMid meet"/>
 </svg>

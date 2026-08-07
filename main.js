@@ -121,6 +121,7 @@ ipcMain.handle('defer-update', () => {
 // ============================================================
 const RELEASES_LATEST_URL = 'https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Releases/releases/latest';
 const LATEST_YML_URL = RELEASES_LATEST_URL + '/download/latest.yml';
+const WEBSITE_URL = 'https://1132-fixer.xyz/';
 const UPDATE_RECHECK_MS = 4 * 60 * 60 * 1000; // long-open apps re-check every 4h
 
 // GitHub's /releases/latest/download/* is a 302 to the CDN; plain
@@ -179,6 +180,11 @@ async function checkPortableUpdate() {
 
 ipcMain.handle('open-download-page', () => {
   shell.openExternal(RELEASES_LATEST_URL);
+  return { success: true };
+});
+
+ipcMain.handle('open-website', () => {
+  shell.openExternal(WEBSITE_URL);
   return { success: true };
 });
 

@@ -754,7 +754,8 @@ window.addEventListener('DOMContentLoaded', async () => {
 })();
 
 // ============================================================
-// Feedback modal (unchanged behavior)
+// Feedback modal — single Submit Feedback / Report entry: chooser (bug /
+// rating / message+support-request), attach-report flow, report preview link
 // ============================================================
 const ratings = { ease: 0, resolved: 0, recommend: 0, overall: 0 };
 let feedbackMode = '';
@@ -770,6 +771,10 @@ function openFeedback() {
   showSection('fbChoose');
   feedbackMode = '';
   document.querySelectorAll('.fb-textarea').forEach(t => { t.value = ''; });
+  attachGen++;
+  const attachBtn = document.getElementById('fbAttachReport');
+  attachBtn.disabled = false;
+  attachBtn.textContent = 'Attach Support Report';
   document.querySelectorAll('.fb-rating-btn').forEach(b => b.classList.remove('selected'));
   document.querySelectorAll('.fb-status').forEach(s => { s.textContent = ''; s.className = 'fb-status'; });
   Object.keys(ratings).forEach(k => { ratings[k] = 0; });
@@ -791,7 +796,8 @@ async function loadSysInfo() {
   }
 }
 
-document.getElementById('btnFeedback').addEventListener('click', openFeedback);
+document.getElementById('btnSupport').addEventListener('click', openFeedback);
+document.getElementById('btnVisitSite').addEventListener('click', () => window.electronAPI.openWebsite());
 ['fbClose', 'fbBugCancel', 'fbRatingCancel', 'fbContactCancel'].forEach(id => {
   document.getElementById(id).addEventListener('click', closeFeedback);
 });
@@ -827,6 +833,50 @@ document.querySelectorAll('.fb-rating-btns').forEach(group => {
   document.getElementById(id).addEventListener('input', (e) => {
     document.getElementById(submitId).disabled = e.target.value.trim().length < 50;
   });
+});
+
+document.getElementById('fbViewReport').addEventListener('click', openSupportReport);
+
+// Bug-report attach flow: pull the sanitized report into the bug description
+// so one submission carries both. attachGen invalidates an in-flight build
+// when the modal is closed/reopened (openFeedback bumps it), so a stale IPC
+// completion can't write into a fresh form. Budget leaves headroom under the
+// proxy's 4,000-char MAX_TEXT_CHARS for the auto-appended system-info block.
+const MAX_ATTACH_CHARS = 3700;
+let attachGen = 0;
+document.getElementById('fbAttachReport').addEventListener('click', async () => {
+  const btn = document.getElementById('fbAttachReport');
+  const status = document.getElementById('fbBugStatus');
+  status.textContent = '';
+  btn.disabled = true;
+  btn.textContent = 'Attaching…';
+  const gen = attachGen;
+  try {
+    const result = await window.electronAPI.supportReport({
+      receipt: lastReceipt,
+      logTail: logBuffer.join('\n'),
+      stage:   lastStageLabel
+    });
+    if (gen !== attachGen) return;
+    const md = result && result.markdown;
+    if (!md) throw new Error('report unavailable');
+    const ta = document.getElementById('fbBugText');
+    const userText = ta.value.trim();
+    let combined = userText ? userText + '\n\n---\n' + md : md;
+    if (combined.length > MAX_ATTACH_CHARS) {
+      const marker = '\n…[report trimmed to fit the 4,000-character limit]';
+      combined = combined.slice(0, MAX_ATTACH_CHARS - marker.length) + marker;
+      status.textContent = 'The report was trimmed to fit the 4,000-character limit.';
+    }
+    ta.value = combined;
+    ta.dispatchEvent(new Event('input'));
+    btn.textContent = 'Report attached'; // stays disabled: one attach per open
+  } catch (err) {
+    if (gen !== attachGen) return;
+    btn.disabled = false;
+    btn.textContent = 'Attach Support Report';
+    status.textContent = 'Could not build the report — try again.';
+  }
 });
 
 document.getElementById('fbBugSubmit').addEventListener('click', async () => {
@@ -882,7 +932,6 @@ const supportTextArea  = document.getElementById('supportText');
 const supportCopyBtn   = document.getElementById('supportCopy');
 const supportCloseBtn  = document.getElementById('supportClose');
 const supportCopyStat  = document.getElementById('supportCopyStatus');
-const btnSupportReport = document.getElementById('btnSupportReport');
 
 let releaseSupportTrap = null;
 
@@ -908,7 +957,6 @@ function closeSupportReport() {
   if (releaseSupportTrap) { releaseSupportTrap(); releaseSupportTrap = null; }
 }
 
-btnSupportReport.addEventListener('click', openSupportReport);
 supportCloseBtn.addEventListener('click', closeSupportReport);
 supportCopyBtn.addEventListener('click', async () => {
   try {
@@ -928,7 +976,9 @@ supportCopyBtn.addEventListener('click', async () => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     cancelFixCountdown();
-    if (supportOverlay.classList.contains('show'))                         closeSupportReport();
-    if (document.getElementById('fbOverlay').classList.contains('show'))   closeFeedback();
+    // Close only the topmost overlay — the report preview can now sit on top
+    // of the feedback modal, and closing both would wipe the user's draft.
+    if      (supportOverlay.classList.contains('show'))                    closeSupportReport();
+    else if (document.getElementById('fbOverlay').classList.contains('show')) closeFeedback();
   }
 });
