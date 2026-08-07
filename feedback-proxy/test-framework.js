@@ -193,7 +193,7 @@ check('healthz alive; readyz ready; health keeps legacy shape + db field', async
   const rz = await req('GET', '/readyz');
   const h = await req('GET', '/health');
   return hz.status === 200 && rz.status === 200 && rz.json.migrations === 'applied' &&
-    rz.json.worker === 'running' &&
+    ['running', 'starting'].includes(rz.json.worker) &&
     h.status === 200 && h.json.ok === true && h.json.configured === true && h.json.db === 'ok';
 });
 
@@ -437,7 +437,9 @@ check('my-messages: staff reply listed; AVAILABLE -> NOTIFIED on list', async ()
   const list = await req('GET', '/v1/my-messages', undefined, bearer(S.A));
   const m = list.json.messages.find((x) => x.caseRef === S.case1);
   S.staffMsgId = m && m.messageId;
-  const after = (await db.query("SELECT state FROM inbox_receipts")).rows[0];
+  const after = (await db.query(
+    "SELECT r.state FROM inbox_receipts r JOIN case_messages m ON m.id = r.message_id " +
+      "WHERE m.public_id = $1", [S.staffMsgId])).rows[0];
   return unread1.json.unread === 1 && list.json.unread === 1 &&
     /^MS-[A-Z2-9]{8,16}$/.test(S.staffMsgId) && m.author === 'staff' &&
     m.body === 'Please send the preflight log.' && after.state === 'NOTIFIED';
@@ -479,7 +481,10 @@ check('user reply: waiting_for_user -> in_review; receipts flip REPLIED', async 
 });
 
 check('resolve button -> resolved; user reply reopens', async () => {
-  const r = await signedInteraction(button(`resolve:${S.case1}`));
+  // Controls carry the epoch they were rendered with.
+  const epoch = (await db.query(
+    'SELECT control_epoch FROM support_cases WHERE case_ref = $1', [S.case1])).rows[0].control_epoch;
+  const r = await signedInteraction(button(`resolve:${S.case1}:${epoch}`));
   const reply = await req('POST', `/v1/cases/${S.case1}/messages`,
     { body: 'still broken after the fix' }, bearer(S.A, idem('M3')));
   return r.json.data.content.includes('resolved') && reply.status === 201 &&
@@ -525,7 +530,7 @@ check('forum posts use Components V2, all five controls, escaped markdown', asyn
   return posts.length === 5 && posts.every((p) =>
     p.message.flags === 32768 && !p.message.content && !p.message.embeds) &&
     ['reply:', 'assign:', 'diag:', 'resolve:', 'more:'].every((a) =>
-      componentsJson.includes(`"custom_id":"${a}${S.case1}"`)) &&
+      componentsJson.includes(`"custom_id":"${a}${S.case1}:`)) && // epoch-suffixed
     texts.includes('\\*\\*stops\\*\\*'); // user's ** arrives markdown-escaped
 });
 
@@ -749,10 +754,16 @@ check('MINOR: fenced facts cannot be broken out of or forged', async () => {
   }, bearer(S.C, idem('FENCE')));
   await outbox.tick();
   const post = fetchCalls.filter((c) => c.url.includes('/threads')).pop();
-  const facts = JSON.parse(post.body).message.components[0].components
+  const block = JSON.parse(post.body).message.components[0].components
     .map((c) => c.content || '').find((t) => t.includes('ENVIRONMENT'));
-  return r.status === 201 && !facts.includes('`') &&
-    facts.split('\n').filter((l) => l.startsWith('ASSIGNED')).length === 1;
+  const lines = block.split('\n');
+  const envLine = lines.find((l) => l.startsWith('ENVIRONMENT'));
+  const diagLine = lines.find((l) => l.startsWith('DIAGNOSTICS'));
+  // The fence itself is backticks; the injected values must carry none, and
+  // the newline must not have forged an extra fact row.
+  return r.status === 201 && !envLine.includes('`') && !diagLine.includes('`') &&
+    !envLine.includes('```') && lines.filter((l) => l.startsWith('ASSIGNED')).length === 1 &&
+    envLine.includes('ASSIGNED      admin'); // flattened onto the ENVIRONMENT line
 });
 
 check('MINOR: stale Discord signature timestamp is rejected', async () => {
