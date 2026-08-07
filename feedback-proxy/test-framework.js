@@ -746,6 +746,46 @@ check('REVIEW#9b: internal notes stay out of the case transcript too', async () 
   return one.status === 200 && !one.body.includes('TRANSCRIPT-SECRET');
 });
 
+check('REVIEW#10: a FAILED interaction retried with the same id re-arms and applies', async () => {
+  // A crash after recordInteraction leaves response_state='failed'. Discord
+  // redelivers the SAME interaction id; the retry must apply, not dead-end
+  // on 'Already handled.'
+  const created = await req('POST', '/v1/cases',
+    { type: 'bug', title: 'Retry re-arm probe', description: 'a failed attempt must be retryable' },
+    bearer(S.C, idem('REARM')));
+  const ref = created.json.caseRef;
+  const row = (await db.query(
+    'SELECT id, control_epoch FROM support_cases WHERE case_ref = $1', [ref])).rows[0];
+  await db.query(
+    'INSERT INTO discord_interactions (interaction_id, case_id, discord_user_id, action, response_state) ' +
+      "VALUES ('int-rearm-1', $1, 'staff-user-1', 'resolve', 'failed')",
+    [row.id]);
+  const r = await signedInteraction(button(`resolve:${ref}:${row.control_epoch}`, { id: 'int-rearm-1' }));
+  const after = (await db.query(
+    "SELECT response_state FROM discord_interactions WHERE interaction_id = 'int-rearm-1'")).rows[0];
+  const state = (await db.query(
+    'SELECT state FROM support_cases WHERE case_ref = $1', [ref])).rows[0].state;
+  return r.json.data.content.includes('resolved') && state === 'resolved' &&
+    after.response_state === 'applied';
+});
+
+check('REVIEW#11: concurrent rating submits build a complete snapshot (no undercount)', async () => {
+  // Two installs rate at the same moment; the advisory lock serializes the
+  // snapshot rebuilds so the stored aggregate includes both rows.
+  const p1 = (await req('POST', '/v1/principals',
+    { product: 'WINDOWS', appVersion: '5.5.1' }, { 'x-forwarded-for': '10.2.0.1' })).json;
+  const p2 = (await req('POST', '/v1/principals',
+    { product: 'WINDOWS', appVersion: '5.5.1' }, { 'x-forwarded-for': '10.2.0.2' })).json;
+  const [a, b] = await Promise.all([
+    req('POST', '/v1/ratings', scores({}), bearer(p1, idem('CC1'))),
+    req('POST', '/v1/ratings', scores({}), bearer(p2, idem('CC2'))),
+  ]);
+  const current = await req('GET', '/v1/ratings/current');
+  const verified = await count("SELECT count(*) FROM ratings WHERE state = 'verified'");
+  return a.status === 200 && b.status === 200 &&
+    current.status === 200 && current.json.count === verified;
+});
+
 check('MINOR: fenced facts cannot be broken out of or forged', async () => {
   const r = await req('POST', '/v1/cases', {
     type: 'bug', title: 'Fence escape probe',
