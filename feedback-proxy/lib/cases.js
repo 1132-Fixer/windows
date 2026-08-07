@@ -1,6 +1,6 @@
 /**
- * Support cases (final directive schema: support_cases / case_messages /
- * case_events / inbox_receipts / discord_case_bindings).
+ * Support cases (support_cases / case_messages / case_events /
+ * inbox_receipts / discord_case_bindings).
  *
  * Public identifier is the random caseRef ('FX-…'); message ids are random
  * 'MS-…'. Client responses never contain database ids, Discord ids,
@@ -10,8 +10,9 @@
  * State machine: user replies move waiting_for_user -> in_review and
  * resolved -> reopened; spam locks the case for users; staff transitions
  * come only through verified Discord interactions. Every state change bumps
- * support_cases.control_epoch (stale Discord controls are rejected) and
- * writes a case_events row.
+ * support_cases.control_epoch, writes a case_events row, and enqueues a
+ * card refresh so Discord controls are reissued carrying the new epoch —
+ * stale controls (reply modal AND resolve button) are rejected.
  */
 'use strict';
 
@@ -21,7 +22,7 @@ const ids = require('./ids');
 const outbox = require('./outbox');
 const inbox = require('./inbox');
 const { withIdempotency } = require('./idempotency');
-const { json, fail, readBody, clean } = require('./http');
+const { json, fail, readBody, clean, principalLimited } = require('./http');
 
 const MAX_BODY_BYTES = 32 * 1024;
 const SUBJECT_MIN = 3;
@@ -96,9 +97,22 @@ async function insertMessage(client, caseRow, author, body, opts) {
   return rows[0];
 }
 
+function toClientCase(c) {
+  return {
+    caseRef: c.case_ref,
+    kind: c.kind,
+    state: c.state,
+    subject: c.subject,
+    appVersion: c.app_version,
+    createdAt: c.created_at,
+    updatedAt: c.updated_at,
+  };
+}
+
 /**
- * Insert a case + first user message + audit event + outbox alert on the
- * caller's transaction. Also used by ratings.js (kind 'rating_feedback').
+ * Insert a case + first user message + system confirmation (with an inbox
+ * receipt, so the case is visible in My Messages immediately) + audit event
+ * + outbox alert, on the caller's transaction. Also used by ratings.js.
  */
 async function insertCase(client, principal, fields, idemKey) {
   const caseRef = ids.newCaseRef();
@@ -113,19 +127,14 @@ async function insertCase(client, principal, fields, idemKey) {
   );
   const c = rows[0];
   await insertMessage(client, c, 'user', fields.summary, { idempotencyKey: idemKey + ':initial' });
+  const confirm = await insertMessage(client, c, 'system',
+    `Case ${caseRef} received. Support replies appear here in My Messages.`,
+    { idempotencyKey: idemKey + ':confirm' });
+  await inbox.addReceipt(client, confirm.id, principal.id, 'READ');
   await addCaseEvent(client, c.id, 'user', principal.public_id, 'case.created', { kind: fields.kind });
   await outbox.enqueue(client, 'case', c.id, 'case.created', {
     case_id: c.id,
     case_ref: c.case_ref,
-    kind: c.kind,
-    state: c.state,
-    priority: c.priority,
-    product: c.product,
-    app_version: c.app_version,
-    subject: c.subject,
-    summary: c.summary,
-    environment: fields.environment || {},
-    created_at: c.created_at.toISOString(),
   });
   return c;
 }
@@ -146,12 +155,18 @@ async function setState(client, caseRow, toState, actorType, actorRef) {
   );
   await addCaseEvent(client, caseRow.id, actorType, actorRef, 'state.changed',
     { from: caseRow.state, to: toState });
+  // Reissue the Discord controls with the new epoch, so a stale card cannot
+  // act on the newer state.
+  await outbox.enqueue(client, 'case', caseRow.id, 'case.card.refresh', {
+    case_id: caseRow.id, case_ref: caseRow.case_ref,
+  });
 }
 
 // ---- client route handlers ------------------------------------------
 
 /** POST /v1/cases — bug | feedback ('Contact' temporarily mapped to feedback). */
 async function create(req, res, principal) {
+  if (principalLimited(res, 'cases', principal)) return;
   const raw = await readRaw(req, res);
   if (!raw) return;
   const idemKey = requireIdemKey(req, res);
@@ -190,8 +205,42 @@ async function create(req, res, principal) {
   });
 }
 
+/** GET /v1/cases — principal-scoped list. */
+async function list(req, res, principal) {
+  const { rows } = await db.query(
+    'SELECT * FROM support_cases WHERE principal_id = $1 ORDER BY updated_at DESC LIMIT 100',
+    [principal.id]
+  );
+  return json(res, 200, {
+    cases: rows.map(toClientCase),
+    unread: await inbox.unreadCount(principal.id),
+  });
+}
+
+/** GET /v1/cases/{caseRef} — case + its user-visible transcript. */
+async function get(req, res, principal, caseRef) {
+  const { rows } = await db.query(
+    'SELECT * FROM support_cases WHERE case_ref = $1 AND principal_id = $2',
+    [caseRef, principal.id]
+  );
+  if (!rows[0]) return fail(res, 404, 'not_found', 'No such case.');
+  // internal_notes is a different table; it cannot leak through this join.
+  const msgs = await db.query(
+    'SELECT public_id, author, body, created_at FROM case_messages ' +
+      'WHERE case_id = $1 ORDER BY case_seq',
+    [rows[0].id]
+  );
+  return json(res, 200, {
+    case: toClientCase(rows[0]),
+    messages: msgs.rows.map((m) => ({
+      messageId: m.public_id, author: m.author, body: m.body, createdAt: m.created_at,
+    })),
+  });
+}
+
 /** POST /v1/cases/{caseRef}/messages — user reply. */
 async function addMessage(req, res, principal, caseRef) {
+  if (principalLimited(res, 'messages', principal)) return;
   const raw = await readRaw(req, res);
   if (!raw) return;
   const idemKey = requireIdemKey(req, res);
@@ -262,21 +311,33 @@ async function currentEpoch(caseRef) {
   return rows[0].control_epoch;
 }
 
+/** Every staff control carries the epoch it was issued with. */
+function assertEpoch(caseRow, expectedEpoch) {
+  if (!Number.isInteger(expectedEpoch) || caseRow.control_epoch !== expectedEpoch) {
+    throw staffError('stale_epoch');
+  }
+}
+
 /**
  * Staff reply from the Discord modal. expectedEpoch is the control epoch
  * captured when the modal was opened — a mismatch means the case changed
- * underneath the form (stale controls cannot change a newer case).
+ * underneath the form.
  */
 async function staffReply(caseRef, { body, statusWord, staffUserId, interactionId, expectedEpoch }) {
   const to = STAFF_STATUS_WORDS.get(statusWord);
   if (!to) throw staffError('bad_status_word');
   const out = await db.tx(async (client) => {
     const c = await lockCase(client, caseRef);
-    if (c.control_epoch !== expectedEpoch) throw staffError('stale_epoch');
+    assertEpoch(c, expectedEpoch);
     const m = await insertMessage(client, c, 'staff', body,
       { staffUserId, idempotencyKey: 'discord:' + interactionId });
     await inbox.addReceipt(client, m.id, c.principal_id);
     await addCaseEvent(client, c.id, 'staff', staffUserId, 'message.created', { case_seq: m.case_seq });
+    // Mirror the staff side into the thread too, so the forum shows the whole
+    // conversation (no role ping — this is a thread post).
+    await outbox.enqueue(client, 'message', m.id, 'message.created', {
+      case_id: c.id, case_ref: c.case_ref, author: 'staff', body,
+    });
     if (to !== c.state) await setState(client, c, to, 'staff', staffUserId);
     else await client.query('UPDATE support_cases SET updated_at = now() WHERE id = $1', [c.id]);
     return { caseRef: c.case_ref, state: to, principalId: c.principal_id };
@@ -285,16 +346,28 @@ async function staffReply(caseRef, { body, statusWord, staffUserId, interactionI
   return out;
 }
 
-/** Resolve button. Idempotent: an already resolved case stays resolved. */
-async function staffResolve(caseRef, staffUserId) {
+/** Resolve button. Epoch-checked like the reply modal. */
+async function staffResolve(caseRef, staffUserId, expectedEpoch) {
   return db.tx(async (client) => {
     const c = await lockCase(client, caseRef);
+    assertEpoch(c, expectedEpoch);
     if (c.state !== 'resolved') await setState(client, c, 'resolved', 'staff', staffUserId);
     return { caseRef: c.case_ref, state: 'resolved' };
   });
 }
 
+/** Case + binding data the worker needs to render the Discord card. */
+async function cardData(client, caseId) {
+  const { rows } = await client.query(
+    'SELECT c.*, b.forum_thread_id, b.control_message_id ' +
+      'FROM support_cases c LEFT JOIN discord_case_bindings b ON b.case_id = c.id ' +
+      'WHERE c.id = $1',
+    [caseId]
+  );
+  return rows[0] || null;
+}
+
 module.exports = {
-  create, addMessage,
-  insertCase, staffReply, staffResolve, currentEpoch,
+  create, list, get, addMessage,
+  insertCase, insertMessage, addCaseEvent, staffReply, staffResolve, currentEpoch, cardData,
 };

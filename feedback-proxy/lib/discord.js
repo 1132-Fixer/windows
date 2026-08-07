@@ -32,6 +32,15 @@ function escapeMd(s) {
   return String(s == null ? '' : s).replace(/([\\*_~`|>#[\]()-])/g, '\\$1');
 }
 
+/**
+ * Values embedded in the fenced facts block: backticks would close the fence
+ * and newlines would forge extra fact rows (a fake STATE/ASSIGNED line), so
+ * both are flattened to spaces.
+ */
+function escapeFact(s) {
+  return String(s == null ? '' : s).replace(/[`\r\n]+/g, ' ').slice(0, 120);
+}
+
 async function api(method, path, body) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error('DISCORD_BOT_TOKEN not set');
@@ -66,17 +75,32 @@ const KIND_LABEL = {
 
 const text = (content) => ({ type: TEXT_DISPLAY, content });
 
-/** Starter message for a case forum post — six facts, short, phone-friendly. */
+const STATE_DOT = {
+  new: '\u{1F7E1} New',
+  in_review: '\u{1F535} In review',
+  waiting_for_user: '\u{1F7E0} Waiting for user',
+  reopened: '\u{1F7E1} Reopened',
+  resolved: '\u{1F7E2} Resolved',
+  spam: '\u{26AB} Spam',
+};
+
+/**
+ * Starter/control message for a case forum post — six facts, short,
+ * phone-friendly. Every control custom_id carries the case's control epoch,
+ * so a card rendered against an older state cannot act on the newer one.
+ */
 function buildCaseMessage(p) {
   const env = p.environment || {};
+  const epoch = p.control_epoch || 1;
   const facts = [
-    'STATE         \u{1F7E1} New',
+    `STATE         ${STATE_DOT[p.state] || p.state}`,
     `PRIORITY      ${p.priority || 'normal'}`,
-    `SOURCE        ${p.product} · ${p.app_version}`,
-    'ASSIGNED      Unassigned',
-    `ENVIRONMENT   ${env.os || 'unknown'}`,
-    `DIAGNOSTICS   ${env.impact ? 'Impact: ' + env.impact : 'none provided'}`,
+    `SOURCE        ${p.product} · ${escapeFact(p.app_version)}`,
+    `ASSIGNED      ${escapeFact(p.assigned_discord_user_id) || 'Unassigned'}`,
+    `ENVIRONMENT   ${escapeFact(env.os) || 'unknown'}`,
+    `DIAGNOSTICS   ${env.impact ? 'Impact: ' + escapeFact(env.impact) : 'none provided'}`,
   ].join('\n');
+  const closed = p.state === 'resolved' || p.state === 'spam';
   return {
     flags: IS_COMPONENTS_V2,
     allowed_mentions: NO_MENTIONS,
@@ -92,21 +116,29 @@ function buildCaseMessage(p) {
         {
           type: ACTION_ROW,
           components: [
-            { type: BUTTON, style: 1, label: '\u{1F4AC} Reply', custom_id: `reply:${p.case_ref}` },
-            { type: BUTTON, style: 2, label: 'Assign to me', custom_id: `assign:${p.case_ref}` },
-            { type: BUTTON, style: 2, label: 'Request diagnostics', custom_id: `diag:${p.case_ref}` },
-            { type: BUTTON, style: 3, label: 'Resolve', custom_id: `resolve:${p.case_ref}` },
+            { type: BUTTON, style: 1, label: '\u{1F4AC} Reply', custom_id: `reply:${p.case_ref}:${epoch}` },
+            { type: BUTTON, style: 2, label: 'Assign to me', custom_id: `assign:${p.case_ref}:${epoch}` },
+            { type: BUTTON, style: 2, label: 'Request diagnostics', custom_id: `diag:${p.case_ref}:${epoch}` },
+            {
+              type: BUTTON, style: 3, label: 'Resolve',
+              custom_id: `resolve:${p.case_ref}:${epoch}`, disabled: closed,
+            },
           ],
         },
         {
           type: ACTION_ROW,
           components: [
-            { type: BUTTON, style: 2, label: 'More actions…', custom_id: `more:${p.case_ref}` },
+            { type: BUTTON, style: 2, label: 'More actions…', custom_id: `more:${p.case_ref}:${epoch}` },
           ],
         },
       ],
     }],
   };
+}
+
+/** Re-render the control card in place after a state change. */
+function editCaseCard(threadId, messageId, caseRow) {
+  return api('PATCH', `/channels/${threadId}/messages/${messageId}`, buildCaseMessage(caseRow));
 }
 
 /** Forum tags for kind/state/platform, from the DISCORD_TAG_* env ids that are set. */
@@ -217,4 +249,7 @@ async function upsertRatingCard(snapshot) {
   console.log(`[discord] created live rating card — set DISCORD_LIVE_RATING_MESSAGE_ID=${msg.id}`);
 }
 
-module.exports = { createForumPost, postRoleAlert, postThreadMessage, upsertRatingCard, escapeMd };
+module.exports = {
+  createForumPost, postRoleAlert, postThreadMessage, editCaseCard, upsertRatingCard,
+  escapeMd, escapeFact,
+};

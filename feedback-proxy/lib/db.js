@@ -20,7 +20,13 @@ function getPool() {
   if (!hasDb()) return null;
   if (!pool) {
     const { Pool } = require('pg');
-    pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
+    // connectionTimeoutMillis: a starved pool must fail the request fast
+    // rather than park it forever behind a slow worker.
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      max: 5,
+      connectionTimeoutMillis: 5000,
+    });
     pool.on('error', (e) => console.error('[db] idle client error: ' + e.message));
   }
   return pool;

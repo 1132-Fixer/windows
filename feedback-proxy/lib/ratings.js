@@ -24,7 +24,7 @@ const db = require('./db');
 const cases = require('./cases');
 const outbox = require('./outbox');
 const { withIdempotency } = require('./idempotency');
-const { json, fail, readBody, clean } = require('./http');
+const { json, fail, readBody, clean, principalLimited } = require('./http');
 
 const MAX_BODY_BYTES = 16 * 1024;
 const COMMENT_MAX = 4000;
@@ -67,6 +67,15 @@ async function insertSnapshot(client, product) {
     [product, WINDOW_DAYS, agg.count ? agg.average : null, agg.count,
      JSON.stringify(distributionOf(agg)), state]
   );
+  // Only the newest row per scope is ever read; keep a couple for history
+  // rather than growing the table forever.
+  await client.query(
+    'DELETE FROM rating_snapshots WHERE product IS NOT DISTINCT FROM $1 AND window_days = $2 ' +
+      'AND id NOT IN (SELECT id FROM rating_snapshots ' +
+      'WHERE product IS NOT DISTINCT FROM $1 AND window_days = $2 ' +
+      'ORDER BY generated_at DESC LIMIT 3)',
+    [product, WINDOW_DAYS]
+  );
   return {
     id: rows[0].id, generatedAt: rows[0].generated_at, state,
     average: agg.count ? agg.average : null, count: agg.count,
@@ -102,6 +111,7 @@ function publicRatingBody(s) {
 // ---- POST /v1/ratings ----------------------------------------------
 
 async function submit(req, res, principal) {
+  if (principalLimited(res, 'ratings', principal)) return;
   let raw;
   try {
     raw = await readBody(req, MAX_BODY_BYTES);
@@ -136,6 +146,11 @@ async function submit(req, res, principal) {
   const needsCase = !allPositive || Boolean(comment); // any 0-3, or any written text
 
   return withIdempotency(res, principal, idemKey, raw, async (client) => {
+    // Serialize concurrent first-ratings for this principal+product: without
+    // a row to lock, two different keys would both take the insert path and
+    // the loser would 500 on the unique constraint.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',
+      [principal.id + ':' + principal.product]);
     const existing = (await client.query(
       'SELECT * FROM ratings WHERE principal_id = $1 AND product = $2 FOR UPDATE',
       [principal.id, principal.product]
@@ -178,12 +193,27 @@ async function submit(req, res, principal) {
     if (needsCase) {
       // Exactly one open rating case per principal+product; never stacked.
       const open = (await client.query(
-        "SELECT case_ref FROM support_cases WHERE principal_id = $1 AND kind = 'rating_feedback' " +
+        "SELECT * FROM support_cases WHERE principal_id = $1 AND kind = 'rating_feedback' " +
           "AND state NOT IN ('resolved', 'spam') ORDER BY created_at DESC LIMIT 1",
         [principal.id]
       )).rows[0];
       if (open) {
         caseRef = open.case_ref;
+        // A NEW submission on an already-open case must still reach staff:
+        // append it to the case and mirror it into the thread. The once-per-
+        // case role alert is what dedupes retries — it must not swallow
+        // genuinely new content.
+        const updateBody =
+          `Rating updated — overall ${scores.overall}/5 (ease ${scores.ease}, resolved ${scores.resolved}, recommend ${scores.recommend}).` +
+          (comment ? `\n${comment}` : '');
+        const m = await cases.insertMessage(client, open, 'user', updateBody,
+          { idempotencyKey: idemKey + ':rerate' });
+        await cases.addCaseEvent(client, open.id, 'user', principal.public_id,
+          'rating.updated', { overall: scores.overall });
+        await client.query('UPDATE support_cases SET updated_at = now() WHERE id = $1', [open.id]);
+        await outbox.enqueue(client, 'message', m.id, 'message.created', {
+          case_id: open.id, case_ref: open.case_ref, author: 'user', body: updateBody,
+        });
       } else {
         const c = await cases.insertCase(client, principal, {
           kind: 'rating_feedback',
@@ -221,9 +251,26 @@ async function current(req, res, searchParams) {
     );
     if (rows[0]) {
       const s = rows[0];
-      return json(res, 200, publicRatingBody({
-        average: s.average, count: s.rating_count, generatedAt: s.generated_at,
-      }));
+      const age = Date.now() - new Date(s.generated_at).getTime();
+      if (age <= STALE_AFTER_MS) {
+        return json(res, 200, publicRatingBody({
+          average: s.average, count: s.rating_count, generatedAt: s.generated_at,
+        }));
+      }
+      // Snapshots are only written on submission, so a quiet period would
+      // otherwise serve a permanently STALE (and window-expired) number.
+      // Recompute live; fall back to the stored row if that read fails.
+      try {
+        const fresh = await aggregate(db, productParam);
+        return json(res, 200, publicRatingBody({
+          average: fresh.count ? fresh.average : null, count: fresh.count,
+          generatedAt: new Date().toISOString(),
+        }));
+      } catch {
+        return json(res, 200, publicRatingBody({
+          average: s.average, count: s.rating_count, generatedAt: s.generated_at,
+        }));
+      }
     }
     // Cold start: no snapshot yet — compute live, store nothing on a GET.
     const agg = await aggregate(db, productParam);

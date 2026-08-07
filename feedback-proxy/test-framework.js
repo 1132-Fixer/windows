@@ -18,6 +18,8 @@ if (!process.env.TEST_DATABASE_URL) {
 
 const crypto = require('crypto');
 const http = require('http');
+const { execFileSync } = require('child_process');
+const path = require('path');
 
 const PORT = 39118;
 process.env.PORT = String(PORT);
@@ -41,6 +43,7 @@ process.env.DISCORD_PUBLIC_KEY = publicKey
 const fetchCalls = [];
 let threadCounter = 0;
 let failNextThreadPost = false; // simulates an archived thread once
+let failNextRoleAlert = false;  // simulates a role-alert failure once
 global.fetch = async (url, opts) => {
   const u = String(url);
   const call = { url: u, method: (opts && opts.method) || 'GET', body: opts && opts.body };
@@ -54,6 +57,10 @@ global.fetch = async (url, opts) => {
   if (u.includes('/threads')) {
     threadCounter += 1;
     return respond(201, { id: 'thread-' + threadCounter });
+  }
+  if (failNextRoleAlert && call.body && call.body.includes('<@&')) {
+    failNextRoleAlert = false;
+    return respond(403, { message: 'Missing permissions' });
   }
   if (call.method === 'PATCH') return respond(200, { id: 'card-1' });
   if (u.includes('/messages')) {
@@ -91,6 +98,38 @@ function req(method, path, body, headers) {
     r.on('error', reject);
     if (data) r.write(data);
     r.end();
+  });
+}
+
+/** Like req(), but exposes the response headers (for CORS assertions). */
+function rawReq(method, path, headers) {
+  return new Promise((resolve, reject) => {
+    const r = http.request({ host: '127.0.0.1', port: PORT, path, method, headers: headers || {} },
+      (res) => {
+        let s = '';
+        res.on('data', (c) => (s += c));
+        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: s }));
+      });
+    r.on('error', reject);
+    r.end();
+  });
+}
+
+/** Open an SSE stream and keep it open; used to test the per-principal cap. */
+function sseOpen(path, headers) {
+  return new Promise((resolve, reject) => {
+    const handle = { closed: false, destroy: () => handle.req.destroy() };
+    handle.req = http.request({ host: '127.0.0.1', port: PORT, path, method: 'GET', headers },
+      (res) => {
+        res.on('data', () => {});
+        res.on('end', () => { handle.closed = true; });
+        res.on('close', () => { handle.closed = true; });
+        // Give the server a moment to close an over-cap older stream.
+        setTimeout(() => resolve(handle), 120).unref();
+      });
+    handle.req.on('error', () => { handle.closed = true; });
+    handle.req.end();
+    setTimeout(() => reject(new Error('sse open timeout')), 4000).unref();
   });
 }
 
@@ -432,7 +471,10 @@ check('SSE: events stream opens and delivers the unread count', async () => {
 check('user reply: waiting_for_user -> in_review; receipts flip REPLIED', async () => {
   const r = await req('POST', `/v1/cases/${S.case1}/messages`,
     { body: 'log attached here' }, bearer(S.A, idem('M2')));
-  const receipt = (await db.query('SELECT state FROM inbox_receipts')).rows[0];
+  const receipt = (await db.query(
+    "SELECT r.state FROM inbox_receipts r JOIN case_messages m ON m.id = r.message_id " +
+      "JOIN support_cases c ON c.id = m.case_id WHERE c.case_ref = $1 AND m.author = 'staff'",
+    [S.case1])).rows[0];
   return r.status === 201 && r.json.state === 'in_review' && receipt.state === 'REPLIED';
 });
 
@@ -508,6 +550,266 @@ check('DIRECTIVE: archived thread does not block or lose a user reply', async ()
   const pending = await count("SELECT count(*) FROM outbox WHERE state IN ('pending', 'failed')");
   return r.status === 201 && failed === 1 && pending === 0 &&
     (await count("SELECT count(*) FROM case_messages WHERE body = 'one more detail'")) === 1;
+});
+
+// --- regression checks for the adversarial review findings -----------
+
+check('REVIEW#1: same key + identical body across principals does not collide', async () => {
+  // The cross-principal UNIQUE (key, request_digest) is gone; both principals
+  // must succeed independently with a shared key and byte-identical body.
+  const body = { type: 'feedback', title: 'Shared key probe', description: 'identical body' };
+  const a = await req('POST', '/v1/cases', body, bearer(S.A, idem('SHARED-KEY')));
+  const b = await req('POST', '/v1/cases', body, bearer(S.B, idem('SHARED-KEY')));
+  return a.status === 201 && b.status === 201 && a.json.caseRef !== b.json.caseRef;
+});
+
+check('REVIEW#2: a key reused after expiry is reclaimed, not a permanent 500', async () => {
+  const body = { type: 'feedback', title: 'Expiry reclaim probe', description: 'first use' };
+  const first = await req('POST', '/v1/cases', body, bearer(S.A, idem('EXPIRING')));
+  // Age the stored record past its retention window.
+  await db.query(
+    "UPDATE idempotency_requests SET expires_at = now() - interval '1 hour' WHERE key = 'EXPIRING'");
+  const second = await req('POST', '/v1/cases',
+    { type: 'feedback', title: 'Expiry reclaim probe', description: 'second use' },
+    bearer(S.A, idem('EXPIRING')));
+  return first.status === 201 && second.status === 201 &&
+    second.json.caseRef !== first.json.caseRef; // reclaimed, not replayed
+});
+
+check('REVIEW#2b: worker tick purges long-expired idempotency rows', async () => {
+  await db.query(
+    "UPDATE idempotency_requests SET expires_at = now() - interval '2 hours' WHERE key = 'EXPIRING'");
+  const before = await count("SELECT count(*) FROM idempotency_requests WHERE key = 'EXPIRING'");
+  await outbox.tick();
+  const after = await count("SELECT count(*) FROM idempotency_requests WHERE key = 'EXPIRING'");
+  return before === 1 && after === 0;
+});
+
+check('REVIEW#3: per-principal case budget returns 429 (and does not touch others)', async () => {
+  // Dedicated principal so the budget probe cannot couple to other checks.
+  const flooder = (await req('POST', '/v1/principals',
+    { product: 'WINDOWS', appVersion: '5.5.1' }, { 'x-forwarded-for': '10.1.0.9' })).json;
+  let sawLimit = false;
+  for (let i = 0; i < 40 && !sawLimit; i++) {
+    const r = await req('POST', '/v1/cases',
+      { type: 'feedback', title: 'Flood probe ' + i, description: 'flooding' },
+      bearer(flooder, idem('FLOOD-' + i)));
+    if (r.status === 429 && r.json.error.code === 'rate_limited') sawLimit = true;
+  }
+  const other = await req('GET', '/v1/cases', undefined, bearer(S.C));
+  // Remove the probe's cases and their queued Discord work so this check
+  // cannot perturb the outbox assertions that follow.
+  await db.query(
+    "DELETE FROM outbox WHERE payload->>'case_ref' IN " +
+      '(SELECT case_ref FROM support_cases WHERE principal_id = ' +
+      '(SELECT id FROM support_principals WHERE public_id = $1))',
+    [flooder.principalId]
+  );
+  await db.query(
+    'DELETE FROM support_cases WHERE principal_id = ' +
+      '(SELECT id FROM support_principals WHERE public_id = $1)',
+    [flooder.principalId]
+  );
+  return sawLimit && other.status === 200; // budget is per principal, not global
+});
+
+check('REVIEW#3b: concurrent SSE streams per principal are capped', async () => {
+  const opened = [];
+  for (let i = 0; i < 5; i++) opened.push(await sseOpen('/v1/my-messages/events', bearer(S.C)));
+  const alive = opened.filter((s) => !s.closed).length;
+  opened.forEach((s) => s.destroy());
+  return alive <= 3;
+});
+
+check('REVIEW#4: role-alert failure never creates a second forum thread', async () => {
+  const before = fetchCalls.filter((c) => c.url.includes('/threads')).length;
+  const r = await req('POST', '/v1/cases',
+    { type: 'bug', title: 'Alert failure probe', description: 'role alert will fail once' },
+    bearer(S.A, idem('ALERTFAIL')));
+  failNextRoleAlert = true;
+  await outbox.tick();                       // post succeeds, alert 403s
+  await db.query("UPDATE outbox SET available_at = now() WHERE state = 'failed'");
+  await outbox.tick();                       // retry must reuse the thread
+  const after = fetchCalls.filter((c) => c.url.includes('/threads')).length;
+  const bindings = await count(
+    'SELECT count(*) FROM discord_case_bindings b JOIN support_cases c ON c.id = b.case_id ' +
+      'WHERE c.case_ref = $1', [r.json.caseRef]);
+  const pending = await count("SELECT count(*) FROM outbox WHERE state IN ('pending','failed')");
+  return after - before === 1 && bindings === 1 && pending === 0;
+});
+
+check('REVIEW#5: re-rating an open case appends the new content for staff', async () => {
+  const msgsBefore = await count(
+    'SELECT count(*) FROM case_messages m JOIN support_cases c ON c.id = m.case_id ' +
+      'WHERE c.case_ref = $1', [S.ratingCaseB]);
+  const r = await req('POST', '/v1/ratings',
+    scores({ ease: 0, overall: 0, comment: 'it got much worse after the update' }),
+    bearer(S.B, idem('R-RERATE')));
+  const msgsAfter = await count(
+    'SELECT count(*) FROM case_messages m JOIN support_cases c ON c.id = m.case_id ' +
+      'WHERE c.case_ref = $1', [S.ratingCaseB]);
+  const mirrored = await count(
+    "SELECT count(*) FROM outbox WHERE event_type = 'message.created' " +
+      "AND payload->>'case_ref' = $1", [S.ratingCaseB]);
+  const evented = await count(
+    "SELECT count(*) FROM case_events e JOIN support_cases c ON c.id = e.case_id " +
+      "WHERE c.case_ref = $1 AND e.event_type = 'rating.updated'", [S.ratingCaseB]);
+  return r.json.caseRef === S.ratingCaseB && msgsAfter === msgsBefore + 1 &&
+    mirrored >= 1 && evented === 1;
+});
+
+check('REVIEW#6: ticks do not stack while one is in flight', async () => {
+  const results = await Promise.all([outbox.tick(), outbox.tick(), outbox.tick()]);
+  const pending = await count("SELECT count(*) FROM outbox WHERE state IN ('pending','failed')");
+  return results.length === 3 && pending === 0;
+});
+
+check('REVIEW#6b: a stuck running row is reclaimed after its lease', async () => {
+  await db.query(
+    "INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload, state, locked_at) " +
+      "SELECT 'case', id, 'case.card.refresh', jsonb_build_object('case_id', id::text, 'case_ref', case_ref), " +
+      "'running', now() - interval '10 minutes' FROM support_cases WHERE case_ref = $1",
+    [S.case1]
+  );
+  await outbox.tick();
+  const stuck = await count("SELECT count(*) FROM outbox WHERE state = 'running'");
+  return stuck === 0;
+});
+
+check('REVIEW#7: a DB failure on SSE connect does not kill the process', async () => {
+  // Force the pre-header unread query to fail; the request must error
+  // cleanly and the server must still serve legacy /feedback afterwards.
+  await db.query('ALTER TABLE inbox_receipts RENAME TO inbox_receipts_hidden');
+  let status = 0;
+  try {
+    const r = await sseFirstEvent('/v1/my-messages/events', bearer(S.A));
+    status = r.status;
+  } catch { status = 0; }
+  await db.query('ALTER TABLE inbox_receipts_hidden RENAME TO inbox_receipts');
+  const alive = await req('POST', '/feedback', { type: 'Feedback', text: 'still alive' });
+  return status !== 200 && alive.status === 201; // no SSE 200, process survived
+});
+
+check('REVIEW#8: stale resolve button is rejected; card refresh is enqueued', async () => {
+  const epoch = (await db.query(
+    'SELECT control_epoch FROM support_cases WHERE case_ref = $1', [S.case3])).rows[0].control_epoch;
+  const stale = await signedInteraction(button(`resolve:${S.case3}:${epoch - 1}`));
+  const stateAfterStale = (await db.query(
+    'SELECT state FROM support_cases WHERE case_ref = $1', [S.case3])).rows[0].state;
+  const fresh = await signedInteraction(button(`resolve:${S.case3}:${epoch}`));
+  const refreshes = await count(
+    "SELECT count(*) FROM outbox WHERE event_type = 'case.card.refresh' AND payload->>'case_ref' = $1",
+    [S.case3]);
+  return stale.json.data.content.includes('changed since') && stateAfterStale !== 'resolved' &&
+    fresh.json.data.content.includes('resolved') && refreshes >= 1;
+});
+
+check('REVIEW#8b: refreshed card carries the new epoch and disables Resolve', async () => {
+  await outbox.tick();
+  const patches = fetchCalls.filter((c) => c.method === 'PATCH' && c.body && c.body.includes('resolve:'));
+  const last = JSON.parse(patches[patches.length - 1].body);
+  const j = JSON.stringify(last.components);
+  const epoch = (await db.query(
+    'SELECT control_epoch FROM support_cases WHERE case_ref = $1', [S.case3])).rows[0].control_epoch;
+  return patches.length >= 1 && j.includes(`"custom_id":"resolve:${S.case3}:${epoch}"`) &&
+    j.includes('"disabled":true') && j.includes('Resolved');
+});
+
+check('REVIEW#9: own case is listed, readable, and lands in My Messages at once', async () => {
+  const created = await req('POST', '/v1/cases',
+    { type: 'bug', title: 'Visible immediately', description: 'should appear in my messages' },
+    bearer(S.C, idem('VISIBLE')));
+  const ref = created.json.caseRef;
+  const list = await req('GET', '/v1/cases', undefined, bearer(S.C));
+  const one = await req('GET', `/v1/cases/${ref}`, undefined, bearer(S.C));
+  const inboxList = await req('GET', '/v1/my-messages', undefined, bearer(S.C));
+  const foreign = await req('GET', `/v1/cases/${ref}`, undefined, bearer(S.A));
+  return list.json.cases.some((c) => c.caseRef === ref) &&
+    one.status === 200 && one.json.messages.length === 2 &&
+    one.json.messages[0].author === 'user' && one.json.messages[1].author === 'system' &&
+    inboxList.json.messages.some((m) => m.caseRef === ref) &&
+    foreign.status === 404;
+});
+
+check('REVIEW#9b: internal notes stay out of the case transcript too', async () => {
+  const { rows } = await db.query('SELECT id FROM support_cases WHERE case_ref = $1', [S.case1]);
+  await db.query(
+    "INSERT INTO internal_notes (case_id, staff_discord_user_id, body) VALUES ($1, 'staff-user-1', 'TRANSCRIPT-SECRET')",
+    [rows[0].id]
+  );
+  const one = await req('GET', `/v1/cases/${S.case1}`, undefined, bearer(S.A));
+  return one.status === 200 && !one.body.includes('TRANSCRIPT-SECRET');
+});
+
+check('MINOR: fenced facts cannot be broken out of or forged', async () => {
+  const r = await req('POST', '/v1/cases', {
+    type: 'bug', title: 'Fence escape probe',
+    description: 'body text',
+    os: 'Windows\n```\nASSIGNED      admin', impact: 'back`tick',
+  }, bearer(S.C, idem('FENCE')));
+  await outbox.tick();
+  const post = fetchCalls.filter((c) => c.url.includes('/threads')).pop();
+  const facts = JSON.parse(post.body).message.components[0].components
+    .map((c) => c.content || '').find((t) => t.includes('ENVIRONMENT'));
+  return r.status === 201 && !facts.includes('`') &&
+    facts.split('\n').filter((l) => l.startsWith('ASSIGNED')).length === 1;
+});
+
+check('MINOR: stale Discord signature timestamp is rejected', async () => {
+  const interaction = { type: 1, id: 'int-stale-ts' };
+  const raw = JSON.stringify(interaction);
+  const oldTs = String(Math.floor(Date.now() / 1000) - 3600);
+  const sig = crypto.sign(null, Buffer.concat([Buffer.from(oldTs), Buffer.from(raw)]), privateKey)
+    .toString('hex');
+  const r = await req('POST', '/v1/discord/interactions', raw, {
+    'x-signature-ed25519': sig, 'x-signature-timestamp': oldTs,
+  });
+  return r.status === 401;
+});
+
+check('MINOR: public rating endpoint is CORS-readable and answers preflight', async () => {
+  const get = await rawReq('GET', '/v1/ratings/current');
+  const opt = await rawReq('OPTIONS', '/v1/ratings/current');
+  const priv = await rawReq('GET', '/v1/my-messages');
+  return get.headers['access-control-allow-origin'] === '*' &&
+    opt.status === 204 && opt.headers['access-control-allow-origin'] === '*' &&
+    priv.headers['access-control-allow-origin'] === undefined;
+});
+
+check('MINOR: rating_snapshots are pruned per scope', async () => {
+  const perScope = await count(
+    'SELECT count(*) FROM rating_snapshots WHERE product IS NULL AND window_days = 90');
+  return perScope <= 3;
+});
+
+check('MINOR: staff replies are mirrored into the case thread', async () => {
+  const staffMirrors = await count(
+    "SELECT count(*) FROM outbox WHERE event_type = 'message.created' AND payload->>'author' = 'staff'");
+  return staffMirrors >= 1;
+});
+
+check('MINOR: readyz reports worker health, not a constant', async () => {
+  const r = await req('GET', '/readyz');
+  return r.status === 200 && r.json.ok === true &&
+    ['running', 'starting'].includes(r.json.worker);
+});
+
+check('DARK GUARANTEE: flags off -> exact legacy /health keys, no new routes', async () => {
+  // Subprocess with both gates unset: the body must be byte-identical legacy.
+  const probe =
+    "const http=require('http');process.env.PORT='39131';process.env.GH_ISSUES_TOKEN='x';" +
+    "delete process.env.SUPPORT_V2_ENABLED;delete process.env.DATABASE_URL;" +
+    "const {ready}=require(" + JSON.stringify(path.join(__dirname, 'server.js')) + ");" +
+    "const get=(p)=>new Promise(r=>http.get({host:'127.0.0.1',port:39131,path:p},(s)=>{let b='';" +
+    "s.on('data',c=>b+=c);s.on('end',()=>r({status:s.statusCode,body:b}));}));" +
+    "ready.then(async()=>{const h=await get('/health');const hz=await get('/healthz');" +
+    "const rz=await get('/readyz');const v1=await get('/v1/ratings/current');" +
+    "console.log(JSON.stringify({keys:Object.keys(JSON.parse(h.body)),hz:hz.status,rz:rz.status,v1:v1.status}));" +
+    "process.exit(0);});";
+  const out = execFileSync(process.execPath, ['-e', probe], { encoding: 'utf8' });
+  const r = JSON.parse(out.trim().split('\n').pop());
+  return JSON.stringify(r.keys) === JSON.stringify(['ok', 'service', 'configured']) &&
+    r.hz === 404 && r.rz === 404 && r.v1 === 404;
 });
 
 check('no client response ever contained a bot token or a token hash', async () => {

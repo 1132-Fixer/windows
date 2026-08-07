@@ -26,6 +26,9 @@ const ids = require('./ids');
 const { json, readBody } = require('./http');
 
 const MAX_BODY_BYTES = 64 * 1024;
+// Discord's guidance: reject stale timestamps so a captured request cannot be
+// replayed indefinitely.
+const MAX_SIGNATURE_AGE_S = 5 * 60;
 
 // Ed25519 SPKI DER prefix: crypto.createPublicKey cannot import a raw 32-byte
 // key, so wrap it in the standard header (RFC 8410).
@@ -34,6 +37,8 @@ const SPKI_ED25519_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 function verifySignature(rawBody, signatureHex, timestamp) {
   const publicKeyHex = process.env.DISCORD_PUBLIC_KEY || '';
   if (!publicKeyHex || !signatureHex || !timestamp) return false;
+  const age = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));
+  if (!Number.isFinite(age) || age > MAX_SIGNATURE_AGE_S) return false;
   try {
     const key = crypto.createPublicKey({
       key: Buffer.concat([SPKI_ED25519_PREFIX, Buffer.from(publicKeyHex, 'hex')]),
@@ -127,9 +132,13 @@ const STUB_ACTIONS = new Map([
  * id was already processed (Discord retry / double delivery).
  */
 async function recordInteraction(interaction, caseUuid, action) {
+  // A previously FAILED attempt may be retried: recording must not turn
+  // at-least-once delivery into silent at-most-once loss.
   const { rowCount } = await db.query(
     'INSERT INTO discord_interactions (interaction_id, case_id, discord_user_id, action, response_state) ' +
-      "VALUES ($1, $2, $3, $4, 'received') ON CONFLICT (interaction_id) DO NOTHING",
+      "VALUES ($1, $2, $3, $4, 'received') ON CONFLICT (interaction_id) DO UPDATE " +
+      "SET response_state = 'received', completed_at = NULL " +
+      "WHERE discord_interactions.response_state = 'failed'",
     [interaction.id, caseUuid, (interaction.member && interaction.member.user && interaction.member.user.id) || 'unknown', action]
   );
   return rowCount === 1;
@@ -194,7 +203,9 @@ async function handle(req, res) {
       return replyModal(res, caseRef, epoch);
     }
     if (interaction.type === 3 && action === 'resolve') {
-      await cases.staffResolve(caseRef, staffUserId);
+      // The button carries the epoch it was rendered with: a stale card
+      // cannot resolve a case the user has since reopened.
+      await cases.staffResolve(caseRef, staffUserId, Number(epochStr));
       await finishInteraction(interaction.id, 'applied');
       return ephemeral(res, `${caseRef} resolved.`);
     }

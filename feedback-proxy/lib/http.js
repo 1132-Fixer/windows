@@ -90,6 +90,24 @@ function createRateLimiter(max, windowMs) {
 }
 
 /**
+ * Per-principal write budgets for the /v1 surface. In-memory and therefore
+ * per-replica — a floor, not a distributed quota; keyed on the principal's
+ * public id, never on a client-supplied header.
+ */
+const principalLimits = {
+  cases: createRateLimiter(30, 24 * 60 * 60 * 1000),   // 30 new cases / day
+  messages: createRateLimiter(60, 60 * 60 * 1000),     // 60 replies / hour
+  ratings: createRateLimiter(20, 60 * 60 * 1000),      // 20 submissions / hour
+};
+
+/** True (and responds 429) when this principal is over the named budget. */
+function principalLimited(res, bucket, principal) {
+  if (!principalLimits[bucket].limited(principal.public_id, Date.now())) return false;
+  fail(res, 429, 'rate_limited', 'Too many requests — slow down and try again later.');
+  return true;
+}
+
+/**
  * Standard error shape for the support API (spec pack):
  *   { error: { code, message, requestId } }
  * The legacy /feedback contract keeps its own { ok:false, error } shape.
@@ -100,4 +118,6 @@ function fail(res, status, code, message) {
   return requestId;
 }
 
-module.exports = { json, fail, clientIp, readBody, clean, createRateLimiter };
+module.exports = {
+  json, fail, clientIp, readBody, clean, createRateLimiter, principalLimited,
+};

@@ -54,21 +54,32 @@ async function readyz(res) {
   try {
     const migrated = (await db.query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n > 0;
     const configOk = Boolean(process.env.TOKEN_HASH_PEPPER);
-    const workerOk = require('./lib/outbox').isRunning();
-    if (migrated && configOk && workerOk) {
-      return json(res, 200, { ok: true, db: 'ok', migrations: 'applied', worker: 'running' });
+    const worker = require('./lib/outbox').workerHealth();
+    if (migrated && configOk && worker.ok) {
+      return json(res, 200, {
+        ok: true, db: 'ok', migrations: 'applied',
+        worker: worker.state || 'running', lastTickAgeMs: worker.lastTickAgeMs,
+      });
     }
     return json(res, 503, {
       ok: false,
-      reason: !migrated ? 'migrations_missing' : !configOk ? 'config_missing' : 'worker_not_running',
+      reason: !migrated ? 'migrations_missing' : !configOk ? 'config_missing' : ('worker_' + worker.reason),
     });
   } catch {
     return json(res, 503, { ok: false, reason: 'database_unreachable' });
   }
 }
 
-const CASE_MSG_PATH = /^\/v1\/cases\/(FX-[A-Z2-9]{6,12})\/messages$/;
+const CASE_PATH = /^\/v1\/cases\/(FX-[A-Z2-9]{6,12})(\/messages)?$/;
 const INBOX_READ_PATH = /^\/v1\/my-messages\/(MS-[A-Z2-9]{8,16})\/read$/;
+
+// The public rating endpoint is read by the website and the apps from other
+// origins; nothing else on this service is cross-origin readable.
+const PUBLIC_CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Max-Age': '86400',
+};
 
 async function routeV1(req, res, pathname, searchParams) {
   // Lazy requires keep legacy mode free of any 'pg' dependency chain.
@@ -80,7 +91,12 @@ async function routeV1(req, res, pathname, searchParams) {
   if (req.method === 'POST' && pathname === '/v1/principals') {
     return auth.register(req, res);
   }
-  if (req.method === 'GET' && pathname === '/v1/ratings/current') {
+  if (pathname === '/v1/ratings/current' && (req.method === 'GET' || req.method === 'OPTIONS')) {
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, PUBLIC_CORS);
+      return res.end();
+    }
+    for (const [k, v] of Object.entries(PUBLIC_CORS)) res.setHeader(k, v);
     return ratings.current(req, res, searchParams); // public: apps + website read it
   }
   if (req.method === 'POST' && pathname === '/v1/discord/interactions') {
@@ -92,6 +108,7 @@ async function routeV1(req, res, pathname, searchParams) {
 
   if (req.method === 'POST' && pathname === '/v1/ratings') return ratings.submit(req, res, principal);
   if (req.method === 'POST' && pathname === '/v1/cases') return cases.create(req, res, principal);
+  if (req.method === 'GET' && pathname === '/v1/cases') return cases.list(req, res, principal);
   if (req.method === 'GET' && pathname === '/v1/my-messages') return inbox.list(req, res, principal);
   if (req.method === 'GET' && pathname === '/v1/my-messages/unread-count') {
     return inbox.unread(req, res, principal);
@@ -101,8 +118,11 @@ async function routeV1(req, res, pathname, searchParams) {
   }
   const read = pathname.match(INBOX_READ_PATH);
   if (read && req.method === 'POST') return inbox.markRead(req, res, principal, read[1]);
-  const msg = pathname.match(CASE_MSG_PATH);
-  if (msg && req.method === 'POST') return cases.addMessage(req, res, principal, msg[1]);
+  const one = pathname.match(CASE_PATH);
+  if (one) {
+    if (one[2] && req.method === 'POST') return cases.addMessage(req, res, principal, one[1]);
+    if (!one[2] && req.method === 'GET') return cases.get(req, res, principal, one[1]);
+  }
 
   return fail(res, 404, 'not_found', 'No such route.');
 }
@@ -134,6 +154,10 @@ const server = http.createServer(async (req, res) => {
     return json(res, 404, { ok: false, error: 'not_found' });
   } catch (err) {
     console.error('[feedback] unhandled: ' + (err && err.message));
+    // A streaming response (SSE) has already written its head: writing a JSON
+    // error here would throw ERR_HTTP_HEADERS_SENT inside this catch and take
+    // the whole process down with an unhandled rejection.
+    if (res.headersSent) return res.destroy();
     return json(res, 500, { ok: false, error: 'internal' });
   }
 });

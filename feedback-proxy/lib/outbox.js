@@ -1,9 +1,20 @@
 /**
- * Transactional outbox (final directive table: outbox, states + lease
- * columns). enqueue() runs on the SAME transaction as the case/message/
- * rating write, so a crash between commit and delivery leaves a pending
- * row, never a lost event — and an idempotency replay never enqueues
+ * Transactional outbox. enqueue() runs on the SAME transaction as the
+ * case/message/rating write, so a crash between commit and delivery leaves a
+ * pending row, never a lost event — and an idempotency replay never enqueues
  * again, so retries never send a second ping.
+ *
+ * Delivery is deliberately NOT inside one long transaction:
+ *   claim (short tx, marks 'running') -> Discord HTTP with no tx open ->
+ *   record outcome (own short statement).
+ * That keeps a 429 sleep from holding a pooled connection and row locks, and
+ * stops one row's DB error from aborting the whole batch. Rows stuck in
+ * 'running' (crash mid-dispatch) are reclaimed after LEASE_MS.
+ *
+ * Discord side effects are made idempotent by state, not by transactions:
+ * dispatchCaseCreated consults discord_case_bindings BEFORE posting, so a
+ * retry reuses the existing thread instead of creating a duplicate, and the
+ * role alert is claimed with a conditional UPDATE so it can fire at most once.
  *
  * DISCORD_ENABLED !== 'true' -> rows accumulate pending, nothing is sent.
  */
@@ -14,6 +25,7 @@ const discord = require('./discord');
 
 const INTERVAL_MS = 5000;
 const BATCH = 10;
+const LEASE_MS = 5 * 60 * 1000; // reclaim rows abandoned by a crashed dispatch
 
 function discordEnabled() {
   return process.env.DISCORD_ENABLED === 'true';
@@ -28,100 +40,158 @@ function enqueue(client, aggregateType, aggregateId, eventType, payload) {
   );
 }
 
-async function dispatchCaseCreated(client, payload) {
-  const ids = await discord.createForumPost(payload);
-  await client.query(
-    'INSERT INTO discord_case_bindings (case_id, forum_thread_id, control_message_id) ' +
-      'VALUES ($1, $2, $3) ON CONFLICT (case_id) DO NOTHING',
-    [payload.case_id, ids.thread_id, ids.message_id]
+/** Existing Discord binding for a case, or null. */
+async function bindingOf(caseId) {
+  const { rows } = await db.query(
+    'SELECT forum_thread_id, control_message_id, alerted_at FROM discord_case_bindings WHERE case_id = $1',
+    [caseId]
   );
-  // Staff-role mention exactly once per case, on the first qualifying post.
-  const { rows } = await client.query(
-    'SELECT alerted_at FROM discord_case_bindings WHERE case_id = $1 FOR UPDATE',
-    [payload.case_id]
-  );
-  if (rows[0] && !rows[0].alerted_at) {
-    await discord.postRoleAlert(ids.thread_id);
-    await client.query(
-      'UPDATE discord_case_bindings SET alerted_at = now(), updated_at = now() WHERE case_id = $1',
+  return rows[0] || null;
+}
+
+async function dispatchCaseCreated(payload) {
+  const cases = require('./cases');
+  let binding = await bindingOf(payload.case_id);
+
+  if (!binding) {
+    const card = await db.tx((client) => cases.cardData(client, payload.case_id));
+    if (!card) return; // case deleted; nothing to post
+    const created = await discord.createForumPost(card);
+    // Persist the binding BEFORE anything else can fail, so a retry can never
+    // create a second thread.
+    await db.query(
+      'INSERT INTO discord_case_bindings (case_id, forum_thread_id, control_message_id) ' +
+        'VALUES ($1, $2, $3) ON CONFLICT (case_id) DO NOTHING',
+      [payload.case_id, created.thread_id, created.message_id]
+    );
+    binding = await bindingOf(payload.case_id);
+  }
+
+  // Claim the alert first: at-most-once is the requirement, so a failed post
+  // must not re-ping on retry.
+  if (!binding.alerted_at) {
+    const claim = await db.query(
+      'UPDATE discord_case_bindings SET alerted_at = now(), updated_at = now() ' +
+        'WHERE case_id = $1 AND alerted_at IS NULL RETURNING forum_thread_id',
       [payload.case_id]
     );
+    if (claim.rows[0]) await discord.postRoleAlert(claim.rows[0].forum_thread_id);
   }
-  await client.query(
+
+  await db.query(
     "INSERT INTO case_events (case_id, actor_type, event_type, data) VALUES ($1, 'system', 'discord.posted', $2)",
-    [payload.case_id, JSON.stringify({ thread_id: ids.thread_id })]
+    [payload.case_id, JSON.stringify({ thread_id: binding.forum_thread_id })]
   );
 }
 
-async function dispatchUserMessage(client, payload) {
-  const { rows } = await client.query(
-    'SELECT forum_thread_id FROM discord_case_bindings WHERE case_id = $1', [payload.case_id]
-  );
-  if (!rows[0]) {
+async function dispatchMessage(payload) {
+  const binding = await bindingOf(payload.case_id);
+  if (!binding) {
     // Forum post not delivered yet; retry after backoff keeps ordering sane.
     throw new Error(`no thread yet for ${payload.case_ref}`);
   }
+  const who = payload.author === 'staff' ? 'Staff reply' : 'User reply';
   await discord.postThreadMessage(
-    rows[0].forum_thread_id,
-    `**User reply on ${payload.case_ref}**\n${discord.escapeMd(payload.body).slice(0, 1500)}`
+    binding.forum_thread_id,
+    `**${who} on ${payload.case_ref}**\n${discord.escapeMd(payload.body).slice(0, 1500)}`
   );
 }
 
-async function dispatchSnapshotChanged(client) {
-  // Lazy require: ratings -> cases -> outbox would otherwise be a load cycle.
-  const ratings = require('./ratings');
-  await discord.upsertRatingCard(await ratings.latestSnapshotForCard(client));
+/** Re-render the control card so its buttons carry the current epoch. */
+async function dispatchCardRefresh(payload) {
+  const cases = require('./cases');
+  const card = await db.tx((client) => cases.cardData(client, payload.case_id));
+  if (!card || !card.control_message_id) return; // not posted yet; nothing to refresh
+  await discord.editCaseCard(card.forum_thread_id, card.control_message_id, card);
 }
 
-let running = false;
+async function dispatchSnapshotChanged() {
+  // Lazy require: ratings -> cases -> outbox would otherwise be a load cycle.
+  const ratings = require('./ratings');
+  await discord.upsertRatingCard(await ratings.latestSnapshotForCard(db));
+}
+
+const HANDLERS = new Map([
+  ['case.created', dispatchCaseCreated],
+  ['message.created', dispatchMessage],
+  ['case.card.refresh', dispatchCardRefresh],
+  ['rating.snapshot.changed', dispatchSnapshotChanged],
+]);
+
+/** Claim due rows in a SHORT transaction; Discord work happens after it commits. */
+function claimBatch() {
+  return db.tx(async (client) => {
+    const { rows } = await client.query(
+      "SELECT * FROM outbox WHERE (state IN ('pending', 'failed') AND available_at <= now()) " +
+        "OR (state = 'running' AND locked_at < now() - ($2::int * interval '1 millisecond')) " +
+        'ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED',
+      [BATCH, LEASE_MS]
+    );
+    if (rows.length) {
+      await client.query(
+        "UPDATE outbox SET state = 'running', locked_at = now() WHERE id = ANY($1::bigint[])",
+        [rows.map((r) => r.id)]
+      );
+    }
+    return rows;
+  });
+}
+
+let inFlight = false;
+let lastTickAt = 0;
+let lastTickOk = false;
 
 /** One worker pass. Exported for tests; scheduled by startWorker(). */
 async function tick() {
-  if (!db.hasDb() || !discordEnabled()) return;
-  await db.tx(async (client) => {
-    const { rows } = await client.query(
-      "SELECT * FROM outbox WHERE state IN ('pending', 'failed') AND available_at <= now() " +
-        'ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED',
-      [BATCH]
-    );
+  if (!db.hasDb()) return;
+  if (inFlight) return; // ticks must not stack: a 429 sleep can outlast the interval
+  inFlight = true;
+  try {
+    await require('./idempotency').purgeExpired().catch((e) =>
+      console.error('[outbox] idempotency purge failed: ' + e.message));
+    if (!discordEnabled()) return;
+
+    const rows = await claimBatch();
     let cardDone = false;
     for (const row of rows) {
-      await client.query('UPDATE outbox SET locked_at = now() WHERE id = $1', [row.id]);
       try {
-        if (row.event_type === 'case.created') {
-          await dispatchCaseCreated(client, row.payload);
-        } else if (row.event_type === 'message.created') {
-          await dispatchUserMessage(client, row.payload);
-        } else if (row.event_type === 'rating.snapshot.changed') {
+        if (row.event_type === 'rating.snapshot.changed') {
           // Debounce: one silent card edit covers every claimed snapshot row.
           if (!cardDone) {
-            await dispatchSnapshotChanged(client);
+            await dispatchSnapshotChanged();
             cardDone = true;
           }
         } else {
-          throw new Error(`unknown outbox event_type ${row.event_type}`);
+          const handler = HANDLERS.get(row.event_type);
+          if (!handler) throw new Error(`unknown outbox event_type ${row.event_type}`);
+          await handler(row.payload);
         }
-        await client.query(
-          "UPDATE outbox SET state = 'sent', sent_at = now() WHERE id = $1", [row.id]
-        );
+        await db.query("UPDATE outbox SET state = 'sent', sent_at = now() WHERE id = $1", [row.id]);
       } catch (e) {
         console.error(`[outbox] ${row.event_type} #${row.id} attempt ${row.attempts + 1}: ${e.message}`);
         const backoffS = Math.min(3600, 30 * 2 ** row.attempts);
-        await client.query(
+        // Own statement, no shared transaction to abort.
+        await db.query(
           "UPDATE outbox SET state = 'failed', attempts = attempts + 1, " +
             "last_error_code = $2, available_at = now() + ($3::int * interval '1 second') WHERE id = $1",
           [row.id, String(e.status || 'error'), backoffS]
-        );
+        ).catch((err) => console.error('[outbox] could not mark failed: ' + err.message));
       }
     }
-  });
+    lastTickOk = true;
+  } catch (e) {
+    lastTickOk = false;
+    throw e;
+  } finally {
+    lastTickAt = Date.now();
+    inFlight = false;
+  }
 }
 
 let timer = null;
 
 function startWorker() {
   if (timer) return;
-  running = true;
   timer = setInterval(() => {
     tick().catch((e) => console.error('[outbox] tick failed: ' + e.message));
   }, INTERVAL_MS);
@@ -129,9 +199,17 @@ function startWorker() {
   console.log(`[outbox] worker started (discord dispatch ${discordEnabled() ? 'ENABLED' : 'disabled — rows stay pending'})`);
 }
 
-/** For /readyz: the worker loop has been started. */
-function isRunning() {
-  return running;
+/**
+ * Worker health for /readyz: started AND a recent tick that did not throw.
+ * A worker whose every tick fails must not read as ready.
+ */
+function workerHealth() {
+  if (!timer) return { ok: false, reason: 'not_started' };
+  const age = lastTickAt ? Date.now() - lastTickAt : null;
+  if (age === null) return { ok: true, state: 'starting' }; // first tick not due yet
+  if (age > INTERVAL_MS * 6) return { ok: false, reason: 'stalled', lastTickAgeMs: age };
+  if (!lastTickOk) return { ok: false, reason: 'failing', lastTickAgeMs: age };
+  return { ok: true, state: 'running', lastTickAgeMs: age };
 }
 
-module.exports = { enqueue, tick, startWorker, isRunning };
+module.exports = { enqueue, tick, startWorker, workerHealth };

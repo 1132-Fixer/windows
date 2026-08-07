@@ -199,8 +199,12 @@ CREATE TABLE idempotency_requests (
   response_body   jsonb NOT NULL,
   expires_at      timestamptz NOT NULL,
   created_at      timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (principal_id, key),
-  UNIQUE (key, request_digest)
+  -- Scope is the principal: two principals may legitimately choose the same
+  -- key. A cross-principal UNIQUE (key, request_digest) would make one
+  -- principal's key block another's identical body forever, so it is
+  -- deliberately absent; same-key-different-body is enforced in code by
+  -- comparing request_digest within the principal's own row.
+  PRIMARY KEY (principal_id, key)
 );
 
 CREATE TABLE outbox (
