@@ -131,9 +131,11 @@ function userReplyState(state) {
 }
 
 async function setState(client, caseRow, toState, actorType, actorRef) {
+  // $1 appears twice ($1::case_state assignment + $1::text comparison); the
+  // explicit casts keep Postgres from deducing inconsistent parameter types.
   await client.query(
-    'UPDATE support_cases SET state = $1, version = version + 1, updated_at = now(), ' +
-      "resolved_at = CASE WHEN $1 = 'resolved' THEN now() ELSE resolved_at END WHERE id = $2",
+    'UPDATE support_cases SET state = $1::case_state, version = version + 1, updated_at = now(), ' +
+      "resolved_at = CASE WHEN $1::text = 'resolved' THEN now() ELSE resolved_at END WHERE id = $2",
     [toState, caseRow.id]
   );
   await addCaseEvent(client, caseRow.id, actorType, actorRef, 'state.changed',
