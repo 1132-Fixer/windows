@@ -1,17 +1,21 @@
 /**
- * Discord HTTP interactions endpoint (POST /integrations/discord/interactions).
+ * Discord HTTP interactions endpoint (POST /v1/discord/interactions).
  *
  * Order of operations is the security contract:
  *   1. Verify Ed25519 signature over the RAW body. Invalid -> 401, before
  *      any JSON parsing.
  *   2. PING -> PONG (Discord's endpoint verification; carries no guild).
  *   3. EVERY other interaction re-verifies guild + staff roles. A custom_id
- *      is routing data, never authorization.
+ *      is routing data, never authorization — and carries only the public
+ *      caseRef, never secrets or raw database ids.
  *   4. Each interaction id is recorded once (discord_interactions PK), so a
  *      Discord retry cannot apply the same action twice.
- *   5. The reply modal carries the case version captured at open time; a
- *      mismatch at submit means the case changed underneath the form
- *      (optimistic lock — stale buttons cannot change a newer case).
+ *   5. The reply modal carries the case control_epoch captured at open
+ *      time; a mismatch at submit is rejected (stale controls cannot
+ *      change a newer case).
+ *
+ * Buttons: Reply and Resolve are live; Assign to me / Request diagnostics /
+ * More actions… exist on the card and answer acknowledged-not-implemented.
  */
 'use strict';
 
@@ -70,12 +74,12 @@ function ephemeral(res, content) {
   });
 }
 
-function replyModal(res, caseId, version) {
+function replyModal(res, caseRef, epoch) {
   return json(res, 200, {
     type: 9,
     data: {
-      custom_id: `reply_modal:${caseId}:${version}`,
-      title: `Reply to ${caseId}`,
+      custom_id: `reply_modal:${caseRef}:${epoch}`,
+      title: `Reply to ${caseRef}`,
       components: [
         {
           type: 1,
@@ -109,8 +113,14 @@ const STAFF_ERROR_TEXT = {
   case_not_found: 'Case not found.',
   case_locked: 'Case is marked spam — restore it before acting on it.',
   bad_status_word: 'Unknown status — use waiting, review, or resolve.',
-  stale_version: 'This case changed since the form was opened. Re-open it and try again.',
+  stale_epoch: 'This case changed since the control was issued. Re-open it and try again.',
 };
+
+const STUB_ACTIONS = new Map([
+  ['assign', 'Assign to me is acknowledged but not implemented yet.'],
+  ['diag', 'Request diagnostics is acknowledged but not implemented yet.'],
+  ['more', 'More actions… is acknowledged but not implemented yet.'],
+]);
 
 /**
  * Record the interaction exactly once. Returns false when this interaction
@@ -132,8 +142,8 @@ function finishInteraction(interactionId, state) {
   );
 }
 
-async function caseUuidOf(casePublicId) {
-  const { rows } = await db.query('SELECT id FROM support_cases WHERE public_id = $1', [casePublicId]);
+async function caseUuidOf(caseRef) {
+  const { rows } = await db.query('SELECT id FROM support_cases WHERE case_ref = $1', [caseRef]);
   return rows[0] ? rows[0].id : null;
 }
 
@@ -163,26 +173,30 @@ async function handle(req, res) {
   if (!isStaff(interaction)) return ephemeral(res, 'Not authorized.');
 
   const customId = (interaction.data && interaction.data.custom_id) || '';
-  const [action, caseId, versionStr] = customId.split(':');
-  if (!ids.CASE_ID_RE.test(caseId || '')) return ephemeral(res, 'Malformed control.');
+  const [action, caseRef, epochStr] = customId.split(':');
+  if (!ids.CASE_REF_RE.test(caseRef || '')) return ephemeral(res, 'Malformed control.');
   const staffUserId = (interaction.member && interaction.member.user && interaction.member.user.id) || 'unknown';
 
-  const caseUuid = await caseUuidOf(caseId);
+  const caseUuid = await caseUuidOf(caseRef);
   if (!caseUuid) return ephemeral(res, STAFF_ERROR_TEXT.case_not_found);
   const fresh = await recordInteraction(interaction, caseUuid, action);
   if (!fresh) return ephemeral(res, 'Already handled.');
 
   try {
-    if (interaction.type === 3 && action === 'reply') {
-      // Capture the CURRENT version for the modal so a stale submit is caught.
-      const version = await cases.currentVersion(caseId);
+    if (interaction.type === 3 && STUB_ACTIONS.has(action)) {
       await finishInteraction(interaction.id, 'applied');
-      return replyModal(res, caseId, version);
+      return ephemeral(res, STUB_ACTIONS.get(action));
+    }
+    if (interaction.type === 3 && action === 'reply') {
+      // Capture the CURRENT epoch for the modal so a stale submit is caught.
+      const epoch = await cases.currentEpoch(caseRef);
+      await finishInteraction(interaction.id, 'applied');
+      return replyModal(res, caseRef, epoch);
     }
     if (interaction.type === 3 && action === 'resolve') {
-      await cases.staffResolve(caseId, staffUserId);
+      await cases.staffResolve(caseRef, staffUserId);
       await finishInteraction(interaction.id, 'applied');
-      return ephemeral(res, `${caseId} resolved.`);
+      return ephemeral(res, `${caseRef} resolved.`);
     }
     if (interaction.type === 5 && action === 'reply_modal') {
       const values = modalValues(interaction);
@@ -191,15 +205,15 @@ async function handle(req, res) {
         await finishInteraction(interaction.id, 'rejected');
         return ephemeral(res, 'Reply text is required.');
       }
-      const out = await cases.staffReply(caseId, {
+      const out = await cases.staffReply(caseRef, {
         body,
         statusWord: (values.status || '').trim().toLowerCase(),
         staffUserId,
         interactionId: interaction.id,
-        expectedVersion: Number(versionStr),
+        expectedEpoch: Number(epochStr),
       });
       await finishInteraction(interaction.id, 'applied');
-      return ephemeral(res, `Reply queued for ${caseId} (state: ${out.state}).`);
+      return ephemeral(res, `Reply queued for ${caseRef} (state: ${out.state}).`);
     }
   } catch (e) {
     if (e.staff) {

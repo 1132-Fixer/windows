@@ -1,10 +1,22 @@
 /**
- * Verified ratings (operator spec): four required 1-5 integer scores
- * (ease, resolved, recommend, overall) + optional comment, one active
- * rating per (installation, source), verified only when the installation
- * has a recent eligible product event. The public number is avg(overall)
- * over 90 days, published only at >= 10 verified ratings. Legacy
- * GitHub-issue ratings are never read and never counted.
+ * Verified ratings — final build directive.
+ *
+ * Score model: four required questions (ease, resolved, recommend, overall),
+ * each an INTEGER 0-5 inclusive — six choices. 0 is a REAL answer; a missing
+ * or null question is unanswered and rejected. -1, 6, fractions, and strings
+ * are rejected. The public score is the average of `overall` only.
+ *
+ * Routing rule:
+ *   - every score 4-5 AND no written text  -> save rating only; silent
+ *     dashboard edit; no case, no alert (the response is the receipt).
+ *   - ANY score 0-3                        -> save rating + case + alert.
+ *   - ANY written comment (even all 4-5)   -> save rating + case + alert.
+ *
+ * Public window: 90 days. Minimum public sample: 10 verified ratings.
+ * API contract: average and count are SEPARATE fields; average has one
+ * decimal and is null when count = 0 (never invent an average).
+ * States: LOADING (client-side) / VERIFIED / NOT_ENOUGH_RATINGS /
+ * UNAVAILABLE / STALE.
  */
 'use strict';
 
@@ -17,76 +29,79 @@ const { json, fail, readBody, clean } = require('./http');
 const MAX_BODY_BYTES = 16 * 1024;
 const COMMENT_MAX = 4000;
 const SCORE_FIELDS = ['ease', 'resolved', 'recommend', 'overall'];
-// Operator routing rule (2026-08-07): overall <= 3 opens a rating_feedback
-// case + staff forum alert; overall >= 4 only refreshes the live score
-// surfaces — unless the user explicitly requested follow-up.
-const NEGATIVE_RATING_MAX = 3;
-// Below this many verified 90-day ratings the public state is 'collecting'.
-const MIN_PUBLIC_SAMPLE = 10;
-const WINDOW_DAYS = 90;
-// "Recent" eligible product event, per the verified-rating rules.
-const ELIGIBLE_WINDOW_DAYS = 90;
+const SCORE_MIN = 0;
+const SCORE_MAX = 5;
+// A submission is positive only when EVERY score is >= 4.
+const POSITIVE_MIN = 4;
+const WINDOW_DAYS = 90;      // public window (documented contract)
+const MIN_PUBLIC_SAMPLE = 10; // below this: NOT_ENOUGH_RATINGS
+const STALE_AFTER_MS = 24 * 60 * 60 * 1000; // snapshot older than this reads as STALE
 
-async function latestEligibleEvent(client, installationId) {
-  const { rows } = await client.query(
-    "SELECT id FROM product_events WHERE installation_id = $1 " +
-      "AND kind IN ('fix_completed', 'fix_failed') " +
-      `AND occurred_at >= now() - interval '${ELIGIBLE_WINDOW_DAYS} days' ` +
-      'ORDER BY occurred_at DESC LIMIT 1',
-    [installationId]
-  );
-  return rows[0] ? rows[0].id : null;
-}
-
-async function aggregate(client) {
-  const { rows } = await client.query(
-    'SELECT count(*)::int AS count, round(avg(overall)::numeric, 2)::float AS score, ' +
-      SCORE_BUCKETS +
-      " FROM ratings WHERE state = 'verified' AND updated_at >= now() - interval '" +
-      WINDOW_DAYS + " days'"
-  );
-  return rows[0];
-}
-
-const SCORE_BUCKETS = [1, 2, 3, 4, 5]
+const SCORE_BUCKETS = [0, 1, 2, 3, 4, 5]
   .map((n) => `count(*) FILTER (WHERE overall = ${n})::int AS s${n}`)
   .join(', ');
 
 function distributionOf(agg) {
-  return { 1: agg.s1, 2: agg.s2, 3: agg.s3, 4: agg.s4, 5: agg.s5 };
+  return { 0: agg.s0, 1: agg.s1, 2: agg.s2, 3: agg.s3, 4: agg.s4, 5: agg.s5 };
 }
 
-/** Rebuild the public snapshot inside the caller's transaction. */
-async function rebuildSnapshot(client) {
-  const agg = await aggregate(client);
-  const state = agg.count >= MIN_PUBLIC_SAMPLE ? 'ready' : 'collecting';
+async function aggregate(client, product) {
+  const where = product ? 'AND product = $1' : '';
   const { rows } = await client.query(
-    'INSERT INTO rating_snapshots (source, window_days, score, rating_count, distribution, state) ' +
-      'VALUES (NULL, $1, $2, $3, $4, $5) RETURNING id, generated_at',
-    [WINDOW_DAYS, agg.count ? agg.score : null, agg.count,
+    'SELECT count(*)::int AS count, round(avg(overall)::numeric, 1)::float AS average, ' +
+      SCORE_BUCKETS +
+      " FROM ratings WHERE state = 'verified' AND updated_at >= now() - interval '" +
+      WINDOW_DAYS + " days' " + where,
+    product ? [product] : []
+  );
+  return rows[0];
+}
+
+/** Insert one snapshot row (overall when product is null). Caller's tx. */
+async function insertSnapshot(client, product) {
+  const agg = await aggregate(client, product);
+  const state = agg.count >= MIN_PUBLIC_SAMPLE ? 'VERIFIED' : 'NOT_ENOUGH_RATINGS';
+  const { rows } = await client.query(
+    'INSERT INTO rating_snapshots (product, window_days, average, rating_count, distribution, state) ' +
+      'VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, generated_at',
+    [product, WINDOW_DAYS, agg.count ? agg.average : null, agg.count,
      JSON.stringify(distributionOf(agg)), state]
   );
-  return { id: rows[0].id, generatedAt: rows[0].generated_at, state, score: agg.score, count: agg.count, distribution: distributionOf(agg) };
-}
-
-function snapshotBody(s) {
-  if (s.state !== 'ready') {
-    return { state: 'collecting', count: s.count, verified: true, window: `${WINDOW_DAYS}d` };
-  }
   return {
-    state: 'ready',
-    score: typeof s.score === 'string' ? parseFloat(s.score) : s.score,
-    count: s.count,
-    verified: true,
-    window: `${WINDOW_DAYS}d`,
-    distribution: s.distribution,
-    updatedAt: s.generatedAt,
+    id: rows[0].id, generatedAt: rows[0].generated_at, state,
+    average: agg.count ? agg.average : null, count: agg.count,
+    distribution: distributionOf(agg),
   };
 }
 
-// ---- PUT /api/v1/ratings/me ----------------------------------------
+/**
+ * The public response contract. Exported for unit tests: average and count
+ * stay SEPARATE typed fields — there is no string path that could render
+ * '5.43' out of average 5.4 and count 3.
+ */
+function publicRatingBody(s) {
+  const average = s.count > 0 && s.average != null
+    ? Math.round(Number(s.average) * 10) / 10 // one decimal, as a number
+    : null; // count 0 -> never invent an average
+  let state = s.count >= MIN_PUBLIC_SAMPLE ? 'VERIFIED' : 'NOT_ENOUGH_RATINGS';
+  if (s.error) state = 'UNAVAILABLE';
+  else if (s.generatedAt && Date.now() - new Date(s.generatedAt).getTime() > STALE_AFTER_MS) {
+    state = 'STALE';
+  }
+  return {
+    average,
+    count: s.count | 0,
+    verified: !s.error,
+    state,
+    updatedAt: s.generatedAt || null,
+    window: `${WINDOW_DAYS}d`,
+    minimumSample: MIN_PUBLIC_SAMPLE,
+  };
+}
 
-async function put(req, res, inst) {
+// ---- POST /v1/ratings ----------------------------------------------
+
+async function submit(req, res, principal) {
   let raw;
   try {
     raw = await readBody(req, MAX_BODY_BYTES);
@@ -106,28 +121,24 @@ async function put(req, res, inst) {
   const scores = {};
   for (const f of SCORE_FIELDS) {
     const v = payload[f];
-    // STRICT: whole numbers 1..5 only — no strings, no 3.5.
-    if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 5) {
-      return fail(res, 400, 'validation_failed', `${f} must be a whole number from 1 to 5.`);
+    // 0 is a real answer; null/undefined is unanswered. All four required.
+    // STRICT integers 0..5 — reject -1, 6, fractions, strings.
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < SCORE_MIN || v > SCORE_MAX) {
+      return fail(res, 400, 'validation_failed',
+        `${f} must be answered with a whole number from 0 to 5.`);
     }
     scores[f] = v;
   }
   const comment = clean(payload.comment, COMMENT_MAX) || null;
-  const followUp = payload.followUpRequested === true;
-  const appVersion = clean(payload.appVersion, 40) || inst.app_version;
+  const appVersion = clean(payload.appVersion, 40) || principal.app_version;
 
-  return withIdempotency(res, inst, idemKey, raw, async (client) => {
-    const eligibleEventId = await latestEligibleEvent(client, inst.id);
-    if (!eligibleEventId) {
-      return {
-        status: 422,
-        body: { error: { code: 'not_eligible', message: 'Run a fix first — ratings need a recent fix result from this installation.', requestId: 'req_' + idemKey.slice(0, 8) } },
-      };
-    }
+  const allPositive = SCORE_FIELDS.every((f) => scores[f] >= POSITIVE_MIN);
+  const needsCase = !allPositive || Boolean(comment); // any 0-3, or any written text
 
+  return withIdempotency(res, principal, idemKey, raw, async (client) => {
     const existing = (await client.query(
-      'SELECT * FROM ratings WHERE installation_id = $1 AND source = $2 FOR UPDATE',
-      [inst.id, inst.source]
+      'SELECT * FROM ratings WHERE principal_id = $1 AND product = $2 FOR UPDATE',
+      [principal.id, principal.product]
     )).rows[0];
 
     let ratingId;
@@ -135,21 +146,20 @@ async function put(req, res, inst) {
     if (!existing) {
       reason = 'created';
       ratingId = (await client.query(
-        "INSERT INTO ratings (installation_id, eligible_event_id, source, app_version, " +
-          "ease, resolved, recommend, overall, comment, state, verified_at) " +
-          "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'verified', now()) RETURNING id",
-        [inst.id, eligibleEventId, inst.source, appVersion,
+        "INSERT INTO ratings (principal_id, product, app_version, ease, resolved, recommend, overall, comment, state, verified_at) " +
+          "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'verified', now()) RETURNING id",
+        [principal.id, principal.product, appVersion,
          scores.ease, scores.resolved, scores.recommend, scores.overall, comment]
       )).rows[0].id;
     } else {
+      // Replace, never add: the count cannot grow from a re-rate.
       reason = existing.state === 'withdrawn' ? 'restored' : 'user_updated';
       ratingId = existing.id;
       await client.query(
-        "UPDATE ratings SET eligible_event_id = $2, app_version = $3, ease = $4, resolved = $5, " +
-          "recommend = $6, overall = $7, comment = $8, state = 'verified', verified_at = now(), " +
+        "UPDATE ratings SET app_version = $2, ease = $3, resolved = $4, recommend = $5, " +
+          "overall = $6, comment = $7, state = 'verified', verified_at = now(), " +
           'withdrawn_at = NULL, updated_at = now() WHERE id = $1',
-        [ratingId, eligibleEventId, appVersion,
-         scores.ease, scores.resolved, scores.recommend, scores.overall, comment]
+        [ratingId, appVersion, scores.ease, scores.resolved, scores.recommend, scores.overall, comment]
       );
     }
     await client.query(
@@ -158,109 +168,94 @@ async function put(req, res, inst) {
       [ratingId, JSON.stringify(Object.assign({ comment }, scores)), reason]
     );
 
-    // Public snapshot rebuilds in the same request; the pinned Discord card
-    // follows through the outbox (silent edit, never a new post).
-    const snapshot = await rebuildSnapshot(client);
+    // Public snapshots (overall + this product) rebuild in the same request;
+    // the pinned Discord card follows through the outbox (silent edit).
+    const snapshot = await insertSnapshot(client, null);
+    await insertSnapshot(client, principal.product);
     await outbox.enqueue(client, 'rating_snapshot', snapshot.id, 'rating.snapshot.changed', {});
 
-    // Operator routing rule: negative score, or explicit follow-up request,
-    // opens exactly one active rating_feedback case + staff alert.
-    let caseId = null;
-    if (scores.overall <= NEGATIVE_RATING_MAX || followUp) {
+    let caseRef = null;
+    if (needsCase) {
+      // Exactly one open rating case per principal+product; never stacked.
       const open = (await client.query(
-        "SELECT public_id FROM support_cases WHERE installation_id = $1 AND kind = 'rating_feedback' " +
+        "SELECT case_ref FROM support_cases WHERE principal_id = $1 AND kind = 'rating_feedback' " +
           "AND state NOT IN ('resolved', 'spam') ORDER BY created_at DESC LIMIT 1",
-        [inst.id]
+        [principal.id]
       )).rows[0];
       if (open) {
-        caseId = open.public_id; // never stack a second open rating case
+        caseRef = open.case_ref;
       } else {
-        const c = await cases.insertCase(client, inst, {
+        const c = await cases.insertCase(client, principal, {
           kind: 'rating_feedback',
-          subject: `Rating ${scores.overall}/5 — ${inst.source}`,
-          summary: comment || `Overall ${scores.overall}/5 (ease ${scores.ease}, resolved ${scores.resolved}, recommend ${scores.recommend}). No comment provided.`,
+          subject: `Rating ${scores.overall}/5 — ${principal.product}`,
+          summary: comment ||
+            `Overall ${scores.overall}/5 (ease ${scores.ease}, resolved ${scores.resolved}, recommend ${scores.recommend}). No comment provided.`,
           environment: {},
           appVersion,
         }, idemKey);
-        caseId = c.public_id;
+        caseRef = c.case_ref;
       }
     }
 
-    return { status: 200, body: { state: 'verified', caseId, snapshot: snapshotBody(snapshot) } };
+    // Pure positive gets a receipt, not a fake case.
+    return {
+      status: 200,
+      body: { ratingSaved: true, caseRef, snapshot: publicRatingBody(snapshot) },
+    };
   });
 }
 
-// ---- DELETE /api/v1/ratings/me (withdraw) ---------------------------
+// ---- GET /v1/ratings/current?product=WINDOWS (public) ---------------
 
-async function withdraw(req, res, inst) {
-  await readBody(req, 1024).catch(() => null); // drain
-  let out = null;
-  await db.tx(async (client) => {
-    const existing = (await client.query(
-      'SELECT * FROM ratings WHERE installation_id = $1 AND source = $2 FOR UPDATE',
-      [inst.id, inst.source]
-    )).rows[0];
-    if (!existing) { out = { missing: true }; return; }
-    if (existing.state !== 'withdrawn') {
-      await client.query(
-        "UPDATE ratings SET state = 'withdrawn', withdrawn_at = now(), updated_at = now() WHERE id = $1",
-        [existing.id]
-      );
-      await client.query(
-        'INSERT INTO rating_revisions (rating_id, revision, "values", reason) VALUES ' +
-          "($1, (SELECT coalesce(max(revision), 0) + 1 FROM rating_revisions WHERE rating_id = $1), '{}', 'withdrawn')",
-        [existing.id]
-      );
-      const snapshot = await rebuildSnapshot(client);
-      await outbox.enqueue(client, 'rating_snapshot', snapshot.id, 'rating.snapshot.changed', {});
+async function current(req, res, searchParams) {
+  try {
+    const productParam = clean(searchParams.get('product'), 20) || null;
+    if (productParam && !require('./auth').PRODUCTS.has(productParam)) {
+      return fail(res, 400, 'validation_failed', 'product must be WINDOWS, CHROME, or MACOS.');
     }
-    out = { missing: false };
-  });
-  if (out.missing) return fail(res, 404, 'not_found', 'No rating to withdraw.');
-  return json(res, 200, { state: 'withdrawn' }); // repeat DELETE is a no-op
-}
-
-// ---- GET /api/v1/ratings/current (public) ---------------------------
-
-async function current(req, res) {
-  const { rows } = await db.query(
-    'SELECT id, score, rating_count, distribution, state, generated_at FROM rating_snapshots ' +
-      'WHERE source IS NULL AND window_days = $1 ORDER BY generated_at DESC LIMIT 1',
-    [WINDOW_DAYS]
-  );
-  if (rows[0]) {
-    const s = rows[0];
-    return json(res, 200, snapshotBody({
-      state: s.state, score: s.score, count: s.rating_count,
-      distribution: s.distribution, generatedAt: s.generated_at,
+    const { rows } = await db.query(
+      'SELECT average, rating_count, distribution, generated_at FROM rating_snapshots ' +
+        'WHERE product IS NOT DISTINCT FROM $1 AND window_days = $2 ' +
+        'ORDER BY generated_at DESC LIMIT 1',
+      [productParam, WINDOW_DAYS]
+    );
+    if (rows[0]) {
+      const s = rows[0];
+      return json(res, 200, publicRatingBody({
+        average: s.average, count: s.rating_count, generatedAt: s.generated_at,
+      }));
+    }
+    // Cold start: no snapshot yet — compute live, store nothing on a GET.
+    const agg = await aggregate(db, productParam);
+    return json(res, 200, publicRatingBody({
+      average: agg.count ? agg.average : null, count: agg.count,
+      generatedAt: new Date().toISOString(),
     }));
+  } catch (e) {
+    console.error('[ratings] current failed: ' + e.message);
+    return json(res, 200, publicRatingBody({ average: null, count: 0, error: true }));
   }
-  // Cold start: no snapshot yet — compute live, store nothing on a GET.
-  const agg = await aggregate(db);
-  return json(res, 200, snapshotBody({
-    state: agg.count >= MIN_PUBLIC_SAMPLE ? 'ready' : 'collecting',
-    score: agg.score, count: agg.count,
-    distribution: distributionOf(agg), generatedAt: new Date().toISOString(),
-  }));
 }
 
-/** Latest snapshot data for the Discord card (worker). */
+/** Latest overall snapshot data for the Discord card (worker). */
 async function latestSnapshotForCard(client) {
   const { rows } = await client.query(
-    'SELECT score, rating_count, distribution, state, generated_at FROM rating_snapshots ' +
-      'WHERE source IS NULL AND window_days = $1 ORDER BY generated_at DESC LIMIT 1',
+    'SELECT average, rating_count, distribution, state, generated_at FROM rating_snapshots ' +
+      'WHERE product IS NULL AND window_days = $1 ORDER BY generated_at DESC LIMIT 1',
     [WINDOW_DAYS]
   );
-  if (!rows[0]) return { state: 'collecting', count: 0, score: null, distribution: {}, generatedAt: null };
+  if (!rows[0]) {
+    return { state: 'NOT_ENOUGH_RATINGS', count: 0, average: null, distribution: {}, generatedAt: null };
+  }
   const s = rows[0];
   return {
     state: s.state,
-    score: s.score == null ? null : parseFloat(s.score),
+    average: s.average == null ? null : parseFloat(s.average),
     count: s.rating_count, distribution: s.distribution, generatedAt: s.generated_at,
   };
 }
 
 module.exports = {
-  put, withdraw, current, latestSnapshotForCard,
-  NEGATIVE_RATING_MAX, MIN_PUBLIC_SAMPLE, WINDOW_DAYS,
+  submit, current, latestSnapshotForCard, publicRatingBody,
+  WINDOW_DAYS, MIN_PUBLIC_SAMPLE, POSITIVE_MIN,
 };

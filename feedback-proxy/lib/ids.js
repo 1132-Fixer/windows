@@ -19,8 +19,10 @@ function randomPublicId(prefix, length) {
   return prefix + s;
 }
 
-const newInstallationId = () => randomPublicId('IN-', 12);
-const newCaseId = () => randomPublicId('FX-', 8);
-const CASE_ID_RE = /^FX-[A-Z2-9]{6,12}$/;
+const newPrincipalId = () => randomPublicId('IN-', 12);
+const newCaseRef = () => randomPublicId('FX-', 8);
+const newMessageId = () => randomPublicId('MS-', 10);
+const CASE_REF_RE = /^FX-[A-Z2-9]{6,12}$/;
+const MESSAGE_ID_RE = /^MS-[A-Z2-9]{8,16}$/;
 
-module.exports = { newInstallationId, newCaseId, CASE_ID_RE };
+module.exports = { newPrincipalId, newCaseRef, newMessageId, CASE_REF_RE, MESSAGE_ID_RE };

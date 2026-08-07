@@ -1,11 +1,11 @@
 /**
- * Support-framework test suite (node script, no framework — test.js style).
+ * Support-framework test suite (node script, no framework — test.js style),
+ * aligned to the final build directive incl. its §15 test list.
  *
  * Needs a throwaway Postgres via TEST_DATABASE_URL; without it the suite
- * SKIPS with exit 0 so machines without a database stay green. All Discord
- * and GitHub traffic is stubbed through global.fetch — nothing external is
- * ever called. Tables are TRUNCATEd at start: point this at a scratch
- * database only.
+ * SKIPS with exit 0. All Discord and GitHub traffic is stubbed through
+ * global.fetch — nothing external is ever called. Tables are TRUNCATEd at
+ * start: point this at a scratch database only.
  *
  * Exits 0 on PASS/SKIP, 1 on FAIL.
  */
@@ -22,6 +22,7 @@ const http = require('http');
 const PORT = 39118;
 process.env.PORT = String(PORT);
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
+process.env.SUPPORT_V2_ENABLED = 'true';
 process.env.GH_ISSUES_TOKEN = 'github_pat_FAKE_TOKEN_FOR_TESTS_ONLY';
 process.env.TOKEN_HASH_PEPPER = 'test-pepper';
 process.env.DISCORD_ENABLED = 'false'; // worker must NOT dispatch: proves rows persist
@@ -39,6 +40,7 @@ process.env.DISCORD_PUBLIC_KEY = publicKey
 // --- Stub every external fetch BEFORE the server loads ---------------
 const fetchCalls = [];
 let threadCounter = 0;
+let failNextThreadPost = false; // simulates an archived thread once
 global.fetch = async (url, opts) => {
   const u = String(url);
   const call = { url: u, method: (opts && opts.method) || 'GET', body: opts && opts.body };
@@ -55,6 +57,10 @@ global.fetch = async (url, opts) => {
   }
   if (call.method === 'PATCH') return respond(200, { id: 'card-1' });
   if (u.includes('/messages')) {
+    if (!u.includes('rating-chan-1') && failNextThreadPost) {
+      failNextThreadPost = false;
+      return respond(403, { message: 'Thread is archived' });
+    }
     return respond(200, { id: u.includes('rating-chan-1') ? 'card-1' : 'tmsg-' + fetchCalls.length });
   }
   return respond(404, { error: 'unstubbed ' + u });
@@ -63,6 +69,7 @@ global.fetch = async (url, opts) => {
 const { ready } = require('./server.js');
 const db = require('./lib/db');
 const outbox = require('./lib/outbox');
+const { publicRatingBody } = require('./lib/ratings');
 
 // --- helpers ---------------------------------------------------------
 function req(method, path, body, headers) {
@@ -87,7 +94,27 @@ function req(method, path, body, headers) {
   });
 }
 
-const bearer = (inst, extra) => Object.assign({ Authorization: `Bearer ${inst.token}` }, extra || {});
+/** Read an SSE stream until the first complete event, then hang up. */
+function sseFirstEvent(path, headers) {
+  return new Promise((resolve, reject) => {
+    const r = http.request({ host: '127.0.0.1', port: PORT, path, method: 'GET', headers }, (res) => {
+      let buf = '';
+      res.on('data', (c) => {
+        buf += c;
+        if (buf.includes('event: unread') && buf.includes('\n\n')) {
+          resolve({ status: res.statusCode, contentType: res.headers['content-type'], head: buf });
+          r.destroy();
+        }
+      });
+      res.on('error', () => {});
+    });
+    r.on('error', () => {}); // destroy() after resolve triggers a reset; promise already settled
+    r.end();
+    setTimeout(() => { r.destroy(); reject(new Error('sse timeout')); }, 4000).unref();
+  });
+}
+
+const bearer = (p, extra) => Object.assign({ Authorization: `Bearer ${p.token}` }, extra || {});
 const idem = (key) => ({ 'Idempotency-Key': key });
 
 let interactionCounter = 0;
@@ -98,7 +125,7 @@ function signedInteraction(interaction, opts) {
   const sig = (opts && opts.badSignature)
     ? crypto.randomBytes(64).toString('hex')
     : crypto.sign(null, Buffer.concat([Buffer.from(ts), Buffer.from(raw)]), privateKey).toString('hex');
-  return req('POST', '/integrations/discord/interactions', raw, {
+  return req('POST', '/v1/discord/interactions', raw, {
     'x-signature-ed25519': sig,
     'x-signature-timestamp': ts,
   });
@@ -115,166 +142,216 @@ async function count(sql, params) {
 }
 
 const CASE_RE = /^FX-[A-Z2-9]{6,12}$/;
-const goodRating = (overall, extra) => Object.assign(
-  { ease: 5, resolved: 5, recommend: 5, overall, appVersion: '5.5.1' }, extra || {});
+const scores = (over) => Object.assign({ ease: 5, resolved: 5, recommend: 5, overall: 5 }, over);
 
 // --- suite -----------------------------------------------------------
 const S = {}; // shared state across ordered checks
 const checks = [];
 const check = (name, fn) => checks.push({ name, fn });
 
-check('ready 200 with db ok; health keeps legacy shape + db field', async () => {
-  const r = await req('GET', '/ready');
+check('healthz alive; readyz ready; health keeps legacy shape + db field', async () => {
+  const hz = await req('GET', '/healthz');
+  const rz = await req('GET', '/readyz');
   const h = await req('GET', '/health');
-  return r.status === 200 && r.json.db === 'ok' &&
+  return hz.status === 200 && rz.status === 200 && rz.json.migrations === 'applied' &&
+    rz.json.worker === 'running' &&
     h.status === 200 && h.json.ok === true && h.json.configured === true && h.json.db === 'ok';
 });
 
-check('legacy /feedback still works with the database mounted', async () => {
+check('legacy /feedback still works with v2 mounted', async () => {
   const r = await req('POST', '/feedback', { type: 'Feedback', text: 'legacy path alive' });
   return r.status === 201 && r.json.number === 4242;
 });
 
 check('standard error shape: code + message + requestId', async () => {
-  const r = await req('GET', '/api/v1/cases');
+  const r = await req('GET', '/v1/my-messages');
   return r.status === 401 && r.json.error && r.json.error.code === 'unauthorized' &&
     typeof r.json.error.message === 'string' && /^req_/.test(r.json.error.requestId);
 });
 
-check('register issues IN-… id + one-time token; bad source rejected', async () => {
-  const a = await req('POST', '/api/v1/installations',
-    { source: 'windows', appVersion: '5.5.1' }, { 'x-forwarded-for': '10.1.0.1' });
-  const b = await req('POST', '/api/v1/installations',
-    { source: 'windows', appVersion: '5.5.1' }, { 'x-forwarded-for': '10.1.0.2' });
-  const c = await req('POST', '/api/v1/installations',
-    { source: 'windows', appVersion: '5.5.0' }, { 'x-forwarded-for': '10.1.0.3' });
-  const bad = await req('POST', '/api/v1/installations',
-    { source: 'linux', appVersion: '1' }, { 'x-forwarded-for': '10.1.0.4' });
+check('principals: IN-… id + one-time token; UPPER products only', async () => {
+  const a = await req('POST', '/v1/principals',
+    { product: 'WINDOWS', appVersion: '5.5.1' }, { 'x-forwarded-for': '10.1.0.1' });
+  const b = await req('POST', '/v1/principals',
+    { product: 'WINDOWS', appVersion: '5.5.1' }, { 'x-forwarded-for': '10.1.0.2' });
+  const c = await req('POST', '/v1/principals',
+    { product: 'CHROME', appVersion: '1.2.1' }, { 'x-forwarded-for': '10.1.0.3' });
+  const bad = await req('POST', '/v1/principals',
+    { product: 'windows', appVersion: '1' }, { 'x-forwarded-for': '10.1.0.4' });
   S.A = a.json; S.B = b.json; S.C = c.json;
-  return a.status === 201 && /^IN-[A-Z2-9]{10,20}$/.test(a.json.installationId) &&
+  return a.status === 201 && /^IN-[A-Z2-9]{10,20}$/.test(a.json.principalId) &&
     /^[0-9a-f]{64}$/.test(a.json.token) && b.status === 201 && c.status === 201 &&
     bad.status === 400 && bad.json.error.code === 'validation_failed';
 });
 
 check('token stored only as hash; tampered token -> 401', async () => {
-  const { rows } = await db.query('SELECT token_hash FROM installations');
-  const tampered = await req('GET', '/api/v1/cases', undefined,
+  const { rows } = await db.query('SELECT token_hash FROM support_principals');
+  const tampered = await req('GET', '/v1/my-messages', undefined,
     { Authorization: 'Bearer ' + '0'.repeat(64) });
   return rows.length === 3 &&
     rows.every((r) => Buffer.isBuffer(r.token_hash) && r.token_hash.length === 32) &&
     tampered.status === 401;
 });
 
-check('case create requires Idempotency-Key', async () => {
-  const r = await req('POST', '/api/v1/cases',
-    { type: 'bug', title: 'x y z', description: 'd' }, bearer(S.A));
-  return r.status === 400 && r.json.error.code === 'missing_idempotency_key';
-});
-
 check('case create: same key + same body -> SAME random FX case, one row', async () => {
+  const missing = await req('POST', '/v1/cases',
+    { type: 'bug', title: 'x y z', description: 'd' }, bearer(S.A));
   const body = {
-    type: 'bug', title: 'Fix stops during preflight',
+    type: 'bug', title: 'Fix **stops** during preflight',
     description: 'The scan completes, but Fix stays disabled after preflight.',
     impact: 'A main feature is blocked', os: 'Windows 11 · 10.0.26200', appVersion: '5.5.1',
   };
-  const first = await req('POST', '/api/v1/cases', body, bearer(S.A, idem('K1')));
-  const retry = await req('POST', '/api/v1/cases', body, bearer(S.A, idem('K1')));
-  S.case1 = first.json.case && first.json.case.caseId;
-  return first.status === 201 && CASE_RE.test(S.case1) && first.json.case.state === 'new' &&
-    retry.status === 201 && retry.json.case.caseId === S.case1 &&
+  const first = await req('POST', '/v1/cases', body, bearer(S.A, idem('K1')));
+  const retry = await req('POST', '/v1/cases', body, bearer(S.A, idem('K1')));
+  S.case1 = first.json.caseRef;
+  return missing.status === 400 && missing.json.error.code === 'missing_idempotency_key' &&
+    first.status === 201 && CASE_RE.test(S.case1) && first.json.state === 'new' &&
+    retry.status === 201 && retry.json.caseRef === S.case1 &&
     (await count('SELECT count(*) FROM support_cases')) === 1;
 });
 
 check('same key + DIFFERENT body -> 409 idempotency_conflict', async () => {
-  const r = await req('POST', '/api/v1/cases',
+  const r = await req('POST', '/v1/cases',
     { type: 'bug', title: 'something else', description: 'other' }, bearer(S.A, idem('K1')));
   return r.status === 409 && r.json.error.code === 'idempotency_conflict';
 });
 
-check('second case gets a different random id (not sequential)', async () => {
-  const r = await req('POST', '/api/v1/cases',
+check("'Contact' temporarily maps to feedback in the new API", async () => {
+  const r = await req('POST', '/v1/cases',
+    { type: 'Contact', title: 'Question about the fix', description: 'how does it work?' },
+    bearer(S.A, idem('K3')));
+  S.case3 = r.json.caseRef;
+  const second = await req('POST', '/v1/cases',
     { type: 'bug', title: 'Second bug here', description: 'details' }, bearer(S.A, idem('K2')));
-  S.case2 = r.json.case.caseId;
-  return r.status === 201 && CASE_RE.test(S.case2) && S.case2 !== S.case1;
+  S.case2 = second.json.caseRef;
+  return r.status === 201 && r.json.kind === 'feedback' &&
+    second.status === 201 && S.case2 !== S.case1 && CASE_RE.test(S.case2);
 });
 
 check('outbox rows committed in the SAME tx (worker off -> rows pending)', async () => {
   return (await count(
-    "SELECT count(*) FROM outbox_events WHERE event_type = 'case.created' AND state = 'pending'")) === 2;
+    "SELECT count(*) FROM outbox WHERE event_type = 'case.created' AND state = 'pending'")) === 3;
 });
 
-check('OPERATOR RULE: compliment -> counted, NO case, NO alert', async () => {
-  const r = await req('POST', '/api/v1/feedback',
-    { topic: 'compliment', message: 'love it, thanks!' }, bearer(S.A, idem('F1')));
-  return r.status === 201 && r.json.saved === true &&
-    (await count('SELECT count(*) FROM positive_feedback')) === 1 &&
-    (await count('SELECT count(*) FROM support_cases')) === 2 &&
-    (await count("SELECT count(*) FROM outbox_events WHERE event_type = 'case.created'")) === 2;
+check('rating validation strict: -1, 6, fraction, string, missing all 400', async () => {
+  const h = bearer(S.B, idem('RX'));
+  const probes = [
+    await req('POST', '/v1/ratings', scores({ overall: -1 }), h),
+    await req('POST', '/v1/ratings', scores({ ease: 6 }), h),
+    await req('POST', '/v1/ratings', scores({ recommend: 3.5 }), h),
+    await req('POST', '/v1/ratings', scores({ resolved: '4' }), h),
+    await req('POST', '/v1/ratings', { ease: 5, recommend: 5, overall: 5 }, h), // resolved unanswered
+    await req('POST', '/v1/ratings', scores({ overall: null }), h),
+  ];
+  return probes.every((r) => r.status === 400 && r.json.error.code === 'validation_failed');
 });
 
-check('suggestion -> feedback case + alert', async () => {
-  const r = await req('POST', '/api/v1/feedback',
-    { topic: 'suggestion', message: 'add a dark mode toggle' }, bearer(S.A, idem('F2')));
-  return r.status === 201 && r.json.case.kind === 'feedback' &&
-    r.json.case.subject === 'Feedback — suggestion' &&
-    (await count("SELECT count(*) FROM outbox_events WHERE event_type = 'case.created'")) === 3;
+check('DIRECTIVE: 0 is a REAL answer — accepted, and any 0-3 opens a case', async () => {
+  const r = await req('POST', '/v1/ratings', scores({ ease: 0 }), bearer(S.B, idem('R1')));
+  S.ratingCaseB = r.json.caseRef;
+  const row = (await db.query('SELECT ease, overall FROM ratings')).rows[0];
+  const kind = (await db.query(
+    'SELECT kind FROM support_cases WHERE case_ref = $1', [S.ratingCaseB])).rows[0];
+  return r.status === 200 && r.json.ratingSaved === true && CASE_RE.test(S.ratingCaseB) &&
+    row.ease === 0 && row.overall === 5 && kind.kind === 'rating_feedback';
 });
 
-check('case list hides internals; unreadCount present', async () => {
-  const r = await req('GET', '/api/v1/cases', undefined, bearer(S.A));
-  const allowed = new Set(['caseId', 'kind', 'state', 'subject', 'appVersion', 'createdAt', 'updatedAt']);
-  return r.status === 200 && r.json.unreadCount === 0 && r.json.cases.length === 3 &&
-    r.json.cases.every((c) => Object.keys(c).every((k) => allowed.has(k)));
+check('replace-not-add: re-rate updates the one row, count cannot grow', async () => {
+  const r = await req('POST', '/v1/ratings', scores({}), bearer(S.B, idem('R2')));
+  return r.status === 200 && r.json.caseRef === null && // all 4-5, no text -> silent
+    (await count('SELECT count(*) FROM ratings')) === 1 &&
+    (await count('SELECT count(*) FROM rating_revisions')) === 2 &&
+    r.json.snapshot.count === 1;
 });
 
-check("another installation cannot see A's case", async () => {
-  const r = await req('GET', `/api/v1/cases/${S.case1}`, undefined, bearer(S.B));
-  return r.status === 404;
+check('DIRECTIVE: all 4-5 and no text -> receipt only, NO case, NO alert', async () => {
+  const casesBefore = await count('SELECT count(*) FROM support_cases');
+  const alertsBefore = await count("SELECT count(*) FROM outbox WHERE event_type = 'case.created'");
+  const r = await req('POST', '/v1/ratings', scores({ ease: 4, overall: 4 }), bearer(S.C, idem('R3')));
+  return r.status === 200 && r.json.ratingSaved === true && r.json.caseRef === null &&
+    (await count('SELECT count(*) FROM support_cases')) === casesBefore &&
+    (await count("SELECT count(*) FROM outbox WHERE event_type = 'case.created'")) === alertsBefore;
 });
 
-check('user message: idempotent; initial message listed first', async () => {
-  const first = await req('POST', `/api/v1/cases/${S.case1}/messages`,
-    { body: 'more info: log attached' }, bearer(S.A, idem('M1')));
-  const retry = await req('POST', `/api/v1/cases/${S.case1}/messages`,
-    { body: 'more info: log attached' }, bearer(S.A, idem('M1')));
-  const g = await req('GET', `/api/v1/cases/${S.case1}`, undefined, bearer(S.A));
-  return first.status === 201 && first.json.state === 'new' &&
-    retry.json.message.body === 'more info: log attached' &&
-    g.json.messages.length === 2 && g.json.messages[0].author === 'user' &&
-    g.json.messages[1].body === 'more info: log attached';
+check('DIRECTIVE: all 5s WITH text -> exactly one case, retry never re-pings', async () => {
+  const body = Object.assign(scores({}), { comment: 'love it, but one question' });
+  const first = await req('POST', '/v1/ratings', body, bearer(S.C, idem('R4')));
+  const retry = await req('POST', '/v1/ratings', body, bearer(S.C, idem('R4')));
+  S.ratingCaseC = first.json.caseRef;
+  return first.status === 200 && CASE_RE.test(S.ratingCaseC) &&
+    retry.json.caseRef === S.ratingCaseC &&
+    (await count("SELECT count(*) FROM support_cases WHERE kind = 'rating_feedback'")) === 2 &&
+    (await count("SELECT count(*) FROM outbox WHERE event_type = 'case.created' AND payload->>'case_ref' = $1",
+      [S.ratingCaseC])) === 1;
 });
 
-check('interactions: invalid signature -> 401 before any parsing', async () => {
-  const r = await signedInteraction(button(`resolve:${S.case1}`), { badSignature: true });
-  const noHeaders = await req('POST', '/integrations/discord/interactions', JSON.stringify({ type: 1 }));
-  return r.status === 401 && noHeaders.status === 401;
+check('current: average and count separate; product split; window documented', async () => {
+  const all = await req('GET', '/v1/ratings/current');
+  const windows = await req('GET', '/v1/ratings/current?product=WINDOWS');
+  const chrome = await req('GET', '/v1/ratings/current?product=CHROME');
+  const badProduct = await req('GET', '/v1/ratings/current?product=LINUX');
+  return all.status === 200 && all.json.average === 5 && all.json.count === 2 &&
+    all.json.state === 'NOT_ENOUGH_RATINGS' && all.json.verified === true &&
+    all.json.window === '90d' && all.json.minimumSample === 10 && all.json.updatedAt &&
+    windows.json.count === 1 && chrome.json.count === 1 &&
+    badProduct.status === 400;
 });
 
-check('interactions: PING -> PONG', async () => {
-  const r = await signedInteraction({ type: 1 });
-  return r.status === 200 && r.json.type === 1;
+check('contract unit: count rendering 0/1/43/1000; average never concatenates', async () => {
+  const now = new Date().toISOString();
+  const zero = publicRatingBody({ average: null, count: 0, generatedAt: now });
+  const one = publicRatingBody({ average: 5, count: 1, generatedAt: now });
+  const c43 = publicRatingBody({ average: 4.3333, count: 43, generatedAt: now });
+  const kilo = publicRatingBody({ average: 4.55, count: 1000, generatedAt: now });
+  const j43 = JSON.stringify(c43);
+  return zero.average === null && zero.count === 0 && zero.state === 'NOT_ENOUGH_RATINGS' &&
+    one.average === 5 && one.count === 1 &&
+    c43.average === 4.3 && c43.count === 43 &&
+    typeof c43.average === 'number' && typeof c43.count === 'number' &&
+    j43.includes('"average":4.3') && j43.includes('"count":43') && !j43.includes('4.343') &&
+    kilo.average === 4.6 && kilo.count === 1000 && kilo.state === 'VERIFIED';
 });
 
-check('wrong guild denied — custom_id is not authorization', async () => {
-  const r = await signedInteraction(button(`resolve:${S.case1}`, { guild_id: 'evil-guild' }));
-  const c = await req('GET', `/api/v1/cases/${S.case1}`, undefined, bearer(S.A));
-  return r.json.data.content === 'Not authorized.' && c.json.case.state === 'new';
+check('contract unit: STALE and UNAVAILABLE states', async () => {
+  const stale = publicRatingBody({
+    average: 4.5, count: 12, generatedAt: new Date(Date.now() - 25 * 3600 * 1000).toISOString(),
+  });
+  const down = publicRatingBody({ average: null, count: 0, error: true });
+  return stale.state === 'STALE' && stale.average === 4.5 &&
+    down.state === 'UNAVAILABLE' && down.verified === false && down.average === null;
 });
 
-check('non-staff member denied', async () => {
-  const r = await signedInteraction(button(`resolve:${S.case1}`,
+check('interactions: invalid signature -> 401 before any parsing; PING -> PONG', async () => {
+  const bad = await signedInteraction(button(`resolve:${S.case1}`), { badSignature: true });
+  const noHeaders = await req('POST', '/v1/discord/interactions', JSON.stringify({ type: 1 }));
+  const ping = await signedInteraction({ type: 1 });
+  return bad.status === 401 && noHeaders.status === 401 && ping.json.type === 1;
+});
+
+check('wrong guild + non-staff denied — custom_id is not authorization', async () => {
+  const wrongGuild = await signedInteraction(button(`resolve:${S.case1}`, { guild_id: 'evil-guild' }));
+  const nonStaff = await signedInteraction(button(`resolve:${S.case1}`,
     { member: { roles: ['random-role'], user: { id: 'rando' } } }));
-  const c = await req('GET', `/api/v1/cases/${S.case1}`, undefined, bearer(S.A));
-  return r.json.data.content === 'Not authorized.' && c.json.case.state === 'new';
+  const { rows } = await db.query('SELECT state FROM support_cases WHERE case_ref = $1', [S.case1]);
+  return wrongGuild.json.data.content === 'Not authorized.' &&
+    nonStaff.json.data.content === 'Not authorized.' && rows[0].state === 'new';
 });
 
-check('Reply button -> modal carrying the CURRENT case version', async () => {
+check('stub buttons acknowledged: assign / diagnostics / more actions', async () => {
+  const assign = await signedInteraction(button(`assign:${S.case1}`));
+  const diag = await signedInteraction(button(`diag:${S.case1}`));
+  const more = await signedInteraction(button(`more:${S.case1}`));
+  return [assign, diag, more].every((r) =>
+    r.status === 200 && r.json.data.content.includes('not implemented'));
+});
+
+check('Reply button -> modal carrying the CURRENT control epoch', async () => {
   const r = await signedInteraction(button(`reply:${S.case1}`));
   return r.status === 200 && r.json.type === 9 &&
     r.json.data.custom_id === `reply_modal:${S.case1}:1`;
 });
 
-check('modal submit stores staff reply + waiting_for_user + version bump', async () => {
+check('modal submit: staff reply + waiting_for_user + epoch bump + receipt', async () => {
   const r = await signedInteraction({
     type: 5, guild_id: 'guild-1', member: staffMember, id: 'int-modal-1',
     data: {
@@ -285,12 +362,11 @@ check('modal submit stores staff reply + waiting_for_user + version bump', async
       ],
     },
   });
-  const c = await req('GET', `/api/v1/cases/${S.case1}`, undefined, bearer(S.A));
-  const { rows } = await db.query(
-    "SELECT version FROM support_cases WHERE public_id = $1", [S.case1]);
+  const c = (await db.query('SELECT state, control_epoch FROM support_cases WHERE case_ref = $1', [S.case1])).rows[0];
   return r.status === 200 && r.json.data.content.includes('Reply queued') &&
-    c.json.case.state === 'waiting_for_user' && rows[0].version === 2 &&
-    (await count("SELECT count(*) FROM case_messages WHERE author = 'staff'")) === 1;
+    c.state === 'waiting_for_user' && c.control_epoch === 2 &&
+    (await count("SELECT count(*) FROM case_messages WHERE author = 'staff'")) === 1 &&
+    (await count("SELECT count(*) FROM inbox_receipts WHERE state = 'AVAILABLE'")) === 1;
 });
 
 check('same interaction id replayed -> no second reply', async () => {
@@ -305,11 +381,11 @@ check('same interaction id replayed -> no second reply', async () => {
     (await count("SELECT count(*) FROM case_messages WHERE author = 'staff'")) === 1;
 });
 
-check('stale version modal submit rejected (optimistic lock)', async () => {
+check('DIRECTIVE: stale control epoch rejected', async () => {
   const r = await signedInteraction({
     type: 5, guild_id: 'guild-1', member: staffMember,
     data: {
-      custom_id: `reply_modal:${S.case1}:1`, // current version is 2
+      custom_id: `reply_modal:${S.case1}:1`, // current epoch is 2
       components: [{ type: 1, components: [{ type: 4, custom_id: 'message', value: 'stale' }] }],
     },
   });
@@ -317,41 +393,60 @@ check('stale version modal submit rejected (optimistic lock)', async () => {
     (await count("SELECT count(*) FROM case_messages WHERE author = 'staff'")) === 1;
 });
 
-check('delivery ladder: queued -> available on fetch -> read on /read', async () => {
-  const before = await db.query(
-    "SELECT delivery FROM case_messages WHERE author = 'staff'");
-  const list1 = await req('GET', '/api/v1/cases', undefined, bearer(S.A));
-  await req('GET', `/api/v1/cases/${S.case1}`, undefined, bearer(S.A)); // flips to available
-  const mid = await db.query("SELECT delivery FROM case_messages WHERE author = 'staff'");
-  const rr = await req('POST', `/api/v1/cases/${S.case1}/read`, {}, bearer(S.A));
-  const after = await db.query("SELECT delivery FROM case_messages WHERE author = 'staff'");
-  return before.rows[0].delivery === 'available' || before.rows[0].delivery === 'queued'
-    ? (list1.json.unreadCount === 1 && mid.rows[0].delivery === 'available' &&
-       rr.json.unreadCount === 0 && after.rows[0].delivery === 'read')
-    : false;
+check('my-messages: staff reply listed; AVAILABLE -> NOTIFIED on list', async () => {
+  const unread1 = await req('GET', '/v1/my-messages/unread-count', undefined, bearer(S.A));
+  const list = await req('GET', '/v1/my-messages', undefined, bearer(S.A));
+  const m = list.json.messages.find((x) => x.caseRef === S.case1);
+  S.staffMsgId = m && m.messageId;
+  const after = (await db.query("SELECT state FROM inbox_receipts")).rows[0];
+  return unread1.json.unread === 1 && list.json.unread === 1 &&
+    /^MS-[A-Z2-9]{8,16}$/.test(S.staffMsgId) && m.author === 'staff' &&
+    m.body === 'Please send the preflight log.' && after.state === 'NOTIFIED';
 });
 
-check('state machine: user reply to waiting_for_user -> in_review', async () => {
-  const r = await req('POST', `/api/v1/cases/${S.case1}/messages`,
+check('DIRECTIVE: internal note never appears in My Messages', async () => {
+  const { rows } = await db.query('SELECT id FROM support_cases WHERE case_ref = $1', [S.case1]);
+  await db.query(
+    "INSERT INTO internal_notes (case_id, staff_discord_user_id, body) VALUES ($1, 'staff-user-1', 'INTERNAL-SECRET-NOTE')",
+    [rows[0].id]
+  );
+  const list = await req('GET', '/v1/my-messages', undefined, bearer(S.A));
+  const unread = await req('GET', '/v1/my-messages/unread-count', undefined, bearer(S.A));
+  return !list.body.includes('INTERNAL-SECRET-NOTE') && unread.json.unread === 1;
+});
+
+check('read: NOTIFIED -> READ; unread drops to 0; repeat read is a no-op', async () => {
+  const r = await req('POST', `/v1/my-messages/${S.staffMsgId}/read`, {}, bearer(S.A));
+  const again = await req('POST', `/v1/my-messages/${S.staffMsgId}/read`, {}, bearer(S.A));
+  const unread = await req('GET', '/v1/my-messages/unread-count', undefined, bearer(S.A));
+  return r.status === 200 && r.json.state === 'READ' && again.status === 200 &&
+    unread.json.unread === 0;
+});
+
+check('SSE: events stream opens and delivers the unread count', async () => {
+  const r = await sseFirstEvent('/v1/my-messages/events', bearer(S.A));
+  return r.status === 200 && String(r.contentType).includes('text/event-stream') &&
+    r.head.includes('event: unread') && r.head.includes('"unread":0');
+});
+
+check('user reply: waiting_for_user -> in_review; receipts flip REPLIED', async () => {
+  const r = await req('POST', `/v1/cases/${S.case1}/messages`,
     { body: 'log attached here' }, bearer(S.A, idem('M2')));
-  return r.status === 201 && r.json.state === 'in_review';
+  const receipt = (await db.query('SELECT state FROM inbox_receipts')).rows[0];
+  return r.status === 201 && r.json.state === 'in_review' && receipt.state === 'REPLIED';
 });
 
-check('resolve button -> resolved', async () => {
+check('resolve button -> resolved; user reply reopens', async () => {
   const r = await signedInteraction(button(`resolve:${S.case1}`));
-  const c = await req('GET', `/api/v1/cases/${S.case1}`, undefined, bearer(S.A));
-  return r.json.data.content.includes('resolved') && c.json.case.state === 'resolved';
-});
-
-check('state machine: user reply to resolved -> reopened', async () => {
-  const r = await req('POST', `/api/v1/cases/${S.case1}/messages`,
+  const reply = await req('POST', `/v1/cases/${S.case1}/messages`,
     { body: 'still broken after the fix' }, bearer(S.A, idem('M3')));
-  return r.status === 201 && r.json.state === 'reopened';
+  return r.json.data.content.includes('resolved') && reply.status === 201 &&
+    reply.json.state === 'reopened';
 });
 
 check('spam locks the case for users (409 case_locked)', async () => {
-  await db.query("UPDATE support_cases SET state = 'spam' WHERE public_id = $1", [S.case2]);
-  const r = await req('POST', `/api/v1/cases/${S.case2}/messages`,
+  await db.query("UPDATE support_cases SET state = 'spam' WHERE case_ref = $1", [S.case2]);
+  const r = await req('POST', `/v1/cases/${S.case2}/messages`,
     { body: 'hello?' }, bearer(S.A, idem('M4')));
   return r.status === 409 && r.json.error.code === 'case_locked';
 });
@@ -361,145 +456,65 @@ check('every transition wrote a case_events audit row', async () => {
     "SELECT count(*) FROM case_events WHERE event_type = 'state.changed'")) >= 4;
 });
 
-check('rating before any eligible product event -> 422 not_eligible', async () => {
-  const r = await req('PUT', '/api/v1/ratings/me', goodRating(5), bearer(S.B, idem('RB0')));
-  return r.status === 422 && r.json.error.code === 'not_eligible';
-});
-
-check('product-events: recorded once, replayed on retry', async () => {
-  const body = { kind: 'fix_completed', appVersion: '5.5.1', occurredAt: new Date().toISOString() };
-  const first = await req('POST', '/api/v1/product-events', body, bearer(S.A, idem('E1')));
-  const retry = await req('POST', '/api/v1/product-events', body, bearer(S.A, idem('E1')));
-  return first.status === 201 && first.json.recorded === true &&
-    retry.status === 201 &&
-    (await count('SELECT count(*) FROM product_events')) === 1;
-});
-
-check('rating validation strict: fraction, zero, missing, string all 400', async () => {
-  const h = bearer(S.A, idem('RX'));
-  const probes = [
-    await req('PUT', '/api/v1/ratings/me', goodRating(3.5), h),
-    await req('PUT', '/api/v1/ratings/me', goodRating(5, { ease: 0 }), h),
-    await req('PUT', '/api/v1/ratings/me', { ease: 5, resolved: 5, overall: 5, appVersion: 'v' }, h),
-    await req('PUT', '/api/v1/ratings/me', goodRating(5, { recommend: '4' }), h),
-  ];
-  return probes.every((r) => r.status === 400 && r.json.error.code === 'validation_failed');
-});
-
-check('OPERATOR RULE: rating 5, no follow-up -> live score only, NO case', async () => {
-  const casesBefore = await count('SELECT count(*) FROM support_cases');
-  const r = await req('PUT', '/api/v1/ratings/me',
-    goodRating(5, { comment: 'works great' }), bearer(S.A, idem('R1')));
-  return r.status === 200 && r.json.state === 'verified' && r.json.caseId === null &&
-    r.json.snapshot.state === 'collecting' && r.json.snapshot.count === 1 &&
-    (await count('SELECT count(*) FROM support_cases')) === casesBefore &&
-    (await count("SELECT count(*) FROM outbox_events WHERE event_type = 'rating.snapshot.changed' AND state = 'pending'")) >= 1;
-});
-
-check('GET /api/v1/ratings/current is public and honest below 10 samples', async () => {
-  const r = await req('GET', '/api/v1/ratings/current');
-  return r.status === 200 && r.json.state === 'collecting' && r.json.count === 1 &&
-    r.json.window === '90d' && r.json.score === undefined;
-});
-
-check('re-rate upserts the one row per (installation, source) + revisions', async () => {
-  const r = await req('PUT', '/api/v1/ratings/me', goodRating(4), bearer(S.A, idem('R2')));
-  return r.status === 200 &&
-    (await count('SELECT count(*) FROM ratings')) === 1 &&
-    (await count('SELECT count(*) FROM rating_revisions')) === 2;
-});
-
-check('OPERATOR RULE: rating 2 -> rating_feedback case + alert', async () => {
-  await req('POST', '/api/v1/product-events',
-    { kind: 'fix_failed', occurredAt: new Date().toISOString() }, bearer(S.B, idem('E2')));
-  const r = await req('PUT', '/api/v1/ratings/me',
-    goodRating(2, { comment: 'made it worse' }), bearer(S.B, idem('R3')));
-  S.ratingCase = r.json.caseId;
-  const kind = (await db.query(
-    'SELECT kind FROM support_cases WHERE public_id = $1', [S.ratingCase])).rows[0];
-  return r.status === 200 && CASE_RE.test(S.ratingCase) && kind.kind === 'rating_feedback' &&
-    (await count("SELECT count(*) FROM outbox_events WHERE event_type = 'case.created'")) === 4;
-});
-
-check('retry with same key replays the SAME case; re-rate reuses the open case', async () => {
-  const retry = await req('PUT', '/api/v1/ratings/me',
-    goodRating(2, { comment: 'made it worse' }), bearer(S.B, idem('R3')));
-  const rerate = await req('PUT', '/api/v1/ratings/me',
-    goodRating(1, { comment: 'even worse now' }), bearer(S.B, idem('R4')));
-  return retry.json.caseId === S.ratingCase && rerate.json.caseId === S.ratingCase &&
-    (await count("SELECT count(*) FROM support_cases WHERE kind = 'rating_feedback'")) === 1;
-});
-
-check('rating case is visible to its user via the client API (My Messages)', async () => {
-  const list = await req('GET', '/api/v1/cases', undefined, bearer(S.B));
-  const one = await req('GET', `/api/v1/cases/${S.ratingCase}`, undefined, bearer(S.B));
-  return list.json.cases.some((c) => c.caseId === S.ratingCase) &&
-    one.json.messages.length >= 1 && one.json.messages[0].body === 'made it worse';
-});
-
-check('OPERATOR RULE: rating 4-5 WITH follow-up requested -> case + alert', async () => {
-  await req('POST', '/api/v1/product-events',
-    { kind: 'fix_completed', occurredAt: new Date().toISOString() }, bearer(S.C, idem('E3')));
-  const r = await req('PUT', '/api/v1/ratings/me',
-    goodRating(5, { comment: 'great but one question', followUpRequested: true }),
-    bearer(S.C, idem('R5')));
-  return r.status === 200 && CASE_RE.test(r.json.caseId) &&
-    (await count("SELECT count(*) FROM outbox_events WHERE event_type = 'case.created'")) === 5;
-});
-
-check('DELETE withdraws the rating and drops it from the snapshot', async () => {
-  const r = await req('DELETE', '/api/v1/ratings/me', undefined, bearer(S.A));
-  const again = await req('DELETE', '/api/v1/ratings/me', undefined, bearer(S.A));
-  const cur = await req('GET', '/api/v1/ratings/current');
-  return r.status === 200 && r.json.state === 'withdrawn' && again.status === 200 &&
-    cur.json.count === 2; // B (overall 1) + C (overall 5) remain verified
-});
-
 check('worker off: every Discord-bound row still pending, zero Discord calls', async () => {
-  const pending = await count(
-    "SELECT count(*) FROM outbox_events WHERE state = 'pending'");
+  const pending = await count("SELECT count(*) FROM outbox WHERE state = 'pending'");
   const discordCalls = fetchCalls.filter((c) => c.url.includes('discord.com'));
   return pending >= 10 && discordCalls.length === 0;
 });
 
-check('flag on: worker drains outbox, saves thread ids, upserts rating card', async () => {
+check('flag on: worker drains outbox; bindings saved; card upserted', async () => {
   process.env.DISCORD_ENABLED = 'true';
   for (let i = 0; i < 4; i++) await outbox.tick();
-  const pending = await count(
-    "SELECT count(*) FROM outbox_events WHERE state IN ('pending', 'failed')");
-  const threads = await count(
-    'SELECT count(*) FROM support_cases WHERE discord_forum_thread_id IS NOT NULL');
+  const pending = await count("SELECT count(*) FROM outbox WHERE state IN ('pending', 'failed')");
+  const bindings = await count('SELECT count(*) FROM discord_case_bindings');
   const forumPosts = fetchCalls.filter((c) => c.url.includes('/channels/forum-1/threads'));
   const cardCalls = fetchCalls.filter((c) => c.url.includes('rating-chan-1'));
-  return pending === 0 && threads === 5 && forumPosts.length === 5 && cardCalls.length >= 1;
+  return pending === 0 && bindings === 5 && forumPosts.length === 5 && cardCalls.length >= 1;
 });
 
-check('forum posts use Components V2 and carry the case controls', async () => {
+check('forum posts use Components V2, all five controls, escaped markdown', async () => {
   const posts = fetchCalls
     .filter((c) => c.url.includes('/channels/forum-1/threads'))
     .map((c) => JSON.parse(c.body));
+  const k1 = posts.find((p) => p.name.startsWith(S.case1));
+  const componentsJson = JSON.stringify(k1.message.components);
+  const texts = k1.message.components[0].components
+    .map((c) => c.content || '').join('\n');
   return posts.length === 5 && posts.every((p) =>
-    p.message.flags === 32768 && !p.message.content && !p.message.embeds &&
-    JSON.stringify(p.message.components).includes('"custom_id":"reply:'));
+    p.message.flags === 32768 && !p.message.content && !p.message.embeds) &&
+    ['reply:', 'assign:', 'diag:', 'resolve:', 'more:'].every((a) =>
+      componentsJson.includes(`"custom_id":"${a}${S.case1}"`)) &&
+    texts.includes('\\*\\*stops\\*\\*'); // user's ** arrives markdown-escaped
 });
 
-check('user text never pings; the one role alert allowlists exactly one role', async () => {
-  const discordMsgs = fetchCalls.filter((c) =>
-    c.url.includes('discord.com') && c.body && (c.method === 'POST' || c.method === 'PATCH'));
-  const alerts = discordMsgs.filter((c) => c.body.includes('<@&'));
-  return discordMsgs.every((c) => c.body.includes('"allowed_mentions"')) &&
-    alerts.length === 5 && alerts.every((c) => {
-      const b = JSON.parse(c.body);
-      return b.allowed_mentions.parse.length === 0 &&
-        JSON.stringify(b.allowed_mentions.roles) === '["staff-role-1"]';
-    });
+check('role alert: exactly once per case, single-role allowlist, never re-pinged', async () => {
+  const alerts = fetchCalls.filter((c) =>
+    c.url.includes('discord.com') && c.body && c.body.includes('<@&'));
+  return alerts.length === 5 && alerts.every((c) => {
+    const b = JSON.parse(c.body);
+    return b.allowed_mentions.parse.length === 0 &&
+      JSON.stringify(b.allowed_mentions.roles) === '["staff-role-1"]';
+  });
+});
+
+check('DIRECTIVE: archived thread does not block or lose a user reply', async () => {
+  const r = await req('POST', `/v1/cases/${S.case1}/messages`,
+    { body: 'one more detail' }, bearer(S.A, idem('M5')));
+  failNextThreadPost = true; // Discord refuses the archived thread once
+  await outbox.tick();
+  const failed = await count("SELECT count(*) FROM outbox WHERE state = 'failed'");
+  await db.query("UPDATE outbox SET available_at = now() WHERE state = 'failed'"); // skip backoff
+  await outbox.tick();
+  const pending = await count("SELECT count(*) FROM outbox WHERE state IN ('pending', 'failed')");
+  return r.status === 201 && failed === 1 && pending === 0 &&
+    (await count("SELECT count(*) FROM case_messages WHERE body = 'one more detail'")) === 1;
 });
 
 check('no client response ever contained a bot token or a token hash', async () => {
   const probes = [
     await req('GET', '/health'),
-    await req('GET', '/api/v1/cases', undefined, bearer(S.A)),
-    await req('GET', '/api/v1/ratings/current'),
+    await req('GET', '/v1/my-messages', undefined, bearer(S.A)),
+    await req('GET', '/v1/ratings/current'),
   ];
   return probes.every((p) => !p.body.includes('FAKE_DISCORD_BOT_TOKEN') &&
     !p.body.includes('token_hash'));
@@ -507,13 +522,13 @@ check('no client response ever contained a bot token or a token hash', async () 
 
 // --- run -------------------------------------------------------------
 (async () => {
-  console.log('=== support-framework suite ===');
+  console.log('=== support-framework suite (final directive) ===');
   console.log('');
   await ready;
   await db.query(
-    'TRUNCATE discord_interactions, outbox_events, idempotency_records, case_events, ' +
-      'rating_snapshots, rating_revisions, positive_feedback, ratings, case_attachments, ' +
-      'case_messages, support_cases, product_events, installations CASCADE'
+    'TRUNCATE discord_interactions, outbox, idempotency_requests, case_events, ' +
+      'rating_snapshots, rating_revisions, ratings, inbox_receipts, internal_notes, ' +
+      'attachments, case_messages, discord_case_bindings, support_cases, support_principals CASCADE'
   );
 
   let pass = true;

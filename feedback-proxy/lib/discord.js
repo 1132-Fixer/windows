@@ -2,18 +2,19 @@
  * Discord REST helpers (API v10, plain fetch, bot token from env).
  *
  * Messages use Components V2 (IS_COMPONENTS_V2 flag; Container/TextDisplay/
- * Separator + button rows) per the operator's Discord design plan — no
- * legacy content/embeds on those messages. Callers run inside the outbox
- * worker: failures throw, the row stays pending, the worker retries.
- * The bot token is never logged.
+ * Separator + button rows). User strings are markdown-escaped and every
+ * payload disarms mentions; the single deliberate role alert allowlists
+ * exactly one configured role and is sent once per case. custom_ids carry
+ * only the public caseRef — never secrets or raw database ids.
+ *
+ * Callers run inside the outbox worker: failures throw, the row stays
+ * pending, the worker retries. The bot token is never logged.
  */
 'use strict';
 
 const API = 'https://discord.com/api/v10';
 const IS_COMPONENTS_V2 = 1 << 15; // 32768
 
-// User text must never ping. The one deliberate role alert builds its own
-// explicit allowlist instead.
 const NO_MENTIONS = { parse: [] };
 
 // Component type ids (Components V2)
@@ -23,8 +24,13 @@ const TEXT_DISPLAY = 10;
 const SEPARATOR = 14;
 const CONTAINER = 17;
 
-const BLUE = 0x2563eb;  // main action color (quality review palette)
+const BLUE = 0x2563eb;  // main action color
 const AMBER = 0xffb020; // warning accent
+
+/** Escape Discord markdown in user-controlled strings. */
+function escapeMd(s) {
+  return String(s == null ? '' : s).replace(/([\\*_~`|>#[\]()-])/g, '\\$1');
+}
 
 async function api(method, path, body) {
   const token = process.env.DISCORD_BOT_TOKEN;
@@ -66,7 +72,7 @@ function buildCaseMessage(p) {
   const facts = [
     'STATE         \u{1F7E1} New',
     `PRIORITY      ${p.priority || 'normal'}`,
-    `SOURCE        ${p.source} · ${p.app_version}`,
+    `SOURCE        ${p.product} · ${p.app_version}`,
     'ASSIGNED      Unassigned',
     `ENVIRONMENT   ${env.os || 'unknown'}`,
     `DIAGNOSTICS   ${env.impact ? 'Impact: ' + env.impact : 'none provided'}`,
@@ -78,16 +84,24 @@ function buildCaseMessage(p) {
       type: CONTAINER,
       accent_color: p.kind === 'bug' ? AMBER : BLUE,
       components: [
-        text(`**${KIND_LABEL[p.kind] || p.kind} · ${p.public_id}**\n**${p.subject}**`),
-        text(String(p.summary).slice(0, 1500)),
+        text(`**${KIND_LABEL[p.kind] || p.kind} · ${p.case_ref}**\n**${escapeMd(p.subject)}**`),
+        text(escapeMd(String(p.summary).slice(0, 1500))),
         { type: SEPARATOR, divider: true, spacing: 1 },
         text('```\n' + facts + '\n```'),
-        text(`-# 1132 Fixer • One-click fix for Zoom Error 1132 • ${p.public_id}`),
+        text(`-# 1132 Fixer • One-click fix for Zoom Error 1132 • ${p.case_ref}`),
         {
           type: ACTION_ROW,
           components: [
-            { type: BUTTON, style: 1, label: '\u{1F4AC} Reply', custom_id: `reply:${p.public_id}` },
-            { type: BUTTON, style: 3, label: 'Resolve', custom_id: `resolve:${p.public_id}` },
+            { type: BUTTON, style: 1, label: '\u{1F4AC} Reply', custom_id: `reply:${p.case_ref}` },
+            { type: BUTTON, style: 2, label: 'Assign to me', custom_id: `assign:${p.case_ref}` },
+            { type: BUTTON, style: 2, label: 'Request diagnostics', custom_id: `diag:${p.case_ref}` },
+            { type: BUTTON, style: 3, label: 'Resolve', custom_id: `resolve:${p.case_ref}` },
+          ],
+        },
+        {
+          type: ACTION_ROW,
+          components: [
+            { type: BUTTON, style: 2, label: 'More actions…', custom_id: `more:${p.case_ref}` },
           ],
         },
       ],
@@ -103,10 +117,10 @@ function forumTags(p) {
     rating_feedback: process.env.DISCORD_TAG_TYPE_RATING_ID,
   }[p.kind];
   const platformTag = {
-    windows: process.env.DISCORD_TAG_PLATFORM_WINDOWS_ID,
-    chrome: process.env.DISCORD_TAG_PLATFORM_CHROME_ID,
-    macos: process.env.DISCORD_TAG_PLATFORM_MACOS_ID,
-  }[p.source];
+    WINDOWS: process.env.DISCORD_TAG_PLATFORM_WINDOWS_ID,
+    CHROME: process.env.DISCORD_TAG_PLATFORM_CHROME_ID,
+    MACOS: process.env.DISCORD_TAG_PLATFORM_MACOS_ID,
+  }[p.product];
   return [kindTag, process.env.DISCORD_TAG_STATE_NEW_ID, platformTag].filter(Boolean);
 }
 
@@ -115,7 +129,7 @@ async function createForumPost(p) {
   const forumId = process.env.DISCORD_SUPPORT_FORUM_ID;
   if (!forumId) throw new Error('DISCORD_SUPPORT_FORUM_ID not set');
   const body = {
-    name: `${p.public_id} · ${p.subject}`.slice(0, 100),
+    name: `${p.case_ref} · ${p.subject}`.slice(0, 100),
     message: buildCaseMessage(p),
   };
   const tags = forumTags(p);
@@ -128,6 +142,7 @@ async function createForumPost(p) {
 /**
  * The one deliberate role alert: a separate bot-owned line whose
  * allowed_mentions allowlists exactly the first configured support role.
+ * The caller sends it once per case (discord_case_bindings.alerted_at).
  */
 async function postRoleAlert(threadId) {
   const roleId = (process.env.DISCORD_SUPPORT_ROLE_IDS || '')
@@ -155,17 +170,20 @@ function bar(n, max) {
 
 function buildRatingCard(s) {
   let lines;
-  if (s.state !== 'ready') {
+  if (s.count === 0 || s.average == null) {
     lines = ['**1132 Fixer — verified rating**', '', 'Collecting verified ratings'];
   } else {
     const d = s.distribution || {};
-    const max = Math.max(...[5, 4, 3, 2, 1].map((n) => d[n] || 0));
+    const rows = [5, 4, 3, 2, 1, 0];
+    const max = Math.max(...rows.map((n) => d[n] || 0));
     lines = [
       '**1132 Fixer — verified rating**',
       '',
-      `**${s.score.toFixed(2)} / 5** · ${s.count} verified · last 90 days`,
+      // average and count are separate values, never concatenated.
+      `**${s.average.toFixed(1)} / 5** · ${s.count} verified · last 90 days` +
+        (s.state === 'NOT_ENOUGH_RATINGS' ? ' · collecting (needs 10)' : ''),
       '',
-      ...[5, 4, 3, 2, 1].map((n) => `${n}★  ${bar(d[n] || 0, max).padEnd(10)} ${d[n] || 0}`),
+      ...rows.map((n) => `${n}★  ${bar(d[n] || 0, max).padEnd(10)} ${d[n] || 0}`),
     ];
   }
   lines.push('', `-# Verified in-app ratings only · updated <t:${Math.floor(Date.now() / 1000)}:R>`);
@@ -199,4 +217,4 @@ async function upsertRatingCard(snapshot) {
   console.log(`[discord] created live rating card — set DISCORD_LIVE_RATING_MESSAGE_ID=${msg.id}`);
 }
 
-module.exports = { createForumPost, postRoleAlert, postThreadMessage, upsertRatingCard };
+module.exports = { createForumPost, postRoleAlert, postThreadMessage, upsertRatingCard, escapeMd };
