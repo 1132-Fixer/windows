@@ -63,6 +63,49 @@ jobs:
           path: dist/*Setup*.exe
           retention-days: 7
 
+  support-service:
+    name: Support Service
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fixer_support_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      # npm ci: the service holding the DB credential and bot token builds
+      # from the committed lockfile, not from a fresh resolve.
+      - name: Install feedback-proxy dependencies
+        working-directory: feedback-proxy
+        run: npm ci --no-audit --no-fund
+
+      - name: Framework suite (Postgres-backed)
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/fixer_support_test
+        run: node feedback-proxy/test-framework.js
+
+      # DATABASE_URL deliberately unset here: proves the dark-deploy guarantee —
+      # the refactored server must behave exactly like the legacy proxy.
+      - name: Legacy suite (no DATABASE_URL)
+        run: node feedback-proxy/test.js
+
   lint:
     name: Code Quality
     runs-on: ubuntu-latest
