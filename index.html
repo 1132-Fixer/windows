@@ -671,6 +671,11 @@
     .fb-section { display: none; }
     .fb-section.active { display: block; }
     .fb-label { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: var(--s-2); }
+    .fb-inline-link {
+      background: none; border: none; padding: 0;
+      font: inherit; color: var(--accent);
+      text-decoration: underline; cursor: pointer;
+    }
     .fb-textarea {
       width: 100%;
       min-height: 100px;
@@ -881,8 +886,7 @@
         <div class="fb-choices">
           <div class="fb-choice" data-mode="bug" tabindex="0" role="button">Bug Report</div>
           <div class="fb-choice" data-mode="rating" tabindex="0" role="button">Rate Your Experience</div>
-          <div class="fb-choice" data-mode="contact" tabindex="0" role="button">Send a Message</div>
-          <div class="fb-choice" data-mode="report" tabindex="0" role="button">Support Report</div>
+          <div class="fb-choice" data-mode="contact" tabindex="0" role="button">Send a Message / Support Request</div>
         </div>
         <div class="fb-actions">
           <button class="fb-btn fb-btn-cancel" id="fbClose">Cancel</button>
@@ -957,10 +961,11 @@
 
       <div class="fb-section" id="fbContact">
         <button class="fb-btn-back" id="fbContactBack">Back</button>
-        <div class="fb-title">Send a Message</div>
-        <div class="fb-label">Your message (min 50 characters)</div>
+        <div class="fb-title">Send a Message / Support Request</div>
+        <div class="fb-label">Your message (min 50 characters) &middot; <button type="button" class="fb-inline-link" id="fbViewReport">preview support report</button></div>
         <textarea class="fb-textarea" id="fbContactText" placeholder="What would you like to tell us?" aria-label="Message"></textarea>
         <div class="fb-actions">
+          <button class="fb-btn fb-btn-cancel" id="fbAttachReport" aria-label="Attach sanitized support report to this message">Attach Support Report</button>
           <button class="fb-btn fb-btn-cancel" id="fbContactCancel">Cancel</button>
           <button class="fb-btn fb-btn-submit" id="fbContactSubmit" disabled>Submit</button>
         </div>

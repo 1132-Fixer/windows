@@ -770,6 +770,9 @@ function openFeedback() {
   showSection('fbChoose');
   feedbackMode = '';
   document.querySelectorAll('.fb-textarea').forEach(t => { t.value = ''; });
+  const attachBtn = document.getElementById('fbAttachReport');
+  attachBtn.disabled = false;
+  attachBtn.textContent = 'Attach Support Report';
   document.querySelectorAll('.fb-rating-btn').forEach(b => b.classList.remove('selected'));
   document.querySelectorAll('.fb-status').forEach(s => { s.textContent = ''; s.className = 'fb-status'; });
   Object.keys(ratings).forEach(k => { ratings[k] = 0; });
@@ -805,7 +808,6 @@ document.querySelectorAll('.fb-choice').forEach(el => {
     if      (feedbackMode === 'bug')     showSection('fbBug');
     else if (feedbackMode === 'rating')  showSection('fbRating');
     else if (feedbackMode === 'contact') showSection('fbContact');
-    else if (feedbackMode === 'report')  { closeFeedback(); openSupportReport(); }
   };
   el.addEventListener('click', activate);
   el.addEventListener('keydown', (e) => {
@@ -829,6 +831,33 @@ document.querySelectorAll('.fb-rating-btns').forEach(group => {
   document.getElementById(id).addEventListener('input', (e) => {
     document.getElementById(submitId).disabled = e.target.value.trim().length < 50;
   });
+});
+
+document.getElementById('fbViewReport').addEventListener('click', openSupportReport);
+
+// Consolidated message/support-request flow: pull the sanitized report into
+// the message body so one submission carries both.
+document.getElementById('fbAttachReport').addEventListener('click', async () => {
+  const btn = document.getElementById('fbAttachReport');
+  btn.disabled = true;
+  btn.textContent = 'Attaching…';
+  try {
+    const result = await window.electronAPI.supportReport({
+      receipt: lastReceipt,
+      logTail: logBuffer.join('\n'),
+      stage:   lastStageLabel
+    });
+    const md = result && result.markdown;
+    if (!md) throw new Error('report unavailable');
+    const ta = document.getElementById('fbContactText');
+    ta.value = (ta.value.trim() ? ta.value.trim() + '\n\n' : '') + '---\n' + md;
+    ta.dispatchEvent(new Event('input'));
+    btn.textContent = 'Report attached';
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Attach Support Report';
+    document.getElementById('fbContactStatus').textContent = 'Could not build the report — try again.';
+  }
 });
 
 document.getElementById('fbBugSubmit').addEventListener('click', async () => {
