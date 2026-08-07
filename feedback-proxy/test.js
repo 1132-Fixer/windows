@@ -109,6 +109,13 @@ check('renderer contract: every type the app actually sends is accepted', async 
   return true;
 });
 
+check('multi-line text yields a single-line issue title', async () => {
+  const r = await req('POST', '/feedback', { type: 'Feedback', text: '## Report\nline two\nline three of the report body' }, { 'x-forwarded-for': '10.99.1.1' });
+  if (r.status !== 201) return false;
+  const sent = JSON.parse(captured[captured.length - 1].opts.body);
+  return !sent.title.includes('\n') && sent.title.startsWith('[Feedback] ## Report line two');
+});
+
 check('bogus type rejected (400)', async () => {
   const r = await req('POST', '/feedback', { type: 'Arbitrary Label', text: 'x' });
   return r.status === 400 && JSON.parse(r.body).error === 'bad_type';

@@ -134,7 +134,11 @@ function clean(v, max) {
 // --- Issue creation -------------------------------------------------
 async function createIssue({ type, text, version, os }) {
   const label = TYPE_LABELS.get(type);
-  const title = `[${type}] ${text.slice(0, 80)}${text.length > 80 ? '...' : ''}`;
+  // Titles must be single-line: collapse newlines/whitespace from the excerpt
+  // (clean() keeps \n in the body on purpose, but a multi-line title reads as
+  // junk in the issue list and risks API rejection).
+  const titleText = text.slice(0, 80).replace(/\s+/g, ' ').trim();
+  const title = `[${type}] ${titleText}${text.length > 80 ? '...' : ''}`;
   const body =
     `**Type:** ${type}\n` +
     `**App Version:** ${version || 'unknown'}\n` +
