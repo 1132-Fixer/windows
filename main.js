@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -234,6 +234,31 @@ function createWindow() {
 
   // Avoid the white flash / half-painted first frame on slower machines.
   mainWindow.once('ready-to-show', () => mainWindow.show());
+
+  // Hung renderer: offer a way out instead of a silently frozen window.
+  // The fix engine runs in THIS process, so "keep waiting" is often right
+  // while PowerShell grinds; the prompt says so instead of guessing.
+  mainWindow.on('unresponsive', () => {
+    if (fatalDialogShown) return;
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'warning',
+      title: '1132 Fixer',
+      message: 'The 1132 Fixer window is not responding.',
+      detail: fixInProgress
+        ? 'A fix is still running in the background — give it a moment before restarting. It is safe to run the fix again after a restart.'
+        : 'You can keep waiting or restart the app.',
+      buttons: ['Keep waiting', 'Restart 1132 Fixer'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    });
+    if (choice === 1) {
+      fatalDialogShown = true;
+      app.relaunch();
+      app.exit(1);
+    }
+  });
+
   mainWindow.loadFile('index.html');
   mainWindow.setMenu(null);
 }
@@ -295,6 +320,57 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   app.quit();
 });
+
+// ============================================================
+// Fatal-path handling — the app must never die silently.
+// Three uncovered paths before this existed: a main-process throw
+// (window never appears, no message), a dead renderer (blank window),
+// and a hung renderer (frozen window). Each now says what happened
+// and what to do next, in the same voice as messages.js.
+// ============================================================
+let fatalDialogShown = false;
+
+process.on('uncaughtException', (err) => {
+  console.error('FATAL uncaughtException:', (err && err.stack) || err);
+  if (!fatalDialogShown) {
+    fatalDialogShown = true;
+    try {
+      dialog.showErrorBox(
+        '1132 Fixer hit a problem it could not recover from',
+        'The app has to close. If a fix was running, run it again after ' +
+        'restarting — the fix is safe to repeat and repairs partial runs.\n\n' +
+        'Start 1132 Fixer again. If this keeps happening, report it at\n' +
+        'https://github.com/PrimeUpYourLife/1132-Fixer-Windows/issues\n\n' +
+        `Detail for support: ${(err && err.message) || err}`
+      );
+    } catch (_) { /* dialog itself failed — the console line above remains */ }
+  }
+  app.exit(1);
+});
+
+app.on('render-process-gone', (_event, _webContents, details) => {
+  if (details && details.reason === 'clean-exit') return;
+  console.error(`FATAL render-process-gone: reason=${details && details.reason} exitCode=${details && details.exitCode}`);
+  if (fatalDialogShown) return;
+  fatalDialogShown = true;
+  const fixNote = fixInProgress
+    ? '\n\nA fix was running. Run it again after restarting — the fix is safe to repeat and repairs partial runs.'
+    : '';
+  const choice = dialog.showMessageBoxSync({
+    type: 'error',
+    title: '1132 Fixer',
+    message: 'The 1132 Fixer window stopped working.',
+    detail: `Windows ended the interface process (reason: ${(details && details.reason) || 'not reported'}).` +
+            ' Restart the app to continue.' + fixNote,
+    buttons: ['Restart 1132 Fixer', 'Close'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true
+  });
+  if (choice === 0) app.relaunch();
+  app.exit(1);
+});
+
 
 // ============================================================
 // Path / process helpers
