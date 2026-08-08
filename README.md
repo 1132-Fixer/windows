@@ -64,7 +64,7 @@ Username: user1
 Password: user1
 ```
 
-- `user1` is added to the local Administrators group.
+- `user1` is a standard user — it is **not** an administrator. If an older version of the app made it an administrator, the next fix run removes those rights automatically.
 - Do not use `user1` as your normal Windows account.
 - The app may ask for Windows admin approval.
 
