@@ -267,8 +267,7 @@ async function runEnvironmentScan() {
     fixBtn.disabled = !canRunFix;
   } catch (err) {
     checkList.innerHTML = '';
-    checkList.appendChild(renderCheckRow('scan', 'Environment scan', 'blocked',
-      (err && err.message) ? err.message : 'Scan failed — restart the app as Administrator.'));
+    checkList.appendChild(renderCheckRow('scan', 'Environment scan', 'blocked', scanFailureMessage(err)));
     canRunFix = false;
     setStatus('error', 'Error');
     fixBtn.disabled = true;
@@ -295,23 +294,10 @@ function renderFixReceipt(receipt, warnings) {
     return;
   }
   lastReceipt = receipt;
-  const cam = receiptStatusFor(receipt.camera);
-  const mic = receiptStatusFor(receipt.microphone);
-
-  const hkuMap = {
-    'session':   { txt: 'Active user1 session — consent written live',                    icon: 'info' },
-    'temp-load': { txt: 'NTUSER.DAT loaded to write consent, then unloaded cleanly',      icon: 'info' },
-    'skipped':   { txt: 'Per-user write skipped — only HKLM floor applied (firstrun retries)', icon: 'warn' }
-  };
-  const hku = hkuMap[receipt.hkuPath] || { txt: receipt.hkuPath || 'unknown', icon: 'info' };
-
-  const fsMap = {
-    'ok':                     { txt: 'Running normally',                                  icon: 'ok'   },
-    'restored-from-disabled': { txt: 'Was Disabled — restored to Manual',                 icon: 'ok'   },
-    'disabled-unfixable':     { txt: 'Disabled and could not be re-enabled — cameras will not work', icon: 'fail' },
-    'missing':                { txt: 'Service not present — cameras may not enumerate',   icon: 'fail' }
-  };
-  const fs = fsMap[receipt.frameServer] || { txt: receipt.frameServer || 'unknown', icon: 'info' };
+  const cam = receiptStatusView(receipt.camera);
+  const mic = receiptStatusView(receipt.microphone);
+  const hku = describeHku(receipt.hkuPath);
+  const fs  = describeFrameServer(receipt.frameServer);
 
   const items = [
     receiptCardHtml('Camera (desktop apps)',     cam.text, cam.status, cam.iconSvg),
@@ -352,17 +338,11 @@ function iconForReceipt(s) {
   }
 }
 
-function receiptStatusFor(status) {
-  switch (status) {
-    case 'OK':
-      return { text: 'GRANTED', status: 'ok',   iconSvg: iconForReceipt('ok') };
-    case 'POLICY-BLOCKED':
-      return { text: 'BLOCKED BY WINDOWS POLICY — your IT admin / device management blocks access. 1132 Fixer cannot override this.', status: 'fail', iconSvg: iconForReceipt('fail') };
-    case 'UNVERIFIED':
-      return { text: 'UNVERIFIED — registry write did not confirm. Open Settings > Privacy & security under user1 and toggle on manually.', status: 'warn', iconSvg: iconForReceipt('warn') };
-    default:
-      return { text: status || 'unknown', status: 'info', iconSvg: iconForReceipt('info') };
-  }
+// Thin view adapter over the messages.js catalog: adds the icon SVG, which
+// stays renderer-side so the catalog remains DOM-free and testable in Node.
+function receiptStatusView(status) {
+  const m = receiptStatusFor(status);
+  return { text: m.text, status: m.status, iconSvg: iconForReceipt(m.status) };
 }
 
 function escapeHtml(s) {
@@ -542,7 +522,7 @@ async function runFix() {
     // The fix IPC (or a renderer helper it calls) threw. Surface it instead
     // of dying as a silent unhandled rejection.
     addEmptyLine();
-    addFileItem(`FIX FAILED: ${(err && err.message) || 'Unexpected error in the fix flow.'}`, 'failed');
+    addFileItem(`FIX FAILED: ${unexpectedFixFailure(err)}`, 'failed');
     finalizeStages('fail');
     setStatus('error', 'Failed');
     setLogExpanded(true);
@@ -555,23 +535,8 @@ async function runFix() {
   }
 }
 
-function friendlyError(code) {
-  switch (code) {
-    case 'not_elevated':            return 'Process is not running as Administrator. Re-launch the app elevated (right-click → Run as administrator).';
-    case 'running_as_target':       return 'You are currently signed in as user1. Sign in as a different administrator and try again.';
-    case 'preflight_failed':        return 'Environment check found one or more blockers. Look at the highlighted lines above — each one tells you what to fix before retrying.';
-    case 'missing_tool':            return 'A required Windows tool is missing from PATH (powershell/taskkill/robocopy/icacls/takeown/net/reg). See preflight output above.';
-    case 'create_user_failed':      return 'Could not create the user1 account. Make sure the app is running as Administrator and that password policy allows the password.';
-    case 'delete_user_failed':      return 'Could not delete the existing user1 account. Make sure the app is running as Administrator.';
-    case 'delete_profile_failed':   return 'The user1 profile folder could not be removed — a file handle is still open. Reboot once and run the fix again.';
-    case 'zoom_not_found':          return 'Zoom Workplace was not found at C:\\Program Files\\Zoom\\bin\\Zoom.exe. Install the machine-wide Zoom Workplace MSI (not the per-user installer), then try again.';
-    case 'launch_failed':           return 'Zoom could not be launched as user1. Common causes: Secondary Logon service disabled, password policy mismatch, or user1 lacks permission to start C:\\Program Files\\Zoom\\bin\\Zoom.exe. Re-run as Administrator or check the log above for the exact PowerShell exception.';
-    case 'seclogon_disabled':       return 'The Secondary Logon service is disabled. It is required to launch processes under another local account. Run this from an admin shell and retry:  sc.exe config seclogon start= demand  &  sc.exe start seclogon';
-    case 'profile_not_materialized':return 'The user1 profile did not appear in time. The account was created and Zoom was launched, but the per-user profile setup was skipped.';
-    case 'tool_probe_failed':       return 'The PowerShell tool probe failed. PowerShell itself may be missing or restricted by AppLocker/policy. The fix cannot continue.';
-    default:                        return code || 'Unknown error.';
-  }
-}
+// friendlyError() and the rest of the user-facing copy live in messages.js
+// (loaded before this script; require()-able by tools/messages-smoke.js).
 
 // ============================================================
 // Shortcut helper — direct create, no prompt.
@@ -582,7 +547,7 @@ async function createShortcut(showHeader) {
   }
   const result = await window.electronAPI.createShortcut();
   if (!result.success) {
-    addFileItem(`Shortcut failed: ${result.error}`, 'failed');
+    addFileItem(shortcutFailureMessage(result.error), 'failed');
     return;
   }
   addFileItem(`Shortcut created: ${result.path}`, 'success');
@@ -932,11 +897,11 @@ async function submitFeedback(type, text, statusId) {
       statusEl.className = 'fb-status ok';
       setTimeout(closeFeedback, 1500);
     } else {
-      statusEl.textContent = result.error || 'Submission failed';
+      statusEl.textContent = result.error || FEEDBACK_FALLBACK;
       statusEl.className = 'fb-status err';
     }
   } catch (err) {
-    statusEl.textContent = 'Network error';
+    statusEl.textContent = FEEDBACK_NETWORK;
     statusEl.className = 'fb-status err';
   }
 }
@@ -963,9 +928,9 @@ async function openSupportReport() {
       logTail: logBuffer.join('\n'),
       stage:   lastStageLabel
     });
-    supportTextArea.value = (result && result.markdown) ? result.markdown : 'Failed to build report.';
+    supportTextArea.value = (result && result.markdown) ? result.markdown : reportBuildFailure(null);
   } catch (err) {
-    supportTextArea.value = `Failed to build report: ${err.message || err}`;
+    supportTextArea.value = reportBuildFailure(err);
   }
 }
 

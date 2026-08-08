@@ -554,8 +554,8 @@ async function preflightCheck() {
   }
   info.tools = presence;
   info.seclogon = {
-    status: presence.seclogon_status || 'unknown',
-    startType: presence.seclogon_starttype || 'unknown'
+    status: presence.seclogon_status || 'not checked',
+    startType: presence.seclogon_starttype || 'not checked'
   };
   for (const t of REQUIRED_TOOLS) {
     if (!presence[t]) {
@@ -1976,7 +1976,10 @@ ipcMain.handle('submit-feedback', async (event, type, text) => {
       req.end();
     });
   } catch (err) {
-    return { success: false, error: err.message };
+    // Never surface a raw exception as the whole message — the renderer shows
+    // this string verbatim in the feedback modal.
+    console.warn('submit-feedback failed before the request was sent:', err && err.message);
+    return { success: false, error: 'Could not send right now. Check your internet connection and try again in a minute.' };
   }
 });
 
@@ -2246,10 +2249,10 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
   if (receipt) {
     md.push('### Last fix receipt');
     md.push('```');
-    md.push(`camera:      ${receipt.camera || 'n/a'}`);
-    md.push(`microphone:  ${receipt.microphone || 'n/a'}`);
-    md.push(`hkuPath:     ${receipt.hkuPath || 'n/a'}`);
-    md.push(`frameServer: ${receipt.frameServer || 'n/a'}`);
+    md.push(`camera:      ${receipt.camera || 'not recorded'}`);
+    md.push(`microphone:  ${receipt.microphone || 'not recorded'}`);
+    md.push(`hkuPath:     ${receipt.hkuPath || 'not recorded'}`);
+    md.push(`frameServer: ${receipt.frameServer || 'not recorded'}`);
     md.push('```');
     md.push('');
   }
