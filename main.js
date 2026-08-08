@@ -1,10 +1,10 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const https = require('https');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const config = require('./src/main/config');
 
 autoUpdater.autoDownload = true;
@@ -234,6 +234,32 @@ function createWindow() {
 
   // Avoid the white flash / half-painted first frame on slower machines.
   mainWindow.once('ready-to-show', () => mainWindow.show());
+
+  // Hung renderer: offer a way out instead of a silently frozen window.
+  // The fix engine runs in THIS process, so "keep waiting" is often right
+  // while PowerShell grinds; the prompt says so instead of guessing.
+  mainWindow.on('unresponsive', () => {
+    if (fatalDialogShown) return;
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'warning',
+      title: '1132 Fixer',
+      message: 'The 1132 Fixer window is not responding.',
+      detail: fixInProgress
+        ? 'A fix is still running in the background — give it a moment before restarting. It is safe to run the fix again after a restart.'
+        : 'You can keep waiting or restart the app.',
+      buttons: ['Keep waiting', 'Restart 1132 Fixer'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    });
+    if (choice === 1) {
+      fatalDialogShown = true;
+      killActiveChildren();
+      app.relaunch();
+      app.exit(1);
+    }
+  });
+
   mainWindow.loadFile('index.html');
   mainWindow.setMenu(null);
 }
@@ -297,6 +323,79 @@ app.on('window-all-closed', () => {
 });
 
 // ============================================================
+// Fatal-path handling — the app must never die silently.
+// Three uncovered paths before this existed: a main-process throw
+// (window never appears, no message), a dead renderer (blank window),
+// and a hung renderer (frozen window). Each now says what happened
+// and what to do next, in the same voice as messages.js.
+// ============================================================
+let fatalDialogShown = false;
+
+// Fix steps run as child processes (runProcess). Exiting Electron does NOT
+// reliably end them on Windows, and an orphaned fix child mutating accounts/
+// registry while a relaunched instance starts a second fix would mean two
+// concurrent writers on system state. Every fatal exit path kills the tracked
+// child TREE first; the fix is safe to re-run and repairs the interrupted run.
+const activeChildren = new Set();
+function killActiveChildren() {
+  for (const child of activeChildren) {
+    if (!child.pid) continue;
+    try {
+      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 });
+      console.warn(`fatal-path: killed child tree pid=${child.pid}`);
+    } catch (err) {
+      console.warn(`fatal-path: could not kill child pid=${child.pid}: ${err && err.message}`);
+    }
+  }
+  activeChildren.clear();
+}
+
+process.on('uncaughtException', (err) => {
+  console.error('FATAL uncaughtException:', (err && err.stack) || err);
+  killActiveChildren(); // before the blocking dialog — never leave a writer running
+  if (!fatalDialogShown) {
+    fatalDialogShown = true;
+    try {
+      dialog.showErrorBox(
+        '1132 Fixer hit a problem it could not recover from',
+        'The app has to close. If a fix was running, run it again after ' +
+        'restarting — the fix is safe to repeat and repairs partial runs.\n\n' +
+        'Start 1132 Fixer again. If this keeps happening, report it at\n' +
+        'https://github.com/PrimeUpYourLife/1132-Fixer-Windows/issues\n\n' +
+        `Detail for support: ${(err && err.message) || err}`
+      );
+    } catch (_) { /* dialog itself failed — the console line above remains */ }
+  }
+  app.exit(1);
+});
+
+app.on('render-process-gone', (_event, _webContents, details) => {
+  if (details && details.reason === 'clean-exit') return;
+  console.error(`FATAL render-process-gone: reason=${details && details.reason} exitCode=${details && details.exitCode}`);
+  if (fatalDialogShown) return;
+  fatalDialogShown = true;
+  const hadFix = fixInProgress;
+  killActiveChildren(); // before the blocking dialog — never leave a writer running
+  const fixNote = hadFix
+    ? '\n\nA fix was running — it has been stopped. Run it again after restarting; the fix is safe to repeat and repairs partial runs.'
+    : '';
+  const choice = dialog.showMessageBoxSync({
+    type: 'error',
+    title: '1132 Fixer',
+    message: 'The 1132 Fixer window stopped working.',
+    detail: `Windows ended the interface process (reason: ${(details && details.reason) || 'not reported'}).` +
+            ' Restart the app to continue.' + fixNote,
+    buttons: ['Restart 1132 Fixer', 'Close'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true
+  });
+  if (choice === 0) app.relaunch();
+  app.exit(1);
+});
+
+
+// ============================================================
 // Path / process helpers
 // ============================================================
 
@@ -340,6 +439,7 @@ function runProcess(exe, args, onLine, opts = {}) {
     let lastOutputAt = Date.now();
     const started = Date.now();
     const child = spawn(exe, args, { windowsHide: true });
+    activeChildren.add(child);
     const emit = (buf, kind) => {
       const text = buf.toString();
       if (kind === 'err') stderrBuf += text; else stdoutBuf += text;
@@ -377,6 +477,7 @@ function runProcess(exe, args, onLine, opts = {}) {
     const cleanup = () => {
       if (hbTimer) clearInterval(hbTimer);
       if (killTimer) clearTimeout(killTimer);
+      activeChildren.delete(child);
     };
 
     child.on('error', err => {
