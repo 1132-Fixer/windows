@@ -85,6 +85,23 @@ for (const key of Object.keys(m.FRAME_SERVER_STATES)) {
   check(missing.text.includes('Not recorded'), 'missing receipt status explained');
 }
 
+console.log('messages-smoke: checklist group mapping (§9)');
+{
+  const TAXONOMY = ['App', 'Zoom', 'Helper account', 'Privacy policies', 'Camera service'];
+  const EXPECTED_KEYS = ['admin', 'zoom', 'helperUser', 'seclogon', 'camPolicy', 'micPolicy', 'hku', 'frameServer'];
+  check(JSON.stringify(m.CHECK_ORDER.map(c => c.key)) === JSON.stringify(EXPECTED_KEYS),
+    'CHECK_ORDER keys and display order unchanged');
+  check(m.CHECK_ORDER.every(c => typeof c.label === 'string' && c.label.length > 0),
+    'every check row has a fallback label');
+  check(m.CHECK_ORDER.every(c => TAXONOMY.includes(c.group)),
+    'every check row maps to an approved group name');
+  // Renderer emits a header when the group CHANGES — a group split across
+  // non-adjacent rows would render the same header twice.
+  const collapsed = m.CHECK_ORDER.map(c => c.group).filter((g, i, a) => g !== a[i - 1]);
+  check(JSON.stringify(collapsed) === JSON.stringify(TAXONOMY),
+    'groups are contiguous and cover the full taxonomy in order');
+}
+
 console.log('messages-smoke: catalog-wide bans');
 {
   const everyMessage = [
