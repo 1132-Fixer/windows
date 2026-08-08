@@ -559,6 +559,12 @@ function runProcess(exe, args, onLine, opts = {}) {
       killTimer = setTimeout(() => {
         timedOut = true;
         onLine(`  TIMEOUT after ${Math.round(timeoutMs / 1000)}s — killing ${exe}`, 'err');
+        // Kill the TREE, not just the direct child (W4-HANG): the profile
+        // traversal steps run takeown/icacls via Start-Process inside
+        // powershell.exe, and killing only PS orphans a recursive tool
+        // mid-cycle — it keeps grinding (and holding profile handles)
+        // invisibly. Same idiom as killActiveChildren.
+        try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }); } catch (_) {}
         try { child.kill('SIGKILL'); } catch (_) {}
       }, timeoutMs);
     }
@@ -597,16 +603,27 @@ async function runPSScript(scriptContent, onLine, opts = {}) {
   }
 }
 
-// Like runPSScript, but with stdio:'ignore' so the spawned PowerShell
-// does NOT have stdin/stdout/stderr pipes back to us. Used for the Zoom
-// launch: Start-Process -Credential / CreateProcessWithLogonW makes the
-// launched process inherit the parent's std handles, and Zoom keeps its
-// stderr pipe open after launch — which would block the parent PS from
-// exiting (and freeze run-fix at Step 5). With 'ignore', Zoom inherits
-// closed handles, has nothing to write to, and PS exits cleanly.
-// We can't capture the PS output here, so callers should verify success
-// out-of-band (e.g. by polling Get-Process / Win32_Process).
-async function runPSScriptDetachedIO(scriptContent) {
+// Zoom-launch runner (W3-LAUNCH). Start-Process -Credential
+// (CreateProcessWithLogonW) makes the launched Zoom inherit the parent
+// PowerShell's std handles. The old stdio:'ignore' variant existed because
+// with plain runPSScript pipes, Zoom held our stderr pipe open after PS
+// exited, so the 'close' event never fired and run-fix froze at Step 5 —
+// but 'ignore' also threw away the launcher's "Launch failed: <exception>"
+// line, leaving launch_failed diagnoses to a guess-list (#54 #58 #64 #66
+// #70 #72). This variant keeps BOTH properties:
+//   - detach semantics preserved: Start-Process without -Wait creates a
+//     free-standing process; PS exits right after dispatch, and we resolve
+//     on 'exit' (process ended) instead of 'close' (pipes drained), so a
+//     Zoom that inherited our pipe handles can never wedge the step. The
+//     pipes are destroyed after a short drain race; Zoom writing to a
+//     broken pipe is the same do-nothing sink 'ignore' gave it.
+//   - the launcher's own output (written before PS exits) is captured and
+//     returned, so the exact Start-Process exception reaches the log.
+// The 30s guard kills only powershell.exe (never the credential-launched
+// Zoom — child.kill targets the PS pid alone). Callers still verify launch
+// success out-of-band by polling Win32_Process — capture is evidence, the
+// poll stays the authority.
+async function runPSScriptLaunchCapture(scriptContent) {
   const tmp = path.join(os.tmpdir(),
     `fixer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
   // UTF-8 BOM: Windows PowerShell 5.1 reads BOM-less files in the legacy
@@ -614,16 +631,35 @@ async function runPSScriptDetachedIO(scriptContent) {
   // into the script (review P2 on custom Unicode Zoom dirs).
   await fs.promises.writeFile(tmp, '\ufeff' + scriptContent, 'utf8');
   return new Promise((resolve) => {
+    let stdoutBuf = '';
+    let settled = false;
+    let killTimer = null;
+    let timedOut = false;
     const child = spawn('powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp],
-      { windowsHide: true, stdio: 'ignore' });
-    child.on('error', () => {
+      { windowsHide: true });
+    child.stdout.on('data', d => { stdoutBuf += d.toString(); });
+    child.stderr.on('data', d => { stdoutBuf += d.toString(); });
+    const settle = (code) => {
+      if (settled) return;
+      settled = true;
+      if (killTimer) clearTimeout(killTimer);
+      try { child.stdout.destroy(); } catch (_) {}
+      try { child.stderr.destroy(); } catch (_) {}
       fs.promises.unlink(tmp).catch(() => {});
-      resolve({ code: -1 });
-    });
-    child.on('close', code => {
-      fs.promises.unlink(tmp).catch(() => {});
-      resolve({ code });
+      resolve({ code, stdout: stdoutBuf, timedOut });
+    };
+    killTimer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill('SIGKILL'); } catch (_) {}
+      settle(-1);
+    }, 30000);
+    child.on('error', () => settle(-1));
+    child.on('exit', (code) => {
+      // PS has exited; give any tail output one short drain race, then
+      // stop waiting on pipes Zoom may hold open forever.
+      const grace = setTimeout(() => settle(code), 500);
+      child.once('close', () => { clearTimeout(grace); settle(code); });
     });
   });
 }
@@ -754,7 +790,8 @@ async function preflightCheck() {
   info.tools = presence;
   info.seclogon = {
     status: presence.seclogon_status || 'not checked',
-    startType: presence.seclogon_starttype || 'not checked'
+    startType: presence.seclogon_starttype || 'not checked',
+    selfHeal: 'none'
   };
   for (const t of REQUIRED_TOOLS) {
     if (!presence[t]) {
@@ -767,7 +804,13 @@ async function preflightCheck() {
   // OPTIONAL_TOOLS (quser.exe, logoff.exe) ship on Windows Pro/Enterprise only;
   // absent by design on Home. tryLogoffUser gates on info.tools and falls back
   // to taskkill alone, so we don't surface this to the user as a warning.
-  // seclogon: Start-Process -Credential can auto-start it if StartType is Manual or Automatic.
+  //
+  // seclogon is a HARD GATE with self-heal (W3-LAUNCH). Field reports
+  // (#54 #58 #64 #66 #70 #72) show Stopped/Manual passing preflight and the
+  // fix then finishing with a silent no-op launch — "Windows auto-starts it
+  // on demand" is not reliable evidence. Green now requires the service
+  // actually Running: a Stopped-but-startable service gets ONE bounded start
+  // attempt right here, and a failed attempt is a blocker, not a warning.
   if (info.seclogon.status === 'MISSING') {
     warnings.push({
       code: 'seclogon_missing',
@@ -778,12 +821,37 @@ async function preflightCheck() {
       code: 'seclogon_disabled',
       message: 'Secondary Logon service (seclogon) is Disabled. Start-Process -Credential cannot run. Run "sc.exe config seclogon start= demand" from an admin shell and retry.'
     });
-  } else if (info.seclogon.status !== 'Running' && info.seclogon.startType !== 'Manual') {
-    // Stopped+Manual is the Windows default and healthy — service will auto-start on first credential launch.
-    // Anything else stopped (e.g. Stopped+Automatic) is an anomaly worth flagging.
+  } else if (info.seclogon.status !== 'Running' && elevated &&
+             (info.seclogon.startType === 'Manual' || info.seclogon.startType === 'Automatic')) {
+    const heal = await runPSCapture(`
+      $null = & sc.exe start seclogon 2>&1
+      $deadline = [DateTime]::UtcNow.AddSeconds(8)
+      do {
+        try { if ((Get-Service seclogon -EA Stop).Status -eq 'Running') { Write-Output 'SECLOGON_HEAL=RUNNING'; exit 0 } } catch {}
+        Start-Sleep -Milliseconds 400
+      } while ([DateTime]::UtcNow -lt $deadline)
+      $st = ''
+      try { $st = [string](Get-Service seclogon -EA Stop).Status } catch { $st = 'unreadable' }
+      Write-Output ('SECLOGON_HEAL=FAILED=' + $st)
+    `, { timeoutMs: 10000 });
+    if (/SECLOGON_HEAL=RUNNING/.test(heal.stdout || '')) {
+      info.seclogon.status = 'Running';
+      info.seclogon.selfHeal = 'started';
+    } else {
+      const m = /SECLOGON_HEAL=FAILED=(.*)$/m.exec(heal.stdout || '');
+      const st = (m && m[1].trim()) || (heal.timedOut ? 'start attempt timed out' : 'state unreadable');
+      info.seclogon.selfHeal = 'start-failed';
+      blockers.push({
+        code: 'seclogon_start_failed',
+        message: `Secondary Logon service (seclogon) is stopped and did not start (state after the attempt: ${st}). Zoom cannot be launched as ${FIX_USER} without it. Run "sc.exe start seclogon" from an admin shell, then re-check.`
+      });
+    }
+  } else if (info.seclogon.status !== 'Running') {
+    // Residual states only: not elevated (the not_elevated blocker already
+    // gates the fix) or an unexpected StartType we cannot self-heal.
     warnings.push({
       code: 'seclogon_not_running',
-      message: `Secondary Logon service is ${info.seclogon.status}/${info.seclogon.startType} (expected Running or Manual). Windows should auto-start it on demand; will surface a clearer error if launch fails.`
+      message: `Secondary Logon service is ${info.seclogon.status}/${info.seclogon.startType} and was not started. Launching Zoom as ${FIX_USER} may fail until it runs.`
     });
   }
 
@@ -1032,6 +1100,55 @@ function Unload-UserHive {
         Write-Host ("    reg unload exit: " + $rc.ExitCode)
     }
 }
+# W4-HANG guard: default profiles hide XP-compat junctions BELOW the top
+# level too — Documents\\My Music, and AppData\\Local\\Application Data which
+# points back at AppData\\Local (a real cycle). takeown /R, icacls /T and
+# attrib /S all follow junctions, so recursing them across such a subtree
+# loops until the step watchdog kills it — the "My Music cycling over and
+# over" mid-fix hang (#31 #46 #67). This walk descends WITHOUT entering
+# reparse points, deletes each reparse point it finds (the junction entry
+# only — never its target), and reports whether the subtree ended
+# junction-free. Only a junction-free subtree is safe for the recursive
+# tools; otherwise the caller skips them and the junction-safe rd /s /q
+# retry still runs.
+function Remove-NestedReparsePoints {
+    param([string]$Root)
+    $clean = $true
+    $stack = New-Object System.Collections.Generic.Stack[string]
+    $stack.Push($Root)
+    while ($stack.Count -gt 0) {
+        $dir = $stack.Pop()
+        $kids = $null
+        try { $kids = @(Get-ChildItem -LiteralPath $dir -Force -EA Stop) } catch {
+            # Enumeration denied: open up THIS directory only (no /R, no /T —
+            # nothing recursive that could chase a junction), then retry once.
+            Start-Process takeown.exe -ArgumentList @('/F',$dir,'/A','/D','Y') -Wait -WindowStyle Hidden | Out-Null
+            Start-Process icacls.exe -ArgumentList @($dir,'/grant','*S-1-5-32-544:F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
+            try { $kids = @(Get-ChildItem -LiteralPath $dir -Force -EA Stop) } catch {
+                Write-Host ("    cannot enumerate " + $dir + " - leaving it for the rd retry")
+                $clean = $false
+                continue
+            }
+        }
+        foreach ($it in $kids) {
+            $isRp = $true # unreadable attributes: assume the worst, never descend
+            try { $isRp = (($it.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) } catch {}
+            if ($isRp) {
+                try {
+                    if ($it.PSIsContainer) { [System.IO.Directory]::Delete($it.FullName, $false) }
+                    else { [System.IO.File]::Delete($it.FullName) }
+                    Write-Host ("    removed nested reparse point: " + $it.FullName)
+                } catch {
+                    Write-Host ("    WARNING: nested reparse point stuck (" + $_.Exception.Message + "): " + $it.FullName)
+                    $clean = $false
+                }
+            } elseif ($it.PSIsContainer) {
+                $stack.Push($it.FullName)
+            }
+        }
+    }
+    return $clean
+}
 function Remove-ProfileFolder {
     param(
         [Parameter(Mandatory=$true)][string]$Path,
@@ -1092,9 +1209,16 @@ function Remove-ProfileFolder {
         Write-Host ("    fix ACL + attrib: " + $k.Name)
         try {
             if ($k.PSIsContainer) {
-                Start-Process takeown.exe -ArgumentList @('/F',$k.FullName,'/A','/R','/D','Y') -Wait -WindowStyle Hidden | Out-Null
-                Start-Process icacls.exe -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:(OI)(CI)F','/T','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
-                Start-Process attrib.exe -ArgumentList @('-r','-h','-s',$k.FullName,'/S','/D') -Wait -WindowStyle Hidden | Out-Null
+                # takeown /R, icacls /T and attrib /S follow junctions — only
+                # run them once the subtree is confirmed junction-free
+                # (W4-HANG); otherwise leave the child to the rd retry.
+                if (Remove-NestedReparsePoints -Root $k.FullName) {
+                    Start-Process takeown.exe -ArgumentList @('/F',$k.FullName,'/A','/R','/D','Y') -Wait -WindowStyle Hidden | Out-Null
+                    Start-Process icacls.exe -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:(OI)(CI)F','/T','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
+                    Start-Process attrib.exe -ArgumentList @('-r','-h','-s',$k.FullName,'/S','/D') -Wait -WindowStyle Hidden | Out-Null
+                } else {
+                    Write-Host ("    not junction-free; skipping recursive ACL fix for " + $k.Name + " (rd retry still runs)")
+                }
             } else {
                 Start-Process takeown.exe -ArgumentList @('/F',$k.FullName,'/A') -Wait -WindowStyle Hidden | Out-Null
                 Start-Process icacls.exe -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
@@ -1189,6 +1313,7 @@ async function runFixFlow(event) {
   send(`  Zoom present: ${pre.info.zoomPath || '(no machine-wide install)'} -> ${pre.info.zoomPath && fs.existsSync(pre.info.zoomPath) ? 'YES' : 'NO'}`, 'out');
   send(`  Firstrun script: ${pre.info.firstRunScript} -> ${fs.existsSync(pre.info.firstRunScript) ? 'YES' : 'NO'}`, 'out');
   send(`  Interactive user: ${pre.info.interactiveUser}`, 'out');
+  send(`  Secondary Logon: ${pre.info.seclogon.status}/${pre.info.seclogon.startType}${pre.info.seclogon.selfHeal === 'started' ? ' (was stopped — started it for you)' : ''}`, 'out');
   for (const w of pre.warnings) {
     warnings.push(w);
     send(`  WARN [${w.code}]: ${w.message}`, 'err');
@@ -1552,11 +1677,13 @@ async function runFixFlow(event) {
     }
   `;
   send(`  Dispatching Zoom launch (detached) ...`, 'out');
-  const launch = await runPSScriptDetachedIO(launchPs);
+  const launch = await runPSScriptLaunchCapture(launchPs);
+  // The launcher writes '  Zoom launched as user1.' on success or
+  // '  Launch failed: <exception>' before exit 1 — captured now (W3-LAUNCH),
+  // so the exact Start-Process error reaches the log instead of a guess-list.
+  const launchFailLine = (launch.stdout || '').split(/\r?\n/)
+    .map(s => s.trim()).find(l => l.startsWith('Launch failed: ')) || '';
   if (launch.code !== 0 && launch.code !== null) {
-    // Detached PS exited non-zero — usually a PSCredential / Start-Process failure.
-    // We can't capture the exact error here (stdio is ignored), so use the verify
-    // poll below to distinguish "Zoom didn't start" from "PS misbehaved".
     send(`  Launch script exited with code ${launch.code}; verifying via Win32_Process...`, 'err');
   }
 
@@ -1586,8 +1713,14 @@ async function runFixFlow(event) {
   const zoomSeen = (zpoll.stdout || '').includes('YES');
   if (!zoomSeen) {
     send(`ERROR: Zoom.exe is not running as '${FIX_USER}' after launch.`, 'err');
-    send('  Likely causes: Secondary Logon disabled, password policy mismatch, or Zoom crashed on startup.', 'err');
-    send('  Try: sc.exe config seclogon start= demand && sc.exe start seclogon', 'err');
+    if (launchFailLine) {
+      // The exact exception beats the guess-list (W3-LAUNCH); messages.js
+      // launch_failed copy already points the user at this log line.
+      send(`  PowerShell launcher reported: ${launchFailLine}`, 'err');
+    } else {
+      send('  Likely causes: Secondary Logon disabled, password policy mismatch, or Zoom crashed on startup.', 'err');
+      send('  Try: sc.exe config seclogon start= demand && sc.exe start seclogon', 'err');
+    }
     return { success: false, error: 'launch_failed', warnings, steps };
   }
   send(`  Confirmed: Zoom.exe is running as ${FIX_USER}.`, 'out');
@@ -1959,9 +2092,14 @@ async function runFixFlow(event) {
   // Zoom tree was confirmed exited before the ini write.)
   // ============================================================
   send(`[8/8] Relaunching Zoom as '${FIX_USER}'...`, 'header');
-  const relaunch = await runPSScriptDetachedIO(launchPs);
+  const relaunch = await runPSScriptLaunchCapture(launchPs);
   if (relaunch.code !== 0 && relaunch.code !== null) {
-    warnings.push({ code: 'relaunch_failed', message: `Initial launch succeeded but relaunch exited with code ${relaunch.code}. Open Zoom manually.` });
+    const relaunchFailLine = (relaunch.stdout || '').split(/\r?\n/)
+      .map(s => s.trim()).find(l => l.startsWith('Launch failed: ')) || '';
+    warnings.push({
+      code: 'relaunch_failed',
+      message: `Initial launch succeeded but the relaunch ${relaunchFailLine ? `failed — ${relaunchFailLine}` : `exited with code ${relaunch.code}`}. Open Zoom manually.`
+    });
   }
 
   // ============================================================
@@ -2307,7 +2445,7 @@ ipcMain.handle('create-shortcut', async () => {
       `$p = ConvertTo-SecureString '${FIX_PASS}' -AsPlainText -Force\r\n` +
       `$c = New-Object System.Management.Automation.PSCredential('${FIX_USER}', $p)\r\n` +
       `Start-Process -FilePath '${zi.path}' -WorkingDirectory '${zi.dir}' -Credential $c\r\n`;
-    // BOM for the same PS 5.1 legacy-encoding reason as runPSScriptDetachedIO.
+    // BOM for the same PS 5.1 legacy-encoding reason as runPSScriptLaunchCapture.
     fs.writeFileSync(scriptPath, '\ufeff' + scriptContent, 'utf8');
   } catch (err) {
     return { success: false, error: `Failed to write launcher script: ${err.message}` };
@@ -2594,6 +2732,46 @@ ipcMain.handle('preflight-scan', async () => {
       cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' account exists but no profile yet. FIX NOW will reset.` };
     } else {
       cards.helperUser = { status: 'warning', label: 'Helper account', message: `Stale profile folder at ${helperProfileDir} with no account. FIX NOW will clean it up.` };
+    }
+  }
+
+  // --- Secondary Logon (seclogon) -----------------------------
+  // Hard gate (W3-LAUNCH): launching Zoom as user1 rides Start-Process
+  // -Credential, which needs this service actually running. Field reports
+  // showed it Stopped with an all-green scan and the launch then silently
+  // no-opping — so it now has its own row, self-heal happens inside
+  // preflightCheck(), and a not-running service blocks the Fix button.
+  {
+    const sl = pre.info.seclogon || {};
+    if (sl.status === 'Running') {
+      cards.seclogon = {
+        status: 'ready', label: 'Secondary Logon',
+        message: sl.selfHeal === 'started'
+          ? 'Was stopped — 1132 Fixer started it for you. Ready to launch Zoom as user1.'
+          : 'Running — ready to launch Zoom as user1.'
+      };
+    } else if (sl.startType === 'Disabled') {
+      cards.seclogon = {
+        status: 'blocked', label: 'Secondary Logon',
+        message: 'Disabled — Windows cannot launch Zoom as user1. Run "sc.exe config seclogon start= demand" from an admin shell, then come back.'
+      };
+    } else if (sl.status === 'MISSING') {
+      cards.seclogon = {
+        status: 'warning', label: 'Secondary Logon',
+        message: 'Service not found on this Windows build — launching Zoom as user1 will likely fail.'
+      };
+    } else if (sl.status === 'not checked') {
+      cards.seclogon = { status: 'warning', label: 'Secondary Logon', message: probeFailMsg };
+    } else if (sl.selfHeal === 'start-failed') {
+      cards.seclogon = {
+        status: 'blocked', label: 'Secondary Logon',
+        message: 'Stopped and could not be started — the fix would finish without Zoom ever launching. Run "sc.exe start seclogon" from an admin shell, then come back.'
+      };
+    } else {
+      cards.seclogon = {
+        status: 'warning', label: 'Secondary Logon',
+        message: `${sl.status} / ${sl.startType} — unexpected state; the fix may not be able to launch Zoom as user1.`
+      };
     }
   }
 

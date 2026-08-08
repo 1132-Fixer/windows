@@ -296,6 +296,14 @@
     .chk-row[data-status="warning"]    .chk-badge { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-bd); }
     .chk-row[data-status="blocked"]    .chk-badge { color: var(--danger); background: var(--danger-bg); border-color: var(--danger-bd); }
     .chk-row[data-status="pending"]    .chk-badge { color: var(--muted); background: var(--panel-3); border-color: var(--border); }
+    /* "Fix now is disabled by: …" line under the checklist (#66). */
+    .fix-disabled-note {
+      margin-top: 8px;
+      font-size: 13px;
+      line-height: 1.4;
+      color: var(--danger);
+    }
+    .fix-disabled-note[hidden] { display: none; }
 
     /* ============================================================
        STAGE TRACKER — Preparing → Verifying → Consent → Launch → Verify
@@ -965,6 +973,9 @@
         stay unchanged. Do <strong>not</strong> run while signed in as user1.
       </div>
       <div class="chk-list" id="checkList" role="list" aria-label="Environment checks"></div>
+      <!-- One-line answer to "why is Fix now greyed out?" (#66) — filled by
+           the scan with the labels of the blocked checklist rows. -->
+      <div class="fix-disabled-note" id="fixDisabledNote" role="status" hidden></div>
     </section>
 
     <!-- ============================================================

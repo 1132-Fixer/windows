@@ -21,9 +21,32 @@ function Write-Section($t) {
     Write-Host ('=' * 70) -ForegroundColor Cyan
 }
 
+# Junction-safe recursive listing (W4-HANG): Windows PowerShell 5.1's
+# Get-ChildItem -Recurse FOLLOWS directory reparse points, and default
+# profiles contain cyclic ones (AppData\Local\Application Data ->
+# AppData\Local), so a plain -Recurse over a profile can loop forever — and
+# worse, treat junction TARGETS as if they lived inside the profile. Walks
+# without entering reparse points; the reparse-point entries themselves are
+# still returned.
+function Get-ProfileItemsNoReparse([string]$Root) {
+    $out = New-Object System.Collections.Generic.List[object]
+    $stack = New-Object System.Collections.Generic.Stack[string]
+    $stack.Push($Root)
+    while ($stack.Count -gt 0) {
+        $dir = $stack.Pop()
+        foreach ($it in @(Get-ChildItem -LiteralPath $dir -Force -EA 0)) {
+            $out.Add($it)
+            if ($it.PSIsContainer -and (($it.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0)) {
+                $stack.Push($it.FullName)
+            }
+        }
+    }
+    return ,$out
+}
+
 function Get-FolderSizeMB($path) {
     try {
-        $sum = (Get-ChildItem $path -Recurse -Force -File -EA 0 |
+        $sum = (Get-ProfileItemsNoReparse $path | Where-Object { -not $_.PSIsContainer } |
                 Measure-Object Length -Sum).Sum
         if ($null -eq $sum) { return '0.0' }
         return '{0:N1}' -f ($sum / 1MB)
@@ -104,7 +127,7 @@ foreach ($sub in $checks) {
     foreach ($p in @($Canonical) + $Stragglers) {
         $f = Join-Path $p $sub
         if (-not (Test-Path $f)) { continue }
-        $files = Get-ChildItem $f -Recurse -Force -File -EA 0
+        $files = @(Get-ProfileItemsNoReparse $f | Where-Object { -not $_.PSIsContainer })
         $count = $files.Count
         $sumBytes = ($files | Measure-Object Length -Sum).Sum
         $size = '{0:N1}' -f ((@($sumBytes, 0) | Select-Object -First 1) / 1MB)
@@ -128,14 +151,26 @@ foreach ($p in $Stragglers) {
     Write-Host ''
     Write-Host "Removing $p"
     try {
+        # Delete reparse points first (junction entry only, never the target):
+        # PS 5.1's Remove-Item -Recurse follows junctions, and a profile
+        # junction can point outside the straggler being removed.
+        Get-ProfileItemsNoReparse $p |
+            Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 } |
+            ForEach-Object {
+                try {
+                    if ($_.PSIsContainer) { [System.IO.Directory]::Delete($_.FullName, $false) }
+                    else { [System.IO.File]::Delete($_.FullName) }
+                } catch {}
+            }
         Remove-Item $p -Recurse -Force -EA Stop
         Write-Host '  REMOVED' -ForegroundColor Green
     } catch {
         Write-Host "  LOCKED - scheduling reboot-time delete: $($_.Exception.Message)" -ForegroundColor Yellow
-        Get-ChildItem $p -Recurse -Force -File -EA 0 | ForEach-Object {
+        $all = Get-ProfileItemsNoReparse $p
+        $all | Where-Object { -not $_.PSIsContainer } | ForEach-Object {
             [W.N]::MoveFileEx($_.FullName, $null, 4) | Out-Null
         }
-        Get-ChildItem $p -Recurse -Force -Directory -EA 0 | Sort-Object FullName -Descending | ForEach-Object {
+        $all | Where-Object { $_.PSIsContainer } | Sort-Object FullName -Descending | ForEach-Object {
             [W.N]::MoveFileEx($_.FullName, $null, 4) | Out-Null
         }
         [W.N]::MoveFileEx($p, $null, 4) | Out-Null
