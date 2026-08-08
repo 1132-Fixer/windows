@@ -7,6 +7,7 @@ const https = require('https');
 const { spawn, spawnSync } = require('child_process');
 const config = require('./src/main/config');
 const zoomDetect = require('./zoom-detect');
+const { computeRunVerdict, deletionOutcome } = require('./run-verdict');
 
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
@@ -1150,6 +1151,23 @@ async function runFixFlow(event) {
   const send = (line, kind = 'out') => event.sender.send('fix-log', { line, kind });
   const noop = () => {};
   const warnings = [];
+  // Per-step outcome ledger (additive — success/warnings/blockers/receipt all
+  // keep their existing shapes). A 'fail' outcome marks a step whose result
+  // invalidates the fix's purpose; computeRunVerdict turns any of those into
+  // partial:true and the NEEDS ATTENTION headline instead of a silent green.
+  const steps = [];
+  const step = (id, label, outcome, detail = '') => steps.push({ id, label, outcome, detail });
+  // Countable data-clear ledger, fed by every Remove-ProfileFolder pass:
+  // each "  Deleting: <path>" line is one real removal attempt and each
+  // "RESULT: STILL PRESENT" is one confirmed leftover. Aggregated into the
+  // 'data-clear' step outcome and the receipt's `deleted N of M`.
+  let clearAttempts = 0, clearFailures = 0, clearTimedOut = false;
+  const tallyRemovals = (r) => {
+    const out = (r && r.stdout) || '';
+    clearAttempts += (out.match(/^\s*Deleting: /gm) || []).length;
+    clearFailures += (out.match(/RESULT: STILL PRESENT/g) || []).length;
+    if (r && r.timedOut) clearTimedOut = true;
+  };
 
   // ----- Defense-in-depth elevation guard --------------------
   if (!await isElevatedSync()) {
@@ -1239,13 +1257,23 @@ async function runFixFlow(event) {
     send(`  WARNING: some ${FIX_USER} processes survived repeated kills; continuing.`, 'err');
     warnings.push({ code: 'kill_residual', message: `Some ${FIX_USER} processes were still alive after 6s of kill attempts.` });
   }
+  if (drain.timedOut) {
+    // Previously a timed-out drain probe read as "all clear" — fail-loud now.
+    send(`  WARNING: could not confirm all ${FIX_USER} processes exited (check timed out).`, 'err');
+    warnings.push({ code: 'kill_check_timeout', message: `Could not confirm every ${FIX_USER} process exited — the check timed out after 20s.` });
+  }
+  const step1Issues = [];
+  if (realNotes.length) step1Issues.push('session logoff issues');
+  if ((drain.stdout || '').includes('RESIDUAL')) step1Issues.push('some processes survived kill attempts');
+  if (drain.timedOut) step1Issues.push('process check timed out');
+  step('close-sessions', `Close ${FIX_USER} programs and sessions`, step1Issues.length ? 'warn' : 'ok', step1Issues.join('; '));
 
   // ============================================================
   // STEP 2: Pre-clean any leftover suffixed profile folders
   //         (e.g. user1.MACHINENAME) from earlier botched resets.
   // ============================================================
   send('[2/8] Removing leftover suffixed profile folders...', 'header');
-  await runPSScript(`
+  const suffixSweep = await runPSScript(`
     ${PS_REMOVE_PROFILE_HELPER}
     $u = '${FIX_USER}'
     $folders = Get-ChildItem 'C:\\Users' -Directory -Force -EA 0 | Where-Object { $_.Name -match ('^' + [Regex]::Escape($u) + '\\.') }
@@ -1255,6 +1283,7 @@ async function runFixFlow(event) {
       Remove-ProfileFolder -Path $f.FullName
     }
   `, send, { heartbeatMs: 5000, heartbeatLabel: 'suffixed-profile cleanup', timeoutMs: 300000 });
+  tallyRemovals(suffixSweep);
 
   // ============================================================
   // STEP 3: Delete the existing user1 account, profile folder,
@@ -1277,7 +1306,7 @@ async function runFixFlow(event) {
       { heartbeatMs: 5000, heartbeatLabel: 'net user /delete', timeoutMs: 60000 });
     if (del.code !== 0) {
       send(`ERROR: failed to delete account '${FIX_USER}'.`, 'err');
-      return { success: false, error: 'delete_user_failed', warnings };
+      return { success: false, error: 'delete_user_failed', warnings, steps };
     }
     send('  Account deleted.', 'out');
   } else {
@@ -1285,7 +1314,8 @@ async function runFixFlow(event) {
   }
 
   const sourceProfile = `C:\\Users\\${FIX_USER}`;
-  if (fs.existsSync(sourceProfile)) {
+  const profileFolderExisted = fs.existsSync(sourceProfile);
+  if (profileFolderExisted) {
     send(`  Removing profile folder ${sourceProfile} (rd /s /q first; ACL fix only on residue)...`, 'out');
     const delProfile = await runPSScript(`
       ${PS_REMOVE_PROFILE_HELPER}
@@ -1302,12 +1332,13 @@ async function runFixFlow(event) {
     if (delProfile.timedOut) {
       send('ERROR: profile delete timed out after 8 minutes. A handle is likely still open (Zoom, antivirus, search indexer).', 'err');
       send('  Try: reboot, then re-run the fix.', 'err');
-      return { success: false, error: 'delete_profile_timeout', warnings };
+      return { success: false, error: 'delete_profile_timeout', warnings, steps };
     }
     if (delProfile.code !== 0) {
       send('ERROR: profile folder could not be removed. Reboot and try again.', 'err');
-      return { success: false, error: 'delete_profile_failed', warnings };
+      return { success: false, error: 'delete_profile_failed', warnings, steps };
     }
+    tallyRemovals(delProfile);
   } else {
     send(`  ${sourceProfile} did not exist - nothing to delete.`, 'out');
   }
@@ -1324,7 +1355,7 @@ async function runFixFlow(event) {
   //
   // Folder sweep also widened: any ProfileImagePath we removed becomes
   // an orphan folder candidate, regardless of name shape.
-  await runPSScript(`
+  const plSweep = await runPSScript(`
     ${PS_REMOVE_PROFILE_HELPER}
     $u = '${FIX_USER}'
     $preDeleteSid = '${preDeleteSid}'
@@ -1355,6 +1386,27 @@ async function runFixFlow(event) {
       Remove-ProfileFolder -Path $_.FullName
     }
   `, send, { heartbeatMs: 5000, heartbeatLabel: 'leftover cleanup', timeoutMs: 300000 });
+  tallyRemovals(plSweep);
+
+  // Aggregate data-clear outcome across every removal pass above. A counted
+  // leftover ("app only deleted 1 file" class) fails the step -> partial;
+  // a timeout or unclean exit with clean counts is at least a warn.
+  {
+    const deletedCount = Math.max(0, clearAttempts - clearFailures);
+    const clearRec = deletionOutcome(deletedCount, clearAttempts);
+    let clearOutcome = clearRec.outcome;
+    let clearDetail = clearRec.detail;
+    if (clearOutcome === 'ok' && (clearTimedOut || suffixSweep.code !== 0 || plSweep.code !== 0)) {
+      clearOutcome = 'warn';
+      clearDetail += clearTimedOut
+        ? ' — but the cleanup step timed out before it could re-check, so a leftover may remain'
+        : ' — but the cleanup script did not exit cleanly';
+    }
+    if (clearOutcome === 'fail') {
+      send(`  WARNING: old profile data only partially removed (${clearDetail}).`, 'err');
+    }
+    step('data-clear', `Clear old ${FIX_USER} profile data`, clearOutcome, clearDetail);
+  }
 
   // ============================================================
   // STEP 3b: Flush retained User Profile Service hive handles.
@@ -1371,7 +1423,7 @@ async function runFixFlow(event) {
   // sc.exe stop/start, then reg flush as last resort.
   // ============================================================
   send('[3b/8] Flushing User Profile Service hive cache...', 'header');
-  await runPSScript(`
+  const flush = await runPSScript(`
     try {
       $svc = Get-Service ProfSvc -EA Stop
       if ($svc.Status -eq 'Running') {
@@ -1397,6 +1449,21 @@ async function runFixFlow(event) {
     & reg.exe flush HKLM 2>&1 | Out-Null
     Write-Host '  HKLM flushed.'
   `, send, { heartbeatMs: 5000, heartbeatLabel: 'profsvc flush', timeoutMs: 60000 });
+  // A ProfSvc flush that timed out or died used to vanish into a green run
+  // (#90). When a previous user1 existed the flush is what prevents the
+  // TEMP-profile relapse, so its failure invalidates the fix's purpose.
+  if (flush.timedOut || flush.code !== 0) {
+    const profsvcNeeded = accountExisted || profileFolderExisted;
+    const why = flush.timedOut ? 'timed out after 60 seconds' : `did not finish cleanly (exit ${flush.code})`;
+    const detail = `The Windows profile service refresh ${why}. Windows may give ${FIX_USER} a temporary profile — if Error 1132 comes back, reboot once and run the fix again.`;
+    send(`  WARNING: ${detail}`, 'err');
+    step('profsvc-flush', 'Refresh Windows profile service', profsvcNeeded ? 'fail' : 'warn', detail);
+    if (!profsvcNeeded) {
+      warnings.push({ code: 'profsvc_flush_failed', message: detail });
+    }
+  } else {
+    step('profsvc-flush', 'Refresh Windows profile service', 'ok', '');
+  }
 
   // ============================================================
   // STEP 4: Recreate the account, add to Administrators,
@@ -1408,7 +1475,7 @@ async function runFixFlow(event) {
   if (create.code !== 0) {
     send(`ERROR: failed to create '${FIX_USER}'.`, 'err');
     send('  Common cause: password complexity policy rejected the password.', 'err');
-    return { success: false, error: 'create_user_failed', warnings };
+    return { success: false, error: 'create_user_failed', warnings, steps };
   }
   send(`  Account '${FIX_USER}' created.`, 'out');
 
@@ -1433,6 +1500,8 @@ async function runFixFlow(event) {
     send('  WARNING: user1 admin membership could not be verified.', 'err');
     send('  Zoom will still launch as user1, but admin-only actions later may fail.', 'err');
   }
+  step('create-account', `Create fresh ${FIX_USER} account`, adminCheck.inGroup ? 'ok' : 'warn',
+    adminCheck.inGroup ? '' : `${FIX_USER} admin membership could not be verified`);
 
   // ============================================================
   // STEP 5: Launch Zoom once as user1 so Windows creates the profile.
@@ -1496,9 +1565,10 @@ async function runFixFlow(event) {
     send(`ERROR: Zoom.exe is not running as '${FIX_USER}' after launch.`, 'err');
     send('  Likely causes: Secondary Logon disabled, password policy mismatch, or Zoom crashed on startup.', 'err');
     send('  Try: sc.exe config seclogon start= demand && sc.exe start seclogon', 'err');
-    return { success: false, error: 'launch_failed', warnings };
+    return { success: false, error: 'launch_failed', warnings, steps };
   }
   send(`  Confirmed: Zoom.exe is running as ${FIX_USER}.`, 'out');
+  step('launch-zoom', `Start Zoom as ${FIX_USER}`, 'ok', '');
 
   // ============================================================
   // STEP 6: Resolve the new user1 profile via registry first,
@@ -1516,8 +1586,13 @@ async function runFixFlow(event) {
       code: 'profile_not_materialized',
       message: `user1 profile did not appear within 30s. Registry keys checked: ${profile.checkedKeys.join('; ') || '(none)'}. Folders checked: ${profile.checkedPaths.join('; ') || '(none)'}.`
     });
-    send('Done with warnings. Zoom should appear shortly.', 'success');
-    return { success: true, warnings };
+    // Everything the fix exists to deliver per-user (consent, dark mode,
+    // helper script) was skipped — that is a partial outcome, not a green run.
+    step('profile-setup', `Set up the ${FIX_USER} profile`, 'fail',
+      `The ${FIX_USER} profile did not appear within 30 seconds, so Zoom settings, camera/microphone consent, and the helper script were skipped. Sign into Zoom once as ${FIX_USER}, then run the fix again.`);
+    send('Fix finished, but some outcomes need attention - see the summary below.', 'err');
+    const earlyVerdict = computeRunVerdict(steps, warnings, []);
+    return { success: true, partial: earlyVerdict.partial, steps, warnings, receipt: null };
   }
   const newUserProfile = profile.path;
   send(`  Profile source: ${profile.source}, path: ${newUserProfile}`, 'out');
@@ -1595,6 +1670,12 @@ async function runFixFlow(event) {
       send(`    WARNING: firstrun deploy failed: ${err.message}`, 'err');
       warnings.push({ code: 'firstrun_deploy_failed', message: err.message });
     }
+  }
+  {
+    const profileIssueCodes = ['firstrun_missing', 'shortcut_failed', 'firstrun_deploy_failed'];
+    const profileIssues = warnings.filter(w => profileIssueCodes.includes(w.code));
+    step('profile-setup', `Set up the ${FIX_USER} profile`,
+      profileIssues.length ? 'warn' : 'ok', profileIssues.map(w => w.code).join(', '));
   }
 
   // ============================================================
@@ -1756,7 +1837,7 @@ async function runFixFlow(event) {
   // sleep(4s). Kill by image name OR install path, then poll until the whole
   // tree is confirmed gone — positive exit confirmation means file handles
   // (Zoom.us.ini) are released, typically within ~1s instead of always 4s.
-  await runPSCapture(`
+  const zoomClose = await runPSCapture(`
     $u = '${FIX_USER}'
     $names = @('Zoom.exe','CptHost.exe','CptControl.exe','ZoomWebhook.exe',
                'Zoom_launcher.exe','ZoomTeamChat.exe','airhost.exe')
@@ -1775,8 +1856,16 @@ async function runFixFlow(event) {
       $targets | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
       Start-Sleep -Milliseconds 300
     } while ([DateTime]::UtcNow -lt $deadline)
+    if ($targets.Count -eq 0) { Write-Output 'CLEAR' } else { Write-Output ('RESIDUAL=' + $targets.Count) }
   `, { timeoutMs: 30000 });
-  send('  Zoom closed.', 'out');
+  if ((zoomClose.stdout || '').includes('CLEAR')) {
+    send('  Zoom closed.', 'out');
+  } else {
+    // Previously "Zoom closed." printed unconditionally — the ini write below
+    // can silently lose against a still-open Zoom.us.ini handle.
+    send('  WARNING: some Zoom processes may still be running for user1.', 'err');
+    warnings.push({ code: 'zoom_close_residual', message: 'Some Zoom processes were still running when preferences were written — the dark-mode setting may not stick.' });
+  }
 
   if (fs.existsSync(zoomIni)) {
     send('  Writing dark mode to Zoom.us.ini...', 'out');
@@ -1791,7 +1880,11 @@ async function runFixFlow(event) {
       }
       [IO.File]::WriteAllText($p, $c)
     `;
-    await runPSScript(iniEdit, send);
+    const iniWrite = await runPSScript(iniEdit, send);
+    if (iniWrite.timedOut || iniWrite.code !== 0) {
+      send('  WARNING: could not write dark mode into Zoom.us.ini.', 'err');
+      warnings.push({ code: 'ini_write_failed', message: 'Could not write dark mode into Zoom.us.ini — Zoom may open in light mode. Cosmetic only; everything else still applies.' });
+    }
   }
 
   if (fs.existsSync(srcZoomDir)) {
@@ -1826,6 +1919,12 @@ async function runFixFlow(event) {
   } else {
     send(`  NOTE: ${srcZoomDir} not found. Skipping prefs copy.`, 'out');
   }
+  {
+    const zoomCfgCodes = ['sid_unresolved', 'ini_seed_failed', 'ini_write_failed', 'pref_copy_failed', 'zoom_close_residual'];
+    const cfgIssues = warnings.filter(w => zoomCfgCodes.includes(w.code));
+    step('zoom-config', 'Apply Zoom preferences', cfgIssues.length ? 'warn' : 'ok',
+      cfgIssues.map(w => w.code).join(', '));
+  }
 
   // ============================================================
   // STEP 8: Relaunch Zoom so the new prefs take effect.
@@ -1838,7 +1937,134 @@ async function runFixFlow(event) {
     warnings.push({ code: 'relaunch_failed', message: `Initial launch succeeded but relaunch exited with code ${relaunch.code}. Open Zoom manually.` });
   }
 
-  send('Done. Zoom should appear momentarily.', 'success');
+  // ============================================================
+  // STEP 8.5: Outcome verification — cheap read-only re-checks of what the
+  // fix exists to deliver, recorded into the receipt. No mutations:
+  //   (a) consent registry values actually present for user1 (readback is
+  //       authoritative — resolves the write-time UNVERIFIED cases),
+  //   (b) FrameServer service state,
+  //   (c) Zoom.exe running as user1 (the relaunch above is detached and was
+  //       previously never confirmed).
+  // ============================================================
+  send('[V] Verifying fix outcomes...', 'header');
+  const verify = await runPSCapture(`
+    $sid = '${userSID || ''}'
+    $u = '${FIX_USER}'
+    function ConsentVal([string]$p) {
+      try { return [string](Get-ItemProperty -Path $p -Name 'Value' -EA Stop).Value } catch { return '' }
+    }
+    foreach ($d in @('webcam','microphone')) {
+      $hklm = 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\' + $d
+      $ok = ((ConsentVal $hklm) -eq 'Allow') -and ((ConsentVal ($hklm + '\\NonPackaged')) -eq 'Allow')
+      Write-Output ('VERIFY_HKLM_' + $d + '=' + $(if ($ok) { 'YES' } else { 'NO' }))
+    }
+    $hkuLoaded = $false
+    if ($sid) {
+      $null = reg query "HKU\\$sid" 2>$null
+      if ($LASTEXITCODE -eq 0) { $hkuLoaded = $true }
+    }
+    Write-Output ('VERIFY_HKU_LOADED=' + $(if ($hkuLoaded) { 'YES' } else { 'NO' }))
+    if ($hkuLoaded) {
+      foreach ($d in @('webcam','microphone')) {
+        $hku = 'Registry::HKEY_USERS\\' + $sid + '\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\' + $d
+        $ok = ((ConsentVal $hku) -eq 'Allow') -and ((ConsentVal ($hku + '\\NonPackaged')) -eq 'Allow')
+        Write-Output ('VERIFY_USER_' + $d + '=' + $(if ($ok) { 'YES' } else { 'NO' }))
+      }
+    }
+    $svc = Get-Service FrameServer -EA SilentlyContinue
+    if ($svc) { Write-Output ('VERIFY_FRAMESERVER=' + [string]$svc.Status + '/' + [string]$svc.StartType) }
+    else { Write-Output 'VERIFY_FRAMESERVER=MISSING' }
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    $hit = $false
+    do {
+      try {
+        $procs = Get-CimInstance Win32_Process -Filter "Name='Zoom.exe'" -EA SilentlyContinue
+        foreach ($p in $procs) {
+          $o = Invoke-CimMethod -InputObject $p -MethodName GetOwner -EA SilentlyContinue
+          if ($o -and ($o.User -ieq $u)) { $hit = $true; break }
+        }
+      } catch {}
+      if ($hit) { break }
+      Start-Sleep -Milliseconds 400
+    } while ([DateTime]::UtcNow -lt $deadline)
+    Write-Output ('VERIFY_ZOOM_USER1=' + $(if ($hit) { 'YES' } else { 'NO' }))
+  `, { timeoutMs: 30000 });
+
+  const vout = verify.stdout || '';
+  const vprobeFailed = verify.timedOut || !/VERIFY_/.test(vout);
+  const vget = (k) => {
+    const m = new RegExp('^' + k + '=(.*)$', 'm').exec(vout);
+    return m ? m[1].trim() : '';
+  };
+
+  // Receipt: start from the write-time consent receipt; when the consent
+  // block was skipped entirely (script missing, SID unresolved) synthesize an
+  // honest default instead of returning null and hiding the panel.
+  const receipt = (typeof consentReceipt !== 'undefined') ? consentReceipt : {
+    camera: 'UNVERIFIED', microphone: 'UNVERIFIED', hkuPath: 'skipped', frameServer: ''
+  };
+  // Readback is authoritative where it could see the values. It can upgrade
+  // a write-time UNVERIFIED to OK (writes landed but the script died before
+  // reporting) and downgrade an unbacked OK; POLICY-BLOCKED always stands.
+  const finalizeConsent = (writeTime, userRead, hklmRead) => {
+    if (writeTime === 'POLICY-BLOCKED') return writeTime;
+    if (userRead === 'YES' || hklmRead === 'YES') return 'OK';
+    if (vprobeFailed) return writeTime; // probe broke: keep the write-time status
+    return 'UNVERIFIED';
+  };
+  receipt.camera     = finalizeConsent(receipt.camera,     vget('VERIFY_USER_webcam'),     vget('VERIFY_HKLM_webcam'));
+  receipt.microphone = finalizeConsent(receipt.microphone, vget('VERIFY_USER_microphone'), vget('VERIFY_HKLM_microphone'));
+  if (!vprobeFailed) {
+    send(`  Consent readback: camera=${receipt.camera}, microphone=${receipt.microphone}`,
+      (receipt.camera !== 'UNVERIFIED' && receipt.microphone !== 'UNVERIFIED') ? 'out' : 'err');
+  }
+  const consentBad = receipt.camera === 'UNVERIFIED' || receipt.microphone === 'UNVERIFIED';
+  const consentPolicy = receipt.camera === 'POLICY-BLOCKED' || receipt.microphone === 'POLICY-BLOCKED';
+  step('consent', 'Grant camera and microphone access',
+    consentBad ? 'fail' : (consentPolicy ? 'warn' : 'ok'),
+    consentBad
+      ? `camera=${receipt.camera}, microphone=${receipt.microphone} — if Zoom cannot see them, sign in as ${FIX_USER} and enable Camera and Microphone for desktop apps under Settings > Privacy & security.`
+      : `camera=${receipt.camera}, microphone=${receipt.microphone}`);
+
+  // FrameServer readback refines the receipt; never downgrades an honest
+  // 'restored-from-disabled' to plain 'ok'.
+  const vfs = vget('VERIFY_FRAMESERVER');
+  if (vfs === 'MISSING') {
+    receipt.frameServer = 'missing';
+  } else if (vfs.endsWith('/Disabled')) {
+    receipt.frameServer = 'disabled-unfixable';
+    if (!warnings.some(w => w.code === 'frameserver_disabled')) {
+      warnings.push({ code: 'frameserver_disabled', message: 'Windows Camera Frame Server service is Disabled — cameras will not enumerate for any desktop app until it is set to Manual or Automatic.' });
+    }
+  } else if (vfs && !receipt.frameServer) {
+    receipt.frameServer = 'ok';
+  }
+
+  // Zoom-under-user1 relaunch confirmation.
+  if (vget('VERIFY_ZOOM_USER1') === 'YES') {
+    send(`  Confirmed: Zoom.exe is running as ${FIX_USER}.`, 'out');
+    step('relaunch', `Restart Zoom as ${FIX_USER}`, 'ok', '');
+    receipt.zoomRelaunch = 'confirmed';
+  } else if (vprobeFailed) {
+    step('relaunch', `Restart Zoom as ${FIX_USER}`, 'warn', 'could not confirm the relaunch — the verification probe did not finish');
+    warnings.push({ code: 'verify_probe_failed', message: 'The final verification probe did not finish; the receipt reflects what each step reported at the time.' });
+    receipt.zoomRelaunch = 'unverified';
+  } else {
+    send(`  WARNING: Zoom.exe is not running as ${FIX_USER} after the relaunch.`, 'err');
+    step('relaunch', `Restart Zoom as ${FIX_USER}`, 'fail',
+      `Zoom did not start as ${FIX_USER} after the fix — double-click "Open Zoom with 1132 Helper" on your desktop to start it.`);
+    receipt.zoomRelaunch = 'not-detected';
+  }
+  if (clearAttempts > 0) {
+    receipt.dataClear = `deleted ${Math.max(0, clearAttempts - clearFailures)} of ${clearAttempts}`;
+  }
+
+  const verdict = computeRunVerdict(steps, warnings, []);
+  if (verdict.partial) {
+    send('Fix finished, but some outcomes need attention - see the summary below.', 'err');
+  } else {
+    send('Done. Zoom should appear momentarily.', 'success');
+  }
   if (warnings.length) {
     send(`Completed with ${warnings.length} warning(s) - see above.`, 'err');
   }
@@ -1848,10 +2074,10 @@ async function runFixFlow(event) {
   send('     push mirror-off, dual monitors, mute-on-join, etc.', 'out');
   return {
     success: true,
+    partial: verdict.partial,
+    steps,
     warnings,
-    // typeof guard — consentReceipt is set inside the consent-script block;
-    // if that block was skipped (script missing), receipt stays undefined.
-    receipt: (typeof consentReceipt !== 'undefined') ? consentReceipt : null
+    receipt
   };
 }
 
@@ -2488,6 +2714,8 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
     md.push(`microphone:  ${receipt.microphone || 'not recorded'}`);
     md.push(`hkuPath:     ${receipt.hkuPath || 'not recorded'}`);
     md.push(`frameServer: ${receipt.frameServer || 'not recorded'}`);
+    md.push(`dataClear:   ${receipt.dataClear || 'not recorded'}`);
+    md.push(`zoomRelaunch: ${receipt.zoomRelaunch || 'not recorded'}`);
     md.push('```');
     md.push('');
   }

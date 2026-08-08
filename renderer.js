@@ -476,20 +476,32 @@ async function runFix() {
     addEmptyLine();
     if (result && result.success) {
       const warnings = Array.isArray(result.warnings) ? result.warnings : [];
-      if (warnings.length) {
-        addFileItem(`FIX COMPLETE (with ${warnings.length} warning(s))`, 'header');
+      const steps = Array.isArray(result.steps) ? result.steps : [];
+      // Verdict + header live in run-verdict.js (loaded before this script,
+      // shared with main.js). Legacy results without steps keep the old
+      // warning-count headline unchanged.
+      const verdict = computeRunVerdict(steps, warnings, []);
+      const partial = !!result.partial || verdict.partial;
+      if (partial) {
+        addFileItem(VERDICT_HEADERS.attention, 'header');
+        finalizeStages('warn');
+        setStatus('warn', 'Needs attention');
+      } else if (warnings.length) {
+        addFileItem(verdict.header, 'header');
         finalizeStages('warn');
         setStatus('warn', 'Done (warnings)');
       } else {
-        addFileItem('FIX COMPLETE', 'header');
+        addFileItem(verdict.header, 'header');
         finalizeStages('ok');
         setStatus('done', 'Done');
       }
       renderFixReceipt(result.receipt, warnings);
 
-      if (warnings.length) {
+      const failedSteps = steps.filter(s => s && s.outcome === 'fail');
+      if (warnings.length || failedSteps.length) {
         addEmptyLine();
         addFileItem('WARNINGS', 'header');
+        failedSteps.forEach(s => addFileItem(`  • ${s.label}: ${s.detail}`, 'failed'));
         warnings.forEach(w => addFileItem(`  • [${w.code}] ${w.message}`, 'failed'));
       }
       // Re-expand log on completion so users can scroll back.
