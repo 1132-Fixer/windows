@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- **The helper account password is now random for every fix run and stored
+  encrypted (Windows DPAPI) — never in plain text.** Each FIX NOW mints a
+  fresh, cryptographically random password for `user1` and seals it with
+  Windows Data Protection (`helper-credential.bin`, decryptable only by your
+  own Windows account); the desktop-shortcut launcher script no longer
+  contains a password at all. Older shortcuts keep working and are upgraded
+  automatically on the next fix run. If Windows Data Protection is disabled
+  or blocked on a PC, the fix still completes — only the one-click shortcut
+  is unavailable until a later fix run can store the sign-in, and a clear
+  warning says so.
 - **The `user1` helper account is no longer an administrator.** Every
   privileged repair step already runs under 1132 Fixer's own elevated
   process, and `user1` only runs Zoom — so the account is now created as a

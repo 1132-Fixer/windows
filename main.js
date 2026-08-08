@@ -7,6 +7,7 @@ const https = require('https');
 const { spawn, spawnSync } = require('child_process');
 const config = require('./src/main/config');
 const zoomDetect = require('./zoom-detect');
+const helperCred = require('./helper-credential');
 const { computeRunVerdict, deletionOutcome, consentOutcome, profsvcRefreshResult } = require('./run-verdict');
 
 autoUpdater.autoDownload = true;
@@ -191,7 +192,11 @@ ipcMain.handle('open-website', () => {
 });
 
 const FIX_USER = 'user1';
-const FIX_PASS = 'user1';
+// There is NO static password (W5-SECURITY-DESIGN Option A — SEC-A6, #33/#76).
+// Every fix run mints a fresh CSPRNG password (helper-credential.js) at
+// STEP 4; the delete->recreate model means the run that mints it also writes
+// every consumer (launch, relaunch, DPAPI-sealed shortcut blob), so no
+// old-password knowledge is ever needed and nothing plaintext hits disk.
 // Default machine-wide install candidates only — the actual install is
 // resolved by resolveZoomInstall() (W1-DETECT: 32-bit MSI, custom install
 // dirs, and per-user installs all exist in the field).
@@ -1673,8 +1678,18 @@ async function runFixFlow(event) {
   //         are machine-wide MSI updates done by the primary user.
   // ============================================================
   send(`[4/8] Creating account '${FIX_USER}' as a standard user...`, 'header');
+  // Mint THIS run's password. Rotation is free: STEP 3 deleted the old
+  // account, so nothing anywhere needs the previous secret, and every
+  // consumer below (launch, relaunch, sealed shortcut blob) is written by
+  // this same run. The alphabet is PS-single-quote / argv / net.exe-safe by
+  // construction (helper-credential.js). Never logged, never persisted in
+  // plain text.
+  const fixPass = helperCred.generateHelperPassword();
+  // /y auto-answers net.exe's ">14 characters" DOS-compat confirmation
+  // prompt, which would otherwise wait forever on our piped, never-written
+  // stdin now that the password is 24 chars.
   const create = await runProcess('net.exe',
-    ['user', FIX_USER, FIX_PASS, '/add'], send);
+    ['user', FIX_USER, fixPass, '/add', '/y'], send);
   if (create.code !== 0) {
     send(`ERROR: failed to create '${FIX_USER}'.`, 'err');
     send('  Common cause: password complexity policy rejected the password.', 'err');
@@ -1697,8 +1712,12 @@ async function runFixFlow(event) {
     send(`ERROR: ${zoomDetect.zoomStatusMessage(zi)}`, 'err');
     return { success: false, error: 'zoom_not_found', warnings };
   }
+  // fixPass is interpolated into a single-quoted PS string inside a tmp
+  // script file (runPSScriptLaunchCapture) — never onto a command line where
+  // Win32_Process could enumerate it. The tmp file is unlinked after the run;
+  // its seconds-long lifetime is the accepted residual (see PR notes).
   const launchPs = `
-    $pw = ConvertTo-SecureString '${FIX_PASS}' -AsPlainText -Force
+    $pw = ConvertTo-SecureString '${fixPass}' -AsPlainText -Force
     $cred = New-Object System.Management.Automation.PSCredential('${FIX_USER}', $pw)
     try {
       Start-Process -FilePath '${zi.path}' -WorkingDirectory '${zi.dir}' -Credential $cred -EA Stop
@@ -1757,6 +1776,68 @@ async function runFixFlow(event) {
   }
   send(`  Confirmed: Zoom.exe is running as ${FIX_USER}.`, 'out');
   step('launch-zoom', `Start Zoom as ${FIX_USER}`, 'ok', '');
+
+  // ============================================================
+  // Seal this run's password for the desktop shortcut (W5 Option A).
+  // DPAPI scope justification — CurrentUser, NOT LocalMachine: the shortcut
+  // runs in the PRIMARY user's non-elevated session, and this elevated
+  // process is the SAME account. CurrentUser blobs are keyed to the user
+  // profile's DPAPI master keys, which elevation does not change — so
+  // seal-elevated / unseal-non-elevated works, and NO other local account
+  // can decrypt the blob. LocalMachine would be decryptable by any local
+  // user and would need hand-rolled ACLs to compensate.
+  // Every fix run rewrites blob + launcher unconditionally (same paths), so
+  // legacy plaintext launchers are migrated in place with zero handshake
+  // and rotation needs no staleness detection.
+  // Soft-fail (#76): if Protect fails (Windows Data Protection disabled or
+  // blocked), the fix itself is NOT failed — Zoom already launched with the
+  // in-memory credential and STEP 8 relaunch still works. We skip the
+  // blob+launcher write and warn that the one-click shortcut is
+  // unavailable. NEVER fall back to a static or logged password, NEVER
+  // write plaintext. A stale blob from an older run simply stops matching
+  // the rotated password; the launcher's catch branch turns that into the
+  // same friendly "press FIX NOW" message.
+  // ============================================================
+  const credDir = path.dirname(LAUNCHER_SCRIPT_PATH());
+  const blobPath = CRED_BLOB_PATH();
+  const psq = s => String(s).replace(/'/g, "''");
+  // Password + paths ride inside a tmp script file (runPSCapture), never on
+  // a command line. Paths are ''-escaped; the password alphabet cannot
+  // contain apostrophes or newlines by construction.
+  const seal = await runPSCapture(`
+    try {
+      Add-Type -AssemblyName System.Security
+      if (-not (Test-Path -LiteralPath '${psq(credDir)}')) { New-Item -ItemType Directory -Path '${psq(credDir)}' -Force | Out-Null }
+      $pt = [Text.Encoding]::UTF8.GetBytes('${fixPass}')
+      $sealed = [Security.Cryptography.ProtectedData]::Protect($pt, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+      [Array]::Clear($pt, 0, $pt.Length)
+      [IO.File]::WriteAllBytes('${psq(blobPath)}', $sealed)
+      Write-Output 'SEALED'
+    } catch {
+      Write-Output ('SEALFAIL: ' + $_.Exception.Message)
+    }
+  `);
+  let sealedOk = (seal.stdout || '').includes('SEALED') && fs.existsSync(blobPath);
+  if (sealedOk) {
+    try {
+      // BOM for the same PS 5.1 legacy-encoding reason as runPSScriptLaunchCapture.
+      fs.writeFileSync(LAUNCHER_SCRIPT_PATH(),
+        '\ufeff' + helperCred.launcherScriptContent(FIX_USER, zi.path, zi.dir), 'utf8');
+      send('  Helper sign-in stored encrypted (Windows DPAPI) for the desktop shortcut.', 'out');
+    } catch (err) {
+      sealedOk = false;
+    }
+  }
+  if (!sealedOk) {
+    const sealFailLine = (seal.stdout || '').split(/\r?\n/)
+      .map(s => s.trim()).find(l => l.startsWith('SEALFAIL: ')) || '';
+    send('  WARNING: could not store the helper sign-in encrypted — the one-click desktop shortcut will not work until a fix run can store it.', 'err');
+    warnings.push({
+      code: 'dpapi_seal_failed',
+      message: 'One-click desktop shortcut unavailable because Windows Data Protection is disabled or blocked on this PC — the helper sign-in could not be stored encrypted. The fix still worked; run FIX NOW again when you want Zoom relaunched.'
+        + (sealFailLine ? ` Detail for support: ${sealFailLine.slice(10)}` : '')
+    });
+  }
 
   // ============================================================
   // STEP 6: Resolve the new user1 profile via registry first,
@@ -2300,6 +2381,9 @@ const LEGACY_SHORTCUT_FILENAMES = [
 ];
 const LAUNCHER_SCRIPT_NAME = `launch-zoom-as-${FIX_USER}.ps1`;
 const LAUNCHER_SCRIPT_PATH = () => path.join(app.getPath('appData'), '1132 Fixer', LAUNCHER_SCRIPT_NAME);
+// DPAPI-sealed helper password (W5 Option A), co-located with the launcher —
+// the launcher resolves it via $PSScriptRoot, so the two must share a dir.
+const CRED_BLOB_PATH = () => path.join(app.getPath('appData'), '1132 Fixer', helperCred.CRED_BLOB_NAME);
 
 // Cached: the canonical Desktop path cannot change mid-session, and this
 // used to cost a powershell.exe spawn on every shortcut check.
@@ -2478,14 +2562,18 @@ ipcMain.handle('create-shortcut', async () => {
 
   const scriptPath = LAUNCHER_SCRIPT_PATH();
   const scriptDir = path.dirname(scriptPath);
+  // The launcher carries NO secret (W5 Option A): it reads the DPAPI-sealed
+  // helper-credential.bin written by the last fix run. Without that blob
+  // there is no working sign-in to point a shortcut at — FIX NOW is what
+  // mints and seals it — so refuse with the next step instead of minting a
+  // dead shortcut.
+  if (!fs.existsSync(CRED_BLOB_PATH())) {
+    return { success: false, error: 'No stored helper sign-in was found on this PC. Press FIX NOW once, then create the shortcut again.' };
+  }
   try {
     fs.mkdirSync(scriptDir, { recursive: true });
-    const scriptContent =
-      `$p = ConvertTo-SecureString '${FIX_PASS}' -AsPlainText -Force\r\n` +
-      `$c = New-Object System.Management.Automation.PSCredential('${FIX_USER}', $p)\r\n` +
-      `Start-Process -FilePath '${zi.path}' -WorkingDirectory '${zi.dir}' -Credential $c\r\n`;
     // BOM for the same PS 5.1 legacy-encoding reason as runPSScriptLaunchCapture.
-    fs.writeFileSync(scriptPath, '\ufeff' + scriptContent, 'utf8');
+    fs.writeFileSync(scriptPath, '\ufeff' + helperCred.launcherScriptContent(FIX_USER, zi.path, zi.dir), 'utf8');
   } catch (err) {
     return { success: false, error: `Failed to write launcher script: ${err.message}` };
   }

@@ -61,9 +61,10 @@ The app manages this local account:
 
 ```text
 Username: user1
-Password: user1
+Password: random — a fresh one is generated on every fix run
 ```
 
+- You never need the password. The desktop shortcut signs in for you: the fix stores the password encrypted with Windows DPAPI in `%APPDATA%\1132 Fixer\helper-credential.bin`, next to the shortcut's launcher script (`launch-zoom-as-user1.ps1`). Only your own Windows account can decrypt it, and no plain-text password is ever written to disk. Shortcuts made by older versions keep working and are upgraded on the next fix run.
 - `user1` is a standard user — it is **not** an administrator. If an older version of the app made it an administrator, the next fix run removes those rights automatically.
 - Do not use `user1` as your normal Windows account.
 - The app may ask for Windows admin approval.

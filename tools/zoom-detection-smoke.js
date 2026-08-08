@@ -121,13 +121,24 @@ console.log('zoom-detection-smoke: zoomStatusMessage');
 
 console.log('zoom-detection-smoke: launcher path extraction');
 {
-  const script = "$p = ConvertTo-SecureString 'user1' -AsPlainText -Force\r\n$c = New-Object System.Management.Automation.PSCredential('user1', $p)\r\nStart-Process -FilePath 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe' -WorkingDirectory 'C:\\Program Files (x86)\\Zoom\\bin' -Credential $c\r\n";
-  check(zd.extractLauncherZoomPath(script) === 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe', 'extracts baked -FilePath path');
+  // Current launcher: the REAL sealed-credential content main.js ships
+  // (helper-credential.js, W5 Option A) — extraction is what the shortcut
+  // staleness check runs against the file on disk.
+  const hc = require('../helper-credential.js');
+  const script = hc.launcherScriptContent('user1',
+    'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe', 'C:\\Program Files (x86)\\Zoom\\bin');
+  check(zd.extractLauncherZoomPath(script) === 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe', 'extracts baked -FilePath from sealed-credential launcher');
+  const bom = '\ufeff' + script;
+  check(zd.extractLauncherZoomPath(bom) === 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe', 'BOM-prefixed script still parses');
+
+  // Legacy pre-W5A plaintext launcher still on disk in the field until the
+  // next fix run overwrites it — the reader must keep parsing it.
+  const legacy = "$p = ConvertTo-SecureString 'user1' -AsPlainText -Force\r\n$c = New-Object System.Management.Automation.PSCredential('user1', $p)\r\nStart-Process -FilePath 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe' -WorkingDirectory 'C:\\Program Files (x86)\\Zoom\\bin' -Credential $c\r\n";
+  check(zd.extractLauncherZoomPath(legacy) === 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe', 'legacy plaintext launcher still parses');
+
   check(zd.extractLauncherZoomPath('no launch line here') === null, 'no launch line -> null (cannot judge)');
   check(zd.extractLauncherZoomPath('') === null, 'empty -> null');
   check(zd.extractLauncherZoomPath(null) === null, 'null -> null, no throw');
-  const bom = '\ufeff' + script;
-  check(zd.extractLauncherZoomPath(bom) === 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe', 'BOM-prefixed script still parses');
 }
 
 if (failures) {
