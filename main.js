@@ -475,7 +475,10 @@ function runProcess(exe, args, onLine, opts = {}) {
 async function runPSScript(scriptContent, onLine, opts = {}) {
   const tmp = path.join(os.tmpdir(),
     `fixer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
-  await fs.promises.writeFile(tmp, scriptContent, 'utf8');
+  // UTF-8 BOM: Windows PowerShell 5.1 reads BOM-less files in the legacy
+  // system codepage, which corrupts non-ASCII install paths interpolated
+  // into the script (review P2 on custom Unicode Zoom dirs).
+  await fs.promises.writeFile(tmp, '\ufeff' + scriptContent, 'utf8');
   try {
     return await runProcess('powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp],
@@ -497,7 +500,10 @@ async function runPSScript(scriptContent, onLine, opts = {}) {
 async function runPSScriptDetachedIO(scriptContent) {
   const tmp = path.join(os.tmpdir(),
     `fixer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
-  await fs.promises.writeFile(tmp, scriptContent, 'utf8');
+  // UTF-8 BOM: Windows PowerShell 5.1 reads BOM-less files in the legacy
+  // system codepage, which corrupts non-ASCII install paths interpolated
+  // into the script (review P2 on custom Unicode Zoom dirs).
+  await fs.promises.writeFile(tmp, '\ufeff' + scriptContent, 'utf8');
   return new Promise((resolve) => {
     const child = spawn('powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp],
@@ -1885,6 +1891,23 @@ async function findExistingShortcuts() {
     .map(loc => ({ kind: loc.kind, lnk: path.join(loc.path, SHORTCUT_FILENAME) }))
     .filter(loc => fs.existsSync(loc.lnk));
   if (!present.length) return [];
+
+  // A shortcut that points at the right launcher script can still be stale:
+  // the script bakes the Zoom path at creation time, and Zoom may since have
+  // moved (x64 default -> x86/custom reinstall). When we know the current
+  // machine-wide path, a mismatched baked path marks the shortcut invalid so
+  // the post-fix flow rewrites the launcher. Unknown states never invalidate.
+  let launcherStale = false;
+  if (zoomInstall && zoomInstall.path && fs.existsSync(expectedScript)) {
+    try {
+      const baked = zoomDetect.extractLauncherZoomPath(fs.readFileSync(expectedScript, 'utf8'));
+      if (baked && baked.toLowerCase() !== zoomInstall.path.toLowerCase()) {
+        launcherStale = true;
+        console.warn(`[zoom-detect] launcher script bakes '${baked}' but resolved install is '${zoomInstall.path}' — marking shortcut stale`);
+      }
+    } catch (_) { /* unreadable script -> cannot judge, leave validity alone */ }
+  }
+
   const infoMap = await inspectShortcuts(present.map(l => l.lnk));
   return present.map(loc => {
     const info = infoMap[loc.lnk] || null;
@@ -1892,7 +1915,7 @@ async function findExistingShortcuts() {
       kind: loc.kind,
       path: loc.lnk,
       // null = inspection failed; treat conservatively as "unknown but present".
-      valid: info ? shortcutMatchesCurrentApp(info, expectedScript) : null,
+      valid: info ? (shortcutMatchesCurrentApp(info, expectedScript) && !launcherStale) : null,
       target: info ? info.target : null,
       arguments: info ? info.arguments : null
     };
@@ -1925,7 +1948,8 @@ ipcMain.handle('create-shortcut', async () => {
       `$p = ConvertTo-SecureString '${FIX_PASS}' -AsPlainText -Force\r\n` +
       `$c = New-Object System.Management.Automation.PSCredential('${FIX_USER}', $p)\r\n` +
       `Start-Process -FilePath '${zi.path}' -WorkingDirectory '${zi.dir}' -Credential $c\r\n`;
-    fs.writeFileSync(scriptPath, scriptContent, 'utf8');
+    // BOM for the same PS 5.1 legacy-encoding reason as runPSScriptDetachedIO.
+    fs.writeFileSync(scriptPath, '\ufeff' + scriptContent, 'utf8');
   } catch (err) {
     return { success: false, error: `Failed to write launcher script: ${err.message}` };
   }

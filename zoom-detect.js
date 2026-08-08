@@ -45,6 +45,15 @@ function deriveCandidateDirs(text) {
   return dirs;
 }
 
+// Pull the Zoom path baked into a helper-launcher script (the single-quoted
+// Start-Process -FilePath argument). Returns null when the text has no
+// recognizable launch line — callers must treat null as "cannot judge",
+// never as "stale".
+function extractLauncherZoomPath(scriptText) {
+  const m = /Start-Process\s+-FilePath\s+'([^']+)'/.exec(String(scriptText || ''));
+  return m ? m[1] : null;
+}
+
 const ZOOM_NOT_FOUND_MESSAGE =
   'Not found. Install the machine-wide Zoom Workplace MSI (not the per-user installer), then Check again.';
 
@@ -69,6 +78,7 @@ function zoomStatusMessage(install) {
 }
 
 module.exports = {
+  extractLauncherZoomPath,
   SAFE_ZOOM_PATH_RE,
   isSafeZoomPath,
   deriveCandidateDirs,

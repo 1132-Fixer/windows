@@ -117,6 +117,17 @@ console.log('zoom-detection-smoke: zoomStatusMessage');
   check(zd.zoomStatusMessage(null) === zd.ZOOM_NOT_FOUND_MESSAGE, 'null install object -> not-found copy, no throw');
 }
 
+console.log('zoom-detection-smoke: launcher path extraction');
+{
+  const script = "$p = ConvertTo-SecureString 'user1' -AsPlainText -Force\r\n$c = New-Object System.Management.Automation.PSCredential('user1', $p)\r\nStart-Process -FilePath 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe' -WorkingDirectory 'C:\\Program Files (x86)\\Zoom\\bin' -Credential $c\r\n";
+  check(zd.extractLauncherZoomPath(script) === 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe', 'extracts baked -FilePath path');
+  check(zd.extractLauncherZoomPath('no launch line here') === null, 'no launch line -> null (cannot judge)');
+  check(zd.extractLauncherZoomPath('') === null, 'empty -> null');
+  check(zd.extractLauncherZoomPath(null) === null, 'null -> null, no throw');
+  const bom = '\ufeff' + script;
+  check(zd.extractLauncherZoomPath(bom) === 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe', 'BOM-prefixed script still parses');
+}
+
 if (failures) {
   console.error(`zoom-detection-smoke: ${failures} FAILURE(S)`);
   process.exit(1);
