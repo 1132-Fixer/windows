@@ -208,13 +208,20 @@ const OPTIONAL_TOOLS = ['quser.exe', 'logoff.exe'];
 
 let mainWindow;
 
+ipcMain.handle('window-minimize', () => mainWindow?.minimize());
+ipcMain.handle('window-maximize', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
     height: 700,
     minWidth: 720,
-    minHeight: 560,
-    backgroundColor: '#0a1020',
+    minHeight: 640,
+    backgroundColor: '#0F1724',
     // NOTE: no alwaysOnTop. The old always-on-top + frameless window had no
     // drag region either, so it sat immovable above everything — including
     // the Zoom window this app launches. That's most of the "frozen/glitchy"

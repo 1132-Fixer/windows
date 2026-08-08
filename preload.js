@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deferUpdate: () => ipcRenderer.invoke('defer-update'),
   openDownloadPage: () => ipcRenderer.invoke('open-download-page'),
   openWebsite: () => ipcRenderer.invoke('open-website'),
+  minimizeWindow: () => ipcRenderer.invoke('window-minimize'),
+  maximizeWindow: () => ipcRenderer.invoke('window-maximize'),
   quitApp: () => ipcRenderer.invoke('quit-app'),
   submitFeedback: (type, text) => ipcRenderer.invoke('submit-feedback', type, text),
   getVersion: () => ipcRenderer.invoke('get-version'),

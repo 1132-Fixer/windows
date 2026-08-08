@@ -807,22 +807,139 @@
       letter-spacing: 0.2px;
     }
 
+    /* Design-system alignment: flat dark surfaces, Windows chrome, shared type/spacing. */
+    :root {
+      --bg: #0F1724;
+      --bg-top: #0F1724;
+      --bg-bottom: #0F1724;
+      --panel: #202B3D;
+      --panel-2: #202B3D;
+      --panel-3: #2A2530;
+      --border: #33415A;
+      --border-strong: #33415A;
+      --text: #F5F7FA;
+      --muted: #9AA5B4;
+      --dim: #9AA5B4;
+      --disabled: #9AA5B4;
+      --accent: #2E78D6;
+      --accent-2: rgba(46, 120, 214, 0.9);
+      --success: #3CCF6E;
+      --warning: #FFB547;
+      --danger: #EF5350;
+      --info: #2E78D6;
+      --r-sm: 10px;
+      --r-md: 16px;
+      --r-lg: 24px;
+      --r-pill: 28px;
+      --s-1: 4px;
+      --s-2: 8px;
+      --s-3: 12px;
+      --s-4: 16px;
+      --s-5: 24px;
+      --s-6: 32px;
+      --s-7: 48px;
+      --s-8: 64px;
+      --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+    }
+    body { background: var(--bg); font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif; }
+    body::before { display: none; }
+    .titlebar {
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex: 0 0 32px;
+      padding-left: var(--s-4);
+      color: var(--muted);
+      font-size: 12px;
+      -webkit-app-region: drag;
+    }
+    .titlebar-name { display: flex; align-items: center; gap: var(--s-2); }
+    .titlebar-name img { width: 16px; height: 16px; object-fit: contain; }
+    .window-controls { display: flex; height: 100%; -webkit-app-region: no-drag; }
+    .window-control {
+      width: 46px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      color: var(--text);
+      background: transparent;
+      border: 0;
+      cursor: pointer;
+      font: inherit;
+      transition: background 150ms ease-out;
+    }
+    .window-control:hover { background: rgba(154, 165, 180, 0.16); }
+    .window-control.close:hover { background: var(--danger); }
+    .window-control svg { width: 10px; height: 10px; stroke: currentColor; }
+    .header { align-items: stretch; padding: var(--s-4) var(--s-5) 0; }
+    .header-top {
+      justify-content: flex-start;
+      margin: 0;
+      padding: var(--s-4);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+    }
+    .logo { flex-direction: row; align-items: center; gap: var(--s-3); }
+    .logo img { width: 48px; height: 48px; }
+    .logo-copy { display: flex; flex-direction: column; gap: var(--s-1); }
+    .logo-title { font-size: 28px; line-height: 34px; font-weight: 700; text-align: left; }
+    .logo-desc { font-size: 12px; line-height: 16px; }
+    .logo-sep, .exit-badge { display: none; }
+    .status-badge { margin-left: auto; font-size: 12px; padding: var(--s-2) var(--s-3); }
+    .main { padding: var(--s-5); gap: var(--s-4); }
+    .view.active { gap: var(--s-4); }
+    .home-intro { padding: var(--s-4); box-shadow: none; line-height: 20px; }
+    .chk-list { gap: 0; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-2) var(--s-4); }
+    .chk-row { padding: var(--s-3) 0; background: transparent; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
+    .chk-row:last-child { border-bottom: 0; }
+    .chk-row[data-status] { border-left: 0; }
+    .chk-label { min-width: 156px; font-size: 13px; line-height: 18px; }
+    .chk-msg { font-size: 14px; line-height: 20px; }
+    .chk-badge { font-size: 12px; line-height: 16px; padding: var(--s-1) var(--s-2); border: 0; }
+    .button-container { justify-content: stretch; margin: 0; gap: var(--s-3); }
+    .btn { min-height: 46px; padding: var(--s-3) var(--s-4); border-radius: var(--r-md); transition: background 150ms ease-out, border-color 150ms ease-out; }
+    .btn:hover:not(:disabled), .btn-primary:hover:not(:disabled) { transform: none; }
+    .btn-primary { flex: 1; }
+    .button-note { text-align: left; font-size: 12px; line-height: 16px; font-weight: 400; }
+    .stage-tracker, .receipt, .file-list { box-shadow: none; border-radius: var(--r-lg); }
+    .file-list { font-family: 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; line-height: 20px; }
+    .file-item { padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; }
+    .footer-content { padding: var(--s-3) var(--s-5) var(--s-4); }
+    .badge { min-height: 36px; border-radius: var(--r-md); }
+    .fb-overlay { background: rgba(15,23,36,0.72); backdrop-filter: none; }
+    .fb-card { background: var(--panel-3); border-radius: var(--r-lg); box-shadow: none; }
+    .fb-title { font-size: 20px; line-height: 26px; font-weight: 700; text-align: left; }
+    .fb-choice, .fb-textarea, .sr-textarea, .fb-sysinfo { background: var(--panel-3); }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    }
+
   </style>
 </head>
 <body>
+  <div class="titlebar" aria-label="Window controls">
+    <span class="titlebar-name"><img src="assets/brand/logo-mark.svg" alt="">1132 Fixer</span>
+    <div class="window-controls">
+      <button class="window-control" id="btnMinimize" aria-label="Minimize window"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1 5.5h8"/></svg></button>
+      <button class="window-control" id="btnMaximize" aria-label="Maximize window"><svg viewBox="0 0 10 10" fill="none" aria-hidden="true"><rect x="1.5" y="1.5" width="7" height="7"/></svg></button>
+      <button class="window-control close" id="btnExit" aria-label="Close window"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="m1 1 8 8M9 1 1 9"/></svg></button>
+    </div>
+  </div>
   <div class="header">
     <div class="header-top">
+      <div class="logo">
+        <img src="assets/logo-transparent.png" alt="">
+        <div class="logo-copy">
+          <span class="logo-title">1132 Fixer</span>
+          <span class="logo-desc">Zoom diagnostic &amp; repair</span>
+        </div>
+      </div>
       <div class="status-badge" id="statusBadge" role="status" aria-live="polite">
         <span class="status-icon" id="statusBadgeIcon" aria-hidden="true">✓</span>
         <span id="statusBadgeText">Ready</span>
       </div>
-      <button class="exit-badge" id="btnExit" aria-label="Exit application">Exit</button>
-    </div>
-    <div class="logo">
-      <img src="assets/logo-transparent.png" alt="">
-      <span class="logo-title">1132 Fixer</span>
-      <div class="logo-sep" aria-hidden="true"></div>
-      <span class="logo-desc">One-click fix for Zoom Error 1132</span>
     </div>
   </div>
 

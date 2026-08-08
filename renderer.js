@@ -676,6 +676,8 @@ ubLater.addEventListener('click', () => {
 // ============================================================
 window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnExit').addEventListener('click', () => window.electronAPI.quitApp());
+  document.getElementById('btnMinimize').addEventListener('click', () => window.electronAPI.minimizeWindow());
+  document.getElementById('btnMaximize').addEventListener('click', () => window.electronAPI.maximizeWindow());
   fixBtn.addEventListener('click', onFixButtonClick);
   shortcutBtn.addEventListener('click', async () => {
     // Direct create — no confirmation round-trip. Logs land in the running
