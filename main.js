@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const https = require('https');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const config = require('./src/main/config');
 
 autoUpdater.autoDownload = true;
@@ -254,6 +254,7 @@ function createWindow() {
     });
     if (choice === 1) {
       fatalDialogShown = true;
+      killActiveChildren();
       app.relaunch();
       app.exit(1);
     }
@@ -330,8 +331,28 @@ app.on('window-all-closed', () => {
 // ============================================================
 let fatalDialogShown = false;
 
+// Fix steps run as child processes (runProcess). Exiting Electron does NOT
+// reliably end them on Windows, and an orphaned fix child mutating accounts/
+// registry while a relaunched instance starts a second fix would mean two
+// concurrent writers on system state. Every fatal exit path kills the tracked
+// child TREE first; the fix is safe to re-run and repairs the interrupted run.
+const activeChildren = new Set();
+function killActiveChildren() {
+  for (const child of activeChildren) {
+    if (!child.pid) continue;
+    try {
+      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 });
+      console.warn(`fatal-path: killed child tree pid=${child.pid}`);
+    } catch (err) {
+      console.warn(`fatal-path: could not kill child pid=${child.pid}: ${err && err.message}`);
+    }
+  }
+  activeChildren.clear();
+}
+
 process.on('uncaughtException', (err) => {
   console.error('FATAL uncaughtException:', (err && err.stack) || err);
+  killActiveChildren(); // before the blocking dialog — never leave a writer running
   if (!fatalDialogShown) {
     fatalDialogShown = true;
     try {
@@ -353,8 +374,10 @@ app.on('render-process-gone', (_event, _webContents, details) => {
   console.error(`FATAL render-process-gone: reason=${details && details.reason} exitCode=${details && details.exitCode}`);
   if (fatalDialogShown) return;
   fatalDialogShown = true;
-  const fixNote = fixInProgress
-    ? '\n\nA fix was running. Run it again after restarting — the fix is safe to repeat and repairs partial runs.'
+  const hadFix = fixInProgress;
+  killActiveChildren(); // before the blocking dialog — never leave a writer running
+  const fixNote = hadFix
+    ? '\n\nA fix was running — it has been stopped. Run it again after restarting; the fix is safe to repeat and repairs partial runs.'
     : '';
   const choice = dialog.showMessageBoxSync({
     type: 'error',
@@ -416,6 +439,7 @@ function runProcess(exe, args, onLine, opts = {}) {
     let lastOutputAt = Date.now();
     const started = Date.now();
     const child = spawn(exe, args, { windowsHide: true });
+    activeChildren.add(child);
     const emit = (buf, kind) => {
       const text = buf.toString();
       if (kind === 'err') stderrBuf += text; else stdoutBuf += text;
@@ -453,6 +477,7 @@ function runProcess(exe, args, onLine, opts = {}) {
     const cleanup = () => {
       if (hbTimer) clearInterval(hbTimer);
       if (killTimer) clearTimeout(killTimer);
+      activeChildren.delete(child);
     };
 
     child.on('error', err => {
