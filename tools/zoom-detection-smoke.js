@@ -99,6 +99,7 @@ console.log('zoom-detection-smoke: zoomStatusMessage');
   check(msg === zd.ZOOM_NOT_FOUND_MESSAGE, 'nothing found -> canonical not-found copy');
   check(/machine-wide Zoom Workplace MSI/.test(msg), 'not-found copy names the machine-wide MSI');
   check(/Check again/.test(msg), 'not-found copy tells the user the next step');
+  check(/zoom\.us\/download/.test(msg), 'not-found copy says WHERE to get the MSI (W8-UX)');
 }
 {
   const per = 'C:\\Users\\alice\\AppData\\Roaming\\Zoom\\bin\\Zoom.exe';
@@ -107,6 +108,7 @@ console.log('zoom-detection-smoke: zoomStatusMessage');
   check(/for your Windows user only/.test(msg), 'per-user-only copy explains the install scope');
   check(/helper account/.test(msg), 'per-user-only copy explains WHY it cannot be used');
   check(/machine-wide Zoom Workplace MSI/.test(msg), 'per-user-only copy gives the remedy');
+  check(/zoom\.us\/download/.test(msg), 'per-user-only copy says WHERE to get the MSI (W8-UX)');
   check(msg !== zd.ZOOM_NOT_FOUND_MESSAGE, 'per-user-only copy differs from generic not-found');
 }
 {

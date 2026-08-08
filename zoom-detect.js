@@ -55,7 +55,8 @@ function extractLauncherZoomPath(scriptText) {
 }
 
 const ZOOM_NOT_FOUND_MESSAGE =
-  'Not found. Install the machine-wide Zoom Workplace MSI (not the per-user installer), then Check again.';
+  'Not found. Install the machine-wide Zoom Workplace MSI (not the per-user installer) — ' +
+  'download it from zoom.us/download under "Zoom Workplace for IT admins" — then Check again.';
 
 // One message for the three detection states, used verbatim by the preflight
 // card, the preflight blocker, and the fix-run error:
@@ -72,7 +73,8 @@ function zoomStatusMessage(install) {
   if (perUserPath) {
     return `Zoom is installed for your Windows user only (${perUserPath}). ` +
       `The fix launches Zoom under its helper account, which can't see per-user installs — ` +
-      `install the machine-wide Zoom Workplace MSI, then Check again.`;
+      `install the machine-wide Zoom Workplace MSI from zoom.us/download ` +
+      `("Zoom Workplace for IT admins"), then Check again.`;
   }
   return ZOOM_NOT_FOUND_MESSAGE;
 }

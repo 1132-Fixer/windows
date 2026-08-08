@@ -21,6 +21,7 @@ const stageTracker    = document.getElementById('stageTracker');
 const receiptPanel    = document.getElementById('receiptPanel');
 const logToggle       = document.getElementById('logToggle');
 const logToggleLabel  = document.getElementById('logToggleLabel');
+const copyErrBtn      = document.getElementById('copyErrBtn');
 
 let isRunning = false;
 let lastReceipt = null;
@@ -229,6 +230,15 @@ let canRunFix = false;
 // the scan already returns.
 const fixDisabledNote = document.getElementById('fixDisabledNote');
 
+// Preflight blockers that already surface as a blocked checklist card —
+// listing both the card label and the blocker message would say the same
+// thing twice. Everything NOT in this set (running_as_target, missing_tool,
+// tool-probe failure) has no card of its own and is named by its message
+// (already user-facing copy) so the disabled note never goes silent (F-W22).
+const CARD_COVERED_BLOCKER_CODES = new Set([
+  'not_elevated', 'zoom_not_found', 'seclogon_disabled', 'seclogon_start_failed'
+]);
+
 function updateFixDisabledNote(blockedLabels) {
   if (!blockedLabels || !blockedLabels.length) {
     fixDisabledNote.hidden = true;
@@ -290,7 +300,11 @@ async function runEnvironmentScan() {
       .map(c => result.cards[c.key])
       .filter(card => card && card.status === 'blocked')
       .map(card => card.label);
-    updateFixDisabledNote(canRunFix ? [] : blockedLabels);
+    // Blockers without a checklist card (F-W22) — name them by message.
+    const nonCardBlockers = (Array.isArray(result.blockers) ? result.blockers : [])
+      .filter(b => b && !CARD_COVERED_BLOCKER_CODES.has(b.code))
+      .map(b => b.message || b.code);
+    updateFixDisabledNote(canRunFix ? [] : blockedLabels.concat(nonCardBlockers));
   } catch (err) {
     checkList.innerHTML = '';
     checkList.appendChild(renderCheckRow('scan', 'Environment scan', 'blocked', scanFailureMessage(err)));
@@ -491,6 +505,7 @@ async function runFix() {
   setStageTracker(true);
   advanceStageTo('prep');
   receiptPanel.classList.remove('visible');
+  copyErrBtn.classList.remove('visible'); // failure-only; re-shown on FIX FAILED
   clearFileList();
   setLogExpanded(false);
   logToggle.classList.add('visible');
@@ -556,6 +571,7 @@ async function runFix() {
       finalizeStages('fail');
       setStatus('error', 'Failed');
       setLogExpanded(true);
+      copyErrBtn.classList.add('visible');
     }
   } catch (err) {
     // The fix IPC (or a renderer helper it calls) threw. Surface it instead
@@ -565,6 +581,7 @@ async function runFix() {
     finalizeStages('fail');
     setStatus('error', 'Failed');
     setLogExpanded(true);
+    copyErrBtn.classList.add('visible');
   } finally {
     // Always release the run lock and re-enable controls — even on a throw.
     isRunning = false;
@@ -576,6 +593,37 @@ async function runFix() {
 
 // friendlyError() and the rest of the user-facing copy live in messages.js
 // (loaded before this script; require()-able by tools/messages-smoke.js).
+
+// ============================================================
+// Copy error details (W8-UX) — failure-only chip next to the log toggle.
+// Reuses the support-report IPC so the copied text is the SANITIZED bundle
+// (SIDs, username, home path, hostname redacted). If the report cannot be
+// built, falls back to the raw visible log lines — text already on screen.
+// ============================================================
+const COPY_ERR_LABEL = 'Copy error details';
+copyErrBtn.addEventListener('click', async () => {
+  copyErrBtn.disabled = true;
+  let text = '';
+  try {
+    const result = await window.electronAPI.supportReport({
+      receipt: lastReceipt,
+      logTail: logBuffer.join('\n'),
+      stage:   lastStageLabel
+    });
+    text = (result && result.markdown) || '';
+  } catch (_) { /* fall through to the visible log lines */ }
+  if (!text) text = logBuffer.join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    copyErrBtn.textContent = 'Copied — paste into your support message';
+  } catch (_) {
+    copyErrBtn.textContent = 'Auto-copy blocked — use Feedback & Report instead';
+  }
+  setTimeout(() => {
+    copyErrBtn.textContent = COPY_ERR_LABEL;
+    copyErrBtn.disabled = false;
+  }, 2600);
+});
 
 // ============================================================
 // Shortcut helper — direct create, no prompt.
