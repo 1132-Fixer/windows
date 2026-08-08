@@ -9,6 +9,21 @@
 // visible so support can identify the incident. Never show a bare code,
 // enum, 'unknown', or raw exception text as the whole message.
 
+// Environment checklist structure — row keys, fallback labels, display
+// order, and the §9 Doctor group headers. Lives here (not renderer.js) so
+// tools/messages-smoke.js can test the shipped mapping; renderer.js reads
+// it as a global, the same way it reads the rest of this catalog.
+const CHECK_ORDER = [
+  { key: 'admin',       label: 'Administrator',       group: 'App' },
+  { key: 'zoom',        label: 'Zoom Workplace',      group: 'Zoom' },
+  { key: 'helperUser',  label: 'Helper account',      group: 'Helper account' },
+  { key: 'seclogon',    label: 'Secondary Logon',     group: 'Helper account' },
+  { key: 'camPolicy',   label: 'Camera policy',       group: 'Privacy policies' },
+  { key: 'micPolicy',   label: 'Microphone policy',   group: 'Privacy policies' },
+  { key: 'hku',         label: 'User registry hive',  group: 'Privacy policies' },
+  { key: 'frameServer', label: 'Camera Frame Server', group: 'Camera service' }
+];
+
 const FRIENDLY_ERRORS = {
   not_elevated:             'Process is not running as Administrator. Re-launch the app elevated (right-click → Run as administrator).',
   running_as_target:        'You are currently signed in as user1. Sign in as a different administrator and try again.',
@@ -121,6 +136,7 @@ function reportBuildFailure(err) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    CHECK_ORDER,
     FRIENDLY_ERRORS, friendlyError, unexpectedFixFailure, scanFailureMessage,
     shortcutFailureMessage, HKU_STATES, FRAME_SERVER_STATES, describeHku,
     describeFrameServer, receiptStatusFor, describeUnrecognized,

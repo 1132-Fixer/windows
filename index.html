@@ -276,7 +276,11 @@
     .chk-row[data-status="pending"]    { border-left-color: var(--border-strong); opacity: 0.65; }
     .chk-icon { width: 18px; height: 18px; flex-shrink: 0; color: var(--dim); }
     .chk-label { font-weight: 600; color: var(--text); min-width: 160px; }
-    .chk-msg { color: var(--muted); flex: 1; line-height: 1.4; }
+    /* min-width:0 lets the flex item shrink below its longest token;
+       overflow-wrap breaks unbroken tokens (registry paths like
+       HKLM\...\AppPrivacy have no natural break points) instead of
+       pushing the row wider than the window at 720px / 200% text. */
+    .chk-msg { color: var(--muted); flex: 1; line-height: 1.4; min-width: 0; overflow-wrap: anywhere; }
     .chk-badge {
       font-size: 11px;
       font-weight: 600;
@@ -296,6 +300,17 @@
     .chk-row[data-status="warning"]    .chk-badge { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-bd); }
     .chk-row[data-status="blocked"]    .chk-badge { color: var(--danger); background: var(--danger-bg); border-color: var(--danger-bd); }
     .chk-row[data-status="pending"]    .chk-badge { color: var(--muted); background: var(--panel-3); border-color: var(--border); }
+    /* §9 Doctor grouping — small dim label rows between checklist sections.
+       Visual-only (aria-hidden): each row's own label + badge stays the
+       screen-reader story, so the list keeps valid listitem-only children. */
+    .chk-group {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      color: var(--dim);
+      padding: var(--s-3) 0 var(--s-1);
+    }
     /* "Fix now is disabled by: …" line under the checklist (#66). */
     .fix-disabled-note {
       margin-top: 8px;
@@ -304,6 +319,27 @@
       color: var(--danger);
     }
     .fix-disabled-note[hidden] { display: none; }
+    /* "Check again" — explicit manual rescan next to the checklist it
+       re-runs (the throttled focus-rescan stays). Same chip recipe as
+       .log-toggle; 36px floor matches the footer badges' target size. */
+    .chk-rescan {
+      align-self: flex-start;
+      display: inline-flex;
+      align-items: center;
+      min-height: 36px;
+      padding: 8px var(--s-3);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      color: var(--muted);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .chk-rescan:hover { color: var(--text); border-color: var(--border-strong); }
 
     /* ============================================================
        STAGE TRACKER — Preparing → Verifying → Consent → Launch → Verify
@@ -979,6 +1015,9 @@
       <!-- One-line answer to "why is Fix now greyed out?" (#66) — filled by
            the scan with the labels of the blocked checklist rows. -->
       <div class="fix-disabled-note" id="fixDisabledNote" role="status" hidden></div>
+      <!-- Manual rescan (§9) — lives inside homeView so it is only visible
+           there; runEnvironmentScan() self-guards against overlap. -->
+      <button class="chk-rescan" id="rescanBtn" type="button">Check again</button>
     </section>
 
     <!-- ============================================================
@@ -1002,7 +1041,7 @@
       <div class="log-region">
         <div class="log-actions">
           <button class="log-toggle" id="logToggle" type="button" aria-expanded="true" aria-controls="fileList">
-            <span class="chev">▶</span><span id="logToggleLabel">Hide Advanced Details</span>
+            <span class="chev" aria-hidden="true">▶</span><span id="logToggleLabel">Hide Advanced Details</span>
           </button>
           <!-- Failure-only (W8-UX): copies the sanitized support report — or,
                if that fails, the visible log lines — to the clipboard. -->

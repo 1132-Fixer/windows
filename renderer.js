@@ -208,17 +208,9 @@ function iconForStatus(status, klass) {
 
 // ============================================================
 // Environment checklist — runs automatically, no clicks required.
+// CHECK_ORDER (keys, labels, §9 group headers) lives in messages.js
+// so the mapping is covered by tools/messages-smoke.js.
 // ============================================================
-const CHECK_ORDER = [
-  { key: 'admin',       label: 'Administrator' },
-  { key: 'zoom',        label: 'Zoom Workplace' },
-  { key: 'helperUser',  label: 'Helper account' },
-  { key: 'seclogon',    label: 'Secondary Logon' },
-  { key: 'camPolicy',   label: 'Camera policy' },
-  { key: 'micPolicy',   label: 'Microphone policy' },
-  { key: 'hku',         label: 'User registry hive' },
-  { key: 'frameServer', label: 'Camera Frame Server' }
-];
 
 let scanInProgress = false;
 let lastScanAt = 0;
@@ -252,6 +244,16 @@ function updateFixDisabledNote(blockedLabels) {
   fixBtn.title = text;
 }
 
+// §9 group label row — visual-only (aria-hidden) so the role="list"
+// container keeps listitem-only children for screen readers.
+function renderGroupHeader(name) {
+  const el = document.createElement('div');
+  el.className = 'chk-group';
+  el.setAttribute('aria-hidden', 'true');
+  el.textContent = name;
+  return el;
+}
+
 function renderCheckRow(key, label, status, message) {
   const row = document.createElement('div');
   row.className = 'chk-row';
@@ -275,16 +277,22 @@ async function runEnvironmentScan() {
 
   // Show all rows immediately as pending so the screen never sits empty.
   checkList.innerHTML = '';
+  let pendingGroup = null;
   for (const c of CHECK_ORDER) {
+    if (c.group !== pendingGroup) { checkList.appendChild(renderGroupHeader(c.group)); pendingGroup = c.group; }
     checkList.appendChild(renderCheckRow(c.key, c.label, 'pending', 'Checking…'));
   }
 
   try {
     const result = await window.electronAPI.preflightScan();
     checkList.innerHTML = '';
+    let lastGroup = null;
     for (const c of CHECK_ORDER) {
       const card = result.cards[c.key];
       if (!card) continue;
+      // Header only when a row of the group actually renders — a missing
+      // card must not leave an orphaned group label.
+      if (c.group !== lastGroup) { checkList.appendChild(renderGroupHeader(c.group)); lastGroup = c.group; }
       checkList.appendChild(renderCheckRow(c.key, card.label || c.label, card.status, card.message || ''));
     }
     canRunFix = !!result.canRunFix;
@@ -766,6 +774,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('btnMinimize').addEventListener('click', () => window.electronAPI.minimizeWindow());
   document.getElementById('btnMaximize').addEventListener('click', () => window.electronAPI.maximizeWindow());
   fixBtn.addEventListener('click', onFixButtonClick);
+  // Explicit manual rescan (§9) — same guarded entry point as the
+  // focus-rescan; runEnvironmentScan() no-ops while a scan or fix runs.
+  document.getElementById('rescanBtn').addEventListener('click', () => runEnvironmentScan());
   shortcutBtn.addEventListener('click', async () => {
     // Direct create — no confirmation round-trip. Logs land in the running
     // view's log region; flip to it so the result is visible.
