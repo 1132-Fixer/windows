@@ -6,6 +6,7 @@ const os = require('os');
 const https = require('https');
 const { spawn } = require('child_process');
 const config = require('./src/main/config');
+const zoomDetect = require('./zoom-detect');
 
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
@@ -190,6 +191,9 @@ ipcMain.handle('open-website', () => {
 
 const FIX_USER = 'user1';
 const FIX_PASS = 'user1';
+// Default machine-wide install candidates only — the actual install is
+// resolved by resolveZoomInstall() (W1-DETECT: 32-bit MSI, custom install
+// dirs, and per-user installs all exist in the field).
 const ZOOM_PATH = 'C:\\Program Files\\Zoom\\bin\\Zoom.exe';
 // Working directory for Start-Process -Credential. Without an explicit
 // -WorkingDirectory the new process inherits the caller's cwd, which for
@@ -197,6 +201,83 @@ const ZOOM_PATH = 'C:\\Program Files\\Zoom\\bin\\Zoom.exe';
 // "The directory name is invalid" (Win32 ERROR_DIRECTORY / 267).
 // The Zoom install dir is the natural cwd and is readable by all local users.
 const ZOOM_DIR  = 'C:\\Program Files\\Zoom\\bin';
+const ZOOM_X86_PATH = 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe';
+
+// ============================================================
+// Machine-wide Zoom install resolution (W1-DETECT).
+// The fix launches Zoom under the user1 helper account, so ONLY machine-wide
+// installs are launchable. A per-user install (%APPDATA%\Zoom of the CURRENT
+// user) is probed purely so preflight can explain the situation instead of a
+// generic "not found" — it is never accepted as the launch path.
+// Pure parsing/validation/copy lives in zoom-detect.js.
+// ============================================================
+// Resolved once per preflight scan and reused by the fix run and shortcut
+// creation (both re-resolve if the cache is empty or the exe vanished).
+let zoomInstall = null; // { path, dir, source, perUserPath }
+
+async function resolveZoomInstall() {
+  const perUserCandidate = process.env.APPDATA
+    ? path.join(process.env.APPDATA, 'Zoom', 'bin', 'Zoom.exe')
+    : '';
+  const perUserPath = perUserCandidate && fs.existsSync(perUserCandidate)
+    ? perUserCandidate
+    : null;
+
+  // Every resolved path is later interpolated into single-quoted PowerShell
+  // (Zoom launch + helper-shortcut launcher), so validate here — the single
+  // choke point — and treat an unsafe path as not found.
+  const found = (p, dir, source) => {
+    if (!zoomDetect.isSafeZoomPath(p)) {
+      console.warn(`[zoom-detect] rejected unsafe Zoom path (${source}): ${p}`);
+      return null;
+    }
+    return { path: p, dir, source, perUserPath };
+  };
+
+  const defaults = [
+    { path: ZOOM_PATH, dir: ZOOM_DIR, source: 'default-x64' },
+    { path: ZOOM_X86_PATH, dir: path.dirname(ZOOM_X86_PATH), source: 'default-x86' }
+  ];
+  for (const c of defaults) {
+    if (fs.existsSync(c.path)) {
+      const hit = found(c.path, c.dir, c.source);
+      if (hit) return hit;
+    }
+  }
+
+  // Registry fallback: a machine-wide MSI installed to a custom dir still
+  // registers an HKLM uninstall key (64- or 32-bit view). One bounded PS
+  // probe; any failure or timeout = no hit.
+  const probe = await runPSCapture(`
+    $keys = @(
+      'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+      'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+    )
+    foreach ($k in $keys) {
+      foreach ($i in (Get-ItemProperty -Path $k -EA SilentlyContinue)) {
+        $dn = [string]$i.DisplayName
+        if ($dn -like 'Zoom*' -and $dn -notlike 'Zoom Outlook*' -and $dn -notlike 'Zoom Plugin*') {
+          if ($i.InstallLocation) { Write-Output ('InstallLocation=' + $i.InstallLocation) }
+          if ($i.DisplayIcon)     { Write-Output ('DisplayIcon=' + $i.DisplayIcon) }
+        }
+      }
+    }
+  `, { timeoutMs: 10000 });
+  if (!probe.timedOut && probe.code === 0) {
+    for (const dir of zoomDetect.deriveCandidateDirs(probe.stdout)) {
+      for (const exe of [path.join(dir, 'bin', 'Zoom.exe'), path.join(dir, 'Zoom.exe')]) {
+        if (fs.existsSync(exe)) {
+          const hit = found(exe, path.dirname(exe), 'registry');
+          if (hit) return hit;
+        }
+      }
+    }
+  } else {
+    console.warn(`[zoom-detect] registry probe ${probe.timedOut ? 'timed out' : `failed (exit ${probe.code})`} — treating as no registry hit`);
+  }
+
+  return { path: null, dir: null, source: null, perUserPath };
+}
 
 // Tools that must exist on PATH; the destructive flow can't run without them.
 const REQUIRED_TOOLS = [
@@ -524,12 +605,15 @@ async function preflightCheck() {
     });
   }
 
-  // Zoom executable
-  info.zoomPath = ZOOM_PATH;
-  if (!fs.existsSync(ZOOM_PATH)) {
+  // Zoom executable — machine-wide only. resolveZoomInstall() also spots a
+  // per-user install so the blocker explains it instead of a bare "not found".
+  zoomInstall = await resolveZoomInstall();
+  info.zoomInstall = zoomInstall;
+  info.zoomPath = zoomInstall.path;
+  if (!zoomInstall.path) {
     blockers.push({
       code: 'zoom_not_found',
-      message: `Zoom Workplace not found at ${ZOOM_PATH}. Install the machine-wide MSI.`
+      message: zoomDetect.zoomStatusMessage(zoomInstall)
     });
   }
 
@@ -970,7 +1054,7 @@ async function runFixFlow(event) {
     const ok = pre.info.tools && pre.info.tools[t];
     send(`  ${ok ? 'OK ' : 'opt '}  ${t}${ok ? '' : ' (optional)'}`, 'out');
   }
-  send(`  Zoom present: ${pre.info.zoomPath} -> ${fs.existsSync(pre.info.zoomPath) ? 'YES' : 'NO'}`, 'out');
+  send(`  Zoom present: ${pre.info.zoomPath || '(no machine-wide install)'} -> ${pre.info.zoomPath && fs.existsSync(pre.info.zoomPath) ? 'YES' : 'NO'}`, 'out');
   send(`  Firstrun script: ${pre.info.firstRunScript} -> ${fs.existsSync(pre.info.firstRunScript) ? 'YES' : 'NO'}`, 'out');
   send(`  Interactive user: ${pre.info.interactiveUser}`, 'out');
   for (const w of pre.warnings) {
@@ -1240,16 +1324,21 @@ async function runFixFlow(event) {
   // STEP 5: Launch Zoom once as user1 so Windows creates the profile.
   // ============================================================
   send(`[5/8] Launching Zoom as '${FIX_USER}'...`, 'header');
-  // Re-check zoom in case it disappeared between preflight and now.
-  if (!fs.existsSync(ZOOM_PATH)) {
-    send(`ERROR: Zoom not found at ${ZOOM_PATH}.`, 'err');
+  // Re-check zoom in case it disappeared between preflight and now
+  // (re-resolve — an uninstall/reinstall may also have MOVED it).
+  let zi = zoomInstall;
+  if (!zi || !zi.path || !fs.existsSync(zi.path)) {
+    zi = zoomInstall = await resolveZoomInstall();
+  }
+  if (!zi.path) {
+    send(`ERROR: ${zoomDetect.zoomStatusMessage(zi)}`, 'err');
     return { success: false, error: 'zoom_not_found', warnings };
   }
   const launchPs = `
     $pw = ConvertTo-SecureString '${FIX_PASS}' -AsPlainText -Force
     $cred = New-Object System.Management.Automation.PSCredential('${FIX_USER}', $pw)
     try {
-      Start-Process -FilePath '${ZOOM_PATH}' -WorkingDirectory '${ZOOM_DIR}' -Credential $cred -EA Stop
+      Start-Process -FilePath '${zi.path}' -WorkingDirectory '${zi.dir}' -Credential $cred -EA Stop
       Write-Host '  Zoom launched as ${FIX_USER}.'
     } catch {
       Write-Host ('  Launch failed: ' + $_.Exception.Message)
@@ -1814,6 +1903,16 @@ async function findExistingShortcuts() {
 // IPC: create-shortcut (current user's desktop, one-click re-launch)
 // ============================================================
 ipcMain.handle('create-shortcut', async () => {
+  // The shortcut launches Zoom as user1, so it needs the machine-wide
+  // install path — reuse the preflight resolution, re-resolve if stale.
+  let zi = zoomInstall;
+  if (!zi || !zi.path || !fs.existsSync(zi.path)) {
+    zi = zoomInstall = await resolveZoomInstall();
+  }
+  if (!zi.path) {
+    return { success: false, error: zoomDetect.zoomStatusMessage(zi) };
+  }
+
   const desktop = await getCanonicalUserDesktop();
   const shortcutPath = path.join(desktop, SHORTCUT_FILENAME);
   const iconPath = getHelperIconPath();
@@ -1825,7 +1924,7 @@ ipcMain.handle('create-shortcut', async () => {
     const scriptContent =
       `$p = ConvertTo-SecureString '${FIX_PASS}' -AsPlainText -Force\r\n` +
       `$c = New-Object System.Management.Automation.PSCredential('${FIX_USER}', $p)\r\n` +
-      `Start-Process -FilePath '${ZOOM_PATH}' -WorkingDirectory '${ZOOM_DIR}' -Credential $c\r\n`;
+      `Start-Process -FilePath '${zi.path}' -WorkingDirectory '${zi.dir}' -Credential $c\r\n`;
     fs.writeFileSync(scriptPath, scriptContent, 'utf8');
   } catch (err) {
     return { success: false, error: `Failed to write launcher script: ${err.message}` };
@@ -2068,9 +2167,13 @@ ipcMain.handle('preflight-scan', async () => {
     : { status: 'blocked', label: 'Administrator', message: 'Not elevated. Close and re-launch with Run as administrator.' };
 
   // --- Zoom ---------------------------------------------------
-  cards.zoom = fs.existsSync(ZOOM_PATH)
-    ? { status: 'ready', label: 'Zoom Workplace', message: ZOOM_PATH }
-    : { status: 'blocked', label: 'Zoom Workplace', message: `Not found at ${ZOOM_PATH}. Install the machine-wide MSI.` };
+  // preflightCheck() above refreshed zoomInstall; zoomStatusMessage covers
+  // found (path + variant suffix), per-user-only, and not-found copy.
+  cards.zoom = {
+    status: pre.info.zoomInstall.path ? 'ready' : 'blocked',
+    label: 'Zoom Workplace',
+    message: zoomDetect.zoomStatusMessage(pre.info.zoomInstall)
+  };
 
   let probeData = {};
   let probeFailed = false;
