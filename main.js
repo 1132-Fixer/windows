@@ -1695,6 +1695,25 @@ async function runFixFlow(event) {
     send('  Common cause: password complexity policy rejected the password.', 'err');
     return { success: false, error: 'create_user_failed', warnings, steps };
   }
+  // Invalidate-at-rotation: the OLD password just died with the recreate, so
+  // any blob/launcher from a previous run is unusable from this instant.
+  // Delete both NOW — if this run exits before the seal block republishes
+  // them (launch failure, DPAPI failure, launcher-write failure), what
+  // remains is clean ABSENCE, which shortcut-exists / create-shortcut
+  // already report honestly ("press FIX NOW"), instead of a stale pair the
+  // UI would trust. Publish happens only after a confirmed launch (seal
+  // block below). Deletion failure never fails the run.
+  for (const stale of [CRED_BLOB_PATH(), LAUNCHER_SCRIPT_PATH()]) {
+    try {
+      fs.rmSync(stale, { force: true });
+    } catch (err) {
+      console.warn(`[fix] could not remove stale ${path.basename(stale)}: ${err.message}`);
+      warnings.push({
+        code: 'stale_credential_cleanup_failed',
+        message: `Could not remove the previous shortcut sign-in file (${path.basename(stale)}): ${err.message}. The desktop shortcut may not work until the next successful fix run.`
+      });
+    }
+  }
   send(`  Account '${FIX_USER}' created as a standard user (no administrator rights — it only runs Zoom).`, 'out');
   step('create-account', `Create fresh ${FIX_USER} account`, 'ok', '');
 
@@ -1800,6 +1819,12 @@ async function runFixFlow(event) {
   // ============================================================
   const credDir = path.dirname(LAUNCHER_SCRIPT_PATH());
   const blobPath = CRED_BLOB_PATH();
+  // Publish order (invalidate-at-rotation's other half): the blob is sealed
+  // to a .tmp sibling and renamed over the final name only once complete,
+  // and the launcher is written LAST \u2014 so a launcher on disk always implies
+  // its blob exists. Absence (from the rotation delete above) is the only
+  // other reachable state; the UI paths handle both honestly.
+  const blobTmp = blobPath + '.tmp';
   const psq = s => String(s).replace(/'/g, "''");
   // Password + paths ride inside a tmp script file (runPSCapture), never on
   // a command line. Paths are ''-escaped; the password alphabet cannot
@@ -1811,24 +1836,30 @@ async function runFixFlow(event) {
       $pt = [Text.Encoding]::UTF8.GetBytes('${fixPass}')
       $sealed = [Security.Cryptography.ProtectedData]::Protect($pt, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
       [Array]::Clear($pt, 0, $pt.Length)
-      [IO.File]::WriteAllBytes('${psq(blobPath)}', $sealed)
+      [IO.File]::WriteAllBytes('${psq(blobTmp)}', $sealed)
       Write-Output 'SEALED'
     } catch {
       Write-Output ('SEALFAIL: ' + $_.Exception.Message)
     }
   `);
-  let sealedOk = (seal.stdout || '').includes('SEALED') && fs.existsSync(blobPath);
+  let sealedOk = (seal.stdout || '').includes('SEALED') && fs.existsSync(blobTmp);
   if (sealedOk) {
     try {
+      fs.renameSync(blobTmp, blobPath);
       // BOM for the same PS 5.1 legacy-encoding reason as runPSScriptLaunchCapture.
       fs.writeFileSync(LAUNCHER_SCRIPT_PATH(),
         '\ufeff' + helperCred.launcherScriptContent(FIX_USER, zi.path, zi.dir), 'utf8');
       send('  Helper sign-in stored encrypted (Windows DPAPI) for the desktop shortcut.', 'out');
     } catch (err) {
+      // If the rename landed but the launcher write failed, the fresh blob
+      // stays \u2014 the post-fix recreate path (shortcut-exists sees no
+      // launcher -> invalid -> create-shortcut) rewrites the launcher from
+      // it. Only a never-renamed .tmp is swept below.
       sealedOk = false;
     }
   }
   if (!sealedOk) {
+    try { fs.rmSync(blobTmp, { force: true }); } catch (_) { /* best-effort sweep */ }
     const sealFailLine = (seal.stdout || '').split(/\r?\n/)
       .map(s => s.trim()).find(l => l.startsWith('SEALFAIL: ')) || '';
     send('  WARNING: could not store the helper sign-in encrypted — the one-click desktop shortcut will not work until a fix run can store it.', 'err');
@@ -2510,8 +2541,14 @@ async function findExistingShortcuts() {
   // moved (x64 default -> x86/custom reinstall). When we know the current
   // machine-wide path, a mismatched baked path marks the shortcut invalid so
   // the post-fix flow rewrites the launcher. Unknown states never invalidate.
+  // A MISSING launcher, however, is a known-dead shortcut, not an unknown:
+  // the fix deletes launcher+blob the moment the helper password rotates
+  // (invalidate-at-rotation) and republishes only after a confirmed launch,
+  // so absence means a run ended between those points — the .lnk points at
+  // nothing and must read invalid so the recreate path repairs it.
+  const launcherPresent = fs.existsSync(expectedScript);
   let launcherStale = false;
-  if (zoomInstall && zoomInstall.path && fs.existsSync(expectedScript)) {
+  if (zoomInstall && zoomInstall.path && launcherPresent) {
     try {
       const baked = zoomDetect.extractLauncherZoomPath(fs.readFileSync(expectedScript, 'utf8'));
       if (baked && baked.toLowerCase() !== zoomInstall.path.toLowerCase()) {
@@ -2528,7 +2565,7 @@ async function findExistingShortcuts() {
       kind: loc.kind,
       path: loc.lnk,
       // null = inspection failed; treat conservatively as "unknown but present".
-      valid: info ? (shortcutMatchesCurrentApp(info, expectedScript) && !launcherStale) : null,
+      valid: info ? (shortcutMatchesCurrentApp(info, expectedScript) && !launcherStale && launcherPresent) : null,
       target: info ? info.target : null,
       arguments: info ? info.arguments : null
     };
