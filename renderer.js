@@ -268,7 +268,10 @@ function renderCheckRow(key, label, status, message) {
 }
 
 async function runEnvironmentScan() {
-  if (scanInProgress || isRunning) return;
+  // fixCountdownTimer guard: a rescan during the 3s Fix-now countdown would
+  // disable the button (killing its advertised click-to-cancel) and could
+  // overlap the scan with the fix it is about to start.
+  if (scanInProgress || isRunning || fixCountdownTimer) return;
   scanInProgress = true;
   lastScanAt = Date.now();
   setStatus('scanning', 'Checking');
