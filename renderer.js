@@ -212,6 +212,7 @@ const CHECK_ORDER = [
   { key: 'admin',       label: 'Administrator' },
   { key: 'zoom',        label: 'Zoom Workplace' },
   { key: 'helperUser',  label: 'Helper account' },
+  { key: 'seclogon',    label: 'Secondary Logon' },
   { key: 'camPolicy',   label: 'Camera policy' },
   { key: 'micPolicy',   label: 'Microphone policy' },
   { key: 'hku',         label: 'User registry hive' },
@@ -221,6 +222,25 @@ const CHECK_ORDER = [
 let scanInProgress = false;
 let lastScanAt = 0;
 let canRunFix = false;
+
+// Fix-button gating transparency (#66): a disabled "Fix now" never says WHY
+// on its own, so name the blocking checklist row(s) in one line under the
+// checklist and mirror it in the button's tooltip. Pure display over data
+// the scan already returns.
+const fixDisabledNote = document.getElementById('fixDisabledNote');
+
+function updateFixDisabledNote(blockedLabels) {
+  if (!blockedLabels || !blockedLabels.length) {
+    fixDisabledNote.hidden = true;
+    fixDisabledNote.textContent = '';
+    fixBtn.title = '';
+    return;
+  }
+  const text = `Fix now is disabled by: ${blockedLabels.join(', ')}`;
+  fixDisabledNote.textContent = text;
+  fixDisabledNote.hidden = false;
+  fixBtn.title = text;
+}
 
 function renderCheckRow(key, label, status, message) {
   const row = document.createElement('div');
@@ -241,6 +261,7 @@ async function runEnvironmentScan() {
   lastScanAt = Date.now();
   setStatus('scanning', 'Checking');
   fixBtn.disabled = true;
+  updateFixDisabledNote([]);
 
   // Show all rows immediately as pending so the screen never sits empty.
   checkList.innerHTML = '';
@@ -265,12 +286,18 @@ async function runEnvironmentScan() {
       setStatus('done', 'Ready');
     }
     fixBtn.disabled = !canRunFix;
+    const blockedLabels = CHECK_ORDER
+      .map(c => result.cards[c.key])
+      .filter(card => card && card.status === 'blocked')
+      .map(card => card.label);
+    updateFixDisabledNote(canRunFix ? [] : blockedLabels);
   } catch (err) {
     checkList.innerHTML = '';
     checkList.appendChild(renderCheckRow('scan', 'Environment scan', 'blocked', scanFailureMessage(err)));
     canRunFix = false;
     setStatus('error', 'Error');
     fixBtn.disabled = true;
+    updateFixDisabledNote(['Environment scan']);
   } finally {
     scanInProgress = false;
   }
@@ -720,6 +747,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     checkList.appendChild(renderCheckRow('admin', 'Administrator', 'blocked',
       'Not running as Administrator. Close this app, right-click it → Run as administrator.'));
     fixBtn.disabled = true;
+    updateFixDisabledNote(['Administrator']);
     shortcutBtn.disabled = true;
     setStatus('error', 'Not Admin');
     return;
