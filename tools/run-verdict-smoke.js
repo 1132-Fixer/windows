@@ -95,6 +95,32 @@ console.log('run-verdict-smoke: warn steps never partial');
   check(v.header === 'FIX COMPLETE (with 1 warning(s))', 'warn-outcome run keeps warning headline');
 }
 
+console.log('run-verdict-smoke: consent outcome (P1-A — HKU is the toggle Zoom reads)');
+{
+  check(rv.consentOutcome('OK', false, 'YES') === 'OK', 'per-user readback Allow -> OK');
+  check(rv.consentOutcome('UNVERIFIED', false, 'YES') === 'OK', 'readback upgrades marker-lost UNVERIFIED to OK');
+  check(rv.consentOutcome('OK', false, 'NO') === 'UNVERIFIED', 'HKLM-only OK with per-user value absent -> UNVERIFIED (never OK)');
+  check(rv.consentOutcome('OK', false, '') === 'UNVERIFIED', 'HKLM-only OK, hive unreadable, no per-user write proof -> UNVERIFIED');
+  check(rv.consentOutcome('OK', true, '') === 'OK', 'verified per-user write stands when hive is unreadable at verify');
+  check(rv.consentOutcome('UNVERIFIED', true, '') === 'OK', 'verified per-user write also rescues a marker-degraded status');
+  check(rv.consentOutcome('UNVERIFIED', false, '') === 'UNVERIFIED', 'nothing verified anywhere -> UNVERIFIED');
+  check(rv.consentOutcome('POLICY-BLOCKED', true, 'YES') === 'POLICY-BLOCKED', 'policy block always stands');
+  const v = rv.computeRunVerdict(
+    [{ id: 'consent', label: 'Grant camera and microphone access', outcome: 'fail',
+       detail: 'camera=UNVERIFIED, microphone=OK — sign in as user1, open Settings > Privacy & security > Camera (and Microphone), and toggle access on manually.' }],
+    [], []);
+  check(v.partial === true, 'unconfirmed consent -> partial run');
+}
+
+console.log('run-verdict-smoke: ProfSvc refresh marker (P1-B)');
+{
+  check(rv.profsvcRefreshResult('  ProfSvc restarted via Restart-Service.\nPROFSVC_REFRESH=OK\n') === 'OK', 'OK marker parsed');
+  check(rv.profsvcRefreshResult('  Restart-Service failed: denied\n  HKLM flushed.\nPROFSVC_REFRESH=FAILED') === 'FAILED', 'FAILED marker parsed (self-swallowed script exit 0)');
+  check(rv.profsvcRefreshResult('  WARNING: could not inspect ProfSvc: boom\n  HKLM flushed.') === '', 'marker absent -> empty (caller treats as failure)');
+  check(rv.profsvcRefreshResult('') === '' && rv.profsvcRefreshResult(null) === '', 'empty/null output tolerated');
+  check(rv.profsvcRefreshResult('PROFSVC_REFRESH=MAYBE') === '', 'unknown marker value never reads as OK');
+}
+
 if (failures) {
   console.error(`run-verdict-smoke: ${failures} FAILURE(S)`);
   process.exit(1);

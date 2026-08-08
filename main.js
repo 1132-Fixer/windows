@@ -7,7 +7,7 @@ const https = require('https');
 const { spawn, spawnSync } = require('child_process');
 const config = require('./src/main/config');
 const zoomDetect = require('./zoom-detect');
-const { computeRunVerdict, deletionOutcome } = require('./run-verdict');
+const { computeRunVerdict, deletionOutcome, consentOutcome, profsvcRefreshResult } = require('./run-verdict');
 
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
@@ -1424,12 +1424,19 @@ async function runFixFlow(event) {
   // ============================================================
   send('[3b/8] Flushing User Profile Service hive cache...', 'header');
   const flush = await runPSScript(`
+    # PROFSVC_REFRESH is a structured success marker (P1-B): OK is emitted
+    # only when a refresh path VERIFIABLY succeeded — Restart-Service without
+    # throwing, the sc.exe fallback observed back to Running, or the service
+    # was not running (no retained hive handles to drop). Exit code alone
+    # cannot carry this: the catches below deliberately keep the script alive.
+    $refreshOk = $false
     try {
       $svc = Get-Service ProfSvc -EA Stop
       if ($svc.Status -eq 'Running') {
         try {
           Restart-Service ProfSvc -Force -EA Stop
           Write-Host '  ProfSvc restarted via Restart-Service.'
+          $refreshOk = $true
         } catch {
           Write-Host ('  Restart-Service failed: ' + $_.Exception.Message)
           $stop  = & sc.exe stop  ProfSvc 2>&1
@@ -1437,9 +1444,18 @@ async function runFixFlow(event) {
           $start = & sc.exe start ProfSvc 2>&1
           Write-Host ('  sc.exe stop output:  ' + (($stop  | Out-String).Trim()))
           Write-Host ('  sc.exe start output: ' + (($start | Out-String).Trim()))
+          # sc.exe start reports START_PENDING immediately; poll the actual
+          # service state for evidence the fallback worked.
+          $deadline = [DateTime]::UtcNow.AddSeconds(5)
+          do {
+            try { if ((Get-Service ProfSvc -EA Stop).Status -eq 'Running') { $refreshOk = $true; break } } catch {}
+            Start-Sleep -Milliseconds 500
+          } while ([DateTime]::UtcNow -lt $deadline)
         }
       } else {
         Write-Host ('  ProfSvc status=' + $svc.Status + '; nothing to flush.')
+        # Not running = no retained hive handles to drop; goal already met.
+        $refreshOk = $true
       }
     } catch {
       Write-Host ('  WARNING: could not inspect ProfSvc: ' + $_.Exception.Message)
@@ -1448,13 +1464,20 @@ async function runFixFlow(event) {
     # reads fresh ProfileList data, not cached.
     & reg.exe flush HKLM 2>&1 | Out-Null
     Write-Host '  HKLM flushed.'
+    Write-Output ($(if ($refreshOk) { 'PROFSVC_REFRESH=OK' } else { 'PROFSVC_REFRESH=FAILED' }))
   `, send, { heartbeatMs: 5000, heartbeatLabel: 'profsvc flush', timeoutMs: 60000 });
-  // A ProfSvc flush that timed out or died used to vanish into a green run
-  // (#90). When a previous user1 existed the flush is what prevents the
-  // TEMP-profile relapse, so its failure invalidates the fix's purpose.
-  if (flush.timedOut || flush.code !== 0) {
+  // A ProfSvc flush that timed out, died, or self-swallowed its failure used
+  // to vanish into a green run (#90). When a previous user1 existed the flush
+  // is what prevents the TEMP-profile relapse, so its failure invalidates the
+  // fix's purpose. The structured marker catches the self-swallow case where
+  // the script exits 0 despite both restart paths failing (P1-B).
+  const flushMarker = profsvcRefreshResult(flush.stdout);
+  if (flush.timedOut || flush.code !== 0 || flushMarker !== 'OK') {
     const profsvcNeeded = accountExisted || profileFolderExisted;
-    const why = flush.timedOut ? 'timed out after 60 seconds' : `did not finish cleanly (exit ${flush.code})`;
+    const why = flush.timedOut          ? 'timed out after 60 seconds'
+      : flush.code !== 0                ? `did not finish cleanly (exit ${flush.code})`
+      : flushMarker === 'FAILED'        ? 'could not restart the service'
+      :                                   'did not confirm success';
     const detail = `The Windows profile service refresh ${why}. Windows may give ${FIX_USER} a temporary profile — if Error 1132 comes back, reboot once and run the fix again.`;
     send(`  WARNING: ${detail}`, 'err');
     step('profsvc-flush', 'Refresh Windows profile service', profsvcNeeded ? 'fail' : 'warn', detail);
@@ -1792,6 +1815,10 @@ async function runFixFlow(event) {
            (camStatus === 'OK' && micStatus === 'OK') ? 'out' : 'err');
       if (camStatus === 'UNVERIFIED') warnings.push({ code: 'camera_consent_unverified', message: 'Camera consent write did not verify. user1 may need to enable Camera access manually in Settings > Privacy & security > Camera, OR the FrameServer service may be Disabled.' });
       if (micStatus === 'UNVERIFIED') warnings.push({ code: 'mic_consent_unverified',    message: 'Microphone consent write did not verify. user1 may need to enable Microphone access manually in Settings > Privacy & security > Microphone.' });
+      // Per-user write confirmations (the script's own post-write readback of
+      // the HKU values) — carried for the verification pass: when the hive is
+      // unloaded at verify time these are the only per-user evidence (P1-A).
+      var consentUserWrite = { cam: consentResult.cam_user === true, mic: consentResult.mic_user === true };
       // Stash receipt fields on the response so renderer can show a clean
       // outcome panel rather than parsing logs.
       // (Exposed below in the final return alongside warnings.)
@@ -2003,17 +2030,15 @@ async function runFixFlow(event) {
   const receipt = (typeof consentReceipt !== 'undefined') ? consentReceipt : {
     camera: 'UNVERIFIED', microphone: 'UNVERIFIED', hkuPath: 'skipped', frameServer: ''
   };
-  // Readback is authoritative where it could see the values. It can upgrade
-  // a write-time UNVERIFIED to OK (writes landed but the script died before
-  // reporting) and downgrade an unbacked OK; POLICY-BLOCKED always stands.
-  const finalizeConsent = (writeTime, userRead, hklmRead) => {
-    if (writeTime === 'POLICY-BLOCKED') return writeTime;
-    if (userRead === 'YES' || hklmRead === 'YES') return 'OK';
-    if (vprobeFailed) return writeTime; // probe broke: keep the write-time status
-    return 'UNVERIFIED';
-  };
-  receipt.camera     = finalizeConsent(receipt.camera,     vget('VERIFY_USER_webcam'),     vget('VERIFY_HKLM_webcam'));
-  receipt.microphone = finalizeConsent(receipt.microphone, vget('VERIFY_USER_microphone'), vget('VERIFY_HKLM_microphone'));
+  // Readback is authoritative where it could see the values, and OK requires
+  // PER-USER evidence: the HKU value is the toggle Zoom actually reads
+  // (grant-media-consent.ps1) — the HKLM device-wide floor alone never yields
+  // OK (P1-A). POLICY-BLOCKED always stands. VERIFY_HKLM_* stays in the
+  // captured output as diagnostics only. Logic lives in run-verdict.js so
+  // tools/run-verdict-smoke.js exercises the exact shipped semantics.
+  const userWrite = (typeof consentUserWrite !== 'undefined') ? consentUserWrite : { cam: false, mic: false };
+  receipt.camera     = consentOutcome(receipt.camera,     userWrite.cam, vget('VERIFY_USER_webcam'));
+  receipt.microphone = consentOutcome(receipt.microphone, userWrite.mic, vget('VERIFY_USER_microphone'));
   if (!vprobeFailed) {
     send(`  Consent readback: camera=${receipt.camera}, microphone=${receipt.microphone}`,
       (receipt.camera !== 'UNVERIFIED' && receipt.microphone !== 'UNVERIFIED') ? 'out' : 'err');
@@ -2023,7 +2048,7 @@ async function runFixFlow(event) {
   step('consent', 'Grant camera and microphone access',
     consentBad ? 'fail' : (consentPolicy ? 'warn' : 'ok'),
     consentBad
-      ? `camera=${receipt.camera}, microphone=${receipt.microphone} — if Zoom cannot see them, sign in as ${FIX_USER} and enable Camera and Microphone for desktop apps under Settings > Privacy & security.`
+      ? `camera=${receipt.camera}, microphone=${receipt.microphone} — sign in as ${FIX_USER}, open Settings > Privacy & security > Camera (and Microphone), and toggle access on manually.`
       : `camera=${receipt.camera}, microphone=${receipt.microphone}`);
 
   // FrameServer readback refines the receipt; never downgrades an honest
