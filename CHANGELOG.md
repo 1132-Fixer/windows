@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **The `user1` helper account is no longer an administrator.** Every
+  privileged repair step already runs under 1132 Fixer's own elevated
+  process, and `user1` only runs Zoom — so the account is now created as a
+  standard user. If an earlier version left `user1` in the Administrators
+  group, the next fix run removes those rights automatically ("Removed
+  administrator rights the helper account no longer needs"). Zoom updates
+  are unaffected: they install machine-wide from your normal (primary)
+  account.
+
 ## [5.4.0] - 2026-07-17 — reliable updates, working uninstall, one-click flow
 
 Addresses the field reports of freezes, glitches, updates that never complete,

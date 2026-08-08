@@ -966,8 +966,10 @@ async function resolveSID(username) {
 }
 
 // ============================================================
-// Verify user is in local Administrators (S-1-5-32-544) by SID.
+// Check whether user is in local Administrators (S-1-5-32-544) by SID.
 // Falls back to `net localgroup` parsing. Returns { inGroup, method, raw }.
+// user1 must NOT be a member (SEC-A6) — the fix flow uses this to detect
+// a legacy admin user1 and to confirm the membership removal took.
 // ============================================================
 async function verifyAdminMembership(username) {
   // SID translation happens INSIDE the same PS process — a separate
@@ -1442,6 +1444,40 @@ async function runFixFlow(event) {
     send(`  Resolved SID: ${preDeleteSid || '(none)'}`, 'out');
   }
 
+  // SECURITY (SEC-A6): the helper account is no longer an administrator —
+  // every privileged repair step runs under this app's own elevated token,
+  // and user1 only runs Zoom. A user1 left in Administrators by an older
+  // version gets the membership removed here, BEFORE the delete→recreate,
+  // so even a failed delete leaves no admin rights behind. Removal is
+  // SID-first with a net-localgroup fallback (same technique the old
+  // add-path used); a failed removal warns — never fails the run — because
+  // the recreate in STEP 4 builds a standard account either way.
+  if (accountExisted) {
+    const legacyAdmin = await verifyAdminMembership(FIX_USER);
+    if (legacyAdmin.inGroup) {
+      send(`  '${FIX_USER}' is in the Administrators group — removing rights it no longer needs...`, 'out');
+      await runPSScript(`
+        try { Remove-LocalGroupMember -SID 'S-1-5-32-544' -Member '${FIX_USER}' -EA Stop; Write-Host '  Remove-LocalGroupMember OK.' }
+        catch {
+          Write-Host ('  Remove-LocalGroupMember failed: ' + $_.Exception.Message)
+          $r = net localgroup Administrators '${FIX_USER}' /delete 2>&1
+          Write-Host ('  net localgroup fallback: ' + ($r | Out-String).Trim())
+        }
+      `, send, { heartbeatMs: 5000, heartbeatLabel: 'admin-rights removal', timeoutMs: 60000 });
+      const adminRecheck = await verifyAdminMembership(FIX_USER);
+      if (!adminRecheck.inGroup) {
+        send('  Removed administrator rights the helper account no longer needs.', 'out');
+        step('remove-admin-rights', `Remove administrator rights from ${FIX_USER}`, 'ok',
+          'Removed administrator rights the helper account no longer needs');
+      } else {
+        send(`  WARNING: could not remove '${FIX_USER}' from the Administrators group.`, 'err');
+        send('  The account is deleted and rebuilt as a standard user below either way.', 'err');
+        step('remove-admin-rights', `Remove administrator rights from ${FIX_USER}`, 'warn',
+          `'${FIX_USER}' was still visible in the Administrators group after the removal attempt — the rebuilt account is created without admin rights regardless`);
+      }
+    }
+  }
+
   if (accountExisted) {
     const del = await runProcess('net.exe', ['user', FIX_USER, '/delete'], send,
       { heartbeatMs: 5000, heartbeatLabel: 'net user /delete', timeoutMs: 60000 });
@@ -1630,10 +1666,13 @@ async function runFixFlow(event) {
   }
 
   // ============================================================
-  // STEP 4: Recreate the account, add to Administrators,
-  //         and VERIFY membership (no silent best-effort).
+  // STEP 4: Recreate the account as a STANDARD user — no
+  //         Administrators membership (SEC-A6). Every privileged
+  //         repair step runs under this app's own elevated token;
+  //         user1 only runs Zoom, which needs no admin. Zoom updates
+  //         are machine-wide MSI updates done by the primary user.
   // ============================================================
-  send(`[4/8] Creating account '${FIX_USER}' and verifying admin membership...`, 'header');
+  send(`[4/8] Creating account '${FIX_USER}' as a standard user...`, 'header');
   const create = await runProcess('net.exe',
     ['user', FIX_USER, FIX_PASS, '/add'], send);
   if (create.code !== 0) {
@@ -1641,31 +1680,8 @@ async function runFixFlow(event) {
     send('  Common cause: password complexity policy rejected the password.', 'err');
     return { success: false, error: 'create_user_failed', warnings, steps };
   }
-  send(`  Account '${FIX_USER}' created.`, 'out');
-
-  // First try Add-LocalGroupMember by well-known SID; fallback to net localgroup.
-  await runPSScript(`
-    try { Add-LocalGroupMember -SID 'S-1-5-32-544' -Member '${FIX_USER}' -EA Stop; Write-Host '  Add-LocalGroupMember OK.' }
-    catch {
-      Write-Host ('  Add-LocalGroupMember failed: ' + $_.Exception.Message)
-      $r = net localgroup administrators '${FIX_USER}' /add 2>&1
-      Write-Host ('  net localgroup fallback: ' + ($r | Out-String).Trim())
-    }
-  `, send);
-
-  // Verify
-  const adminCheck = await verifyAdminMembership(FIX_USER);
-  send(`  user1 in Administrators: ${adminCheck.inGroup ? 'YES' : 'NO'} (check method: ${adminCheck.method})`, adminCheck.inGroup ? 'out' : 'err');
-  if (!adminCheck.inGroup) {
-    warnings.push({
-      code: 'admin_add_unverified',
-      message: `'${FIX_USER}' is not visible in the local Administrators group. Zoom will still launch, but future Zoom updates or other admin actions performed by user1 may fail. Open lusrmgr.msc and add user1 to Administrators manually if needed.`
-    });
-    send('  WARNING: user1 admin membership could not be verified.', 'err');
-    send('  Zoom will still launch as user1, but admin-only actions later may fail.', 'err');
-  }
-  step('create-account', `Create fresh ${FIX_USER} account`, adminCheck.inGroup ? 'ok' : 'warn',
-    adminCheck.inGroup ? '' : `${FIX_USER} admin membership could not be verified`);
+  send(`  Account '${FIX_USER}' created as a standard user (no administrator rights — it only runs Zoom).`, 'out');
+  step('create-account', `Create fresh ${FIX_USER} account`, 'ok', '');
 
   // ============================================================
   // STEP 5: Launch Zoom once as user1 so Windows creates the profile.
@@ -2671,9 +2687,11 @@ ipcMain.handle('preflight-scan', async () => {
       $out['hku_loaded'] = $false
       $out['hku_sid']    = ''
     }
-    # Helper-account health: existence + Administrators membership (SID-based,
-    # same technique as verifyAdminMembership — Get-LocalGroupMember chokes on
-    # orphaned SIDs, so fall back to net localgroup parsing).
+    # Helper-account health: existence, plus Administrators membership to
+    # detect a LEGACY admin user1 that FIX NOW must strip (SEC-A6 — membership
+    # is no longer created and no longer healthy). SID-based, same technique
+    # as verifyAdminMembership — Get-LocalGroupMember chokes on orphaned SIDs,
+    # so fall back to net localgroup parsing.
     $out['user1_exists'] = $false
     try { if (Get-LocalUser -Name '${FIX_USER}' -EA SilentlyContinue) { $out['user1_exists'] = $true } } catch {}
     $out['user1_admin'] = $false
@@ -2735,8 +2753,10 @@ ipcMain.handle('preflight-scan', async () => {
     : 'PowerShell probe failed — could not read this value. FIX NOW can still run; the checklist re-scans when you come back to this window.';
 
   // --- Helper user (user1) ------------------------------------
-  // A user1 that exists WITH a profile AND admin rights is the normal,
-  // healthy state after a successful fix — report it green. Amber is
+  // A user1 that exists WITH a profile as a STANDARD user is the normal,
+  // healthy state after a successful fix — report it green. The account
+  // is no longer added to Administrators (SEC-A6): a legacy user1 that
+  // still has admin rights is repairable — FIX NOW removes them. Amber is
   // reserved for states FIX NOW actually has to repair.
   const helperProfileDir = `C:\\Users\\${FIX_USER}`;
   const helperProfileExists = fs.existsSync(helperProfileDir);
@@ -2747,10 +2767,10 @@ ipcMain.handle('preflight-scan', async () => {
     const helperAdmin  = !!probeData.user1_admin;
     if (!helperExists && !helperProfileExists) {
       cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' will be created on FIX NOW.` };
-    } else if (helperExists && helperProfileExists && helperAdmin) {
-      cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' is set up — admin rights and profile present. FIX NOW rebuilds it fresh.` };
+    } else if (helperExists && helperAdmin) {
+      cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' has administrator rights it no longer needs — FIX NOW will remove them.` };
     } else if (helperExists && helperProfileExists) {
-      cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' exists but is not in Administrators. FIX NOW will repair it.` };
+      cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' is set up — standard account, profile present. FIX NOW rebuilds it fresh.` };
     } else if (helperExists) {
       cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' account exists but no profile yet. FIX NOW will reset.` };
     } else {

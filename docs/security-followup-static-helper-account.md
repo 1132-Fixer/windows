@@ -1,6 +1,11 @@
 # P0: Replace static `user1` / `user1` helper-account credential model
 
 **Status:** proposed — not opened as a GitHub issue yet.
+**Update 2026-08-08:** item 2 (local admin by default) is RESOLVED — `user1`
+is now created as a **standard user**, and a fix run strips the
+Administrators membership from a legacy admin `user1`
+(W5-SECURITY-DESIGN Option B / SEC-A6). The static-password items
+(1, 4, 5) remain open.
 **Severity:** P0 (security architecture)
 **Tracking suggestion:** open at
 `https://github.com/PrimeUpYourLife/1132-Fixer-Windows/issues/new` once
