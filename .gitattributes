@@ -1,0 +1,27 @@
+# Botify Network 1132 Fixer — line-ending policy.
+# Repo blobs are normalized to LF. Windows-native script types are checked out
+# as CRLF on disk so they run correctly under cmd.exe / PowerShell, without
+# appearing as modified in git status.
+
+# Default: auto-detect text, store LF in the repo, check out LF on disk.
+* text=auto eol=lf
+
+# Windows scripts: store LF in repo, check out CRLF on disk.
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+
+# Explicit binaries — never normalize.
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.webp     binary
+*.ico      binary
+*.exe      binary
+*.dll      binary
+*.blockmap binary
+*.zip      binary
+*.node     binary
