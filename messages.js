@@ -18,7 +18,7 @@ const FRIENDLY_ERRORS = {
   delete_user_failed:       'Could not delete the existing user1 account. Make sure the app is running as Administrator.',
   delete_profile_failed:    'The user1 profile folder could not be removed — a file handle is still open. Reboot once and run the fix again.',
   delete_profile_timeout:   'Deleting the old user1 profile folder timed out — a program is still holding it open (Zoom, antivirus, or the search indexer are the usual suspects). Reboot once, then run the fix again.',
-  zoom_not_found:           'Zoom Workplace was not found at C:\\Program Files\\Zoom\\bin\\Zoom.exe. Install the machine-wide Zoom Workplace MSI (not the per-user installer), then try again.',
+  zoom_not_found:           'No machine-wide Zoom Workplace install was found on this PC. Install the machine-wide Zoom Workplace MSI (not the per-user installer) — download it from zoom.us/download under "Zoom Workplace for IT admins" — then try again.',
   launch_failed:            'Zoom could not be launched as user1. Common causes: Secondary Logon service disabled, password policy mismatch, or user1 lacks permission to start C:\\Program Files\\Zoom\\bin\\Zoom.exe. Re-run as Administrator or check the log above for the exact PowerShell exception.',
   seclogon_disabled:        'The Secondary Logon service is disabled. It is required to launch processes under another local account. Run this from an admin shell and retry:  sc.exe config seclogon start= demand  &  sc.exe start seclogon',
   profile_not_materialized: 'The user1 profile did not appear in time. The account was created and Zoom was launched, but the per-user profile setup was skipped.',

@@ -34,6 +34,11 @@ for (const code of Object.keys(m.FRIENDLY_ERRORS)) {
   const msg = m.friendlyError(null);
   check(msg.length > 20 && !/unknown error/i.test(msg), 'null code gets guidance, not "Unknown error."');
 }
+{
+  const msg = m.FRIENDLY_ERRORS.zoom_not_found;
+  check(/zoom\.us\/download/.test(msg), 'zoom_not_found says WHERE to download the MSI (W8-UX)');
+  check(!/C:\\Program Files\\Zoom/.test(msg), 'zoom_not_found no longer hardcodes the x64 path the W1 resolver looks beyond');
+}
 
 console.log('messages-smoke: fix/scan/shortcut failures');
 {

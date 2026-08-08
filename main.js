@@ -587,13 +587,27 @@ function runProcess(exe, args, onLine, opts = {}) {
   });
 }
 
+// Output-side twin of the UTF-8 BOM fix below (W6-SHORTCUT, #93 #111).
+// Windows PowerShell 5.1 writes REDIRECTED stdout/stderr in the legacy OEM
+// codepage while runProcess decodes the pipes as UTF-8, so any non-ASCII
+// character in captured output arrived corrupted \u2014 most damagingly the
+// OneDrive-redirected, localized Desktop path from
+// [Environment]::GetFolderPath('Desktop') ("\u00c1rea de Trabalho", "\u0420\u0430\u0431\u043e\u0447\u0438\u0439
+// \u0441\u0442\u043e\u043b", accented user names), which then fed shortcut creation a folder
+// that does not exist. Forcing the console output encoding to UTF-8 as the
+// script's first statement makes PS emit what Node decodes. try/catch: the
+// setter needs a console handle; if it ever fails we degrade to today's
+// behavior instead of breaking the script.
+const PS_UTF8_OUTPUT_PREAMBLE =
+  'try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}\r\n';
+
 async function runPSScript(scriptContent, onLine, opts = {}) {
   const tmp = path.join(os.tmpdir(),
     `fixer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
   // UTF-8 BOM: Windows PowerShell 5.1 reads BOM-less files in the legacy
   // system codepage, which corrupts non-ASCII install paths interpolated
   // into the script (review P2 on custom Unicode Zoom dirs).
-  await fs.promises.writeFile(tmp, '\ufeff' + scriptContent, 'utf8');
+  await fs.promises.writeFile(tmp, '\ufeff' + PS_UTF8_OUTPUT_PREAMBLE + scriptContent, 'utf8');
   try {
     return await runProcess('powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp],
@@ -628,8 +642,10 @@ async function runPSScriptLaunchCapture(scriptContent) {
     `fixer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
   // UTF-8 BOM: Windows PowerShell 5.1 reads BOM-less files in the legacy
   // system codepage, which corrupts non-ASCII install paths interpolated
-  // into the script (review P2 on custom Unicode Zoom dirs).
-  await fs.promises.writeFile(tmp, '\ufeff' + scriptContent, 'utf8');
+  // into the script (review P2 on custom Unicode Zoom dirs). The output
+  // preamble keeps the captured launch-failure lines (localized exception
+  // text) decodable \u2014 same OEM-vs-UTF-8 mismatch as runPSScript.
+  await fs.promises.writeFile(tmp, '\ufeff' + PS_UTF8_OUTPUT_PREAMBLE + scriptContent, 'utf8');
   return new Promise((resolve) => {
     let stdoutBuf = '';
     let settled = false;
@@ -732,7 +748,7 @@ async function preflightCheck() {
   if (!elevated) {
     blockers.push({
       code: 'not_elevated',
-      message: 'Process is not running as Administrator. UAC-elevate and retry.'
+      message: 'Not running as Administrator. Close the app, right-click its icon and choose "Run as administrator", then try again.'
     });
   }
 
@@ -742,7 +758,7 @@ async function preflightCheck() {
   if (interactiveUser === FIX_USER.toLowerCase()) {
     blockers.push({
       code: 'running_as_target',
-      message: `You are signed in AS '${FIX_USER}'. Sign in as a different administrator.`
+      message: `You are signed in as '${FIX_USER}' — the fix rebuilds this very account. Sign out, sign in as a different administrator account, then run 1132 Fixer again.`
     });
   }
 
@@ -780,8 +796,8 @@ async function preflightCheck() {
     blockers.push({
       code: probe.timedOut ? 'tool_probe_timeout' : 'tool_probe_failed',
       message: probe.timedOut
-        ? 'PowerShell probe timed out after 20s — Windows tool inventory unavailable. Antivirus or Defender may be blocking powershell.exe.'
-        : 'PowerShell probe failed — could not verify Windows tools. Treating powershell.exe as unavailable.'
+        ? 'PowerShell probe timed out after 20s — Windows tool inventory unavailable. Antivirus or Defender may be blocking powershell.exe. Add 1132 Fixer to your antivirus exclusions (or pause its script shield), then reopen the app to re-check.'
+        : 'PowerShell probe failed — could not verify Windows tools. Treating powershell.exe as unavailable. Restart the app once; if this repeats, check that Windows PowerShell is installed and not blocked by AppLocker or antivirus, then re-check.'
     });
     presence = {};
     for (const t of REQUIRED_TOOLS) presence[t] = false;
@@ -797,7 +813,7 @@ async function preflightCheck() {
     if (!presence[t]) {
       blockers.push({
         code: 'missing_tool',
-        message: `Required Windows tool not on PATH: ${t}`
+        message: `Required Windows tool not on PATH: ${t}. It ships with Windows — an aggressive cleanup tool or a broken PATH removed it. Restore ${t} (or repair PATH under System Properties > Environment Variables), then reopen the app to re-check.`
       });
     }
   }
@@ -2434,6 +2450,13 @@ ipcMain.handle('create-shortcut', async () => {
   }
 
   const desktop = await getCanonicalUserDesktop();
+  // The canonical Desktop exists by definition, but the homedir fallback
+  // (used when the PS resolution fails) can point at a classic
+  // %USERPROFILE%\Desktop that OneDrive redirection has removed —
+  // WScript.Shell Save() then throws file-not-found (#93 #111). Creating
+  // the folder is harmless when it already exists; if this fails, the PS
+  // step below reports the real error non-fatally as before.
+  try { fs.mkdirSync(desktop, { recursive: true }); } catch (_) { /* Save() will report */ }
   const shortcutPath = path.join(desktop, SHORTCUT_FILENAME);
   const iconPath = getHelperIconPath();
 
@@ -2685,7 +2708,7 @@ ipcMain.handle('preflight-scan', async () => {
   // --- Admin --------------------------------------------------
   cards.admin = pre.info.elevated
     ? { status: 'ready', label: 'Administrator', message: 'Running elevated.' }
-    : { status: 'blocked', label: 'Administrator', message: 'Not elevated. Close and re-launch with Run as administrator.' };
+    : { status: 'blocked', label: 'Administrator', message: 'Not running as Administrator. Close the app, right-click its icon and choose "Run as administrator".' };
 
   // --- Zoom ---------------------------------------------------
   // preflightCheck() above refreshed zoomInstall; zoomStatusMessage covers
@@ -2708,8 +2731,8 @@ ipcMain.handle('preflight-scan', async () => {
     }
   }
   const probeFailMsg = probe.timedOut
-    ? 'Probe timed out after 20s — Windows Defender or another AV may be holding PowerShell. FIX NOW can still run, but skip this check first.'
-    : 'PowerShell probe failed — could not read this value. FIX NOW can still run.';
+    ? 'Probe timed out after 20s — Windows Defender or another AV may be holding PowerShell. FIX NOW can still run. To clear this, add 1132 Fixer to your antivirus exclusions; the checklist re-scans when you come back to this window.'
+    : 'PowerShell probe failed — could not read this value. FIX NOW can still run; the checklist re-scans when you come back to this window.';
 
   // --- Helper user (user1) ------------------------------------
   // A user1 that exists WITH a profile AND admin rights is the normal,
@@ -2775,17 +2798,17 @@ ipcMain.handle('preflight-scan', async () => {
     }
   }
 
-  const policyCard = (label, val) => {
+  const policyCard = (label, val, valueName) => {
     if (probeFailed) return { status: 'warning', label, message: probeFailMsg };
     // val: 0 = Force Allow, 1 = User in control, 2 = Force Deny, -1 = no policy
-    if (val === 2) return { status: 'blocked',   label, message: `Blocked by Windows organization/privacy policy (Force Deny). 1132 Fixer cannot override this.` };
+    if (val === 2) return { status: 'blocked',   label, message: `Blocked by Windows policy (Force Deny) — 1132 Fixer cannot override it. If IT manages this PC, ask them to allow app access. On a personal PC, run from an admin shell: reg.exe delete "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\AppPrivacy" /v ${valueName} /f — then come back to re-check.` };
     if (val === 0) return { status: 'ready',     label, message: 'Allowed by policy (Force Allow).' };
     if (val === 1) return { status: 'ready',     label, message: 'Under user control (no Force Deny).' };
     if (val === -1) return { status: 'ready',    label, message: 'No restrictive policy detected.' };
     return { status: 'warning', label, message: 'Could not read policy registry.' };
   };
-  cards.camPolicy = policyCard('Camera policy',     probeData.cam_policy);
-  cards.micPolicy = policyCard('Microphone policy', probeData.mic_policy);
+  cards.camPolicy = policyCard('Camera policy',     probeData.cam_policy, 'LetAppsAccessCamera');
+  cards.micPolicy = policyCard('Microphone policy', probeData.mic_policy, 'LetAppsAccessMicrophone');
 
   // FrameServer
   if (probeFailed) {
@@ -2794,7 +2817,7 @@ ipcMain.handle('preflight-scan', async () => {
     const fsStatus = probeData.fs_status;
     const fsStart  = probeData.fs_starttype;
     if (fsStatus === 'MISSING') {
-      cards.frameServer = { status: 'blocked', label: 'Camera Frame Server', message: 'Service not present on this Windows build — cameras will not enumerate.' };
+      cards.frameServer = { status: 'blocked', label: 'Camera Frame Server', message: 'Service not present on this Windows build — cameras will not enumerate. This usually means a Windows N edition without the Media Feature Pack: install it via Settings > Apps > Optional features > "Media Feature Pack", restart Windows, then come back.' };
     } else if (fsStart === 'Disabled') {
       cards.frameServer = { status: 'repairable', label: 'Camera Frame Server', message: 'Disabled. FIX NOW will set it to Manual so cameras can enumerate.' };
     } else if (fsStatus === 'Running' || fsStart === 'Manual' || fsStart === 'Automatic') {
@@ -2821,17 +2844,20 @@ ipcMain.handle('preflight-scan', async () => {
   // App version
   cards.version = { status: 'ready', label: 'App version', message: `1132 Fixer v${app.getVersion()}` };
 
-  // Roll up overall readiness for renderer convenience.
+  // Roll up overall readiness for renderer convenience. Preflight blockers
+  // count even when no card carries them (running_as_target, missing_tool,
+  // tool-probe failure) — otherwise the Fix button sits enabled while
+  // run-fix would refuse at [0/8] anyway (F-W22).
   const statuses = Object.values(cards).map(c => c.status);
   let overall = 'ready';
-  if (statuses.includes('blocked'))           overall = 'blocked';
+  if (statuses.includes('blocked') || pre.blockers.length) overall = 'blocked';
   else if (statuses.includes('repairable'))   overall = 'repairable';
   else if (statuses.includes('warning'))      overall = 'warning';
 
   return {
     cards,
     overall,
-    canRunFix: !statuses.includes('blocked'),
+    canRunFix: !statuses.includes('blocked') && pre.blockers.length === 0,
     blockers: pre.blockers,
     warnings: pre.warnings,
     info: pre.info
