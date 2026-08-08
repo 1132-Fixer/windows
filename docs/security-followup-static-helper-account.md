@@ -4,8 +4,16 @@
 **Update 2026-08-08:** item 2 (local admin by default) is RESOLVED — `user1`
 is now created as a **standard user**, and a fix run strips the
 Administrators membership from a legacy admin `user1`
-(W5-SECURITY-DESIGN Option B / SEC-A6). The static-password items
-(1, 4, 5) remain open.
+(W5-SECURITY-DESIGN Option B / SEC-A6).
+**Update 2026-08-08 (later):** items 1, 4 and 5 are RESOLVED
+(W5-SECURITY-DESIGN Option A): every fix run now mints a fresh CSPRNG
+password (`helper-credential.js`), seals it with DPAPI **CurrentUser** into
+`%APPDATA%\1132 Fixer\helper-credential.bin`, and the desktop-shortcut
+launcher unseals that blob at click time — no static password, no plaintext
+at rest, no credential in README/source. DPAPI-unavailable machines soft-fail
+to a `dpapi_seal_failed` warning (the fix still completes; #76 recovery
+path). Item 3 (cleanup / "Remove helper account" action + explicit
+account-status display) remains open as the separable follow-up.
 **Severity:** P0 (security architecture)
 **Tracking suggestion:** open at
 `https://github.com/PrimeUpYourLife/1132-Fixer-Windows/issues/new` once
@@ -46,24 +54,29 @@ it creates several real security problems:
 
 A future release must:
 
-- [ ] Generate a per-install random password (≥ 20 chars, mixed) at
-      first run and persist it via DPAPI (`ProtectedData`) or the
-      Windows Credential Manager (`cmdkey` / `wincred` API), never in
-      plain text.
-- [ ] Prefer a **standard user** account unless admin membership is
-      strictly required. Default to non-admin and surface the trade-off
-      to the user with a checkbox.
-- [ ] If admin is required only during initial profile materialization,
+- [x] Generate a per-run random password (24 chars, all four classes) at
+      fix time and persist it via DPAPI (`ProtectedData`, CurrentUser),
+      never in plain text. *(Done — `helper-credential.js` +
+      `helper-credential.bin`; rotation is free because the fix
+      recreates the account every run.)*
+- [x] Prefer a **standard user** account unless admin membership is
+      strictly required. *(Done — created standard, legacy admin
+      membership stripped; no checkbox needed, admin was never
+      required.)*
+- [x] If admin is required only during initial profile materialization,
       **drop the admin membership after the first Zoom launch succeeds**.
+      *(Moot — the account is never admin at all.)*
 - [ ] Provide an in-app **Remove helper account** action that disables
       the account, optionally removes the profile, and revokes the
       stored credential.
 - [ ] Display in the app exactly which local account was created or
       modified (current behavior is implicit) and its admin / non-admin
       status.
-- [ ] Stop documenting the password in README.md.
-- [ ] Stop hard-coding `'user1'` as both username and password in
-      [main.js:39-40](../main.js:39).
+- [x] Stop documenting the password in README.md. *(Done — README now
+      documents the random-per-run, DPAPI-sealed model.)*
+- [x] Stop hard-coding `'user1'` as both username and password.
+      *(Done — the username remains the `FIX_USER` constant; the
+      password is minted per run and never a constant.)*
 
 ## Out of scope for this issue
 
