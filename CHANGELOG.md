@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.6.0] - 2026-08-08 — finds your Zoom, tells the truth, and locks the helper account down
+
+The largest support-driven release yet: every one of the top reported failure
+classes from the last four months is addressed, and the helper account no
+longer carries a static password or administrator rights.
+
 ### Security
 - **The helper account password is now random for every fix run and stored
   encrypted (Windows DPAPI) — never in plain text.** Each FIX NOW mints a
@@ -26,6 +32,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   administrator rights the helper account no longer needs"). Zoom updates
   are unaffected: they install machine-wide from your normal (primary)
   account.
+
+### Fixed
+- **"Zoom not found" when Zoom is clearly installed.** Detection now finds
+  32-bit and custom-location machine-wide installs (registry lookup), and a
+  per-user-only Zoom install gets a real explanation — why the fix can't use
+  it and exactly what to install instead — rather than a generic "not found".
+  (The most-reported problem: 16 support reports.)
+- **"It says it ran fine but I still get the error."** The fix now verifies
+  its own outcomes: camera/microphone consent is read back from the registry
+  (the per-user value Zoom actually reads is now authoritative), partial data
+  clears are counted ("deleted N of M"), service-refresh failures surface,
+  and Zoom is confirmed actually running as the helper account. A run with
+  unverified outcomes says **FIX COMPLETE — NEEDS ATTENTION** with next steps
+  instead of a false green.
+- **Zoom sometimes never launched after a green run.** The Secondary Logon
+  service is now a hard pre-check that 1132 Fixer starts for you when it can,
+  and real launch errors reach the log instead of a guess list.
+- **Mid-fix freezes ("My Music cycling over and over").** Profile cleanup no
+  longer follows Windows' looping profile junctions; long steps show
+  heartbeat progress and time out safely instead of hanging forever.
+- **Shortcut creation failed on OneDrive-redirected or non-English
+  desktops.** Resolved paths survive Windows' legacy text encoding now; the
+  desktop folder is created when redirection removed it.
+- **Errors you can act on.** Every blocked pre-check now names a concrete
+  next step (including the exact command or download where one exists), a
+  failed fix offers **Copy error details** (sanitized), raw internal codes
+  no longer appear anywhere, and the app explains itself when the Fix button
+  is disabled.
+- **No more silent deaths.** A crashed or frozen window now explains what
+  happened and how to recover, and an interrupted fix's background steps are
+  stopped so they can never keep changing the system behind your back.
+
+### Changed
+- The environment checklist is grouped (App · Zoom · Helper account ·
+  Privacy policies · Camera service) with an explicit **Check again** button,
+  keyboard focus is visible everywhere, and animations honor Windows'
+  reduced-motion setting.
 
 ## [5.4.0] - 2026-07-17 — reliable updates, working uninstall, one-click flow
 
