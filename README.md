@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Releases/releases/latest"><strong>Download Latest Release</strong></a>
+  <a href="https://github.com/PrimeUpYourLife/1132-Fixer-Windows/releases/latest"><strong>Download Latest Release</strong></a>
   &nbsp;•&nbsp;
   <a href="https://1132-fixer.xyz/"><strong>Visit Website</strong></a>
 </p>
@@ -82,7 +82,7 @@ Password: random — a fresh one is generated on every fix run
 
 ## Install and use
 
-1. Download the latest [Setup or Portable build](https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Releases/releases/latest).
+1. Download the latest [Setup or Portable build](https://github.com/PrimeUpYourLife/1132-Fixer-Windows/releases/latest).
 2. Open **1132 Fixer**.
 3. Read the safety note.
 4. Press **Fix now**.
@@ -150,20 +150,19 @@ npm install --package-lock-only
 
 ### Publish a release
 
-Push a `v*` tag. `.github/workflows/release.yml` builds Setup and Portable files, makes checksums, and publishes to `PrimeUpYourLife/1132-Fixer-Windows-Releases`.
+Push a `v*` tag. `.github/workflows/release.yml` builds Setup and Portable files, makes checksums, and publishes to this repository's GitHub Releases using the workflow's built-in `GITHUB_TOKEN`.
 
 Keep these names in the right place:
 
 | Name | Where it belongs |
 |---|---|
-| `RELEASES_PAT` | GitHub Actions secret |
 | `FEEDBACK_PROXY_URL` | GitHub Actions variable |
 | `GH_ISSUES_TOKEN` | Railway service only |
 | `CSC_LINK` / `CSC_KEY_PASSWORD` | Optional signing secrets |
 
 Never place a token in app code or a packaged config file. Public `.exe` files can be unpacked and read.
 
-The old `1132-Fixer-Windows-Releases` repo must stay online until existing app updates and download links have moved safely.
+The former `1132-Fixer-Windows-Releases` repo was deleted on 2026-08-09. Installed apps up to v5.5.1 poll its feed and can no longer auto-update — see `docs/RELEASE-MIGRATION-2026-08.md` for the migration plan and user comms.
 
 </details>
 

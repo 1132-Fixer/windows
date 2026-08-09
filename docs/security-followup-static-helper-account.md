@@ -88,10 +88,10 @@ A future release must:
 
 ## Notes for whoever picks this up
 
-- The auto-updater target repo `PrimeUpYourLife/1132-Fixer-Windows-Releases`
-  has v5.3.5 as latest; this work would land in **v5.4.x** at the
-  earliest because it's a behavioral break for any user with an
-  existing `user1` account.
+- Releases now live on this repo's GitHub Releases (the former
+  `1132-Fixer-Windows-Releases` repo was deleted 2026-08-09); this work
+  would land in a minor/major bump at the earliest because it's a
+  behavioral break for any user with an existing `user1` account.
 - Migration path for users with existing `user1`: detect the
   legacy-credentials state, prompt for opt-in re-generation, keep
   the existing profile data.
