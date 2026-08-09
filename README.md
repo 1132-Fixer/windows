@@ -173,6 +173,18 @@ A `v*` tag reachable from `main` runs `.github/workflows/release.yml`, which bui
 
 Secrets belong in GitHub Actions or the feedback service ΓÇö never in app source or a packaged config. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/BUILDING.md](docs/BUILDING.md).
 
+## License
+
+- Code and documentation: MIT. Declared in [`package.json`](package.json)
+  (`"license": "MIT"`) and reproduced in full in the root [`LICENSE`](LICENSE).
+- Distributed installers and portable builds ship
+  [`build/license.txt`](build/license.txt). That file is the same MIT text as
+  the root `LICENSE`, plus a canonical-source line; it is not a separate
+  end-user agreement.
+- Product names, logos, icons, and brand artwork are **not** licensed under MIT,
+  prospectively from the notice date — see [ASSET-LICENSE.md](ASSET-LICENSE.md) for the
+  exact file list and provenance records.
+
 ## Independent project
 
 1132 Fixer is not made by, endorsed by, or affiliated with Zoom Video Communications, Inc.
