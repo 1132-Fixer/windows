@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Validates that a tagged release on the Releases repo is fully wired for
-// the electron-updater. Used both as a CI step (release.yml) and locally:
+// Validates that a tagged release on the release home (this repo's GitHub
+// Releases) is fully wired for the electron-updater. Used both as a CI step
+// (release.yml) and locally:
 //   node scripts/validate-release-assets.mjs v5.3.4
 //
 // Exits non-zero with a single clear error line per check that fails.
@@ -8,12 +9,12 @@
 // Env:
 //   GITHUB_TOKEN or RELEASES_PAT — required to read release metadata
 //                                  (public releases work unauthenticated but
-//                                  rate limits are tight; CI sets RELEASES_PAT)
+//                                  rate limits are tight; CI sets GITHUB_TOKEN)
 //   RELEASES_OWNER — defaults to PrimeUpYourLife
-//   RELEASES_REPO  — defaults to 1132-Fixer-Windows-Releases
+//   RELEASES_REPO  — defaults to 1132-Fixer-Windows
 
 const OWNER = process.env.RELEASES_OWNER || 'PrimeUpYourLife';
-const REPO  = process.env.RELEASES_REPO  || '1132-Fixer-Windows-Releases';
+const REPO  = process.env.RELEASES_REPO  || '1132-Fixer-Windows';
 const TOKEN = process.env.RELEASES_PAT || process.env.GITHUB_TOKEN || '';
 
 const tag = process.argv[2] || process.env.RELEASE_TAG || '';

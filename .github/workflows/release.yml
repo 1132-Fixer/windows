@@ -19,7 +19,7 @@ on:
       - 'v*'
 
 # Serialize ALL release runs (any tag) so an accidental rerun of an old tag
-# can't race the current tag's upload to the releases repo.
+# can't race the current tag's release upload.
 concurrency:
   group: release-pipeline
   cancel-in-progress: false
@@ -94,7 +94,7 @@ jobs:
           # than `npm run build`, so the inject step must be invoked explicitly.
           node scripts/inject-config.js
           # -p never: this workflow handles release creation via action-gh-release;
-          # electron-builder's own publish would target a different repo and conflict.
+          # electron-builder's own publish would race it and duplicate the release.
           npx electron-builder --win --x64 -p never
 
       - name: Verify build artifacts exist
@@ -149,16 +149,10 @@ jobs:
         with:
           name: 1132 Fixer v${{ steps.version.outputs.VERSION }}
           tag_name: v${{ steps.version.outputs.VERSION }}
-          repository: PrimeUpYourLife/1132-Fixer-Windows-Releases
-          token: ${{ secrets.RELEASES_PAT }}
           draft: false
           make_latest: true
           generate_release_notes: true
-          # Prepended above the auto-generated notes. GitHub attaches "Source code
-          # (zip/tar.gz)" to every release and provides no way to hide them
-          # (https://github.com/orgs/community/discussions/6003). On a downloads-only
-          # repo those archives contain no source at all, so point users at the right
-          # file explicitly rather than let them guess.
+          # Prepended above the auto-generated notes.
           body: |
             ## Download
 
@@ -168,11 +162,6 @@ jobs:
             | **1132-Fixer-Portable-${{ steps.version.outputs.VERSION }}.exe** | You want no install — just run it. |
 
             Right-click → **Run as administrator**. Requires Windows 10/11 with Zoom Workplace installed machine-wide.
-
-            > **Ignore the "Source code (zip / tar.gz)" links below.** GitHub adds those
-            > to every release automatically and they cannot be turned off. This is a
-            > downloads-only repo, so they contain no application source — the code lives
-            > in [1132-Fixer-Windows](https://github.com/PrimeUpYourLife/1132-Fixer-Windows).
 
             ---
           files: |
@@ -185,12 +174,12 @@ jobs:
       - name: Validate published release assets
         shell: pwsh
         env:
-          RELEASES_PAT: ${{ secrets.RELEASES_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           node scripts/validate-release-assets.mjs "v${{ steps.version.outputs.VERSION }}"
 
       # Convenience copy only — the real deliverables are already published as
-      # release assets on the Releases repo by the step above. Actions artifact
+      # assets on this repo's GitHub Release by the step above. Actions artifact
       # storage is a separate, quota-limited bucket, so a quota exhaustion here
       # must never fail a release that has already shipped successfully.
       - name: Upload build artifacts
