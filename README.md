@@ -167,6 +167,16 @@ The old `1132-Fixer-Windows-Releases` repo must stay online until existing app u
 
 </details>
 
+## License
+
+- Code and documentation: MIT, as declared in [`package.json`](package.json)
+  (`"license": "MIT"`). This repository has no standalone root `LICENSE` file.
+- Distributed installers and portable builds: governed by the end-user terms in
+  [`build/license.txt`](build/license.txt).
+- Product names, logos, icons, and brand artwork are **not** licensed under MIT,
+  prospectively from the notice date — see [ASSET-LICENSE.md](ASSET-LICENSE.md) for the
+  exact file list and provenance records.
+
 ## Independent project
 
 1132 Fixer is not made by or linked to Zoom Video Communications, Inc.
