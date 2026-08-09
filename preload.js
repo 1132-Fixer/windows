@@ -18,6 +18,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('update-status', handler);
     return () => ipcRenderer.removeListener('update-status', handler);
   },
+  zoomOpenDownload: () => ipcRenderer.invoke('zoom-open-download'),
+  zoomChooseInstaller: () => ipcRenderer.invoke('zoom-choose-installer'),
+  zoomRunInstaller: () => ipcRenderer.invoke('zoom-run-installer'),
+  onZoomInstallerDone: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('zoom-installer-done', handler);
+    return () => ipcRenderer.removeListener('zoom-installer-done', handler);
+  },
   installUpdateNow: () => ipcRenderer.invoke('install-update-now'),
   deferUpdate: () => ipcRenderer.invoke('defer-update'),
   openDownloadPage: () => ipcRenderer.invoke('open-download-page'),

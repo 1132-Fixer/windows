@@ -7,6 +7,7 @@ const https = require('https');
 const { spawn, spawnSync } = require('child_process');
 const config = require('./src/main/config');
 const zoomDetect = require('./zoom-detect');
+const messages = require('./messages');
 const helperCred = require('./helper-credential');
 const { computeRunVerdict, deletionOutcome, consentOutcome, profsvcRefreshResult } = require('./run-verdict');
 
@@ -284,6 +285,154 @@ async function resolveZoomInstall() {
 
   return { path: null, dir: null, source: null, perUserPath };
 }
+
+// ============================================================
+// Zoom Workplace guided recovery card (operator directive 2026-08-09).
+// Three IPCs, all renderer-argument-free by design:
+//   zoom-open-download    opens EXACTLY the official admin download URL —
+//                         the allowlisted catalog constant. The handler
+//                         ignores IPC arguments entirely, so the renderer
+//                         can never steer openExternal anywhere else.
+//   zoom-choose-installer native file picker + full validation chain on the
+//                         SELECTED file only: .msi extension -> OLE magic
+//                         (0xD0CF11E0) -> Authenticode (Status Valid + Zoom
+//                         publisher CN, exact match) -> MSI Template
+//                         architecture vs the OS architecture. Any failed
+//                         check = explained refusal naming that check;
+//                         nothing is ever executed on failure.
+//   zoom-run-installer    launches msiexec /i on the path the validation
+//                         call just approved (main-process state — never a
+//                         renderer-supplied path). Normal UAC flow; no
+//                         credentials requested or stored. Installer exit
+//                         fires 'zoom-installer-done' so the renderer runs
+//                         the promised read-only re-scan.
+// ============================================================
+let pendingInstallerPath = null;
+
+ipcMain.handle('zoom-open-download', async () => {
+  try {
+    await shell.openExternal(messages.ZOOM_RECOVERY.DOWNLOAD_URL);
+    return { success: true };
+  } catch (_) {
+    // Offline / no browser handler — renderer shows the Offline state.
+    return { success: false };
+  }
+});
+
+ipcMain.handle('zoom-choose-installer', async () => {
+  pendingInstallerPath = null;
+  const pick = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose the Zoom Workplace MSI installer',
+    filters: [{ name: 'Windows Installer package', extensions: ['msi'] }],
+    properties: ['openFile']
+  });
+  if (pick.canceled || !pick.filePaths || !pick.filePaths.length) return { canceled: true };
+  const file = pick.filePaths[0];
+
+  // (i) It IS an MSI: extension + OLE compound-file magic.
+  if (!/\.msi$/i.test(file)) {
+    return { ok: false, message: messages.zoomInstallerRefusal('not_msi_ext') };
+  }
+  let head = null;
+  try {
+    const fd = await fs.promises.open(file, 'r');
+    try {
+      head = Buffer.alloc(4);
+      await fd.read(head, 0, 4, 0);
+    } finally { await fd.close(); }
+  } catch (err) {
+    return { ok: false, message: messages.zoomInstallerRefusal('unreadable', err && err.message) };
+  }
+  if (!zoomDetect.hasMsiMagic(head)) {
+    return { ok: false, message: messages.zoomInstallerRefusal('not_msi_magic') };
+  }
+
+  // The path is interpolated into single-quoted PowerShell for the two
+  // probes below. Doubling single quotes neutralizes quote breakout; control
+  // characters have no business in a real dialog-returned path and are
+  // refused outright.
+  if ([...file].some(ch => ch.charCodeAt(0) < 0x20)) {
+    return { ok: false, message: messages.zoomInstallerRefusal('unreadable', 'unsupported characters in the file path') };
+  }
+  const psPath = file.replace(/'/g, "''");
+
+  // (ii) Authenticode: Status must be Valid AND the signer CN must exactly
+  // match one of the two accepted Zoom publisher names — no substrings.
+  const sigProbe = await runPSCapture(`
+    $sig = Get-AuthenticodeSignature -LiteralPath '${psPath}'
+    Write-Output ('SIG_STATUS=' + [string]$sig.Status)
+    if ($sig.SignerCertificate) { Write-Output ('SIG_SUBJECT=' + $sig.SignerCertificate.Subject) }
+  `, { timeoutMs: 60000 });
+  if (sigProbe.timedOut || sigProbe.code !== 0) {
+    return { ok: false, message: messages.zoomInstallerRefusal('signature', sigProbe.timedOut ? 'the signature check timed out' : 'the signature check could not run') };
+  }
+  const sigStatus  = ((/^SIG_STATUS=(.*)$/m.exec(sigProbe.stdout) || [])[1] || '').trim();
+  const sigSubject = ((/^SIG_SUBJECT=(.*)$/m.exec(sigProbe.stdout) || [])[1] || '').trim();
+  if (sigStatus !== 'Valid') {
+    return { ok: false, message: messages.zoomInstallerRefusal('signature', sigStatus || 'unreadable') };
+  }
+  const cn = zoomDetect.subjectCn(sigSubject);
+  if (!messages.ZOOM_RECOVERY.PUBLISHERS.includes(cn)) {
+    return { ok: false, message: messages.zoomInstallerRefusal('publisher', cn || sigSubject) };
+  }
+
+  // (iii) Architecture: MSI Summary-Information Template (property 7) vs
+  // the OS architecture. PROCESSOR_ARCHITEW6432 first — under WOW/emulation
+  // it carries the REAL OS architecture (incl. ARM64) while
+  // PROCESSOR_ARCHITECTURE reports the emulated one.
+  const archProbe = await runPSCapture(`
+    try {
+      $wi = New-Object -ComObject WindowsInstaller.Installer
+      $db = $wi.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $wi, @('${psPath}', 0))
+      $si = $db.GetType().InvokeMember('SummaryInformation', 'GetProperty', $null, $db, $null)
+      $t  = $si.GetType().InvokeMember('Property', 'GetProperty', $null, $si, @(7))
+      Write-Output ('MSI_TEMPLATE=' + [string]$t)
+    } catch {
+      Write-Output ('MSI_TEMPLATE_ERROR=' + $_.Exception.Message)
+    }
+  `, { timeoutMs: 30000 });
+  const template = ((/^MSI_TEMPLATE=(.*)$/m.exec(archProbe.stdout) || [])[1] || '').trim();
+  if (!template) {
+    const perr = ((/^MSI_TEMPLATE_ERROR=(.*)$/m.exec(archProbe.stdout) || [])[1] || '').trim();
+    return { ok: false, message: messages.zoomInstallerRefusal('architecture', `The installer's architecture could not be read${perr ? ` (${perr})` : ''}.`) };
+  }
+  const osArch = process.env.PROCESSOR_ARCHITEW6432 || process.env.PROCESSOR_ARCHITECTURE || '';
+  const cmp = zoomDetect.archCompare(template, osArch);
+  if (!cmp.ok) {
+    return { ok: false, message: messages.zoomInstallerRefusal('architecture', cmp.message) };
+  }
+
+  pendingInstallerPath = file;
+  return { ok: true, fileName: path.basename(file) };
+});
+
+ipcMain.handle('zoom-run-installer', async () => {
+  // Runs ONLY the path the validation call just approved — never an IPC
+  // argument. One shot: the pending path is consumed immediately.
+  const file = pendingInstallerPath;
+  pendingInstallerPath = null;
+  if (!file) return { started: false };
+  let settled = false;
+  const notifyDone = (code) => {
+    if (settled) return;
+    settled = true;
+    // The one automatic behavior the card copy promises: when the installer
+    // finishes, the renderer re-runs the read-only environment scan.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('zoom-installer-done', { code });
+    }
+  };
+  try {
+    // Deliberately NOT added to activeChildren: quitting 1132 Fixer must
+    // never kill a Windows Installer transaction mid-flight.
+    const child = spawn('msiexec.exe', ['/i', file], { windowsHide: false });
+    child.on('error', () => notifyDone(-1));
+    child.on('exit', (code) => notifyDone(code));
+    return { started: true };
+  } catch (_) {
+    return { started: false };
+  }
+});
 
 // Tools that must exist on PATH; the destructive flow can't run without them.
 const REQUIRED_TOOLS = [

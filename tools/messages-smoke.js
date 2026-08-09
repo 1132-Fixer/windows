@@ -102,6 +102,72 @@ console.log('messages-smoke: checklist group mapping (§9)');
     'groups are contiguous and cover the full taxonomy in order');
 }
 
+console.log('messages-smoke: Zoom recovery card (directive 2026-08-09, byte-verbatim)');
+{
+  const z = m.ZOOM_RECOVERY;
+  // Title, primary description, helper texts — byte-exact per the directive.
+  check(z.TITLE === 'Zoom Workplace needs to be installed', 'title byte-exact');
+  check(z.DESCRIPTION === '1132 Fixer uses the computer-wide version of Zoom Workplace. We could not find that version on this PC.', 'primary description byte-exact');
+  check(z.HELPER_LABEL === 'What does this mean?', 'helper label byte-exact');
+  check(z.HELPER_TEXT === 'Zoom may be missing, or you may have a personal version installed only for your Windows account. Install the 64-bit MSI version so Zoom works for every user on this computer.', 'helper text byte-exact (explains MSI in plain English, visible)');
+  check(z.WHY_LABEL === 'Why is the MSI version required?', 'why-MSI label byte-exact');
+  check(z.WHY_TEXT === 'The MSI package installs Zoom in the standard Windows program folder. This lets 1132 Fixer reliably find, check, and repair Zoom for every Windows user on this computer.', 'why-MSI expanded text byte-exact');
+  check(z.TECH_LABEL === 'Technical details', 'technical-details label byte-exact');
+  check(z.FLAG_LABEL === 'Action required', 'Action required label byte-exact (never red-alone)');
+  // The official admin download URL — the ONLY URL the download action opens.
+  check(z.DOWNLOAD_URL === 'https://zoom.us/download/admin', 'official admin download URL byte-exact');
+  // Both accepted publisher CNs, exact.
+  check(JSON.stringify(z.PUBLISHERS) === JSON.stringify(['Zoom Communications, Inc.', 'Zoom Video Communications, Inc.']), 'both publisher CNs byte-exact');
+  // Four action labels (em dash in the recheck label is U+2014).
+  check(z.ACTIONS.download === 'Download Zoom MSI', 'download action label byte-exact');
+  check(z.ACTIONS.recheck === 'I installed it — Check again', 'recheck action label byte-exact');
+  check(z.ACTIONS.choose === 'Choose installer file', 'choose action label byte-exact');
+  check(z.ACTIONS.cancel === 'Cancel setup', 'cancel action label byte-exact');
+  // The seven state strings — byte-exact incl. the U+2026 ellipsis and
+  // straight apostrophes the directive uses.
+  check(z.STATES.downloading === "Opening Zoom's official download page…", 'Downloading state byte-exact');
+  check(z.STATES.waiting === 'Install Zoom Workplace, then return here and select Check again.', 'Waiting state byte-exact');
+  check(z.STATES.checking === 'Checking for Zoom Workplace…', 'Checking state byte-exact');
+  check(z.STATES.success === 'Zoom Workplace is installed and ready.', 'Success state byte-exact');
+  check(z.STATES.still_not_found === 'We still cannot find the computer-wide Zoom installation. Make sure you installed the MSI version, then check again.', 'Still-not-found state byte-exact');
+  check(z.STATES.wrong_version === 'We found Zoom, but it is installed only for one Windows user. Install the computer-wide MSI version to continue.', 'Wrong-version state byte-exact');
+  check(z.STATES.offline === "We could not open Zoom's download page. Check your internet connection, or choose an MSI installer already saved on this computer.", 'Offline state byte-exact');
+
+  // Truthfulness rule (operator amendment 2026-08-09): cancel copy states
+  // the computer is unchanged + detection is read-only; the UAC copy
+  // describes the ONE real automatic behavior precisely and promises no
+  // credential handling.
+  check(/read-only/.test(z.CANCEL_NOTE) && /leaves this computer exactly as it is/.test(z.CANCEL_NOTE), 'cancel copy: unchanged computer + read-only detection');
+  check(/installs nothing unless you choose an installer/.test(z.CANCEL_NOTE), 'cancel copy: nothing modified without a user-chosen installer');
+  check(/checks for Zoom again automatically/.test(z.UAC_NOTE), 'UAC copy describes the real installer-exit re-check precisely');
+  check(/never asks for or stores your password/.test(z.UAC_NOTE), 'UAC copy: no credential request or storage');
+  check(/Windows may now ask you to approve/.test(z.UAC_NOTE), 'UAC copy explains the admin-approval prompt BEFORE launch');
+
+  // Download button accessible name says a browser opens and where.
+  check(/opens Zoom's official download page/.test(z.DOWNLOAD_ARIA) && /browser/.test(z.DOWNLOAD_ARIA), 'download accessible label names the external destination');
+
+  // Installer refusals name the EXACT failed check and state nothing ran.
+  for (const code of ['not_msi_ext', 'not_msi_magic', 'unreadable', 'signature', 'publisher', 'architecture']) {
+    const msg = m.zoomInstallerRefusal(code, 'detail-x');
+    check(/nothing was run/i.test(msg), `refusal '${code}' states nothing was executed`);
+    check(msg.length > 40, `refusal '${code}' is real copy, not a fragment`);
+  }
+  check(/Failed check: publisher/.test(m.zoomInstallerRefusal('publisher', 'Evil Corp')) &&
+        m.zoomInstallerRefusal('publisher', 'Evil Corp').includes('Evil Corp'), 'publisher refusal names the actual signer');
+  check(/Failed check: digital signature/.test(m.zoomInstallerRefusal('signature', 'NotSigned')) &&
+        m.zoomInstallerRefusal('signature', 'NotSigned').includes('NotSigned'), 'signature refusal keeps the Windows status visible');
+  check(/Failed check: processor architecture/.test(m.zoomInstallerRefusal('architecture', 'arch explanation.')), 'architecture refusal names the check');
+  check(/nothing was run/i.test(m.zoomInstallerRefusal('some_future_code', null)), 'unmapped refusal still states nothing was executed');
+
+  // Technical-details disclosure: raw path demoted there, honestly framed.
+  const td = m.zoomRecoveryTechDetails({ path: null, perUserPath: null });
+  check(td.includes('C:\\Program Files\\Zoom\\bin\\Zoom.exe'), 'tech details carry the raw machine-wide path');
+  check(/read-only/.test(td), 'tech details state the check is read-only');
+  const tdPer = m.zoomRecoveryTechDetails({ path: null, perUserPath: 'C:\\Users\\a\\AppData\\Roaming\\Zoom\\bin\\Zoom.exe' });
+  check(tdPer.includes('C:\\Users\\a\\AppData\\Roaming\\Zoom\\bin\\Zoom.exe'), 'tech details show the per-user path when present');
+  check(m.zoomRecoveryTechDetails(null).length > 40, 'tech details work without install data, no throw');
+}
+
 console.log('messages-smoke: catalog-wide bans');
 {
   const everyMessage = [

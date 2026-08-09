@@ -316,6 +316,7 @@ async function runEnvironmentScan() {
       .filter(b => b && !CARD_COVERED_BLOCKER_CODES.has(b.code))
       .map(b => b.message || b.code);
     updateFixDisabledNote(canRunFix ? [] : blockedLabels.concat(nonCardBlockers));
+    updateZoomRecovery(result.cards.zoom, result.info && result.info.zoomInstall);
   } catch (err) {
     checkList.innerHTML = '';
     checkList.appendChild(renderCheckRow('scan', 'Environment scan', 'blocked', scanFailureMessage(err)));
@@ -323,6 +324,7 @@ async function runEnvironmentScan() {
     setStatus('error', 'Error');
     fixBtn.disabled = true;
     updateFixDisabledNote(['Environment scan']);
+    updateZoomRecovery(null, null); // scan state unknown — hide the card
   } finally {
     scanInProgress = false;
   }
@@ -336,6 +338,147 @@ window.addEventListener('focus', () => {
   if (Date.now() - lastScanAt < 10000) return;
   runEnvironmentScan();
 });
+
+// ============================================================
+// Zoom Workplace guided recovery card (operator directive 2026-08-09).
+//
+// Wizard mapping (the app has no wizard): the directive's "blocked screen"
+// is the Zoom checklist card zone — this card renders below the checklist
+// while the machine-wide Zoom requirement is BLOCKED. "Next disabled until
+// the requirement passes" = the existing canRunFix gate on Fix now (kept,
+// untouched). "Cancel setup" = the cancel row's copy + the existing Exit
+// affordance (quitApp) — closing changes nothing on the computer.
+//
+// Truthfulness (operator amendment): detection is read-only; nothing on the
+// computer changes unless the user launches an installer they chose and
+// approved in the Windows prompt. The only automatic behavior described —
+// re-check when the installer finishes — is exactly what the
+// onZoomInstallerDone handler below implements.
+//
+// All copy comes from the ZOOM_RECOVERY catalog (messages.js, byte-pinned
+// by tools/messages-smoke.js); #zrStatus is the ONE live region carrying
+// every card state / validation announcement, so full state strings are
+// both visible and announced without duplicate regions.
+// ============================================================
+const zoomRecoveryEl = document.getElementById('zoomRecovery');
+const zrStatusEl     = document.getElementById('zrStatus');
+const zrTechEl       = document.getElementById('zrTech');
+const zrDownloadBtn  = document.getElementById('zrDownloadBtn');
+const zrRecheckBtn   = document.getElementById('zrRecheckBtn');
+const zrChooseBtn    = document.getElementById('zrChooseBtn');
+const zrCancelBtn    = document.getElementById('zrCancelBtn');
+
+// Fill the card from the catalog so the DOM ships the byte-verbatim
+// directive strings the smoke pins.
+document.getElementById('zrFlagLabel').textContent     = ZOOM_RECOVERY.FLAG_LABEL;
+document.getElementById('zrTitle').textContent         = ZOOM_RECOVERY.TITLE;
+document.getElementById('zrDesc').textContent          = ZOOM_RECOVERY.DESCRIPTION;
+document.getElementById('zrHelperQ').textContent       = ZOOM_RECOVERY.HELPER_LABEL;
+document.getElementById('zrHelperA').textContent       = ZOOM_RECOVERY.HELPER_TEXT;
+document.getElementById('zrWhySummary').textContent    = ZOOM_RECOVERY.WHY_LABEL;
+document.getElementById('zrWhyText').textContent       = ZOOM_RECOVERY.WHY_TEXT;
+document.getElementById('zrTechSummary').textContent   = ZOOM_RECOVERY.TECH_LABEL;
+document.getElementById('zrCancelNote').textContent    = ZOOM_RECOVERY.CANCEL_NOTE;
+document.getElementById('zrDownloadLabel').textContent = ZOOM_RECOVERY.ACTIONS.download;
+zrDownloadBtn.setAttribute('aria-label', ZOOM_RECOVERY.DOWNLOAD_ARIA);
+zrRecheckBtn.textContent = ZOOM_RECOVERY.ACTIONS.recheck;
+zrChooseBtn.textContent  = ZOOM_RECOVERY.ACTIONS.choose;
+zrCancelBtn.textContent  = ZOOM_RECOVERY.ACTIONS.cancel;
+
+// True while a user-driven re-check (Check again button or installer-exit
+// auto re-check) is in flight — its scan result picks the re-check state
+// strings (still-not-found / success) instead of staying silent.
+let zrRecheckPending = false;
+
+function zrSetState(text) {
+  zrStatusEl.textContent = text || '';
+  zrStatusEl.hidden = !text;
+}
+
+// Called with the zoom checklist card + resolveZoomInstall() data after
+// every environment scan (and with nulls when the scan itself failed).
+function updateZoomRecovery(zoomCard, install) {
+  const blocked = !!zoomCard && zoomCard.status === 'blocked';
+  if (!blocked) {
+    if (zrRecheckPending && !zoomRecoveryEl.hidden && zoomCard) {
+      // Requirement passes after a user-driven re-check: card flips to
+      // pass — success string announced; the ready checklist row above
+      // takes over. The next ordinary scan hides the card entirely.
+      zoomRecoveryEl.dataset.state = 'pass';
+      zrSetState(ZOOM_RECOVERY.STATES.success);
+    } else {
+      zoomRecoveryEl.hidden = true;
+      zoomRecoveryEl.dataset.state = '';
+      zrSetState('');
+    }
+    zrRecheckPending = false;
+    return;
+  }
+  const wasQuiet = zoomRecoveryEl.hidden || zoomRecoveryEl.dataset.state === 'pass';
+  zoomRecoveryEl.dataset.state = 'blocked';
+  zoomRecoveryEl.hidden = false;
+  zrTechEl.textContent = zoomRecoveryTechDetails(install);
+  const perUserOnly = !!(install && install.perUserPath && !install.path);
+  if (perUserOnly) {
+    zrSetState(ZOOM_RECOVERY.STATES.wrong_version);
+  } else if (zrRecheckPending) {
+    zrSetState(ZOOM_RECOVERY.STATES.still_not_found);
+  } else if (wasQuiet) {
+    // First render: title + description carry the message; state strings
+    // are reserved for user-driven events ("still cannot find" would be
+    // untrue before the user re-checked anything).
+    zrSetState('');
+  }
+  zrRecheckPending = false;
+}
+
+zrDownloadBtn.addEventListener('click', async () => {
+  zrSetState(ZOOM_RECOVERY.STATES.downloading);
+  let opened = false;
+  try {
+    const r = await window.electronAPI.zoomOpenDownload();
+    opened = !!(r && r.success);
+  } catch (_) { /* offline path below */ }
+  zrSetState(opened ? ZOOM_RECOVERY.STATES.waiting : ZOOM_RECOVERY.STATES.offline);
+});
+
+// Re-runs the SAME detection the scan already uses (resolveZoomInstall via
+// preflight) — no wizard restart, no parallel detection path.
+function zrStartRecheck() {
+  // Same guards as runEnvironmentScan — a no-op scan must never leave a
+  // stale "Checking…" state on screen.
+  if (isRunning || scanInProgress || fixCountdownTimer) return;
+  zrRecheckPending = true;
+  zrSetState(ZOOM_RECOVERY.STATES.checking);
+  runEnvironmentScan();
+}
+zrRecheckBtn.addEventListener('click', zrStartRecheck);
+
+let zrChooseBusy = false;
+zrChooseBtn.addEventListener('click', async () => {
+  if (zrChooseBusy) return;
+  zrChooseBusy = true;
+  zrChooseBtn.disabled = true;
+  try {
+    const r = await window.electronAPI.zoomChooseInstaller();
+    if (r && r.ok) {
+      // Explain the Windows admin-approval prompt BEFORE msiexec starts.
+      zrSetState(ZOOM_RECOVERY.UAC_NOTE);
+      await window.electronAPI.zoomRunInstaller();
+    } else if (r && !r.canceled) {
+      // Explained refusal naming the exact failed check — nothing was run.
+      zrSetState(r.message || zoomInstallerRefusal(null));
+    }
+    // Picker canceled: no state change — nothing happened, nothing claimed.
+  } catch (err) {
+    zrSetState(zoomInstallerRefusal(null, err && err.message));
+  } finally {
+    zrChooseBusy = false;
+    zrChooseBtn.disabled = false;
+  }
+});
+
+zrCancelBtn.addEventListener('click', () => window.electronAPI.quitApp());
 
 // ============================================================
 // Fix Receipt — styled cards
@@ -799,6 +942,18 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
 
   window.electronAPI.onUpdateStatus(handleUpdateStatus);
+
+  // Installer exited — run the promised read-only re-check automatically.
+  // If a scan is already in flight, the pending flag makes ITS result use
+  // the re-check state strings instead of starting a second scan.
+  window.electronAPI.onZoomInstallerDone(() => {
+    if (isRunning) return;
+    zrRecheckPending = true;
+    if (!scanInProgress) {
+      zrSetState(ZOOM_RECOVERY.STATES.checking);
+      runEnvironmentScan();
+    }
+  });
 
   // Initial state: home view + auto-run the environment checklist.
   showView('home');
