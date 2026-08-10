@@ -185,9 +185,14 @@ async function saveScreenshot(client, caseId, messageId, validated) {
 }
 
 /**
- * Claim the case's un-forwarded screenshot for Discord dispatch (at most
- * once, same conditional-UPDATE pattern as the role alert). Returns
- * { filename, contentType, data } or null when there is nothing to forward.
+ * Claim the case's un-forwarded screenshot for Discord dispatch (conditional
+ * UPDATE, like the role alert's claim). Unlike the alert — a cosmetic ping
+ * where at-most-once is the right trade — the screenshot is the report's
+ * evidence payload, so a failed upload REVERTS the claim (revertClaim) and
+ * the outbox retry forwards it again: at-least-once, with a duplicate
+ * possible only if the revert itself were to run after a post that also
+ * succeeded, which a throwing post precludes.
+ * Returns { id, filename, contentType, data } or null.
  */
 async function claimForDispatch(db, caseId) {
   const { rows } = await db.query(
@@ -204,7 +209,16 @@ async function claimForDispatch(db, caseId) {
   );
   if (!blob.rows[0]) return null;
   const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }[a.media_type] || 'bin';
-  return { filename: 'screenshot.' + ext, contentType: a.media_type, data: blob.rows[0].data };
+  return { id: a.id, filename: 'screenshot.' + ext, contentType: a.media_type, data: blob.rows[0].data };
+}
+
+/** Undo a claim whose Discord upload failed, so the retry can re-claim. */
+function revertClaim(db, attachmentId) {
+  return db.query(
+    "UPDATE attachments SET redaction_state = 'pending' " +
+      "WHERE id = $1 AND redaction_state = 'approved'",
+    [attachmentId]
+  );
 }
 
 /** Retention: delete expired attachment rows and their blobs. */
@@ -220,5 +234,5 @@ async function purgeExpired(db) {
 module.exports = {
   SCREENSHOT_MAX_BYTES, RETENTION_DAYS,
   sniffImage, stripMetadata, validateScreenshot,
-  saveScreenshot, claimForDispatch, purgeExpired,
+  saveScreenshot, claimForDispatch, revertClaim, purgeExpired,
 };

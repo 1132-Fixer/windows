@@ -1203,6 +1203,10 @@ async function refreshScreenshotCapability() {
 }
 
 async function setScreenshot(fileOrBlob, name) {
+  // Reset the picker immediately: a rejected file must not leave its value
+  // behind, or re-selecting the same file later is a silent no-op (change
+  // never fires for an identical value).
+  document.getElementById('fbShotInput').value = '';
   if (fileOrBlob.size > SHOT_MAX_BYTES) {
     shotStatus('Screenshot must be 5 MB or smaller.', true);
     return;
@@ -1235,6 +1239,13 @@ async function setScreenshot(fileOrBlob, name) {
     document.getElementById('fbShotPreview').hidden = false;
     document.getElementById('fbShotRow').hidden = true;
     shotStatus('');
+    // Hiding the attach row drops keyboard focus to <body>; hand it to the
+    // preview's Replace control when the user was on the attach path. A
+    // paste/drop while typing keeps focus where it was.
+    const active = document.activeElement;
+    if (active === document.body || active === document.getElementById('fbShotAttach')) {
+      document.getElementById('fbShotReplace').focus();
+    }
   } finally {
     if (gen === shotReadGen) {
       shotReadBusy = false;
@@ -1249,21 +1260,33 @@ document.getElementById('fbShotAttach').addEventListener('click', () => {
 document.getElementById('fbShotReplace').addEventListener('click', () => {
   document.getElementById('fbShotInput').click();
 });
-document.getElementById('fbShotRemove').addEventListener('click', clearScreenshot);
+document.getElementById('fbShotRemove').addEventListener('click', () => {
+  clearScreenshot();
+  // Removing hides the focused button; keep keyboard users in the flow.
+  document.getElementById('fbShotAttach').focus();
+});
 document.getElementById('fbShotInput').addEventListener('change', (e) => {
   const f = e.target.files && e.target.files[0];
   if (f) setScreenshot(f, f.name);
 });
 
-// Drag-and-drop onto the bug section.
+// A file dropped ANYWHERE must never navigate the window away from the app —
+// without this guard Electron replaces the UI with the dropped image. Text
+// drags keep their default behavior (dropping text into a textarea works).
+const dragHasFile = (e) =>
+  e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+['dragover', 'drop'].forEach(ev => document.addEventListener(ev, (e) => {
+  if (dragHasFile(e)) e.preventDefault();
+}));
+
+// Drag-and-drop onto the bug section (attach only; navigation is already
+// guarded above, and text drops keep their default insertion).
 const fbBugSection = document.getElementById('fbBug');
 ['dragover', 'dragenter'].forEach(ev => fbBugSection.addEventListener(ev, (e) => {
-  if (!screenshotsCapable) return;
-  e.preventDefault();
+  if (!screenshotsCapable || !dragHasFile(e)) return;
   document.getElementById('fbShotRow').classList.add('fb-drag');
 }));
-['dragleave', 'drop'].forEach(ev => fbBugSection.addEventListener(ev, (e) => {
-  if (ev === 'drop') e.preventDefault();
+['dragleave', 'drop'].forEach(ev => fbBugSection.addEventListener(ev, () => {
   document.getElementById('fbShotRow').classList.remove('fb-drag');
 }));
 fbBugSection.addEventListener('drop', (e) => {
@@ -1273,11 +1296,14 @@ fbBugSection.addEventListener('drop', (e) => {
 });
 
 // Paste-from-clipboard while the bug form is open (users screenshot errors
-// straight to the clipboard).
+// straight to the clipboard). Inert while the support-report preview modal
+// is stacked on top — a paste meant for that surface must not silently
+// attach an image to the form underneath.
 document.addEventListener('paste', (e) => {
   if (!screenshotsCapable) return;
   if (!document.getElementById('fbOverlay').classList.contains('show')) return;
   if (!fbBugSection.classList.contains('active')) return;
+  if (document.getElementById('supportOverlay').classList.contains('show')) return;
   const items = (e.clipboardData && e.clipboardData.items) || [];
   for (const item of items) {
     if (item.kind === 'file' && item.type.startsWith('image/')) {
@@ -1313,8 +1339,17 @@ document.getElementById('fbContactSubmit').addEventListener('click', async () =>
   await submitFeedback('Contact', text, 'fbContactStatus');
 });
 
+const SUBMIT_BTN_FOR_STATUS = {
+  fbBugStatus: 'fbBugSubmit', fbRatingStatus: 'fbRatingSubmit', fbContactStatus: 'fbContactSubmit',
+};
+
 async function submitFeedback(type, text, statusId, screenshot) {
   const statusEl = document.getElementById(statusId);
+  // One submission at a time: a second click during the request would send a
+  // duplicate report (the legacy path has no server-side idempotency).
+  const submitBtn = document.getElementById(SUBMIT_BTN_FOR_STATUS[statusId]);
+  if (submitBtn.disabled) return;
+  submitBtn.disabled = true;
   statusEl.textContent = screenshot ? 'Submitting report + screenshot...' : 'Submitting...';
   statusEl.className = 'fb-status';
   try {
@@ -1329,14 +1364,16 @@ async function submitFeedback(type, text, statusId, screenshot) {
       statusEl.textContent = 'Submitted successfully!';
       statusEl.className = 'fb-status ok';
       setTimeout(closeFeedback, 1500);
-    } else {
-      statusEl.textContent = result.error || FEEDBACK_FALLBACK;
-      statusEl.className = 'fb-status err';
+      return; // stays disabled until the modal closes — nothing left to send
     }
+    statusEl.textContent = result.error || FEEDBACK_FALLBACK;
+    statusEl.className = 'fb-status err';
   } catch (err) {
     statusEl.textContent = FEEDBACK_NETWORK;
     statusEl.className = 'fb-status err';
   }
+  submitBtn.disabled = false; // failed: let the user retry
+  if (statusId === 'fbBugStatus') refreshBugSubmit(); // re-apply length/read gates
 }
 
 // ============================================================

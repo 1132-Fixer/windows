@@ -44,6 +44,7 @@ const fetchCalls = [];
 let threadCounter = 0;
 let failNextThreadPost = false; // simulates an archived thread once
 let failNextRoleAlert = false;  // simulates a role-alert failure once
+let failNextScreenshotPost = false; // simulates a 500 on the screenshot upload once
 global.fetch = async (url, opts) => {
   const u = String(url);
   const call = { url: u, method: (opts && opts.method) || 'GET', body: opts && opts.body };
@@ -61,6 +62,10 @@ global.fetch = async (url, opts) => {
   if (failNextRoleAlert && call.body && call.body.includes('<@&')) {
     failNextRoleAlert = false;
     return respond(403, { message: 'Missing permissions' });
+  }
+  if (failNextScreenshotPost && call.body && call.body.includes('Screenshot attached to')) {
+    failNextScreenshotPost = false;
+    return respond(500, { message: 'Internal Server Error' });
   }
   if (call.method === 'PATCH') return respond(200, { id: 'card-1' });
   if (u.includes('/messages')) {
@@ -1038,6 +1043,23 @@ check('SHOT#8: expired attachments and blobs are purged by the worker', async ()
   const rows = await count('SELECT count(*) FROM attachments');
   const blobs = await count('SELECT count(*) FROM attachment_blobs');
   return rows === 0 && blobs === 0;
+});
+
+check('SHOT#10: failed upload reverts the claim; the retry delivers, then stays quiet', async () => {
+  const r = await req('POST', '/v1/cases', shotBody(TINY_PNG, { title: 'Upload retry probe' }),
+    bearer(S.B, idem('SHOT-RETRY')));
+  failNextScreenshotPost = true;
+  await outbox.tick(); // forum post + alert succeed; screenshot 500s -> claim reverted, row failed
+  const midState = (await blobOfCase(r.json.caseRef)).redaction_state;
+  await db.query("UPDATE outbox SET available_at = now() WHERE state = 'failed'"); // skip backoff
+  await outbox.tick(); // retry re-claims and posts
+  await outbox.tick(); // a further tick must not post again
+  const posts = fetchCalls.filter((c) => c.url.includes('discord.com') && c.body &&
+    c.body.includes('Screenshot attached to') && c.body.includes(r.json.caseRef));
+  const endState = (await blobOfCase(r.json.caseRef)).redaction_state;
+  const failedLeft = await count("SELECT count(*) FROM outbox WHERE state IN ('pending','failed')");
+  return r.status === 201 && midState === 'pending' && endState === 'approved' &&
+    posts.length === 2 && failedLeft === 0; // 2 calls = the failed attempt + the delivery
 });
 
 // --- run -------------------------------------------------------------

@@ -165,10 +165,14 @@ async function submitBugWithScreenshot(opts) {
     savePrincipal(userDataDir, safeStorage, principal);
   }
 
+  // The service enforces a 3-char title minimum; fall back whenever the
+  // derived excerpt is shorter (e.g. "OK" followed by blank lines), not only
+  // when it is empty — otherwise the whole submission dies on a "title"
+  // error for a field the UI does not have.
   const titleText = text.slice(0, 80).replace(/\s+/g, ' ').trim();
   const payload = {
     type: 'bug',
-    title: titleText || 'Bug report',
+    title: titleText.length >= 3 ? titleText : 'Bug report',
     description: text,
     os: osLabel,
     appVersion: version,
