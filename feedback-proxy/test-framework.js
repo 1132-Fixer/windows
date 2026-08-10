@@ -991,6 +991,21 @@ check('SHOT#7: dispatch posts the screenshot once as multipart; state flips appr
     one.body.includes('Content-Type: image/png');
 });
 
+check('SHOT#9: client CORS — extension can preflight + POST /v1/cases and probe /health', async () => {
+  const opt = await rawReq('OPTIONS', '/v1/cases');
+  const optReg = await rawReq('OPTIONS', '/v1/principals');
+  const health = await rawReq('GET', '/health');
+  const post = await rawReq('POST', '/v1/cases'); // 401 body, but headers must carry CORS
+  const inboxPriv = await rawReq('GET', '/v1/my-messages');
+  return opt.status === 204 &&
+    opt.headers['access-control-allow-origin'] === '*' &&
+    opt.headers['access-control-allow-headers'].includes('Idempotency-Key') &&
+    optReg.status === 204 &&
+    health.headers['access-control-allow-origin'] === '*' &&
+    post.headers['access-control-allow-origin'] === '*' &&
+    inboxPriv.headers['access-control-allow-origin'] === undefined;
+});
+
 check('SHOT#8: expired attachments and blobs are purged by the worker', async () => {
   await db.query('UPDATE attachments SET expires_at = now() - interval \'1 day\'');
   await outbox.tick();
