@@ -175,12 +175,17 @@ async function submitBugWithScreenshot(opts) {
     screenshot: { data: screenshot.bytes.toString('base64'), mediaType: screenshot.mediaType },
   };
   const body = Buffer.from(JSON.stringify(payload));
+  // The key derives from the submission content, so a user retry after an
+  // ambiguous failure (timeout after the server committed) replays the stored
+  // response instead of creating a duplicate case. Editing the report or the
+  // screenshot changes the body and therefore the key.
+  const idemKey = 'fx-' + crypto.createHash('sha256').update(body).digest('hex').slice(0, 40);
   const headers = (p) => ({
     'Content-Type': 'application/json',
     'Content-Length': body.length,
     'User-Agent': `1132Fixer/${version}`,
     Authorization: `Bearer ${p.token}`,
-    'Idempotency-Key': crypto.randomUUID(),
+    'Idempotency-Key': idemKey,
   });
 
   try {

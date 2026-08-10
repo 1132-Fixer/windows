@@ -2,12 +2,11 @@
  * Bug-report screenshot attachments (#141).
  *
  * Images only, 5 MB max, single attachment per case. The claimed MIME type is
- * never trusted: the stored media_type comes from magic-byte sniffing. JPEG
- * and PNG metadata segments (EXIF/XMP/IPTC, textual chunks) are stripped
- * before storage — screenshots can carry location data from the capturing
- * device. GIF and WebP pass through unmodified (neither format carries EXIF
- * in the screenshot tools we accept them from; noted honestly here rather
- * than pretending to strip).
+ * never trusted: the stored media_type comes from magic-byte sniffing. JPEG,
+ * PNG and WebP metadata (EXIF/XMP/IPTC, textual chunks) are stripped before
+ * storage — screenshots can carry location data from the capturing device.
+ * GIF passes through unmodified: the format has no standard EXIF/GPS
+ * container (noted honestly here rather than pretending to strip).
  *
  * Bytes live in attachment_blobs; the attachments row (frozen 001-core
  * schema) points at them via object_key 'db:<uuid>'. redaction_state starts
@@ -97,10 +96,41 @@ function stripPng(buf) {
   }
 }
 
+/**
+ * Drop WebP EXIF / 'XMP ' chunks and clear their presence flags in VP8X
+ * (E=0x08, X=0x04) so decoders never look for the removed chunks. The RIFF
+ * size field is recomputed. Malformed input returns the original.
+ */
+function stripWebp(buf) {
+  try {
+    const chunks = [];
+    let i = 12; // 'RIFF' + size + 'WEBP'
+    while (i + 8 <= buf.length) {
+      const type = buf.toString('latin1', i, i + 4);
+      const dataLen = buf.readUInt32LE(i + 4);
+      const padded = dataLen + (dataLen % 2); // chunks are even-aligned
+      if (i + 8 + padded > buf.length && i + 8 + dataLen > buf.length) return buf;
+      if (type !== 'EXIF' && type !== 'XMP ') {
+        const chunk = Buffer.from(buf.subarray(i, Math.min(i + 8 + padded, buf.length)));
+        if (type === 'VP8X' && dataLen >= 1) chunk[8] &= ~0x0c; // clear E + X flags
+        chunks.push(chunk);
+      }
+      i += 8 + padded;
+    }
+    const body = Buffer.concat(chunks);
+    const head = Buffer.from(buf.subarray(0, 12));
+    head.writeUInt32LE(4 + body.length, 4); // 'WEBP' fourcc + chunks
+    return Buffer.concat([head, body]);
+  } catch {
+    return buf;
+  }
+}
+
 function stripMetadata(buf, mediaType) {
   if (mediaType === 'image/jpeg') return stripJpeg(buf);
   if (mediaType === 'image/png') return stripPng(buf);
-  return buf; // gif/webp: passed through, see module header
+  if (mediaType === 'image/webp') return stripWebp(buf);
+  return buf; // gif: passed through, see module header
 }
 
 // --- validation ------------------------------------------------------

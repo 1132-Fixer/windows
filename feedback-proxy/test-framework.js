@@ -953,6 +953,32 @@ check('SHOT#3: PNG tEXt + JPEG EXIF metadata are stripped before storage', async
     jb.data[0] === 0xff && jb.data[1] === 0xd8;
 });
 
+check('SHOT#3b: WebP EXIF/XMP chunks are stripped and VP8X flags cleared', async () => {
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32LE(data.length);
+    const pad = data.length % 2 ? Buffer.alloc(1) : Buffer.alloc(0);
+    return Buffer.concat([Buffer.from(type, 'latin1'), len, data, pad]);
+  };
+  const vp8x = Buffer.alloc(10); vp8x[0] = 0x0c; // EXIF + XMP presence flags
+  const body = Buffer.concat([
+    chunk('VP8X', vp8x),
+    chunk('VP8 ', Buffer.from([1, 2, 3, 4, 5])),
+    chunk('EXIF', Buffer.from('gps-here')),
+    chunk('XMP ', Buffer.from('<xmp>loc</xmp>')),
+  ]);
+  const head = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP')]);
+  head.writeUInt32LE(4 + body.length, 4);
+  const webp = Buffer.concat([head, body]);
+  const r = await req('POST', '/v1/cases', shotBody(webp, { title: 'WebP meta probe' }),
+    bearer(S.B, idem('SHOT-WEBPMETA')));
+  const wb = await blobOfCase(r.json.caseRef);
+  return r.status === 201 && wb.media_type === 'image/webp' &&
+    !wb.data.includes('gps-here') && !wb.data.includes('EXIF') &&
+    wb.data[wb.data.indexOf('VP8X') + 8] === 0 &&
+    wb.data.includes('VP8 ') &&
+    wb.data.readUInt32LE(4) === wb.data.length - 8;
+});
+
 check('SHOT#4: non-image rejected by magic bytes, not extension or claimed MIME', async () => {
   const exe = Buffer.concat([Buffer.from('MZ'), Buffer.alloc(64, 1)]);
   const r = await req('POST', '/v1/cases',
