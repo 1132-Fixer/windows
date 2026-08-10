@@ -1203,24 +1203,33 @@ async function refreshScreenshotCapability() {
 }
 
 async function setScreenshot(fileOrBlob, name) {
+  // Selecting ANY replacement — even one that will be rejected — must
+  // invalidate a still-in-flight earlier read, or that older file could
+  // attach after the rejection message. The generation bumps first; every
+  // rejection then also releases the busy gate it now owns.
+  const gen = ++shotReadGen;
+  const rejectRead = (msg) => {
+    if (gen === shotReadGen) {
+      shotReadBusy = false;
+      refreshBugSubmit();
+    }
+    shotStatus(msg, true);
+  };
   // Reset the picker immediately: a rejected file must not leave its value
   // behind, or re-selecting the same file later is a silent no-op (change
   // never fires for an identical value).
   document.getElementById('fbShotInput').value = '';
   if (fileOrBlob.size > SHOT_MAX_BYTES) {
-    shotStatus('Screenshot must be 5 MB or smaller.', true);
-    return;
+    return rejectRead('Screenshot must be 5 MB or smaller.');
   }
   // Declared MIME gate (spec: MIME + magic bytes). An empty type (some
   // drag/paste sources) falls through to the sniff, which stays decisive.
   const declared = (fileOrBlob.type || '').toLowerCase().replace('image/jpg', 'image/jpeg');
   if (declared && !SHOT_ALLOWED_MIME.includes(declared)) {
-    shotStatus('Only image files can be attached (PNG, JPEG, WebP, or GIF).', true);
-    return;
+    return rejectRead('Only image files can be attached (PNG, JPEG, WebP, or GIF).');
   }
   // Submission must not observe half-updated state: block Submit while the
   // read is in flight, and discard a completion the user has superseded.
-  const gen = ++shotReadGen;
   shotReadBusy = true;
   refreshBugSubmit();
   try {
