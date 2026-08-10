@@ -23,11 +23,8 @@
   "build": {
     "appId": "com.hightexas.1132fixer",
     "publish": {
-      "provider": "github",
-      "owner": "PrimeUpYourLife",
-      "repo": "1132-Fixer-Windows",
-      "private": false,
-      "releaseType": "release"
+      "provider": "generic",
+      "url": "https://botify-network.com/downloads/1132-fixer/updates"
     },
     "productName": "1132 Fixer",
     "copyright": "Copyright (c) 2024-2026 High Texas",
