@@ -122,6 +122,112 @@ function receiptStatusFor(status) {
   }
 }
 
+// ============================================================
+// Zoom Workplace guided recovery card (operator directive 2026-08-09).
+// Copy below is BYTE-VERBATIM from the directive and pinned byte-exact by
+// tools/messages-smoke.js: title, primary description, both helper texts,
+// the seven state strings, the official admin download URL, and the two
+// accepted publisher names. Never reword them here.
+//
+// Truthfulness rule (operator amendment 2026-08-09): the card never claims
+// automatic or background repair that has no mechanism. Detection is
+// read-only; nothing on the computer changes unless the user launches an
+// installer they chose and approved; the ONE automatic behavior described
+// (re-check when the installer finishes) is implemented exactly as written
+// (installer process exit -> read-only environment re-scan).
+// ============================================================
+const ZOOM_RECOVERY = {
+  TITLE: 'Zoom Workplace needs to be installed',
+  DESCRIPTION: '1132 Fixer uses the computer-wide version of Zoom Workplace. We could not find that version on this PC.',
+  HELPER_LABEL: 'What does this mean?',
+  HELPER_TEXT: 'Zoom may be missing, or you may have a personal version installed only for your Windows account. Install the 64-bit MSI version so Zoom works for every user on this computer.',
+  WHY_LABEL: 'Why is the MSI version required?',
+  WHY_TEXT: 'The MSI package installs Zoom in the standard Windows program folder. This lets 1132 Fixer reliably find, check, and repair Zoom for every Windows user on this computer.',
+  TECH_LABEL: 'Technical details',
+  FLAG_LABEL: 'Action required',
+  DOWNLOAD_URL: 'https://zoom.us/download/admin',
+  PUBLISHERS: ['Zoom Communications, Inc.', 'Zoom Video Communications, Inc.'],
+  ACTIONS: {
+    download: 'Download Zoom MSI',
+    recheck: 'I installed it — Check again',
+    choose: 'Choose installer file',
+    cancel: 'Cancel setup',
+    // Replaces the "Cancel setup" label once msiexec is running: at that point
+    // closing the app no longer cancels anything, so the label must not imply
+    // it does.
+    close_installing: 'Close 1132 Fixer'
+  },
+  // Accessible name for the download button — the external-link icon is
+  // decorative (aria-hidden), so the name itself says a browser opens and
+  // where it goes. Nothing essential lives in a tooltip.
+  DOWNLOAD_ARIA: "Download Zoom MSI — opens Zoom's official download page (zoom.us/download/admin) in your browser",
+  STATES: {
+    downloading: "Opening Zoom's official download page…",
+    waiting: 'Install Zoom Workplace, then return here and select Check again.',
+    checking: 'Checking for Zoom Workplace…',
+    success: 'Zoom Workplace is installed and ready.',
+    still_not_found: 'We still cannot find the computer-wide Zoom installation. Make sure you installed the MSI version, then check again.',
+    wrong_version: 'We found Zoom, but it is installed only for one Windows user. Install the computer-wide MSI version to continue.',
+    offline: "We could not open Zoom's download page. Check your internet connection, or choose an MSI installer already saved on this computer."
+  },
+  // Cancel row copy — truthfulness: states exactly what has and has not
+  // been changed. Checking is read-only; nothing installs without the user.
+  CANCEL_NOTE: 'Cancelling makes no changes: checking for Zoom is read-only, and 1132 Fixer installs nothing unless you choose an installer and approve it. Closing the app now leaves this computer exactly as it is.',
+  // Replaces CANCEL_NOTE once msiexec is running. The "leaves this computer
+  // exactly as it is" promise is no longer true — Windows is mid-install and
+  // closing 1132 Fixer does not stop it — so the copy must say so.
+  CANCEL_NOTE_INSTALLING: 'The installer is running now. Closing 1132 Fixer will not stop it — Windows finishes the installation on its own. When it finishes, 1132 Fixer checks for Zoom again automatically.',
+  // Shown AFTER a chosen installer passes every validation check and BEFORE
+  // msiexec starts — explains the Windows admin-approval prompt first, and
+  // describes the one real automatic behavior (installer-exit re-check).
+  UAC_NOTE: 'The file passed all checks. Windows may now ask you to approve the installation — approval happens in the Windows prompt, and 1132 Fixer never asks for or stores your password. When the installer finishes, 1132 Fixer checks for Zoom again automatically.'
+};
+
+// "Technical details" disclosure body — the raw paths, demoted out of the
+// main explanation per the directive. Mirrors what resolveZoomInstall()
+// actually probes: both default machine-wide dirs plus any custom install
+// dir a Zoom MSI registered in the Windows installer registry.
+function zoomRecoveryTechDetails(install) {
+  const { perUserPath } = install || {};
+  const lines = [
+    'Machine-wide locations checked: C:\\Program Files\\Zoom\\bin\\Zoom.exe, ' +
+    'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe, plus any custom install directory ' +
+    'registered by a Zoom MSI in the Windows installer registry (HKLM uninstall keys). ' +
+    'This check is read-only — nothing on this computer was changed.'
+  ];
+  if (perUserPath) {
+    lines.push(`Per-user Zoom found at: ${perUserPath} — installed only for your Windows account, so the fix's helper account cannot use it.`);
+  }
+  return lines.join('\n');
+}
+
+// Installer-validation refusal copy — names the EXACT failed check and states
+// that nothing was executed (truthfulness rule). `detail` carries the raw
+// status / signer / architecture facts so support can identify the incident.
+function zoomInstallerRefusal(code, detail) {
+  const d = detail ? String(detail) : '';
+  const source = `Download the installer again from ${ZOOM_RECOVERY.DOWNLOAD_URL} and retry.`;
+  switch (code) {
+    case 'not_msi_ext':
+      return `Failed check: file type. The selected file is not a .msi installer package — nothing was run. Choose the MSI file downloaded from ${ZOOM_RECOVERY.DOWNLOAD_URL}.`;
+    case 'not_msi_magic':
+      return `Failed check: file format. The selected file has a .msi name but its contents are not a real Windows Installer package — nothing was run. ${source}`;
+    case 'changed':
+      return `Failed check: file integrity. The chosen installer changed on disk after it passed its checks — nothing was run. ${source}`;
+    case 'unreadable':
+      return `Failed check: file access. The selected file could not be read${d ? ` (${d})` : ''} — nothing was run. ${source}`;
+    case 'signature':
+      return `Failed check: digital signature. The selected file's signature is not valid (Windows reports: ${d || 'no signature'}) — nothing was run. ${source}`;
+    case 'publisher':
+      return `Failed check: publisher. The selected file is signed by "${d || 'an unknown publisher'}", not by Zoom — nothing was run. ${source}`;
+    case 'architecture':
+      // detail is the full archCompare explanation — never a silent mismatch.
+      return `Failed check: processor architecture. ${d} Nothing was run. ${source}`;
+    default:
+      return `The selected installer could not be validated${d ? ` (${d})` : ''} — nothing was run. It is safe to try again. ${source}`;
+  }
+}
+
 // Feedback submit fallbacks (renderer side; main.js maps HTTP statuses).
 const FEEDBACK_FALLBACK = 'Could not send right now. Check your internet connection and try again in a minute.';
 const FEEDBACK_NETWORK  = 'Network error — the message was not sent. Check your internet connection and try again.';
@@ -140,6 +246,7 @@ if (typeof module !== 'undefined' && module.exports) {
     FRIENDLY_ERRORS, friendlyError, unexpectedFixFailure, scanFailureMessage,
     shortcutFailureMessage, HKU_STATES, FRAME_SERVER_STATES, describeHku,
     describeFrameServer, receiptStatusFor, describeUnrecognized,
+    ZOOM_RECOVERY, zoomRecoveryTechDetails, zoomInstallerRefusal,
     FEEDBACK_FALLBACK, FEEDBACK_NETWORK, reportBuildFailure
   };
 }

@@ -119,6 +119,62 @@ console.log('zoom-detection-smoke: zoomStatusMessage');
   check(zd.zoomStatusMessage(null) === zd.ZOOM_NOT_FOUND_MESSAGE, 'null install object -> not-found copy, no throw');
 }
 
+console.log('zoom-detection-smoke: MSI magic header (guided recovery card)');
+{
+  // Real MSIs are OLE compound files: D0 CF 11 E0 (A1 B1 1A E1).
+  check(zd.hasMsiMagic(Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])), 'OLE compound-file header accepted');
+  check(zd.hasMsiMagic(Buffer.from([0xD0, 0xCF, 0x11, 0xE0])), 'exact 4-byte magic accepted');
+  check(!zd.hasMsiMagic(Buffer.from([0x4D, 0x5A, 0x90, 0x00])), 'PE (MZ) header rejected — a renamed .exe is not an MSI');
+  check(!zd.hasMsiMagic(Buffer.from([0x50, 0x4B, 0x03, 0x04])), 'ZIP header rejected');
+  check(!zd.hasMsiMagic(Buffer.from('MSI text impostor')), 'plain text rejected');
+  check(!zd.hasMsiMagic(Buffer.from([0xD0, 0xCF, 0x11])), 'truncated header rejected');
+  check(!zd.hasMsiMagic(Buffer.alloc(0)), 'empty buffer rejected');
+  check(!zd.hasMsiMagic(null), 'null rejected without throwing');
+}
+
+console.log('zoom-detection-smoke: signer CN extraction');
+{
+  check(zd.subjectCn('CN="Zoom Video Communications, Inc.", O=Zoom Video Communications, C=US') === 'Zoom Video Communications, Inc.', 'quoted CN with embedded comma');
+  check(zd.subjectCn('CN=Zoom Communications\\, Inc., O=Zoom') === 'Zoom Communications, Inc.', 'escaped-comma CN');
+  check(zd.subjectCn('CN=Simple Signer, O=X') === 'Simple Signer', 'plain CN');
+  check(zd.subjectCn('O=NoCommonName, C=US') === null, 'no CN -> null (never a pass)');
+  check(zd.subjectCn('') === null, 'empty -> null');
+  check(zd.subjectCn(null) === null, 'null -> null, no throw');
+}
+
+console.log('zoom-detection-smoke: architecture compatibility (never silent)');
+{
+  const ok  = (t, a) => zd.archCompare(t, a).ok;
+  const msg = (t, a) => zd.archCompare(t, a).message;
+  // x64 Windows
+  check(ok('x64;1033', 'AMD64'), 'x64 MSI accepted on x64 Windows');
+  check(ok('Intel;1033', 'AMD64'), '32-bit MSI accepted on x64 Windows (WOW64)');
+  check(!ok('Arm64;1033', 'AMD64'), 'ARM64 MSI refused on x64 Windows');
+  // ARM64 Windows — the directive's headline case: never silently x64.
+  check(ok('Arm64;1033', 'ARM64'), 'ARM64 MSI accepted on ARM64 Windows');
+  check(!ok('x64;1033', 'ARM64'), 'x64 MSI refused on ARM64');
+  check(/ARM/.test(msg('x64;1033', 'ARM64')) && /x64/.test(msg('x64;1033', 'ARM64')), 'x64-on-ARM64 refusal names both architectures');
+  check(!ok('Intel;1033', 'ARM64'), '32-bit MSI refused on ARM64');
+  // 32-bit Windows
+  check(ok('Intel;1033', 'x86'), '32-bit MSI accepted on 32-bit Windows');
+  check(!ok('x64;1033', 'x86'), 'x64 MSI refused on 32-bit Windows');
+  // Never-silent rule: EVERY non-ok verdict carries a real explanation.
+  const cases = [
+    ['Arm64;1033', 'AMD64'], ['x64;1033', 'ARM64'], ['Intel;1033', 'ARM64'],
+    ['x64;1033', 'x86'], ['Arm64;1033', 'x86'],
+    ['', 'AMD64'], ['banana;1033', 'AMD64'], ['x64;1033', ''], [null, null]
+  ];
+  check(cases.every(([t, a]) => {
+    const r = zd.archCompare(t, a);
+    return r.ok || (typeof r.message === 'string' && r.message.length > 20);
+  }), 'every mismatch/unknown is an explained refusal — no silent outcome');
+  check(zd.archCompare('banana;1033', 'AMD64').message.includes('banana'), 'unrecognized MSI platform stays visible in the refusal');
+  check(!zd.archCompare('', 'AMD64').ok, 'missing Template property -> explained refusal, never a pass');
+  // Normalizers used by the matrix
+  check(zd.msiPlatform('x64;1033') === 'x64' && zd.msiPlatform('Intel;1033') === 'x86' && zd.msiPlatform('Arm64;1033') === 'arm64', 'Template platform tokens normalize');
+  check(zd.osArchNorm('AMD64') === 'x64' && zd.osArchNorm('ARM64') === 'arm64' && zd.osArchNorm('x86') === 'x86', 'PROCESSOR_ARCHITECTURE values normalize (incl. ARM64)');
+}
+
 console.log('zoom-detection-smoke: launcher path extraction');
 {
   // Current launcher: the REAL sealed-credential content main.js ships
