@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GitHub release itself with `-p never`, unchanged). The first release
   tag after this change must wait until the broker's `1132-fixer` entry
   is live.
+- The `npm run release` script drops `--publish always` for `--publish never`:
+  electron-builder cannot upload to a `generic` provider, so `always` no longer
+  publishes anything and only implied one. Publishing stays exclusively on the
+  tag-triggered `release.yml` (`action-gh-release`), which uploads `latest.yml`
+  and the installers to this repo's GitHub Releases for the broker to serve.
 
 ## [5.6.0] - 2026-08-08 — finds your Zoom, tells the truth, and locks the helper account down
 

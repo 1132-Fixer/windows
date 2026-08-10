@@ -12,7 +12,7 @@
     "build": "node scripts/inject-config.js && electron-builder --win portable --x64 --publish never",
     "build:installer": "node scripts/inject-config.js && electron-builder --win nsis --x64 --publish never",
     "build:all": "node scripts/inject-config.js && electron-builder --win --x64 --publish never",
-    "release": "node scripts/inject-config.js && electron-builder --win nsis --x64 --publish always"
+    "release": "node scripts/inject-config.js && electron-builder --win nsis --x64 --publish never"
   },
   "author": "High Texas",
   "license": "MIT",
