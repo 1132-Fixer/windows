@@ -37,14 +37,27 @@ async function dbState() {
 }
 
 async function health(res) {
-  // Legacy shape preserved; db field appended ONLY when v2 is enabled so the
-  // dark deployment stays byte-identical.
+  // Legacy shape preserved; db + capabilities fields appended ONLY when v2 is
+  // enabled so the dark deployment stays byte-identical.
   const body = {
     ok: true,
     service: '1132-fixer-feedback-proxy',
     configured: legacy.configured(),
   };
-  if (v2Enabled()) body.db = await dbState();
+  if (v2Enabled()) {
+    body.db = await dbState();
+    // Clients gate their attach-screenshot UI on this (#141): true only when
+    // the whole chain can actually deliver — API mounted, DB up, registration
+    // possible, and Discord dispatch on with its config present. Anything
+    // less would be a dead control in the app.
+    body.capabilities = {
+      screenshots: body.db === 'ok' &&
+        Boolean(process.env.TOKEN_HASH_PEPPER) &&
+        process.env.DISCORD_ENABLED === 'true' &&
+        Boolean(process.env.DISCORD_BOT_TOKEN) &&
+        Boolean(process.env.DISCORD_SUPPORT_FORUM_ID),
+    };
+  }
   return json(res, 200, body);
 }
 

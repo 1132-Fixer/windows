@@ -41,15 +41,47 @@ function escapeFact(s) {
   return String(s == null ? '' : s).replace(/[`\r\n]+/g, ' ').slice(0, 120);
 }
 
-async function api(method, path, body) {
+/**
+ * Multipart body for a message with file uploads: payload_json part plus one
+ * files[n] part per file ({ filename, contentType, data:Buffer }). Built by
+ * hand — this service is zero-dependency by design.
+ */
+function multipartBody(payload, files) {
+  const boundary = 'botify-' + require('crypto').randomBytes(12).toString('hex');
+  const parts = [
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\n` +
+        `Content-Type: application/json\r\n\r\n${JSON.stringify(payload)}\r\n`
+    ),
+  ];
+  files.forEach((f, n) => {
+    parts.push(Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="files[${n}]"; filename="${f.filename}"\r\n` +
+        `Content-Type: ${f.contentType}\r\n\r\n`
+    ), f.data, Buffer.from('\r\n'));
+  });
+  parts.push(Buffer.from(`--${boundary}--\r\n`));
+  return { contentType: 'multipart/form-data; boundary=' + boundary, body: Buffer.concat(parts) };
+}
+
+async function api(method, path, body, files) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error('DISCORD_BOT_TOKEN not set');
-  const doFetch = () =>
-    fetch(API + path, {
+  const doFetch = () => {
+    if (files && files.length) {
+      const mp = multipartBody(body, files);
+      return fetch(API + path, {
+        method,
+        headers: { Authorization: 'Bot ' + token, 'Content-Type': mp.contentType },
+        body: mp.body,
+      });
+    }
+    return fetch(API + path, {
       method,
       headers: { Authorization: 'Bot ' + token, 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+  };
   let r = await doFetch();
   if (r.status === 429) {
     const data = await r.json().catch(() => ({}));
@@ -193,6 +225,19 @@ function postThreadMessage(threadId, content) {
   });
 }
 
+/**
+ * The bug report's screenshot, as its own thread message (#141). Deliberately
+ * NOT part of the control card: card refreshes PATCH the starter message,
+ * and a PATCH that does not re-upload the file would silently drop it.
+ */
+function postScreenshot(threadId, caseRef, file) {
+  return api('POST', `/channels/${threadId}/messages`, {
+    content: `**Screenshot attached to ${caseRef}**`,
+    allowed_mentions: NO_MENTIONS,
+    attachments: [{ id: 0, filename: file.filename }],
+  }, [file]);
+}
+
 // ---- pinned live-rating card ---------------------------------------
 
 function bar(n, max) {
@@ -250,6 +295,6 @@ async function upsertRatingCard(snapshot) {
 }
 
 module.exports = {
-  createForumPost, postRoleAlert, postThreadMessage, editCaseCard, upsertRatingCard,
-  escapeMd, escapeFact,
+  createForumPost, postRoleAlert, postThreadMessage, postScreenshot, editCaseCard,
+  upsertRatingCard, escapeMd, escapeFact,
 };

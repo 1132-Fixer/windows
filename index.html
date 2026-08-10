@@ -896,6 +896,45 @@
     .fb-status.ok { color: var(--success); }
     .fb-status.err { color: var(--danger); }
 
+    /* Bug-report screenshot attach (#141). [hidden] must win over the
+       display rules below — the attribute alone loses to a class display. */
+    .fb-attach[hidden], .fb-attach-preview[hidden], .fb-attach-row[hidden] { display: none !important; }
+    .fb-attach { margin-bottom: var(--s-3); }
+    .fb-attach-row { display: flex; align-items: center; gap: 10px; }
+    .fb-attach-row.fb-drag {
+      outline: 2px dashed var(--accent);
+      outline-offset: 4px;
+      border-radius: var(--r-sm);
+    }
+    .fb-attach-hint { font-size: 11.5px; color: var(--muted); }
+    .fb-attach-preview {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      background: var(--panel-3);
+      padding: 10px;
+    }
+    .fb-attach-preview img {
+      max-width: 120px;
+      max-height: 80px;
+      border-radius: var(--r-sm);
+      border: 1px solid var(--border);
+      object-fit: contain;
+      background: var(--panel);
+    }
+    .fb-attach-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+    .fb-attach-name {
+      font-size: 12px;
+      color: var(--muted);
+      max-width: 150px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .fb-shot-status { text-align: left; margin-top: var(--s-2); }
+
     /* Support report modal — wider, single-screen */
     .sr-card { width: 720px; max-width: 95%; }
     .sr-textarea {
@@ -1223,6 +1262,23 @@
         <div class="fb-title">Bug Report</div>
         <div class="fb-label">Describe the issue (min 50 characters, or attach a support report) &middot; <button type="button" class="fb-inline-link" id="fbViewReport">preview support report</button></div>
         <textarea class="fb-textarea" id="fbBugText" placeholder="What happened? What did you expect?" aria-label="Bug description"></textarea>
+        <div class="fb-attach" id="fbShotBlock" hidden>
+          <div class="fb-label" id="fbShotLabel">Screenshot of the error (optional) &middot; PNG, JPEG, WebP or GIF &middot; 5 MB max</div>
+          <div class="fb-attach-row" id="fbShotRow">
+            <button type="button" class="fb-btn fb-btn-cancel" id="fbShotAttach" aria-describedby="fbShotLabel">Attach screenshot</button>
+            <span class="fb-attach-hint">or drag &amp; drop / paste (Ctrl+V) an image here</span>
+          </div>
+          <div class="fb-attach-preview" id="fbShotPreview" hidden>
+            <img id="fbShotImg" alt="Preview of the attached screenshot" />
+            <div class="fb-attach-meta">
+              <span class="fb-attach-name" id="fbShotName"></span>
+              <button type="button" class="fb-btn fb-btn-cancel" id="fbShotReplace" aria-label="Replace the attached screenshot">Replace</button>
+              <button type="button" class="fb-btn fb-btn-cancel" id="fbShotRemove" aria-label="Remove the attached screenshot">Remove</button>
+            </div>
+          </div>
+          <div class="fb-status fb-shot-status" id="fbShotStatus" role="status" aria-live="polite"></div>
+          <input type="file" id="fbShotInput" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+        </div>
         <div class="fb-label">System Info (auto-attached)</div>
         <div class="fb-sysinfo" id="fbSysInfo">Loading...</div>
         <div class="fb-actions">

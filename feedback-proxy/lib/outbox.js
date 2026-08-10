@@ -78,6 +78,12 @@ async function dispatchCaseCreated(payload) {
     if (claim.rows[0]) await discord.postRoleAlert(claim.rows[0].forum_thread_id);
   }
 
+  // Screenshot forward (#141): same claim-first at-most-once pattern — the
+  // redaction_state flip pending->approved is the claim, so a retry after a
+  // failed upload cannot double-post the image.
+  const shot = await require('./attachments').claimForDispatch(db, payload.case_id);
+  if (shot) await discord.postScreenshot(binding.forum_thread_id, payload.case_ref, shot);
+
   await db.query(
     "INSERT INTO case_events (case_id, actor_type, event_type, data) VALUES ($1, 'system', 'discord.posted', $2)",
     [payload.case_id, JSON.stringify({ thread_id: binding.forum_thread_id })]
@@ -149,6 +155,8 @@ async function tick() {
   try {
     await require('./idempotency').purgeExpired().catch((e) =>
       console.error('[outbox] idempotency purge failed: ' + e.message));
+    await require('./attachments').purgeExpired(db).catch((e) =>
+      console.error('[outbox] attachment purge failed: ' + e.message));
     if (!discordEnabled()) return;
 
     const rows = await claimBatch();

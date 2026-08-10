@@ -1037,8 +1037,10 @@ function openFeedback() {
   attachBtn.disabled = false;
   attachBtn.textContent = 'Attach Support Report';
   document.querySelectorAll('.fb-rating-btn').forEach(b => b.classList.remove('selected'));
-  document.querySelectorAll('.fb-status').forEach(s => { s.textContent = ''; s.className = 'fb-status'; });
+  document.querySelectorAll('.fb-status').forEach(s => { s.textContent = ''; s.className = s.className.includes('fb-shot-status') ? 'fb-status fb-shot-status' : 'fb-status'; });
   Object.keys(ratings).forEach(k => { ratings[k] = 0; });
+  clearScreenshot();
+  refreshScreenshotCapability();
   loadSysInfo();
   releaseFeedbackTrap = installFocusTrap(overlay);
 }
@@ -1140,11 +1142,127 @@ document.getElementById('fbAttachReport').addEventListener('click', async () => 
   }
 });
 
+// ============================================================
+// Bug-report screenshot attach (#141).
+//
+// The whole block stays hidden unless the proxy advertises the screenshots
+// capability — a control that cannot deliver is a dead button. Validation
+// runs client-side first (type by magic bytes, 5 MB cap) for immediate
+// honest feedback; the proxy re-validates server-side regardless.
+// ============================================================
+const SHOT_MAX_BYTES = 5 * 1024 * 1024;
+let bugScreenshot = null;        // { bytes: Uint8Array, mediaType, name }
+let bugScreenshotUrl = null;     // preview object URL (revoked on clear)
+let screenshotsCapable = false;
+
+function sniffImageBytes(u8) {
+  if (u8.length < 12) return null;
+  if (u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4e && u8[3] === 0x47 &&
+      u8[4] === 0x0d && u8[5] === 0x0a && u8[6] === 0x1a && u8[7] === 0x0a) return 'image/png';
+  if (u8[0] === 0xff && u8[1] === 0xd8 && u8[2] === 0xff) return 'image/jpeg';
+  const head = String.fromCharCode.apply(null, Array.from(u8.slice(0, 12)));
+  if (head.startsWith('GIF87a') || head.startsWith('GIF89a')) return 'image/gif';
+  if (head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+
+function shotStatus(msg, isError) {
+  const el = document.getElementById('fbShotStatus');
+  el.textContent = msg || '';
+  el.className = 'fb-status fb-shot-status' + (isError ? ' err' : '');
+}
+
+function clearScreenshot() {
+  bugScreenshot = null;
+  if (bugScreenshotUrl) { URL.revokeObjectURL(bugScreenshotUrl); bugScreenshotUrl = null; }
+  document.getElementById('fbShotPreview').hidden = true;
+  document.getElementById('fbShotRow').hidden = false;
+  document.getElementById('fbShotInput').value = '';
+  shotStatus('');
+}
+
+async function refreshScreenshotCapability() {
+  const block = document.getElementById('fbShotBlock');
+  block.hidden = true;
+  screenshotsCapable = false;
+  try {
+    const cap = await window.electronAPI.feedbackCapabilities();
+    screenshotsCapable = !!(cap && cap.screenshots);
+  } catch (_) { /* capability stays false */ }
+  block.hidden = !screenshotsCapable;
+}
+
+async function setScreenshot(fileOrBlob, name) {
+  if (fileOrBlob.size > SHOT_MAX_BYTES) {
+    shotStatus('Screenshot must be 5 MB or smaller.', true);
+    return;
+  }
+  const bytes = new Uint8Array(await fileOrBlob.arrayBuffer());
+  const mediaType = sniffImageBytes(bytes);
+  if (!mediaType) {
+    shotStatus('Only image files can be attached (PNG, JPEG, WebP, or GIF).', true);
+    return;
+  }
+  if (bugScreenshotUrl) URL.revokeObjectURL(bugScreenshotUrl);
+  bugScreenshot = { bytes, mediaType, name: name || 'screenshot' };
+  bugScreenshotUrl = URL.createObjectURL(new Blob([bytes], { type: mediaType }));
+  document.getElementById('fbShotImg').src = bugScreenshotUrl;
+  document.getElementById('fbShotName').textContent = bugScreenshot.name;
+  document.getElementById('fbShotPreview').hidden = false;
+  document.getElementById('fbShotRow').hidden = true;
+  shotStatus('');
+}
+
+document.getElementById('fbShotAttach').addEventListener('click', () => {
+  document.getElementById('fbShotInput').click();
+});
+document.getElementById('fbShotReplace').addEventListener('click', () => {
+  document.getElementById('fbShotInput').click();
+});
+document.getElementById('fbShotRemove').addEventListener('click', clearScreenshot);
+document.getElementById('fbShotInput').addEventListener('change', (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (f) setScreenshot(f, f.name);
+});
+
+// Drag-and-drop onto the bug section.
+const fbBugSection = document.getElementById('fbBug');
+['dragover', 'dragenter'].forEach(ev => fbBugSection.addEventListener(ev, (e) => {
+  if (!screenshotsCapable) return;
+  e.preventDefault();
+  document.getElementById('fbShotRow').classList.add('fb-drag');
+}));
+['dragleave', 'drop'].forEach(ev => fbBugSection.addEventListener(ev, (e) => {
+  if (ev === 'drop') e.preventDefault();
+  document.getElementById('fbShotRow').classList.remove('fb-drag');
+}));
+fbBugSection.addEventListener('drop', (e) => {
+  if (!screenshotsCapable) return;
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) setScreenshot(f, f.name);
+});
+
+// Paste-from-clipboard while the bug form is open (users screenshot errors
+// straight to the clipboard).
+document.addEventListener('paste', (e) => {
+  if (!screenshotsCapable) return;
+  if (!document.getElementById('fbOverlay').classList.contains('show')) return;
+  if (!fbBugSection.classList.contains('active')) return;
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  for (const item of items) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      const f = item.getAsFile();
+      if (f) { e.preventDefault(); setScreenshot(f, 'pasted screenshot'); }
+      return;
+    }
+  }
+});
+
 document.getElementById('fbBugSubmit').addEventListener('click', async () => {
   const text = document.getElementById('fbBugText').value.trim();
   const sysInfo = document.getElementById('fbSysInfo').textContent;
   const body = `${text}\n\n---\n**System Info**\n${sysInfo.split('\n').map(l => '- ' + l).join('\n')}`;
-  await submitFeedback('Bug Report', body, 'fbBugStatus');
+  await submitFeedback('Bug Report', body, 'fbBugStatus', bugScreenshot);
 });
 document.getElementById('fbRatingSubmit').addEventListener('click', async () => {
   const filled = Object.entries(ratings).filter(([,v]) => v > 0);
@@ -1165,12 +1283,18 @@ document.getElementById('fbContactSubmit').addEventListener('click', async () =>
   await submitFeedback('Contact', text, 'fbContactStatus');
 });
 
-async function submitFeedback(type, text, statusId) {
+async function submitFeedback(type, text, statusId, screenshot) {
   const statusEl = document.getElementById(statusId);
-  statusEl.textContent = 'Submitting...';
+  statusEl.textContent = screenshot ? 'Submitting report + screenshot...' : 'Submitting...';
   statusEl.className = 'fb-status';
   try {
-    const result = await window.electronAPI.submitFeedback(type, text);
+    // The screenshot rides only when present; success below means the proxy
+    // accepted the WHOLE submission (report + screenshot in one request), so
+    // "Submitted successfully" can never overstate what was sent.
+    const shotPayload = screenshot
+      ? { bytes: screenshot.bytes, mediaType: screenshot.mediaType }
+      : undefined;
+    const result = await window.electronAPI.submitFeedback(type, text, shotPayload);
     if (result.success) {
       statusEl.textContent = 'Submitted successfully!';
       statusEl.className = 'fb-status ok';

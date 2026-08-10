@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -7,6 +7,7 @@ const https = require('https');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const config = require('./src/main/config');
+const supportClient = require('./src/main/support-client');
 const zoomDetect = require('./zoom-detect');
 const messages = require('./messages');
 const helperCred = require('./helper-credential');
@@ -2890,12 +2891,35 @@ ipcMain.handle('get-system-info', () => {
 // shipped installer, which is exactly how the old hardcoded token leaked.
 // The proxy builds the issue title/body/labels itself, so a tampered client
 // can't forge labels or issue content.
-ipcMain.handle('submit-feedback', async (event, type, text) => {
+// Attach-screenshot UI gate (#141): the renderer shows the control ONLY when
+// the proxy advertises the capability — anything else would be a dead button
+// while the support platform is dark.
+ipcMain.handle('feedback-capabilities', () => supportClient.capabilities(config));
+
+ipcMain.handle('submit-feedback', async (event, type, text, screenshot) => {
   try {
     const version = app.getVersion();
     const endpoint = config.FEEDBACK_PROXY_URL;
     if (!endpoint) {
       return { success: false, error: 'Feedback service not configured' };
+    }
+
+    // A report carrying a screenshot goes through the /v1 support API — the
+    // legacy /feedback contract caps bodies at 8 KB and cannot carry an
+    // image. Screenshot bytes are never logged.
+    if (screenshot && screenshot.bytes && screenshot.bytes.length) {
+      return supportClient.submitBugWithScreenshot({
+        config,
+        userDataDir: app.getPath('userData'),
+        safeStorage,
+        version,
+        osLabel: `Windows ${os.release()}`,
+        text,
+        screenshot: {
+          bytes: Buffer.from(screenshot.bytes),
+          mediaType: String(screenshot.mediaType || ''),
+        },
+      });
     }
 
     let url;

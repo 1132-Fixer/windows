@@ -873,6 +873,132 @@ check('no client response ever contained a bot token or a token hash', async () 
     !p.body.includes('token_hash'));
 });
 
+// --- screenshot attachments (#141) -----------------------------------
+
+// 1x1 black-pixel PNG, a real decodable image.
+const TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+  'base64');
+
+/** TINY_PNG with a tEXt metadata chunk spliced in before IEND. */
+function pngWithText() {
+  const data = Buffer.from('GPS\0somewhere');
+  const chunk = Buffer.concat([
+    (() => { const b = Buffer.alloc(4); b.writeUInt32BE(data.length); return b; })(),
+    Buffer.from('tEXt'), data, Buffer.alloc(4), // CRC bytes irrelevant to the strip walk
+  ]);
+  const iendAt = TINY_PNG.length - 12; // IEND chunk is exactly 12 bytes
+  return Buffer.concat([TINY_PNG.subarray(0, iendAt), chunk, TINY_PNG.subarray(iendAt)]);
+}
+
+/** Minimal JPEG whose APP1 segment carries an EXIF payload. */
+function jpegWithExif() {
+  const exif = Buffer.from('Exif\0\0gps-coordinates-here');
+  const len = Buffer.alloc(2);
+  len.writeUInt16BE(exif.length + 2);
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8]), Buffer.from([0xff, 0xe1]), len, exif,
+    Buffer.from([0xff, 0xda, 0x00, 0x04, 0x01, 0x02]), // SOS
+    Buffer.from([0x11, 0x22, 0x33]), Buffer.from([0xff, 0xd9]),
+  ]);
+}
+
+const shotBody = (buf, over) => Object.assign({
+  type: 'bug', title: 'Screenshot probe', description: 'bug with a screenshot',
+  screenshot: { data: buf.toString('base64') },
+}, over);
+
+async function blobOfCase(caseRef) {
+  const { rows } = await db.query(
+    'SELECT a.media_type, a.byte_size, a.sha256, a.redaction_state, b.data ' +
+      'FROM attachments a JOIN support_cases c ON c.id = a.case_id ' +
+      "JOIN attachment_blobs b ON b.id = substring(a.object_key from 4)::uuid " +
+      'WHERE c.case_ref = $1',
+    [caseRef]
+  );
+  return rows[0];
+}
+
+check('SHOT#1: /health advertises the screenshots capability when the chain is live', async () => {
+  const h = await req('GET', '/health');
+  return h.status === 200 && h.json.capabilities &&
+    h.json.capabilities.screenshots === true;
+});
+
+check('SHOT#2: valid PNG attaches — 201, stored blob + sha256 + pending state', async () => {
+  const r = await req('POST', '/v1/cases', shotBody(TINY_PNG), bearer(S.B, idem('SHOT-PNG')));
+  S.shotCase = r.json.caseRef;
+  const a = await blobOfCase(S.shotCase);
+  const plain = await req('POST', '/v1/cases',
+    { type: 'bug', title: 'No screenshot', description: 'plain bug' }, bearer(S.B, idem('SHOT-NONE')));
+  return r.status === 201 && r.json.screenshotAttached === true &&
+    plain.status === 201 && plain.json.screenshotAttached === false &&
+    a && a.media_type === 'image/png' && a.redaction_state === 'pending' &&
+    Number(a.byte_size) === a.data.length &&
+    crypto.createHash('sha256').update(a.data).digest().equals(a.sha256);
+});
+
+check('SHOT#3: PNG tEXt + JPEG EXIF metadata are stripped before storage', async () => {
+  const p = await req('POST', '/v1/cases', shotBody(pngWithText(), { title: 'PNG meta probe' }),
+    bearer(S.B, idem('SHOT-PNGMETA')));
+  const j = await req('POST', '/v1/cases', shotBody(jpegWithExif(), { title: 'JPEG meta probe' }),
+    bearer(S.B, idem('SHOT-JPEGMETA')));
+  const pb = await blobOfCase(p.json.caseRef);
+  const jb = await blobOfCase(j.json.caseRef);
+  S.jpegCase = j.json.caseRef;
+  return p.status === 201 && j.status === 201 &&
+    !pb.data.includes('tEXt') && !pb.data.includes('GPS') &&
+    pb.data.subarray(0, 4).equals(TINY_PNG.subarray(0, 4)) &&
+    jb.media_type === 'image/jpeg' && !jb.data.includes('Exif') &&
+    jb.data[0] === 0xff && jb.data[1] === 0xd8;
+});
+
+check('SHOT#4: non-image rejected by magic bytes, not extension or claimed MIME', async () => {
+  const exe = Buffer.concat([Buffer.from('MZ'), Buffer.alloc(64, 1)]);
+  const r = await req('POST', '/v1/cases',
+    shotBody(exe, { screenshot: { data: exe.toString('base64'), mediaType: 'image/png' } }),
+    bearer(S.B, idem('SHOT-EXE')));
+  return r.status === 400 && r.json.error.code === 'validation_failed' &&
+    r.json.error.message.includes('Only image files');
+});
+
+check('SHOT#5: oversized image rejected with the truthful 5 MB message', async () => {
+  const big = Buffer.alloc(5 * 1024 * 1024 + 1);
+  TINY_PNG.copy(big, 0); // real PNG magic so only the size check can reject it
+  const r = await req('POST', '/v1/cases', shotBody(big), bearer(S.B, idem('SHOT-BIG')));
+  return r.status === 400 && r.json.error.code === 'validation_failed' &&
+    r.json.error.message.includes('5 MB');
+});
+
+check('SHOT#6: request body over the create cap -> 413, never a hang or 500', async () => {
+  const r = await req('POST', '/v1/cases',
+    JSON.stringify({ type: 'bug', title: 'x', description: 'y', screenshot: { data: 'A'.repeat(9 * 1024 * 1024) } }),
+    bearer(S.B, idem('SHOT-HUGE')));
+  return r.status === 413 && r.json.error.code === 'too_large';
+});
+
+check('SHOT#7: dispatch posts the screenshot once as multipart; state flips approved', async () => {
+  await outbox.tick();
+  await outbox.tick(); // second pass must not double-post (claimed pending->approved)
+  const shotPosts = fetchCalls.filter((c) =>
+    c.url.includes('discord.com') && c.body && c.body.includes('Screenshot attached to'));
+  const a = await blobOfCase(S.shotCase);
+  const one = shotPosts.find((c) => c.body.includes(S.shotCase));
+  return shotPosts.filter((c) => c.body.includes(S.shotCase)).length === 1 &&
+    a.redaction_state === 'approved' && Buffer.isBuffer(one.body) &&
+    one.body.includes('payload_json') &&
+    one.body.includes('filename="screenshot.png"') &&
+    one.body.includes('Content-Type: image/png');
+});
+
+check('SHOT#8: expired attachments and blobs are purged by the worker', async () => {
+  await db.query('UPDATE attachments SET expires_at = now() - interval \'1 day\'');
+  await outbox.tick();
+  const rows = await count('SELECT count(*) FROM attachments');
+  const blobs = await count('SELECT count(*) FROM attachment_blobs');
+  return rows === 0 && blobs === 0;
+});
+
 // --- run -------------------------------------------------------------
 (async () => {
   console.log('=== support-framework suite (final directive) ===');
@@ -881,7 +1007,7 @@ check('no client response ever contained a bot token or a token hash', async () 
   await db.query(
     'TRUNCATE discord_interactions, outbox, idempotency_requests, case_events, ' +
       'rating_snapshots, rating_revisions, ratings, inbox_receipts, internal_notes, ' +
-      'attachments, case_messages, discord_case_bindings, support_cases, support_principals CASCADE'
+      'attachments, attachment_blobs, case_messages, discord_case_bindings, support_cases, support_principals CASCADE'
   );
 
   let pass = true;
