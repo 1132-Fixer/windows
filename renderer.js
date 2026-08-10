@@ -1091,11 +1091,9 @@ document.querySelectorAll('.fb-rating-btns').forEach(group => {
     });
   });
 });
-['fbBugText', 'fbContactText'].forEach(id => {
-  const submitId = id === 'fbBugText' ? 'fbBugSubmit' : 'fbContactSubmit';
-  document.getElementById(id).addEventListener('input', (e) => {
-    document.getElementById(submitId).disabled = e.target.value.trim().length < 50;
-  });
+document.getElementById('fbBugText').addEventListener('input', refreshBugSubmit);
+document.getElementById('fbContactText').addEventListener('input', (e) => {
+  document.getElementById('fbContactSubmit').disabled = e.target.value.trim().length < 50;
 });
 
 document.getElementById('fbViewReport').addEventListener('click', openSupportReport);
@@ -1151,9 +1149,12 @@ document.getElementById('fbAttachReport').addEventListener('click', async () => 
 // honest feedback; the proxy re-validates server-side regardless.
 // ============================================================
 const SHOT_MAX_BYTES = 5 * 1024 * 1024;
+const SHOT_ALLOWED_MIME = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 let bugScreenshot = null;        // { bytes: Uint8Array, mediaType, name }
 let bugScreenshotUrl = null;     // preview object URL (revoked on clear)
 let screenshotsCapable = false;
+let shotReadGen = 0;             // invalidates in-flight async file reads
+let shotReadBusy = false;        // read in flight: submit must wait
 
 function sniffImageBytes(u8) {
   if (u8.length < 12) return null;
@@ -1172,13 +1173,22 @@ function shotStatus(msg, isError) {
   el.className = 'fb-status fb-shot-status' + (isError ? ' err' : '');
 }
 
+function refreshBugSubmit() {
+  const btn = document.getElementById('fbBugSubmit');
+  const len = document.getElementById('fbBugText').value.trim().length;
+  btn.disabled = shotReadBusy || len < 50;
+}
+
 function clearScreenshot() {
+  shotReadGen++; // a queued async read completion must not resurrect state
+  shotReadBusy = false;
   bugScreenshot = null;
   if (bugScreenshotUrl) { URL.revokeObjectURL(bugScreenshotUrl); bugScreenshotUrl = null; }
   document.getElementById('fbShotPreview').hidden = true;
   document.getElementById('fbShotRow').hidden = false;
   document.getElementById('fbShotInput').value = '';
   shotStatus('');
+  refreshBugSubmit();
 }
 
 async function refreshScreenshotCapability() {
@@ -1197,20 +1207,40 @@ async function setScreenshot(fileOrBlob, name) {
     shotStatus('Screenshot must be 5 MB or smaller.', true);
     return;
   }
-  const bytes = new Uint8Array(await fileOrBlob.arrayBuffer());
-  const mediaType = sniffImageBytes(bytes);
-  if (!mediaType) {
+  // Declared MIME gate (spec: MIME + magic bytes). An empty type (some
+  // drag/paste sources) falls through to the sniff, which stays decisive.
+  const declared = (fileOrBlob.type || '').toLowerCase().replace('image/jpg', 'image/jpeg');
+  if (declared && !SHOT_ALLOWED_MIME.includes(declared)) {
     shotStatus('Only image files can be attached (PNG, JPEG, WebP, or GIF).', true);
     return;
   }
-  if (bugScreenshotUrl) URL.revokeObjectURL(bugScreenshotUrl);
-  bugScreenshot = { bytes, mediaType, name: name || 'screenshot' };
-  bugScreenshotUrl = URL.createObjectURL(new Blob([bytes], { type: mediaType }));
-  document.getElementById('fbShotImg').src = bugScreenshotUrl;
-  document.getElementById('fbShotName').textContent = bugScreenshot.name;
-  document.getElementById('fbShotPreview').hidden = false;
-  document.getElementById('fbShotRow').hidden = true;
-  shotStatus('');
+  // Submission must not observe half-updated state: block Submit while the
+  // read is in flight, and discard a completion the user has superseded.
+  const gen = ++shotReadGen;
+  shotReadBusy = true;
+  refreshBugSubmit();
+  try {
+    const bytes = new Uint8Array(await fileOrBlob.arrayBuffer());
+    if (gen !== shotReadGen) return; // replaced or cleared mid-read
+    const mediaType = sniffImageBytes(bytes);
+    if (!mediaType || (declared && declared !== mediaType)) {
+      shotStatus('Only image files can be attached (PNG, JPEG, WebP, or GIF).', true);
+      return;
+    }
+    if (bugScreenshotUrl) URL.revokeObjectURL(bugScreenshotUrl);
+    bugScreenshot = { bytes, mediaType, name: name || 'screenshot' };
+    bugScreenshotUrl = URL.createObjectURL(new Blob([bytes], { type: mediaType }));
+    document.getElementById('fbShotImg').src = bugScreenshotUrl;
+    document.getElementById('fbShotName').textContent = bugScreenshot.name;
+    document.getElementById('fbShotPreview').hidden = false;
+    document.getElementById('fbShotRow').hidden = true;
+    shotStatus('');
+  } finally {
+    if (gen === shotReadGen) {
+      shotReadBusy = false;
+      refreshBugSubmit();
+    }
+  }
 }
 
 document.getElementById('fbShotAttach').addEventListener('click', () => {
