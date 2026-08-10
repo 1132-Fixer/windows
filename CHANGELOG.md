@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — update feed moves to the Botify Network download broker (#136)
+
+- The updater feed and the portable "download it" link now point at the
+  Botify Network download broker
+  (`botify-network.com/downloads/1132-fixer/updates` /
+  `…/downloads/1132-fixer/latest`) instead of anonymous GitHub release
+  URLs. Releases keep publishing on this repository's GitHub Releases —
+  the broker reads them server-side, so the repository can stay private
+  and installed apps need no GitHub access. `build.publish` becomes the
+  matching `generic` provider (the release workflow already creates the
+  GitHub release itself with `-p never`, unchanged). The first release
+  tag after this change must wait until the broker's `1132-fixer` entry
+  is live.
+- The `npm run release` script drops `--publish always` for `--publish never`:
+  electron-builder cannot upload to a `generic` provider, so `always` no longer
+  publishes anything and only implied one. Publishing stays exclusively on the
+  tag-triggered `release.yml` (`action-gh-release`), which uploads `latest.yml`
+  and the installers to this repo's GitHub Releases for the broker to serve.
+
 ## [5.6.0] - 2026-08-08 — finds your Zoom, tells the truth, and locks the helper account down
 
 The largest support-driven release yet: every one of the top reported failure

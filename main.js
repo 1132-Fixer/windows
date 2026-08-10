@@ -122,13 +122,15 @@ ipcMain.handle('defer-update', () => {
 // were silently pinned to whatever version they downloaded — forever.
 // Instead: fetch latest.yml from the release feed (same feed the NSIS
 // updater uses), compare versions, and surface a "download it" banner.
-// Owner/repo mirror build.publish in package.json. The former
-// 1132-Fixer-Windows-Releases repo was deleted 2026-08-09; releases now
-// live on this repo's GitHub Releases (requires the repo to be public
-// for anonymous updater/download access).
+// URLs mirror build.publish in package.json: the feed is the Botify
+// Network download broker (generic provider), which reads this repo's
+// GitHub Releases server-side — the repo stays PRIVATE and clients need
+// no GitHub access at all. The former 1132-Fixer-Windows-Releases repo
+// was deleted 2026-08-09 and is never recreated (#136). Releases are
+// still published on this repo; the broker serves them anonymously.
 // ============================================================
-const RELEASES_LATEST_URL = 'https://github.com/PrimeUpYourLife/1132-Fixer-Windows/releases/latest';
-const LATEST_YML_URL = RELEASES_LATEST_URL + '/download/latest.yml';
+const RELEASES_LATEST_URL = 'https://botify-network.com/downloads/1132-fixer/latest';
+const LATEST_YML_URL = 'https://botify-network.com/downloads/1132-fixer/updates/latest.yml';
 const WEBSITE_URL = 'https://1132-fixer.xyz/';
 const UPDATE_RECHECK_MS = 4 * 60 * 60 * 1000; // long-open apps re-check every 4h
 
