@@ -25,6 +25,9 @@ const { withIdempotency } = require('./idempotency');
 const { json, fail, readBody, clean, principalLimited } = require('./http');
 
 const MAX_BODY_BYTES = 32 * 1024;
+// Case creation may carry one base64 screenshot (5 MB binary ≈ 6.7 MB
+// encoded); every other route keeps the 32 KB cap.
+const MAX_CREATE_BODY_BYTES = 8 * 1024 * 1024;
 const SUBJECT_MIN = 3;
 const SUBJECT_MAX = 120;
 const SUMMARY_MAX = 8000;
@@ -45,9 +48,9 @@ function errBody(code, message) {
   return { error: { code, message, requestId: 'req_' + crypto.randomBytes(4).toString('hex').toUpperCase() } };
 }
 
-async function readRaw(req, res) {
+async function readRaw(req, res, maxBytes) {
   try {
-    return await readBody(req, MAX_BODY_BYTES);
+    return await readBody(req, maxBytes || MAX_BODY_BYTES);
   } catch (e) {
     if (e && e.code === 413) fail(res, 413, 'too_large', 'Request body is too large.');
     else fail(res, 400, 'bad_request', 'Could not read the request.');
@@ -126,7 +129,10 @@ async function insertCase(client, principal, fields, idemKey) {
      Boolean(fields.diagnosticsConsent)]
   );
   const c = rows[0];
-  await insertMessage(client, c, 'user', fields.summary, { idempotencyKey: idemKey + ':initial' });
+  const initial = await insertMessage(client, c, 'user', fields.summary, { idempotencyKey: idemKey + ':initial' });
+  if (fields.screenshot) {
+    await require('./attachments').saveScreenshot(client, c.id, initial.id, fields.screenshot);
+  }
   const confirm = await insertMessage(client, c, 'system',
     `Case ${caseRef} received. Support replies appear here in My Messages.`,
     { idempotencyKey: idemKey + ':confirm' });
@@ -167,7 +173,7 @@ async function setState(client, caseRow, toState, actorType, actorRef) {
 /** POST /v1/cases — bug | feedback ('Contact' temporarily mapped to feedback). */
 async function create(req, res, principal) {
   if (principalLimited(res, 'cases', principal)) return;
-  const raw = await readRaw(req, res);
+  const raw = await readRaw(req, res, MAX_CREATE_BODY_BYTES);
   if (!raw) return;
   const idemKey = requireIdemKey(req, res);
   if (!idemKey) return;
@@ -196,11 +202,23 @@ async function create(req, res, principal) {
     diagnosticsConsent: payload.diagnosticsConsent === true,
   };
 
+  // Optional single screenshot (#141): images only, 5 MB max, sniffed not
+  // trusted. Rejected before the transaction opens so a bad image costs no
+  // idempotency slot or case row.
+  if (payload.screenshot != null) {
+    const shot = require('./attachments').validateScreenshot(payload.screenshot);
+    if (!shot.ok) return fail(res, 400, 'validation_failed', shot.message);
+    fields.screenshot = shot;
+  }
+
   return withIdempotency(res, principal, idemKey, raw, async (client) => {
     const c = await insertCase(client, principal, fields, idemKey);
     return {
       status: 201,
-      body: { caseRef: c.case_ref, kind: c.kind, state: c.state, subject: c.subject, createdAt: c.created_at },
+      body: {
+        caseRef: c.case_ref, kind: c.kind, state: c.state, subject: c.subject,
+        createdAt: c.created_at, screenshotAttached: Boolean(fields.screenshot),
+      },
     };
   });
 }

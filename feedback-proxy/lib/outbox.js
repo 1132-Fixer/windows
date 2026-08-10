@@ -78,6 +78,22 @@ async function dispatchCaseCreated(payload) {
     if (claim.rows[0]) await discord.postRoleAlert(claim.rows[0].forum_thread_id);
   }
 
+  // Screenshot forward (#141): claim first (pending->approved), but REVERT
+  // the claim if the upload fails so the outbox retry delivers the image —
+  // the screenshot is the report's evidence, not a cosmetic ping, so silent
+  // permanent loss on a transient Discord error is the wrong trade.
+  const attachments = require('./attachments');
+  const shot = await attachments.claimForDispatch(db, payload.case_id);
+  if (shot) {
+    try {
+      await discord.postScreenshot(binding.forum_thread_id, payload.case_ref, shot);
+    } catch (e) {
+      await attachments.revertClaim(db, shot.id).catch((err) =>
+        console.error('[outbox] screenshot claim revert failed: ' + err.message));
+      throw e; // row goes 'failed'; the retry re-claims and re-posts
+    }
+  }
+
   await db.query(
     "INSERT INTO case_events (case_id, actor_type, event_type, data) VALUES ($1, 'system', 'discord.posted', $2)",
     [payload.case_id, JSON.stringify({ thread_id: binding.forum_thread_id })]
@@ -149,6 +165,8 @@ async function tick() {
   try {
     await require('./idempotency').purgeExpired().catch((e) =>
       console.error('[outbox] idempotency purge failed: ' + e.message));
+    await require('./attachments').purgeExpired(db).catch((e) =>
+      console.error('[outbox] attachment purge failed: ' + e.message));
     if (!discordEnabled()) return;
 
     const rows = await claimBatch();

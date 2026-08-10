@@ -37,14 +37,31 @@ async function dbState() {
 }
 
 async function health(res) {
-  // Legacy shape preserved; db field appended ONLY when v2 is enabled so the
-  // dark deployment stays byte-identical.
+  // Legacy shape preserved; db + capabilities fields appended ONLY when v2 is
+  // enabled so the dark deployment stays byte-identical.
   const body = {
     ok: true,
     service: '1132-fixer-feedback-proxy',
     configured: legacy.configured(),
   };
-  if (v2Enabled()) body.db = await dbState();
+  if (v2Enabled()) {
+    body.db = await dbState();
+    // Clients gate their attach-screenshot UI on this (#141): true only when
+    // the whole chain can actually deliver — API mounted, DB up, registration
+    // possible, and Discord dispatch on with its config present. Anything
+    // less would be a dead control in the app.
+    body.capabilities = {
+      screenshots: body.db === 'ok' &&
+        Boolean(process.env.TOKEN_HASH_PEPPER) &&
+        process.env.DISCORD_ENABLED === 'true' &&
+        Boolean(process.env.DISCORD_BOT_TOKEN) &&
+        Boolean(process.env.DISCORD_SUPPORT_FORUM_ID),
+    };
+    // The Chrome extension probes this capability cross-origin (#16). Scoped
+    // to v2 so the dark legacy response stays byte- and header-identical; a
+    // CORS-blocked probe correctly reads as "no capability".
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
   return json(res, 200, body);
 }
 
@@ -74,12 +91,23 @@ const CASE_PATH = /^\/v1\/cases\/(FX-[A-Z2-9]{6,12})(\/messages)?$/;
 const INBOX_READ_PATH = /^\/v1\/my-messages\/(MS-[A-Z2-9]{8,16})\/read$/;
 
 // The public rating endpoint is read by the website and the apps from other
-// origins; nothing else on this service is cross-origin readable.
+// origins; the two client-registration/bug-report routes are additionally
+// cross-origin WRITABLE for the Chrome extension (#16), which submits from a
+// chrome-extension:// origin. CORS is a browser gate, not an auth layer —
+// both routes keep their own auth/rate limits; '*' with an explicit
+// Authorization header is safe because credentials mode is never 'include'.
 const PUBLIC_CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Max-Age': '86400',
 };
+const CLIENT_CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, Idempotency-Key',
+  'Access-Control-Max-Age': '86400',
+};
+const CLIENT_CORS_PATHS = new Set(['/v1/principals', '/v1/cases']);
 
 async function routeV1(req, res, pathname, searchParams) {
   // Lazy requires keep legacy mode free of any 'pg' dependency chain.
@@ -87,6 +115,14 @@ async function routeV1(req, res, pathname, searchParams) {
   const cases = require('./lib/cases');
   const ratings = require('./lib/ratings');
   const inbox = require('./lib/inbox');
+
+  if (CLIENT_CORS_PATHS.has(pathname)) {
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, CLIENT_CORS);
+      return res.end();
+    }
+    for (const [k, v] of Object.entries(CLIENT_CORS)) res.setHeader(k, v);
+  }
 
   if (req.method === 'POST' && pathname === '/v1/principals') {
     return auth.register(req, res);

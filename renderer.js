@@ -1037,8 +1037,10 @@ function openFeedback() {
   attachBtn.disabled = false;
   attachBtn.textContent = 'Attach Support Report';
   document.querySelectorAll('.fb-rating-btn').forEach(b => b.classList.remove('selected'));
-  document.querySelectorAll('.fb-status').forEach(s => { s.textContent = ''; s.className = 'fb-status'; });
+  document.querySelectorAll('.fb-status').forEach(s => { s.textContent = ''; s.className = s.className.includes('fb-shot-status') ? 'fb-status fb-shot-status' : 'fb-status'; });
   Object.keys(ratings).forEach(k => { ratings[k] = 0; });
+  clearScreenshot();
+  refreshScreenshotCapability();
   loadSysInfo();
   releaseFeedbackTrap = installFocusTrap(overlay);
 }
@@ -1089,11 +1091,9 @@ document.querySelectorAll('.fb-rating-btns').forEach(group => {
     });
   });
 });
-['fbBugText', 'fbContactText'].forEach(id => {
-  const submitId = id === 'fbBugText' ? 'fbBugSubmit' : 'fbContactSubmit';
-  document.getElementById(id).addEventListener('input', (e) => {
-    document.getElementById(submitId).disabled = e.target.value.trim().length < 50;
-  });
+document.getElementById('fbBugText').addEventListener('input', refreshBugSubmit);
+document.getElementById('fbContactText').addEventListener('input', (e) => {
+  document.getElementById('fbContactSubmit').disabled = e.target.value.trim().length < 50;
 });
 
 document.getElementById('fbViewReport').addEventListener('click', openSupportReport);
@@ -1140,11 +1140,194 @@ document.getElementById('fbAttachReport').addEventListener('click', async () => 
   }
 });
 
+// ============================================================
+// Bug-report screenshot attach (#141).
+//
+// The whole block stays hidden unless the proxy advertises the screenshots
+// capability — a control that cannot deliver is a dead button. Validation
+// runs client-side first (type by magic bytes, 5 MB cap) for immediate
+// honest feedback; the proxy re-validates server-side regardless.
+// ============================================================
+const SHOT_MAX_BYTES = 5 * 1024 * 1024;
+const SHOT_ALLOWED_MIME = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+let bugScreenshot = null;        // { bytes: Uint8Array, mediaType, name }
+let bugScreenshotUrl = null;     // preview object URL (revoked on clear)
+let screenshotsCapable = false;
+let shotReadGen = 0;             // invalidates in-flight async file reads
+let shotReadBusy = false;        // read in flight: submit must wait
+
+function sniffImageBytes(u8) {
+  if (u8.length < 12) return null;
+  if (u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4e && u8[3] === 0x47 &&
+      u8[4] === 0x0d && u8[5] === 0x0a && u8[6] === 0x1a && u8[7] === 0x0a) return 'image/png';
+  if (u8[0] === 0xff && u8[1] === 0xd8 && u8[2] === 0xff) return 'image/jpeg';
+  const head = String.fromCharCode.apply(null, Array.from(u8.slice(0, 12)));
+  if (head.startsWith('GIF87a') || head.startsWith('GIF89a')) return 'image/gif';
+  if (head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+
+function shotStatus(msg, isError) {
+  const el = document.getElementById('fbShotStatus');
+  el.textContent = msg || '';
+  el.className = 'fb-status fb-shot-status' + (isError ? ' err' : '');
+}
+
+function refreshBugSubmit() {
+  const btn = document.getElementById('fbBugSubmit');
+  const len = document.getElementById('fbBugText').value.trim().length;
+  btn.disabled = shotReadBusy || len < 50;
+}
+
+function clearScreenshot() {
+  shotReadGen++; // a queued async read completion must not resurrect state
+  shotReadBusy = false;
+  bugScreenshot = null;
+  if (bugScreenshotUrl) { URL.revokeObjectURL(bugScreenshotUrl); bugScreenshotUrl = null; }
+  document.getElementById('fbShotPreview').hidden = true;
+  document.getElementById('fbShotRow').hidden = false;
+  document.getElementById('fbShotInput').value = '';
+  shotStatus('');
+  refreshBugSubmit();
+}
+
+async function refreshScreenshotCapability() {
+  const block = document.getElementById('fbShotBlock');
+  block.hidden = true;
+  screenshotsCapable = false;
+  try {
+    const cap = await window.electronAPI.feedbackCapabilities();
+    screenshotsCapable = !!(cap && cap.screenshots);
+  } catch (_) { /* capability stays false */ }
+  block.hidden = !screenshotsCapable;
+}
+
+async function setScreenshot(fileOrBlob, name) {
+  // Selecting ANY replacement — even one that will be rejected — must
+  // invalidate a still-in-flight earlier read, or that older file could
+  // attach after the rejection message. The generation bumps first; every
+  // rejection then also releases the busy gate it now owns.
+  const gen = ++shotReadGen;
+  const rejectRead = (msg) => {
+    if (gen === shotReadGen) {
+      shotReadBusy = false;
+      refreshBugSubmit();
+    }
+    shotStatus(msg, true);
+  };
+  // Reset the picker immediately: a rejected file must not leave its value
+  // behind, or re-selecting the same file later is a silent no-op (change
+  // never fires for an identical value).
+  document.getElementById('fbShotInput').value = '';
+  if (fileOrBlob.size > SHOT_MAX_BYTES) {
+    return rejectRead('Screenshot must be 5 MB or smaller.');
+  }
+  // Declared MIME gate (spec: MIME + magic bytes). An empty type (some
+  // drag/paste sources) falls through to the sniff, which stays decisive.
+  const declared = (fileOrBlob.type || '').toLowerCase().replace('image/jpg', 'image/jpeg');
+  if (declared && !SHOT_ALLOWED_MIME.includes(declared)) {
+    return rejectRead('Only image files can be attached (PNG, JPEG, WebP, or GIF).');
+  }
+  // Submission must not observe half-updated state: block Submit while the
+  // read is in flight, and discard a completion the user has superseded.
+  shotReadBusy = true;
+  refreshBugSubmit();
+  try {
+    const bytes = new Uint8Array(await fileOrBlob.arrayBuffer());
+    if (gen !== shotReadGen) return; // replaced or cleared mid-read
+    const mediaType = sniffImageBytes(bytes);
+    if (!mediaType || (declared && declared !== mediaType)) {
+      shotStatus('Only image files can be attached (PNG, JPEG, WebP, or GIF).', true);
+      return;
+    }
+    if (bugScreenshotUrl) URL.revokeObjectURL(bugScreenshotUrl);
+    bugScreenshot = { bytes, mediaType, name: name || 'screenshot' };
+    bugScreenshotUrl = URL.createObjectURL(new Blob([bytes], { type: mediaType }));
+    document.getElementById('fbShotImg').src = bugScreenshotUrl;
+    document.getElementById('fbShotName').textContent = bugScreenshot.name;
+    document.getElementById('fbShotPreview').hidden = false;
+    document.getElementById('fbShotRow').hidden = true;
+    shotStatus('');
+    // Hiding the attach row drops keyboard focus to <body>; hand it to the
+    // preview's Replace control when the user was on the attach path. A
+    // paste/drop while typing keeps focus where it was.
+    const active = document.activeElement;
+    if (active === document.body || active === document.getElementById('fbShotAttach')) {
+      document.getElementById('fbShotReplace').focus();
+    }
+  } finally {
+    if (gen === shotReadGen) {
+      shotReadBusy = false;
+      refreshBugSubmit();
+    }
+  }
+}
+
+document.getElementById('fbShotAttach').addEventListener('click', () => {
+  document.getElementById('fbShotInput').click();
+});
+document.getElementById('fbShotReplace').addEventListener('click', () => {
+  document.getElementById('fbShotInput').click();
+});
+document.getElementById('fbShotRemove').addEventListener('click', () => {
+  clearScreenshot();
+  // Removing hides the focused button; keep keyboard users in the flow.
+  document.getElementById('fbShotAttach').focus();
+});
+document.getElementById('fbShotInput').addEventListener('change', (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (f) setScreenshot(f, f.name);
+});
+
+// A file dropped ANYWHERE must never navigate the window away from the app —
+// without this guard Electron replaces the UI with the dropped image. Text
+// drags keep their default behavior (dropping text into a textarea works).
+const dragHasFile = (e) =>
+  e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+['dragover', 'drop'].forEach(ev => document.addEventListener(ev, (e) => {
+  if (dragHasFile(e)) e.preventDefault();
+}));
+
+// Drag-and-drop onto the bug section (attach only; navigation is already
+// guarded above, and text drops keep their default insertion).
+const fbBugSection = document.getElementById('fbBug');
+['dragover', 'dragenter'].forEach(ev => fbBugSection.addEventListener(ev, (e) => {
+  if (!screenshotsCapable || !dragHasFile(e)) return;
+  document.getElementById('fbShotRow').classList.add('fb-drag');
+}));
+['dragleave', 'drop'].forEach(ev => fbBugSection.addEventListener(ev, () => {
+  document.getElementById('fbShotRow').classList.remove('fb-drag');
+}));
+fbBugSection.addEventListener('drop', (e) => {
+  if (!screenshotsCapable) return;
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) setScreenshot(f, f.name);
+});
+
+// Paste-from-clipboard while the bug form is open (users screenshot errors
+// straight to the clipboard). Inert while the support-report preview modal
+// is stacked on top — a paste meant for that surface must not silently
+// attach an image to the form underneath.
+document.addEventListener('paste', (e) => {
+  if (!screenshotsCapable) return;
+  if (!document.getElementById('fbOverlay').classList.contains('show')) return;
+  if (!fbBugSection.classList.contains('active')) return;
+  if (document.getElementById('supportOverlay').classList.contains('show')) return;
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  for (const item of items) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      const f = item.getAsFile();
+      if (f) { e.preventDefault(); setScreenshot(f, 'pasted screenshot'); }
+      return;
+    }
+  }
+});
+
 document.getElementById('fbBugSubmit').addEventListener('click', async () => {
   const text = document.getElementById('fbBugText').value.trim();
   const sysInfo = document.getElementById('fbSysInfo').textContent;
   const body = `${text}\n\n---\n**System Info**\n${sysInfo.split('\n').map(l => '- ' + l).join('\n')}`;
-  await submitFeedback('Bug Report', body, 'fbBugStatus');
+  await submitFeedback('Bug Report', body, 'fbBugStatus', bugScreenshot);
 });
 document.getElementById('fbRatingSubmit').addEventListener('click', async () => {
   const filled = Object.entries(ratings).filter(([,v]) => v > 0);
@@ -1165,24 +1348,41 @@ document.getElementById('fbContactSubmit').addEventListener('click', async () =>
   await submitFeedback('Contact', text, 'fbContactStatus');
 });
 
-async function submitFeedback(type, text, statusId) {
+const SUBMIT_BTN_FOR_STATUS = {
+  fbBugStatus: 'fbBugSubmit', fbRatingStatus: 'fbRatingSubmit', fbContactStatus: 'fbContactSubmit',
+};
+
+async function submitFeedback(type, text, statusId, screenshot) {
   const statusEl = document.getElementById(statusId);
-  statusEl.textContent = 'Submitting...';
+  // One submission at a time: a second click during the request would send a
+  // duplicate report (the legacy path has no server-side idempotency).
+  const submitBtn = document.getElementById(SUBMIT_BTN_FOR_STATUS[statusId]);
+  if (submitBtn.disabled) return;
+  submitBtn.disabled = true;
+  statusEl.textContent = screenshot ? 'Submitting report + screenshot...' : 'Submitting...';
   statusEl.className = 'fb-status';
   try {
-    const result = await window.electronAPI.submitFeedback(type, text);
+    // The screenshot rides only when present; success below means the proxy
+    // accepted the WHOLE submission (report + screenshot in one request), so
+    // "Submitted successfully" can never overstate what was sent.
+    const shotPayload = screenshot
+      ? { bytes: screenshot.bytes, mediaType: screenshot.mediaType }
+      : undefined;
+    const result = await window.electronAPI.submitFeedback(type, text, shotPayload);
     if (result.success) {
       statusEl.textContent = 'Submitted successfully!';
       statusEl.className = 'fb-status ok';
       setTimeout(closeFeedback, 1500);
-    } else {
-      statusEl.textContent = result.error || FEEDBACK_FALLBACK;
-      statusEl.className = 'fb-status err';
+      return; // stays disabled until the modal closes — nothing left to send
     }
+    statusEl.textContent = result.error || FEEDBACK_FALLBACK;
+    statusEl.className = 'fb-status err';
   } catch (err) {
     statusEl.textContent = FEEDBACK_NETWORK;
     statusEl.className = 'fb-status err';
   }
+  submitBtn.disabled = false; // failed: let the user retry
+  if (statusId === 'fbBugStatus') refreshBugSubmit(); // re-apply length/read gates
 }
 
 // ============================================================

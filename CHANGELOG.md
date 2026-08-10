@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — attach a screenshot of the error to a bug report (#141)
+
+- The in-app Bug Report form gains an "Attach screenshot" control: file
+  picker, drag-and-drop, or paste (Ctrl+V), with an inline preview and
+  Remove/Replace. Images only (PNG, JPEG, WebP, GIF — verified by content,
+  not filename), 5 MB max, one screenshot per report; both limits are also
+  re-enforced server-side by the support service, which strips JPEG EXIF and
+  PNG textual metadata before storing and forwards the image to the staff
+  Discord case thread. The control only appears when the support service
+  advertises the capability, so it can never render as a dead button; a
+  report with a screenshot travels the authenticated `/v1/cases` API (the
+  install mints its own support token on first use — sealed at rest with
+  Windows DPAPI), while plain reports keep the existing feedback path.
+
 ### Changed — update feed moves to the Botify Network download broker (#136)
 
 - The updater feed and the portable "download it" link now point at the
