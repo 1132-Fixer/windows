@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const https = require('https');
+const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const config = require('./src/main/config');
 const zoomDetect = require('./zoom-detect');
@@ -307,7 +308,23 @@ async function resolveZoomInstall() {
 //                         fires 'zoom-installer-done' so the renderer runs
 //                         the promised read-only re-scan.
 // ============================================================
-let pendingInstallerPath = null;
+
+// The exact bytes the validation chain approved: { path, sha256 }. The launch
+// step re-hashes and refuses if the file changed on disk after it was checked
+// — a swap in a user-writable download folder would otherwise reach msiexec
+// with this app's elevation (a check-to-use race).
+let pendingInstaller = null;
+
+// SHA-256 of a file, streamed so a large MSI never loads fully into memory.
+function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(file);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
 
 ipcMain.handle('zoom-open-download', async () => {
   try {
@@ -320,7 +337,7 @@ ipcMain.handle('zoom-open-download', async () => {
 });
 
 ipcMain.handle('zoom-choose-installer', async () => {
-  pendingInstallerPath = null;
+  pendingInstaller = null;
   const pick = await dialog.showOpenDialog(mainWindow, {
     title: 'Choose the Zoom Workplace MSI installer',
     filters: [{ name: 'Windows Installer package', extensions: ['msi'] }],
@@ -402,16 +419,39 @@ ipcMain.handle('zoom-choose-installer', async () => {
     return { ok: false, message: messages.zoomInstallerRefusal('architecture', cmp.message) };
   }
 
-  pendingInstallerPath = file;
+  // Pin the exact bytes that just passed every check. The launch step
+  // re-hashes and refuses if they change — nothing runs on a mismatch.
+  let sha256;
+  try {
+    sha256 = await sha256File(file);
+  } catch (err) {
+    return { ok: false, message: messages.zoomInstallerRefusal('unreadable', err && err.message) };
+  }
+  pendingInstaller = { path: file, sha256 };
   return { ok: true, fileName: path.basename(file) };
 });
 
 ipcMain.handle('zoom-run-installer', async () => {
-  // Runs ONLY the path the validation call just approved — never an IPC
-  // argument. One shot: the pending path is consumed immediately.
-  const file = pendingInstallerPath;
-  pendingInstallerPath = null;
-  if (!file) return { started: false };
+  // Runs ONLY the descriptor the validation call just approved — never an IPC
+  // argument. One shot: the pending descriptor is consumed immediately.
+  const pending = pendingInstaller;
+  pendingInstaller = null;
+  if (!pending) return { started: false };
+  const { path: file, sha256 } = pending;
+
+  // Re-verify the bytes are the ones that passed validation. On a user-
+  // writable path (e.g. Downloads) another process could swap the file
+  // between the checks and this launch; msiexec would then run the
+  // replacement with this app's elevation. Any change = refuse, run nothing.
+  try {
+    const now = await sha256File(file);
+    if (now !== sha256) {
+      return { started: false, message: messages.zoomInstallerRefusal('changed') };
+    }
+  } catch (err) {
+    return { started: false, message: messages.zoomInstallerRefusal('unreadable', err && err.message) };
+  }
+
   let settled = false;
   const notifyDone = (code) => {
     if (settled) return;

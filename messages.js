@@ -151,7 +151,11 @@ const ZOOM_RECOVERY = {
     download: 'Download Zoom MSI',
     recheck: 'I installed it — Check again',
     choose: 'Choose installer file',
-    cancel: 'Cancel setup'
+    cancel: 'Cancel setup',
+    // Replaces the "Cancel setup" label once msiexec is running: at that point
+    // closing the app no longer cancels anything, so the label must not imply
+    // it does.
+    close_installing: 'Close 1132 Fixer'
   },
   // Accessible name for the download button — the external-link icon is
   // decorative (aria-hidden), so the name itself says a browser opens and
@@ -169,6 +173,10 @@ const ZOOM_RECOVERY = {
   // Cancel row copy — truthfulness: states exactly what has and has not
   // been changed. Checking is read-only; nothing installs without the user.
   CANCEL_NOTE: 'Cancelling makes no changes: checking for Zoom is read-only, and 1132 Fixer installs nothing unless you choose an installer and approve it. Closing the app now leaves this computer exactly as it is.',
+  // Replaces CANCEL_NOTE once msiexec is running. The "leaves this computer
+  // exactly as it is" promise is no longer true — Windows is mid-install and
+  // closing 1132 Fixer does not stop it — so the copy must say so.
+  CANCEL_NOTE_INSTALLING: 'The installer is running now. Closing 1132 Fixer will not stop it — Windows finishes the installation on its own. When it finishes, 1132 Fixer checks for Zoom again automatically.',
   // Shown AFTER a chosen installer passes every validation check and BEFORE
   // msiexec starts — explains the Windows admin-approval prompt first, and
   // describes the one real automatic behavior (installer-exit re-check).
@@ -204,6 +212,8 @@ function zoomInstallerRefusal(code, detail) {
       return `Failed check: file type. The selected file is not a .msi installer package — nothing was run. Choose the MSI file downloaded from ${ZOOM_RECOVERY.DOWNLOAD_URL}.`;
     case 'not_msi_magic':
       return `Failed check: file format. The selected file has a .msi name but its contents are not a real Windows Installer package — nothing was run. ${source}`;
+    case 'changed':
+      return `Failed check: file integrity. The chosen installer changed on disk after it passed its checks — nothing was run. ${source}`;
     case 'unreadable':
       return `Failed check: file access. The selected file could not be read${d ? ` (${d})` : ''} — nothing was run. ${source}`;
     case 'signature':

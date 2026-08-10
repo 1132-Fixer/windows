@@ -142,12 +142,16 @@ console.log('messages-smoke: Zoom recovery card (directive 2026-08-09, byte-verb
   check(/checks for Zoom again automatically/.test(z.UAC_NOTE), 'UAC copy describes the real installer-exit re-check precisely');
   check(/never asks for or stores your password/.test(z.UAC_NOTE), 'UAC copy: no credential request or storage');
   check(/Windows may now ask you to approve/.test(z.UAC_NOTE), 'UAC copy explains the admin-approval prompt BEFORE launch');
+  // Once msiexec is running, the cancel copy and label swap to honest copy:
+  // closing the app does NOT stop the installer or leave the computer as-is.
+  check(/installer is running now/.test(z.CANCEL_NOTE_INSTALLING) && /will not stop it/.test(z.CANCEL_NOTE_INSTALLING), 'installing cancel copy: honest that closing does not stop the installer');
+  check(z.ACTIONS.close_installing === 'Close 1132 Fixer', 'close-during-install action label byte-exact');
 
   // Download button accessible name says a browser opens and where.
   check(/opens Zoom's official download page/.test(z.DOWNLOAD_ARIA) && /browser/.test(z.DOWNLOAD_ARIA), 'download accessible label names the external destination');
 
   // Installer refusals name the EXACT failed check and state nothing ran.
-  for (const code of ['not_msi_ext', 'not_msi_magic', 'unreadable', 'signature', 'publisher', 'architecture']) {
+  for (const code of ['not_msi_ext', 'not_msi_magic', 'changed', 'unreadable', 'signature', 'publisher', 'architecture']) {
     const msg = m.zoomInstallerRefusal(code, 'detail-x');
     check(/nothing was run/i.test(msg), `refusal '${code}' states nothing was executed`);
     check(msg.length > 40, `refusal '${code}' is real copy, not a fragment`);
@@ -157,6 +161,7 @@ console.log('messages-smoke: Zoom recovery card (directive 2026-08-09, byte-verb
   check(/Failed check: digital signature/.test(m.zoomInstallerRefusal('signature', 'NotSigned')) &&
         m.zoomInstallerRefusal('signature', 'NotSigned').includes('NotSigned'), 'signature refusal keeps the Windows status visible');
   check(/Failed check: processor architecture/.test(m.zoomInstallerRefusal('architecture', 'arch explanation.')), 'architecture refusal names the check');
+  check(/Failed check: file integrity/.test(m.zoomInstallerRefusal('changed', null)), 'changed refusal names the integrity check (post-validation swap)');
   check(/nothing was run/i.test(m.zoomInstallerRefusal('some_future_code', null)), 'unmapped refusal still states nothing was executed');
 
   // Technical-details disclosure: raw path demoted there, honestly framed.

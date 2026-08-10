@@ -367,6 +367,7 @@ const zrDownloadBtn  = document.getElementById('zrDownloadBtn');
 const zrRecheckBtn   = document.getElementById('zrRecheckBtn');
 const zrChooseBtn    = document.getElementById('zrChooseBtn');
 const zrCancelBtn    = document.getElementById('zrCancelBtn');
+const zrCancelNoteEl = document.getElementById('zrCancelNote');
 
 // Fill the card from the catalog so the DOM ships the byte-verbatim
 // directive strings the smoke pins.
@@ -378,7 +379,7 @@ document.getElementById('zrHelperA').textContent       = ZOOM_RECOVERY.HELPER_TE
 document.getElementById('zrWhySummary').textContent    = ZOOM_RECOVERY.WHY_LABEL;
 document.getElementById('zrWhyText').textContent       = ZOOM_RECOVERY.WHY_TEXT;
 document.getElementById('zrTechSummary').textContent   = ZOOM_RECOVERY.TECH_LABEL;
-document.getElementById('zrCancelNote').textContent    = ZOOM_RECOVERY.CANCEL_NOTE;
+zrCancelNoteEl.textContent                             = ZOOM_RECOVERY.CANCEL_NOTE;
 document.getElementById('zrDownloadLabel').textContent = ZOOM_RECOVERY.ACTIONS.download;
 zrDownloadBtn.setAttribute('aria-label', ZOOM_RECOVERY.DOWNLOAD_ARIA);
 zrRecheckBtn.textContent = ZOOM_RECOVERY.ACTIONS.recheck;
@@ -393,6 +394,15 @@ let zrRecheckPending = false;
 function zrSetState(text) {
   zrStatusEl.textContent = text || '';
   zrStatusEl.hidden = !text;
+}
+
+// Toggle the "installer is running" presentation. While msiexec runs, the
+// "Cancel setup" affordance and the "leaves this computer exactly as it is"
+// note are both false, so the label and note swap to honest copy until the
+// installer exits (onZoomInstallerDone restores them).
+function zrSetInstalling(on) {
+  zrCancelNoteEl.textContent = on ? ZOOM_RECOVERY.CANCEL_NOTE_INSTALLING : ZOOM_RECOVERY.CANCEL_NOTE;
+  zrCancelBtn.textContent    = on ? ZOOM_RECOVERY.ACTIONS.close_installing : ZOOM_RECOVERY.ACTIONS.cancel;
 }
 
 // Called with the zoom checklist card + resolveZoomInstall() data after
@@ -464,7 +474,14 @@ zrChooseBtn.addEventListener('click', async () => {
     if (r && r.ok) {
       // Explain the Windows admin-approval prompt BEFORE msiexec starts.
       zrSetState(ZOOM_RECOVERY.UAC_NOTE);
-      await window.electronAPI.zoomRunInstaller();
+      const run = await window.electronAPI.zoomRunInstaller();
+      if (run && run.started) {
+        // msiexec is running: closing 1132 Fixer no longer cancels anything.
+        zrSetInstalling(true);
+      } else if (run && run.message) {
+        // Re-check refused the file (it changed after validation) — nothing ran.
+        zrSetState(run.message);
+      }
     } else if (r && !r.canceled) {
       // Explained refusal naming the exact failed check — nothing was run.
       zrSetState(r.message || zoomInstallerRefusal(null));
@@ -947,6 +964,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   // If a scan is already in flight, the pending flag makes ITS result use
   // the re-check state strings instead of starting a second scan.
   window.electronAPI.onZoomInstallerDone(() => {
+    // Installer exited: the "Cancel setup" label and unchanged-computer note
+    // are true again.
+    zrSetInstalling(false);
     if (isRunning) return;
     zrRecheckPending = true;
     if (!scanInProgress) {
