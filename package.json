@@ -15,7 +15,7 @@
     "release": "node scripts/inject-config.js && electron-builder --win nsis --x64 --publish never"
   },
   "author": "High Texas",
-  "license": "MIT",
+  "license": "SEE LICENSE IN build/license.txt",
   "devDependencies": {
     "electron": "^43.2.0",
     "electron-builder": "^24.9.1"
