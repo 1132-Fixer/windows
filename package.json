@@ -3,6 +3,14 @@
   "version": "5.6.0",
   "description": "Zoom 1132 Error Fixer — creates a new Windows user and launches Zoom as that user",
   "main": "main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/1132-Fixer/1132-Fixer-Windows.git"
+  },
+  "bugs": {
+    "url": "https://github.com/1132-Fixer/1132-Fixer-Windows/issues"
+  },
+  "homepage": "https://github.com/1132-Fixer/1132-Fixer-Windows#readme",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --enable-logging",
@@ -14,8 +22,8 @@
     "build:all": "node scripts/inject-config.js && electron-builder --win --x64 --publish never",
     "release": "node scripts/inject-config.js && electron-builder --win nsis --x64 --publish never"
   },
-  "author": "High Texas",
-  "license": "SEE LICENSE IN build/license.txt",
+  "author": "1132 Fixer",
+  "license": "MIT",
   "devDependencies": {
     "electron": "^43.2.0",
     "electron-builder": "^24.9.1"
@@ -23,11 +31,12 @@
   "build": {
     "appId": "com.hightexas.1132fixer",
     "publish": {
-      "provider": "generic",
-      "url": "https://botify-network.com/downloads/1132-fixer/updates"
+      "provider": "github",
+      "owner": "1132-Fixer",
+      "repo": "1132-Fixer-Windows"
     },
     "productName": "1132 Fixer",
-    "copyright": "Copyright (c) 2024-2026 High Texas",
+    "copyright": "Copyright (c) 2024-2026 1132 Fixer",
     "directories": {
       "output": "dist",
       "buildResources": "build"
