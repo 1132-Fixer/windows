@@ -11,17 +11,27 @@ and described a setup this repository never had.
 
 ## 1. Current signing state: UNSIGNED
 
-**1132 Fixer releases are not code-signed today.** Verified 2026-08-14 against
-the published `v5.6.0` release and against an installed client:
+**1132 Fixer has never shipped a code-signed build.** Verified 2026-08-14 by
+reading the Authenticode state of published release assets across the product's
+history, and of an installed client:
 
-| Artifact | Authenticode status | Signer | Timestamp |
-| --- | --- | --- | --- |
-| `1132-Fixer-Setup-5.6.0.exe` (published release asset) | `NotSigned` | none | none |
-| `1132-Fixer-Portable-5.6.0.exe` (published release asset) | `NotSigned` | none | none |
-| `1132 Fixer.exe` from an installed v5.5.1 client | `NotSigned` | none | none |
+| Artifact | Published | Authenticode | Signer | Timestamp |
+| --- | --- | --- | --- | --- |
+| `1132-Fixer-Setup-5.6.0.exe` | 2026-08-10 | `NotSigned` | none | none |
+| `1132-Fixer-Portable-5.6.0.exe` | 2026-08-10 | `NotSigned` | none | none |
+| `1132-Fixer-Setup-5.5.1.exe` | 2026-07-30 | `NotSigned` | none | none |
+| `1132-Fixer-Setup-5.3.6.exe` | 2026-05-29 | `NotSigned` | none | none |
+| `1132.Fixer.Setup.5.2.0.exe` | 2026-05-16 | `NotSigned` | none | none |
+| `1132.Fixer.Setup.5.0.0.exe` | 2026-03-17 | `NotSigned` | none | none |
+| `1132 Fixer.exe` from an installed v5.5.1 client | — | `NotSigned` | none | none |
 
-No `CSC_LINK` or `CSC_KEY_PASSWORD` secret is configured on this repository, so
-every release the pipeline has produced was built without a certificate.
+Four sampled points spanning March to August 2026, plus the current release and
+a real installation. No `CSC_LINK` or `CSC_KEY_PASSWORD` secret is configured on
+this repository, so every release the pipeline has produced was built without a
+certificate.
+
+Releases up to `v5.5.1` were published on `PrimeUpYourLife/1132-Fixer-Windows-Releases`
+and are still served from there; `v5.6.0` onward are published here.
 
 What that means, stated plainly:
 
