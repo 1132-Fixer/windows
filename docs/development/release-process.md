@@ -26,7 +26,7 @@ source  ->  CI tests  ->  build  ->  security checks  ->  signing
 | 5 | Signing | **absent** | no certificate configured — see [`../security/code-signing.md`](../security/code-signing.md) |
 | 6 | Signature verification | present, and currently reports UNSIGNED | `scripts/check-signature-state.mjs` |
 | 7 | Checksums | present | `checksums-sha256.txt`, generated from `dist/*.exe` |
-| 8 | SBOM | planned | WIN-06 |
+| 8 | SBOM | present | `scripts/generate-sbom.mjs` — SPDX 2.3 JSON, attached to the release |
 | 9 | GitHub Release | present | `softprops/action-gh-release`, assets attached |
 | 10 | Updater metadata | present | `latest.yml`, validated by `scripts/validate-release-assets.mjs` |
 
@@ -133,11 +133,36 @@ proof of origin. The checksum file is published on the same release as the
 binaries, so anyone able to alter the release can alter both. Only a code
 signature makes the origin claim.
 
-### 8. SBOM
+### 8. SBOM and provenance
 
-Planned in WIN-06: SPDX JSON covering Electron, the Node dependency tree, the
-updater, the builder, shipped first-party modules, and any native component,
-attached to each release as `sbom.spdx.json`.
+`scripts/generate-sbom.mjs` writes SPDX 2.3 JSON to `dist/sbom.spdx.json` from
+`package-lock.json` and the package inventory. It keeps two distinctions
+explicit, because collapsing them is how an SBOM ends up lying:
+
+- A package that **ships** is `CONTAINED_BY` the application; a package that
+  only **builds** it is a `BUILD_DEPENDENCY_OF`. `electron` is a
+  devDependency whose runtime binaries ship, so it is recorded as contained.
+  `electron-builder` is recorded as a build dependency.
+- Native binaries that electron-builder fetches outside the lockfile are listed
+  from the inventory with their real SHA-256, because the lockfile cannot see
+  them.
+
+`scripts/generate-provenance.mjs` writes `dist/provenance.json`: commit, ref,
+workflow run, runner, toolchain versions, the folded-in signature state, and the
+SHA-256 of every artifact.
+
+**`provenance.json` is not an attestation.** Nothing in it is cryptographically
+bound to the build, and anyone able to modify the release can modify it —
+exactly like `checksums-sha256.txt`. It answers "which commit, which runner,
+which toolchain produced this file"; it does not prove origin. The document
+carries that disclaimer in its own `disclaimer` field.
+
+A signed build attestation via Sigstore (`actions/attest-build-provenance`)
+would give a genuinely verifiable origin claim without needing a code signing
+certificate, and is available to public repositories. It is deliberately **not**
+adopted here — it introduces a second trust system and another third-party
+action, and that is a decision to take on its own merits rather than fold into
+this change. Recorded as the obvious next step.
 
 ### 9. GitHub Release
 
@@ -145,7 +170,7 @@ attached to each release as `sbom.spdx.json`.
 
 `1132-Fixer-Setup-<version>.exe` · `1132-Fixer-Portable-<version>.exe` ·
 `checksums-sha256.txt` · `latest.yml` · `*.blockmap` · `signature-state.json` ·
-`package-inventory.json`
+`package-inventory.json` · `sbom.spdx.json` · `provenance.json`
 
 The Actions artifact upload that follows is a convenience copy only. It is
 `continue-on-error: true` because Actions artifact storage is a quota-limited
@@ -169,6 +194,41 @@ critical path.
 
 Portable builds cannot self-update. The app fetches `latest.yml` from the update
 feed, compares versions, and shows a download banner instead.
+
+## GitHub Actions supply chain
+
+Every action used by the release workflow is pinned to a **commit SHA**, with
+the human-readable tag kept in a trailing comment. A tag is a movable pointer:
+whoever controls the action's repository can repoint it, and a repointed tag in
+a release workflow runs attacker-controlled code with `contents: write` on a
+job that publishes executables to users. A SHA cannot be repointed.
+
+| Action | Pinned SHA | Tag | Party |
+| --- | --- | --- | --- |
+| `actions/checkout` | `3d3c42e5aac5ba805825da76410c181273ba90b1` | `v7` | GitHub |
+| `actions/setup-node` | `820762786026740c76f36085b0efc47a31fe5020` | `v7` | GitHub |
+| `actions/upload-artifact` | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | `v7` | GitHub |
+| `softprops/action-gh-release` | `3d0d9888cb7fd7b750713d6e236d1fcb99157228` | `v3.0.2` | third party |
+
+`softprops/action-gh-release` is the only third-party action in the release
+path. Audited 2026-08-14: MIT, ~5.7k stars, actively maintained, not archived,
+not a fork. It is owned by a **personal account** rather than an organisation,
+which makes it the single highest-leverage external dependency in this pipeline
+— one account compromise would otherwise reach every release. That is the
+specific risk the SHA pin addresses.
+
+Note that `v3.0.2` is an *annotated* tag: it resolves to a tag object
+(`fe965f7a…`), not a commit. The pin above is the commit that tag points at.
+Pinning the tag object instead is a common and easy mistake.
+
+Dependabot is configured for `github-actions` weekly, so it raises pull
+requests to move these pins forward. Review those like any other dependency
+bump: check what changed between the two SHAs, not just that the version number
+went up.
+
+`ci.yml` is not pinned. It uses only GitHub-owned actions and cannot publish
+anything — the trade is deliberate and worth revisiting if CI ever gains write
+access to a release.
 
 ## Publishing a release
 
