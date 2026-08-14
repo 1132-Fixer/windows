@@ -8,7 +8,7 @@ Security fixes land on the latest published Windows release of 1132 Fixer. Older
 
 **Do not open a public issue for a live credential, a remote-code path, or an unpatched privilege problem.**
 
-Use [GitHub private vulnerability reporting](https://github.com/1132-Fixer/1132-Fixer-Windows/security/advisories/new) on this repository.
+Use [GitHub private vulnerability reporting](https://github.com/1132-Fixer/windows/security/advisories/new) on this repository.
 
 If private vulnerability reporting is unavailable, use the contact path on [1132-fixer.xyz](https://1132-fixer.xyz/) and write **Security** in the subject. Include:
 
