@@ -1,0 +1,37 @@
+name: Bug report
+description: Something in the Windows app did not work as expected
+title: "[Bug] "
+labels: ["bug-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This tracker is for the Windows app in 1132-Fixer/1132-Fixer-Windows.
+        Redact usernames, SIDs, and profile paths before you paste a support report.
+        Do not attach live secrets.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      placeholder: "5.6.0"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      placeholder: What you did, what you expected, what you saw.
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Redacted support report (optional)
+      description: Paste only after you have reviewed and redacted it in the app.
