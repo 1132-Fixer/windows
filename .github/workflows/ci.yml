@@ -49,6 +49,19 @@ jobs:
       - name: Package inventory and allowlist
         run: node scripts/package-inventory.mjs --unpacked dist/win-unpacked
 
+      # These three are exercised here as well as at release time, so a broken
+      # generator surfaces on a pull request rather than mid-release. Kept as
+      # separate steps deliberately: pwsh only propagates the last command's
+      # exit code, so chaining them would mask a failure in the first two.
+      - name: Check signature state
+        run: node scripts/check-signature-state.mjs --dist dist
+
+      - name: Generate SBOM
+        run: node scripts/generate-sbom.mjs --out dist/sbom.spdx.json
+
+      - name: Generate provenance
+        run: node scripts/generate-provenance.mjs --dist dist
+
       - name: List build artifacts
         run: |
           echo "=== Build Output ==="
