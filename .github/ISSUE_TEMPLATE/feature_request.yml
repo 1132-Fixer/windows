@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose a change to the Windows app
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests for the Windows app belong here.
+        macOS, Chrome, and the website have their own repositories.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      placeholder: What is hard or missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      placeholder: What should the app do instead?
+    validations:
+      required: true
