@@ -1,15 +1,18 @@
 # 1132 Fixer - Automated Release Pipeline
-# Triggered when a version tag is pushed (e.g., v2.0.1)
+# Triggered when a version tag is pushed (e.g., v5.6.1)
 #
-# SETUP REQUIRED:
-# 1. Code Signing (optional but recommended):
-#    - CSC_LINK: Base64-encoded .pfx certificate
-#    - CSC_KEY_PASSWORD: Certificate password
-#    Add these as repository secrets in GitHub Settings > Secrets
+# Releases from this repository are currently UNSIGNED: no CSC_LINK or
+# CSC_KEY_PASSWORD secret is configured, and no certificate has been purchased.
+# The "Check signature state" step below records that fact on every release and
+# blocks the combinations that would break the update channel.
 #
-# 2. For EV certificates with hardware tokens:
-#    - Use a self-hosted runner with the token attached
-#    - Configure CSC_LINK to point to the certificate store
+# Read docs/security/code-signing.md before changing anything signing-related.
+# In particular, do not set verifyUpdateCodeSignature to true until a release
+# actually produces validly signed artifacts — that flag is evaluated by the
+# version already installed on a user's machine, so enabling it early breaks
+# updates permanently for everyone running that version.
+#
+# Full chain: docs/development/release-process.md
 
 name: Release
 
@@ -138,6 +141,17 @@ jobs:
           }
           $checksums | Out-File -FilePath dist/checksums-sha256.txt -Encoding utf8
 
+      # Records the true Authenticode state of what was just built, and refuses
+      # to publish the combinations that break the update channel. Runs BEFORE
+      # the release is created so a refusal means nothing shipped.
+      # See docs/security/code-signing.md.
+      - name: Check signature state
+        shell: pwsh
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+        run: |
+          node scripts/check-signature-state.mjs --dist dist
+
       - name: List release artifacts
         shell: pwsh
         run: |
@@ -170,11 +184,16 @@ jobs:
             dist/checksums-sha256.txt
             dist/latest.yml
             dist/*.blockmap
+            dist/signature-state.json
 
       - name: Validate published release assets
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Named explicitly. The script's defaults used to be this repository's
+          # former name, which resolved only through GitHub's rename redirect.
+          RELEASES_OWNER: ${{ github.repository_owner }}
+          RELEASES_REPO: ${{ github.event.repository.name }}
         run: |
           node scripts/validate-release-assets.mjs "v${{ steps.version.outputs.VERSION }}"
 
