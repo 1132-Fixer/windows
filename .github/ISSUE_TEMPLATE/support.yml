@@ -1,0 +1,42 @@
+name: Question / support
+description: Get help using the Windows app — installation, camera, Zoom, or the fix flow
+title: "[Support] "
+labels: ["question", "support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Need help using 1132 Fixer for Windows? Ask here. This is the right place for
+        "how do I…", "the fix didn't work", camera or microphone problems, and install questions.
+
+        This is **not** a bug report. If you are certain the app is broken, use the **Bug report** form instead.
+
+        Do **not** open a public issue for a security problem — use the private security link on the chooser.
+
+        Redact usernames, SIDs, and profile paths before pasting a support report. Do not attach live secrets.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      placeholder: "5.6.0"
+    validations:
+      required: false
+  - type: input
+    id: os
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2"
+    validations:
+      required: false
+  - type: textarea
+    id: question
+    attributes:
+      label: What do you need help with?
+      placeholder: What are you trying to do, what happens, and what have you already tried?
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Redacted support report (optional)
+      description: Paste only after you have reviewed and redacted it in the app.

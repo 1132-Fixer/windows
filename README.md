@@ -140,17 +140,17 @@ If those controls are already on, check the laptop camera shutter, a camera func
 
 ## Open source
 
+The **code is MIT-licensed; the brand is not.**
+
 1132 Fixer for Windows is MIT-licensed. You may use, copy, modify, merge, publish, distribute, sublicense, and sell copies of the software, provided the copyright notice and permission notice stay with it. See [LICENSE](LICENSE).
 
-Name, logo, and product marks remain 1132 Fixer marks. Using the software under MIT does not grant trademark rights. Keep attribution to this repository in forks and copies:
-
-`https://github.com/1132-Fixer/windows`
+The 1132 Fixer name, logo, and icons are **not** covered by the MIT licence. Using the software under MIT does not grant trademark rights. See [TRADEMARKS.md](TRADEMARKS.md) for what a fork may and may not imply, and [NOTICE.md](NOTICE.md) for attribution and third-party notices.
 
 ## Develop
 
 ```bash
 git clone https://github.com/1132-Fixer/windows.git
-cd 1132-Fixer-Windows
+cd windows
 npm ci
 npm test
 npm start
@@ -169,7 +169,7 @@ node scripts/bump-version.js patch
 npm install --package-lock-only
 ```
 
-A `v*` tag on `master` runs `.github/workflows/release.yml`, which builds Setup and Portable artifacts, checksums, and `latest.yml` onto this repository's GitHub Releases.
+A `v*` tag reachable from `main` runs `.github/workflows/release.yml`, which builds Setup and Portable artifacts, checksums, and `latest.yml` onto this repository's GitHub Releases.
 
 Secrets belong in GitHub Actions or the feedback service ΓÇö never in app source or a packaged config. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/BUILDING.md](docs/BUILDING.md).
 
