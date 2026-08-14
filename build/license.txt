@@ -1,57 +1,23 @@
-1132 Eliminator - End User License Agreement
+MIT License
 
-Copyright (c) 2024-2026 High Texas. All rights reserved.
+Copyright (c) 2024-2026 1132 Fixer
 
-TERMS AND CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-1. LICENSE GRANT
-   You are granted a non-exclusive, non-transferable license to use
-   1132 Eliminator ("the Software") for personal or commercial purposes.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-2. PERMITTED USE
-   - Install and run the Software on your own Windows systems
-   - Use the Software to eliminate Zoom Error 1132 and device fingerprints
-   - Generate and export attestation reports for your own records
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
-3. RESTRICTIONS
-   - You may not modify, reverse engineer, or decompile the Software
-   - You may not redistribute the Software without written permission
-   - You may not use the Software for malicious purposes
-
-4. ATTRIBUTION
-   Every fork or copy of the Software, whether modified or unmodified and
-   whether source or binary, must retain this license and prominently credit
-   the original repository:
-   https://github.com/1132-Fixer/1132-Fixer-Windows
-
-   This attribution requirement may not be removed, obscured, or replaced.
-
-5. DATA PRIVACY
-   1132 Eliminator operates entirely locally on your device.
-   No system data, scan results, or reports are transmitted to any
-   external servers. All analysis and remediation occurs on your machine.
-
-6. DISCLAIMER
-   THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND.
-   THE AUTHORS ARE NOT LIABLE FOR ANY DAMAGES ARISING FROM USE OF
-   THE SOFTWARE.
-
-   This software modifies system files and registry entries as part of
-   its remediation functions. Always review proposed changes before
-   execution and maintain current backups of important data.
-
-7. ADMINISTRATOR PRIVILEGES
-   Some features of the Software require administrative privileges:
-   - Stopping system services
-   - Modifying protected registry keys
-   - Creating scheduled tasks for post-reboot verification
-
-   The Software will always request explicit user consent before
-   performing any privileged operations.
-
-8. ACCEPTANCE
-   By installing this Software, you agree to these terms.
-
----
-1132 Eliminator v3.1.0
-High Texas
+Canonical source: https://github.com/1132-Fixer/1132-Fixer-Windows
