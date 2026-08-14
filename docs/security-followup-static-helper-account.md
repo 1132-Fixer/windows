@@ -4,9 +4,9 @@
 **Update 2026-08-08:** item 2 (local admin by default) is RESOLVED — `user1`
 is now created as a **standard user**, and a fix run strips the
 Administrators membership from a legacy admin `user1`
-(W5-SECURITY-DESIGN Option B / SEC-A6).
+(security design, option B / SEC-A6).
 **Update 2026-08-08 (later):** items 1, 4 and 5 are RESOLVED
-(W5-SECURITY-DESIGN Option A): every fix run now mints a fresh CSPRNG
+(security design, option A): every fix run now mints a fresh CSPRNG
 password (`helper-credential.js`), seals it with DPAPI **CurrentUser** into
 `%APPDATA%\1132 Fixer\helper-credential.bin`, and the desktop-shortcut
 launcher unseals that blob at click time — no static password, no plaintext

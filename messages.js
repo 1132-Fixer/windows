@@ -123,13 +123,13 @@ function receiptStatusFor(status) {
 }
 
 // ============================================================
-// Zoom Workplace guided recovery card (operator directive 2026-08-09).
-// Copy below is BYTE-VERBATIM from the directive and pinned byte-exact by
+// Zoom Workplace guided recovery card.
+// Copy below is approved copy, pinned byte-exact by
 // tools/messages-smoke.js: title, primary description, both helper texts,
 // the seven state strings, the official admin download URL, and the two
 // accepted publisher names. Never reword them here.
 //
-// Truthfulness rule (operator amendment 2026-08-09): the card never claims
+// Truthfulness rule: the card never claims
 // automatic or background repair that has no mechanism. Detection is
 // read-only; nothing on the computer changes unless the user launches an
 // installer they chose and approved; the ONE automatic behavior described

@@ -1,5 +1,5 @@
-// Smoke test for zoom-detect.js — machine-wide Zoom install detection
-// (triage cluster W1-DETECT). Imports the REAL module main.js ships with,
+// Smoke test for zoom-detect.js — machine-wide Zoom install detection.
+// Imports the REAL module main.js ships with,
 // so the parsing/validation/copy under test is the copy in production.
 //
 // Contract under test:

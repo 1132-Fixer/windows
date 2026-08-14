@@ -200,13 +200,13 @@ ipcMain.handle('open-website', () => {
 });
 
 const FIX_USER = 'user1';
-// There is NO static password (W5-SECURITY-DESIGN Option A — SEC-A6, #33/#76).
+// There is NO static password (security design, option A — SEC-A6, #33/#76).
 // Every fix run mints a fresh CSPRNG password (helper-credential.js) at
 // STEP 4; the delete->recreate model means the run that mints it also writes
 // every consumer (launch, relaunch, DPAPI-sealed shortcut blob), so no
 // old-password knowledge is ever needed and nothing plaintext hits disk.
 // Default machine-wide install candidates only — the actual install is
-// resolved by resolveZoomInstall() (W1-DETECT: 32-bit MSI, custom install
+// resolved by resolveZoomInstall() (32-bit MSI, custom install
 // dirs, and per-user installs all exist in the field).
 const ZOOM_PATH = 'C:\\Program Files\\Zoom\\bin\\Zoom.exe';
 // Working directory for Start-Process -Credential. Without an explicit
@@ -218,7 +218,7 @@ const ZOOM_DIR  = 'C:\\Program Files\\Zoom\\bin';
 const ZOOM_X86_PATH = 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe';
 
 // ============================================================
-// Machine-wide Zoom install resolution (W1-DETECT).
+// Machine-wide Zoom install resolution.
 // The fix launches Zoom under the user1 helper account, so ONLY machine-wide
 // installs are launchable. A per-user install (%APPDATA%\Zoom of the CURRENT
 // user) is probed purely so preflight can explain the situation instead of a
@@ -294,7 +294,7 @@ async function resolveZoomInstall() {
 }
 
 // ============================================================
-// Zoom Workplace guided recovery card (operator directive 2026-08-09).
+// Zoom Workplace guided recovery card.
 // Three IPCs, all renderer-argument-free by design:
 //   zoom-open-download    opens EXACTLY the official admin download URL —
 //                         the allowlisted catalog constant. The handler
@@ -3210,7 +3210,7 @@ ipcMain.handle('preflight-scan', async () => {
   // Roll up overall readiness for renderer convenience. Preflight blockers
   // count even when no card carries them (running_as_target, missing_tool,
   // tool-probe failure) — otherwise the Fix button sits enabled while
-  // run-fix would refuse at [0/8] anyway (F-W22).
+  // run-fix would refuse at [0/8] anyway.
   const statuses = Object.values(cards).map(c => c.status);
   let overall = 'ready';
   if (statuses.includes('blocked') || pre.blockers.length) overall = 'blocked';

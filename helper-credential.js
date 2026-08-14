@@ -1,4 +1,4 @@
-// Helper-account credential model (W5-SECURITY-DESIGN Option A — SEC-A6,
+// Helper-account credential model (security design, option A — SEC-A6,
 // issues #33/#76). Pure, require()-able helpers shared by main.js and
 // tools/helper-credential-smoke.js — main.js cannot be imported under plain
 // node (Electron requires), so everything here needs to stay Electron-free.

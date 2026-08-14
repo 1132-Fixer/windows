@@ -1,5 +1,5 @@
 // Smoke test for helper-credential.js — per-run CSPRNG helper password +
-// sealed-credential desktop launcher (W5-SECURITY-DESIGN Option A, #33/#76).
+// sealed-credential desktop launcher (security design, option A, #33/#76).
 // Imports the REAL module main.js ships with. Pure logic only:
 //  - generated passwords meet length/class requirements and contain no
 //    character that could escape a single-quoted PS string, break
