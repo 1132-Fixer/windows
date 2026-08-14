@@ -13,12 +13,12 @@
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-39D353"></a>
   <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-3A82F7?logo=windows11&logoColor=white">
   <img alt="Setup and Portable" src="https://img.shields.io/badge/Builds-Setup%20%2B%20Portable-39D353">
-  <a href="https://github.com/1132-Fixer/1132-Fixer-Windows/actions/workflows/ci.yml"><img alt="Build status" src="https://github.com/1132-Fixer/1132-Fixer-Windows/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/1132-Fixer/1132-Fixer-Windows/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/1132-Fixer/1132-Fixer-Windows?label=release"></a>
+  <a href="https://github.com/1132-Fixer/windows/actions/workflows/ci.yml"><img alt="Build status" src="https://github.com/1132-Fixer/windows/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/1132-Fixer/windows/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/1132-Fixer/windows?label=release"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/1132-Fixer/1132-Fixer-Windows/releases/latest"><strong>Download the latest release</strong></a>
+  <a href="https://github.com/1132-Fixer/windows/releases/latest"><strong>Download the latest release</strong></a>
   &nbsp;·&nbsp;
   <a href="https://1132-fixer.xyz/"><strong>Website</strong></a>
   &nbsp;·&nbsp;
@@ -27,7 +27,7 @@
   <a href="SECURITY.md"><strong>Security</strong></a>
 </p>
 
-This is the **canonical public source** for the Windows app. Issues, pull requests, CI, and GitHub Releases all live here: [`1132-Fixer/1132-Fixer-Windows`](https://github.com/1132-Fixer/1132-Fixer-Windows).
+This is the **canonical public source** for the Windows app. Issues, pull requests, CI, and GitHub Releases all live here: [`1132-Fixer/windows`](https://github.com/1132-Fixer/windows).
 
 Companion products in the same organization:
 
@@ -97,7 +97,7 @@ Password: random — a fresh one is generated on every fix run
 
 ## Install and use
 
-1. Download the latest [Setup or Portable build](https://github.com/1132-Fixer/1132-Fixer-Windows/releases/latest).
+1. Download the latest [Setup or Portable build](https://github.com/1132-Fixer/windows/releases/latest).
 2. Open **1132 Fixer** (Run as administrator if Windows asks).
 3. Read the safety note.
 4. Press **Fix now**.
@@ -145,12 +145,12 @@ If those controls are already on, check the laptop camera shutter, a camera func
 
 Name, logo, and product marks remain 1132 Fixer marks. Using the software under MIT does not grant trademark rights. Keep attribution to this repository in forks and copies:
 
-`https://github.com/1132-Fixer/1132-Fixer-Windows`
+`https://github.com/1132-Fixer/windows`
 
 ## Develop
 
 ```bash
-git clone https://github.com/1132-Fixer/1132-Fixer-Windows.git
+git clone https://github.com/1132-Fixer/windows.git
 cd 1132-Fixer-Windows
 npm ci
 npm test
