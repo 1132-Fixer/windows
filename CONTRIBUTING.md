@@ -40,7 +40,7 @@ What does **not** belong here:
 
 - The macOS app (`1132-Fixer/macos`).
 - The Chrome extension (`1132-Fixer/chrome`).
-- The public website (`1132-Fixer/website`).
+- The public website at https://1132-fixer.xyz/.
 - Secrets or production service credentials.
 
 ## Releases
