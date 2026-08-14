@@ -20,4 +20,4 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Canonical source: https://github.com/1132-Fixer/1132-Fixer-Windows
+Canonical source: https://github.com/1132-Fixer/windows
