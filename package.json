@@ -33,7 +33,7 @@
     "publish": {
       "provider": "github",
       "owner": "1132-Fixer",
-      "repo": "1132-Fixer-Windows"
+      "repo": "windows"
     },
     "productName": "1132 Fixer",
     "copyright": "Copyright (c) 2024-2026 1132 Fixer",
