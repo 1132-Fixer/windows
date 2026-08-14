@@ -14,20 +14,21 @@ You need Windows 10/11 x64, Node.js 20+, and a machine-wide Zoom Workplace insta
 
 ```bash
 git clone https://github.com/1132-Fixer/windows.git
-cd 1132-Fixer-Windows
+cd windows
 npm ci
 npm test
+npm start
 ```
 
-`npm start` launches the Electron app. Most engine tests do not require Zoom.
+`git clone` creates a `windows/` directory (the repository name), so `cd windows` is the correct next step. `npm start` launches the Electron app. Most engine tests do not require Zoom.
 
 ## Pull requests
 
-1. Fork the repository (or branch from `master` if you have write access).
+1. Fork the repository (or branch from `main` if you have write access).
 2. Create a focused branch. One concern per PR.
 3. Run `npm test` and keep it green.
-4. Describe the user-visible change and how you verified it.
-5. Open the PR against `master` on `1132-Fixer/windows`.
+4. Fill in the [pull request template](.github/PULL_REQUEST_TEMPLATE.md): describe the user-visible change and how you verified it.
+5. Open the PR against `main` on `1132-Fixer/windows`.
 
 Please keep diffs small. Do not bundle a redesign, a release bump, and a dependency upgrade in the same PR.
 
@@ -49,4 +50,4 @@ Maintainers publish by pushing a `v*` tag. GitHub Actions builds Setup and Porta
 
 ## Code of conduct
 
-Be precise, be kind, and do not file support reports that include unredacted personal data. If a report contains secrets or private paths, say so in the issue and do not paste the raw dump.
+This project follows a [Code of Conduct](CODE_OF_CONDUCT.md). By taking part you agree to uphold it. In short: be precise, be kind, and do not file support reports that include unredacted personal data — if a report contains secrets or private paths, say so in the issue and do not paste the raw dump.

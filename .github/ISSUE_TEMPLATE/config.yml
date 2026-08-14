@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability (private)
+    url: https://github.com/1132-Fixer/windows/security/advisories/new
+    about: Do not open a public issue for a security problem. Use GitHub private vulnerability reporting. See SECURITY.md.
+  - name: 💬 Website and downloads
+    url: https://1132-fixer.xyz/
+    about: Product website, latest downloads, and general contact.

@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        This tracker is for the Windows app in 1132-Fixer/1132-Fixer-Windows.
+        This tracker is for the Windows app in 1132-Fixer/windows.
         Redact usernames, SIDs, and profile paths before you paste a support report.
         Do not attach live secrets.
   - type: input

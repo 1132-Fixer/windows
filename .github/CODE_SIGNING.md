@@ -177,7 +177,7 @@ Expected output should show:
 2. **Use GitHub Secrets for all sensitive values**
 3. **Rotate certificates before expiration**
 4. **Keep private keys secure** (HSM for EV certs)
-5. **Enable branch protection** on master/main
+5. **Enable branch protection** on `main`
 6. **Require PR reviews** for release branches
 7. **Use signed commits** for release tags
 

@@ -44,8 +44,9 @@ privilege.
 
 ## Build evidence record — v5.6.0 (2026-08-09)
 
-Local build from source `a2cee7ca` (master at the v5.6.0 bump), same tree green
-in CI run 31283107932:
+Local build from source `a2cee7ca` (the default branch tip at the v5.6.0 bump;
+the branch was named `master` at that time and has since been renamed to `main`),
+same tree green in CI run 31283107932:
 
 | Artifact | SHA-256 | Size |
 |---|---|---|
