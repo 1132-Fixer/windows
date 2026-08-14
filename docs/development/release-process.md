@@ -22,7 +22,7 @@ source  ->  CI tests  ->  build  ->  security checks  ->  signing
 | 1 | Source | present | `main`, tag reachable from it |
 | 2 | CI tests | present | `ci.yml` — smoke suites, feedback-proxy suites, both build targets |
 | 3 | Build | present | `release.yml` — `electron-builder --win --x64 -p never` |
-| 4 | Security checks | partial | `npm audit` advisory-only in CI; packaging allowlist lands in WIN-05 |
+| 4 | Security checks | present | `npm audit` advisory-only in CI; packaging inventory + allowlist enforced in both CI and release |
 | 5 | Signing | **absent** | no certificate configured — see [`../security/code-signing.md`](../security/code-signing.md) |
 | 6 | Signature verification | present, and currently reports UNSIGNED | `scripts/check-signature-state.mjs` |
 | 7 | Checksums | present | `checksums-sha256.txt`, generated from `dist/*.exe` |
@@ -68,13 +68,32 @@ The build step then verifies at least two `.exe` files exist, one matching
 
 ### 4. Security checks
 
-Today: `npm audit --audit-level=high` in CI, advisory only.
+`npm audit --audit-level=high` runs in CI, advisory only.
 
-The packaged payload is currently selected by a broad `**/*` glob with a deny
-list in `package.json` `build.files`. That means what ships depends on what
-happens to be in the working tree at build time. An explicit inventory and
-allowlist, failing the build on an unexpected executable, script, key,
-database, or archive, lands in WIN-05.
+`scripts/package-inventory.mjs` runs in both CI and the release job. It walks
+`dist/win-unpacked`, reads the `resources/app.asar` header, writes
+`dist/package-inventory.json`, and fails the build when a file with a denied
+extension appears without a path-exact entry in
+`build/package-allowlist.json`. Denied: `.exe` `.dll` `.msi` `.sys` `.node`
+`.ps1` `.bat` `.cmd` `.key` `.pfx` `.pem` `.p12` `.cer` `.crt` `.env` `.db`
+`.sqlite` `.zip` `.7z`.
+
+It also fails when an allowlist entry stops matching anything, so a stale
+exception cannot sit there hiding drift.
+
+This matters because `package.json` `build.files` is a broad `**/*` glob with a
+deny list, so what ships depends on what happens to be in the working tree at
+build time. Two demonstrated consequences, both now fixed and both of a kind
+that leaves no diff to review:
+
+- `.cursor/rules/caveman.mdc` shipped inside `app.asar`, because the deny list
+  excludes `**/*.md` and that file is `.mdc`.
+- `design-system` is a git submodule. Building with submodules initialised would
+  have packaged the entire submodule; building without them would not. The
+  payload therefore depended on the checkout, not on the code.
+
+The inventory is the durable control. The `build.files` exclusions are the
+specific fix.
 
 ### 5. Signing
 
@@ -125,7 +144,8 @@ attached to each release as `sbom.spdx.json`.
 `softprops/action-gh-release` creates the release and attaches:
 
 `1132-Fixer-Setup-<version>.exe` · `1132-Fixer-Portable-<version>.exe` ·
-`checksums-sha256.txt` · `latest.yml` · `*.blockmap` · `signature-state.json`
+`checksums-sha256.txt` · `latest.yml` · `*.blockmap` · `signature-state.json` ·
+`package-inventory.json`
 
 The Actions artifact upload that follows is a convenience copy only. It is
 `continue-on-error: true` because Actions artifact storage is a quota-limited

@@ -1,0 +1,40 @@
+{
+  "$comment": [
+    "Every executable, script, key, database or archive permitted in the shipping",
+    "Windows artifact, by exact path. Checked by scripts/package-inventory.mjs.",
+    "",
+    "Adding a path here is a decision about what users receive. Document the",
+    "binary in docs/security/BINARY-POLICY.md in the same pull request, and never",
+    "add a certificate or key path — those must not exist in the repository at all.",
+    "",
+    "Paths are relative to dist/win-unpacked and use forward slashes."
+  ],
+
+  "deniedExtensions": [
+    ".exe", ".dll", ".msi", ".sys", ".node",
+    ".ps1", ".bat", ".cmd",
+    ".key", ".pfx", ".pem", ".p12", ".cer", ".crt",
+    ".env", ".db", ".sqlite",
+    ".zip", ".7z"
+  ],
+
+  "allowedUnpackedPaths": [
+    "1132 Fixer.exe",
+
+    "d3dcompiler_47.dll",
+    "dxcompiler.dll",
+    "dxil.dll",
+    "ffmpeg.dll",
+    "libEGL.dll",
+    "libGLESv2.dll",
+    "vk_swiftshader.dll",
+    "vulkan-1.dll",
+
+    "resources/elevate.exe",
+
+    "resources/grant-media-consent.ps1",
+    "resources/zoom-firstrun-setup.ps1"
+  ],
+
+  "allowedAsarPaths": []
+}
