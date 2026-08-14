@@ -5,12 +5,12 @@
   "main": "main.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/1132-Fixer/1132-Fixer-Windows.git"
+    "url": "https://github.com/1132-Fixer/windows.git"
   },
   "bugs": {
-    "url": "https://github.com/1132-Fixer/1132-Fixer-Windows/issues"
+    "url": "https://github.com/1132-Fixer/windows/issues"
   },
-  "homepage": "https://github.com/1132-Fixer/1132-Fixer-Windows#readme",
+  "homepage": "https://github.com/1132-Fixer/windows#readme",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --enable-logging",
