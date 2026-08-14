@@ -13,7 +13,7 @@ Thank you for helping. This repository is the canonical public source for the Wi
 You need Windows 10/11 x64, Node.js 20+, and a machine-wide Zoom Workplace install to exercise the full fix path.
 
 ```bash
-git clone https://github.com/1132-Fixer/1132-Fixer-Windows.git
+git clone https://github.com/1132-Fixer/windows.git
 cd 1132-Fixer-Windows
 npm ci
 npm test
@@ -27,7 +27,7 @@ npm test
 2. Create a focused branch. One concern per PR.
 3. Run `npm test` and keep it green.
 4. Describe the user-visible change and how you verified it.
-5. Open the PR against `master` on `1132-Fixer/1132-Fixer-Windows`.
+5. Open the PR against `master` on `1132-Fixer/windows`.
 
 Please keep diffs small. Do not bundle a redesign, a release bump, and a dependency upgrade in the same PR.
 
