@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/social-preview.png" alt="1132 Fixer for Windows ΓÇö one-click fix for Zoom Error 1132" width="960">
+  <img src="assets/social-preview.png" alt="1132 Fixer for Windows — one-click fix for Zoom Error 1132" width="960">
 </p>
 
 <h1 align="center">1132 Fixer for Windows</h1>
@@ -73,7 +73,7 @@ The app manages this local account:
 
 ```text
 Username: user1
-Password: random ΓÇö a fresh one is generated on every fix run
+Password: random — a fresh one is generated on every fix run
 ```
 
 - You never need the password. The desktop shortcut signs in for you: the fix stores the password encrypted with Windows DPAPI in `%APPDATA%\1132 Fixer\helper-credential.bin`, next to the shortcut launcher (`launch-zoom-as-user1.ps1`). Only your own Windows account can decrypt it. No plain-text password is written to disk. Shortcuts from older versions keep working and are upgraded on the next fix run.
@@ -171,7 +171,7 @@ npm install --package-lock-only
 
 A `v*` tag reachable from `main` runs `.github/workflows/release.yml`, which builds Setup and Portable artifacts, checksums, and `latest.yml` onto this repository's GitHub Releases.
 
-Secrets belong in GitHub Actions or the feedback service ΓÇö never in app source or a packaged config. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/BUILDING.md](docs/BUILDING.md).
+Secrets belong in GitHub Actions or the feedback service — never in app source or a packaged config. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/BUILDING.md](docs/BUILDING.md).
 
 ## Independent project
 
