@@ -1,5 +1,5 @@
 /**
- * Support principals (final directive rename of installations):
+ * Support principals (renamed from installations):
  *   POST /v1/principals issues { principalId: 'IN-…', token } — the token
  *   appears in that response ONCE; the database stores only
  *   sha256(token + TOKEN_HASH_PEPPER) as bytea (unique).
@@ -8,7 +8,7 @@
  * value is a preimage-resistant digest, so an exact index match is the
  * correct constant-behavior comparison; no plain secret is ever stored.
  *
- * (The directive's route list does not name a registration route; the
+ * (The documented route list does not name a registration route; the
  * principal-creation endpoint is required for every bearer route to work
  * and is documented as such in the PR.)
  */

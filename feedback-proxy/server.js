@@ -1,7 +1,7 @@
 /**
  * 1132 Fixer — support service (formerly the single-purpose feedback proxy).
  *
- * Gate (final directive): SUPPORT_V2_ENABLED joins DATABASE_URL.
+ * Gate: SUPPORT_V2_ENABLED joins DATABASE_URL.
  *
  *   SUPPORT_V2_ENABLED unset/false -> LEGACY, byte-identical: exactly the
  *     original zero-dependency GitHub-issue proxy (/health + POST /feedback,

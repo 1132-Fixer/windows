@@ -1,5 +1,5 @@
 -- 1132 Fixer support and verified-rating schema
--- Final build directive 2026-08-07 (supersedes the spec-pack schema in the
+-- Final build 2026-08-07 (supersedes the spec-pack schema in the
 -- renames/extensions it lists; 0-5 score checks; UPPER product enums).
 -- PostgreSQL 16+.
 
@@ -72,7 +72,7 @@ CREATE TABLE case_messages (
 );
 
 -- Staff-only notes live in their OWN table so no user-facing query can ever
--- select them by accident (directive: never returned to users).
+-- select them by accident (never returned to users).
 CREATE TABLE internal_notes (
   id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   case_id               uuid NOT NULL REFERENCES support_cases(id) ON DELETE CASCADE,
@@ -113,7 +113,7 @@ CREATE TABLE ratings (
   product           product NOT NULL,
   app_version       text NOT NULL,
   -- 0 is a REAL answer; NULL is impossible here because every question is
-  -- required (directive: 0-5 inclusive, six integer choices).
+  -- required (0-5 inclusive, six integer choices).
   ease              smallint NOT NULL CHECK (ease BETWEEN 0 AND 5),
   resolved          smallint NOT NULL CHECK (resolved BETWEEN 0 AND 5),
   recommend         smallint NOT NULL CHECK (recommend BETWEEN 0 AND 5),

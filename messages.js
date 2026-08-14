@@ -184,7 +184,7 @@ const ZOOM_RECOVERY = {
 };
 
 // "Technical details" disclosure body — the raw paths, demoted out of the
-// main explanation per the directive. Mirrors what resolveZoomInstall()
+// main explanation by design. Mirrors what resolveZoomInstall()
 // actually probes: both default machine-wide dirs plus any custom install
 // dir a Zoom MSI registered in the Windows installer registry.
 function zoomRecoveryTechDetails(install) {

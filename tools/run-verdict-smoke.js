@@ -3,7 +3,7 @@
 // block). Imports the REAL module, so the logic under test is the logic that
 // ships.
 //
-// Contract under test (fail-loud policy, triage cluster W2-VERIFY):
+// Contract under test (fail-loud policy):
 //  - all-ok steps -> plain success, header FIX COMPLETE
 //  - any 'fail' step (timed-out ProfSvc restart, unconfirmed consent,
 //    Zoom-not-running) -> partial + NEEDS ATTENTION header + its detail

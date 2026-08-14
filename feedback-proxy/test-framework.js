@@ -1,6 +1,6 @@
 /**
  * Support-framework test suite (node script, no framework — test.js style),
- * aligned to the final build directive incl. its §15 test list.
+ * aligned to the documented build spec and its test list.
  *
  * Needs a throwaway Postgres via TEST_DATABASE_URL; without it the suite
  * SKIPS with exit 0. All Discord and GitHub traffic is stubbed through
@@ -290,7 +290,7 @@ check('rating validation strict: -1, 6, fraction, string, missing all 400', asyn
   return probes.every((r) => r.status === 400 && r.json.error.code === 'validation_failed');
 });
 
-check('DIRECTIVE: 0 is a REAL answer — accepted, and any 0-3 opens a case', async () => {
+check('0 is a REAL answer — accepted, and any 0-3 opens a case', async () => {
   const r = await req('POST', '/v1/ratings', scores({ ease: 0 }), bearer(S.B, idem('R1')));
   S.ratingCaseB = r.json.caseRef;
   const row = (await db.query('SELECT ease, overall FROM ratings')).rows[0];
@@ -308,7 +308,7 @@ check('replace-not-add: re-rate updates the one row, count cannot grow', async (
     r.json.snapshot.count === 1;
 });
 
-check('DIRECTIVE: all 4-5 and no text -> receipt only, NO case, NO alert', async () => {
+check('all 4-5 and no text -> receipt only, NO case, NO alert', async () => {
   const casesBefore = await count('SELECT count(*) FROM support_cases');
   const alertsBefore = await count("SELECT count(*) FROM outbox WHERE event_type = 'case.created'");
   const r = await req('POST', '/v1/ratings', scores({ ease: 4, overall: 4 }), bearer(S.C, idem('R3')));
@@ -317,7 +317,7 @@ check('DIRECTIVE: all 4-5 and no text -> receipt only, NO case, NO alert', async
     (await count("SELECT count(*) FROM outbox WHERE event_type = 'case.created'")) === alertsBefore;
 });
 
-check('DIRECTIVE: all 5s WITH text -> exactly one case, retry never re-pings', async () => {
+check('all 5s WITH text -> exactly one case, retry never re-pings', async () => {
   const body = Object.assign(scores({}), { comment: 'love it, but one question' });
   const first = await req('POST', '/v1/ratings', body, bearer(S.C, idem('R4')));
   const retry = await req('POST', '/v1/ratings', body, bearer(S.C, idem('R4')));
@@ -425,7 +425,7 @@ check('same interaction id replayed -> no second reply', async () => {
     (await count("SELECT count(*) FROM case_messages WHERE author = 'staff'")) === 1;
 });
 
-check('DIRECTIVE: stale control epoch rejected', async () => {
+check('stale control epoch rejected', async () => {
   const r = await signedInteraction({
     type: 5, guild_id: 'guild-1', member: staffMember,
     data: {
@@ -450,7 +450,7 @@ check('my-messages: staff reply listed; AVAILABLE -> NOTIFIED on list', async ()
     m.body === 'Please send the preflight log.' && after.state === 'NOTIFIED';
 });
 
-check('DIRECTIVE: internal note never appears in My Messages', async () => {
+check('internal note never appears in My Messages', async () => {
   const { rows } = await db.query('SELECT id FROM support_cases WHERE case_ref = $1', [S.case1]);
   await db.query(
     "INSERT INTO internal_notes (case_id, staff_discord_user_id, body) VALUES ($1, 'staff-user-1', 'INTERNAL-SECRET-NOTE')",
@@ -549,7 +549,7 @@ check('role alert: exactly once per case, single-role allowlist, never re-pinged
   });
 });
 
-check('DIRECTIVE: archived thread does not block or lose a user reply', async () => {
+check('archived thread does not block or lose a user reply', async () => {
   const r = await req('POST', `/v1/cases/${S.case1}/messages`,
     { body: 'one more detail' }, bearer(S.A, idem('M5')));
   failNextThreadPost = true; // Discord refuses the archived thread once
@@ -1064,7 +1064,7 @@ check('SHOT#10: failed upload reverts the claim; the retry delivers, then stays 
 
 // --- run -------------------------------------------------------------
 (async () => {
-  console.log('=== support-framework suite (final directive) ===');
+  console.log('=== support-framework suite ===');
   console.log('');
   await ready;
   await db.query(

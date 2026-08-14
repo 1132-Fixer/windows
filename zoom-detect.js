@@ -80,8 +80,8 @@ function zoomStatusMessage(install) {
 }
 
 // ============================================================
-// Chosen-installer validation helpers (guided recovery card, operator
-// directive 2026-08-09). Pure — main.js owns the file/PowerShell probing;
+// Chosen-installer validation helpers (guided recovery card).
+// Pure — main.js owns the file/PowerShell probing;
 // tools/zoom-detection-smoke.js pins these against fixture bytes.
 // ============================================================
 
@@ -133,7 +133,7 @@ const ARCH_LABEL = {
 
 // What may run where. 32-bit MSIs run on x64 Windows (WOW64); everything
 // else must match exactly. x64-on-ARM64 is deliberately NOT accepted — the
-// directive requires an explained refusal, never a silent x64 choice.
+// design requires an explained refusal, never a silent x64 choice.
 const ARCH_COMPAT = {
   x64: ['x64', 'x86'],
   x86: ['x86'],

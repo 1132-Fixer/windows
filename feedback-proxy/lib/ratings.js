@@ -1,5 +1,5 @@
 /**
- * Verified ratings — final build directive.
+ * Verified ratings.
  *
  * Score model: four required questions (ease, resolved, recommend, overall),
  * each an INTEGER 0-5 inclusive — six choices. 0 is a REAL answer; a missing

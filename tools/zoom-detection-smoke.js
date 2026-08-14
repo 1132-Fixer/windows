@@ -99,7 +99,7 @@ console.log('zoom-detection-smoke: zoomStatusMessage');
   check(msg === zd.ZOOM_NOT_FOUND_MESSAGE, 'nothing found -> canonical not-found copy');
   check(/machine-wide Zoom Workplace MSI/.test(msg), 'not-found copy names the machine-wide MSI');
   check(/Check again/.test(msg), 'not-found copy tells the user the next step');
-  check(/zoom\.us\/download/.test(msg), 'not-found copy says WHERE to get the MSI (W8-UX)');
+  check(/zoom\.us\/download/.test(msg), 'not-found copy says WHERE to get the MSI');
 }
 {
   const per = 'C:\\Users\\alice\\AppData\\Roaming\\Zoom\\bin\\Zoom.exe';
@@ -108,7 +108,7 @@ console.log('zoom-detection-smoke: zoomStatusMessage');
   check(/for your Windows user only/.test(msg), 'per-user-only copy explains the install scope');
   check(/helper account/.test(msg), 'per-user-only copy explains WHY it cannot be used');
   check(/machine-wide Zoom Workplace MSI/.test(msg), 'per-user-only copy gives the remedy');
-  check(/zoom\.us\/download/.test(msg), 'per-user-only copy says WHERE to get the MSI (W8-UX)');
+  check(/zoom\.us\/download/.test(msg), 'per-user-only copy says WHERE to get the MSI');
   check(msg !== zd.ZOOM_NOT_FOUND_MESSAGE, 'per-user-only copy differs from generic not-found');
 }
 {
@@ -150,7 +150,7 @@ console.log('zoom-detection-smoke: architecture compatibility (never silent)');
   check(ok('x64;1033', 'AMD64'), 'x64 MSI accepted on x64 Windows');
   check(ok('Intel;1033', 'AMD64'), '32-bit MSI accepted on x64 Windows (WOW64)');
   check(!ok('Arm64;1033', 'AMD64'), 'ARM64 MSI refused on x64 Windows');
-  // ARM64 Windows — the directive's headline case: never silently x64.
+  // ARM64 Windows — the headline case: never silently x64.
   check(ok('Arm64;1033', 'ARM64'), 'ARM64 MSI accepted on ARM64 Windows');
   check(!ok('x64;1033', 'ARM64'), 'x64 MSI refused on ARM64');
   check(/ARM/.test(msg('x64;1033', 'ARM64')) && /x64/.test(msg('x64;1033', 'ARM64')), 'x64-on-ARM64 refusal names both architectures');
@@ -178,7 +178,7 @@ console.log('zoom-detection-smoke: architecture compatibility (never silent)');
 console.log('zoom-detection-smoke: launcher path extraction');
 {
   // Current launcher: the REAL sealed-credential content main.js ships
-  // (helper-credential.js, W5 Option A) — extraction is what the shortcut
+  // (helper-credential.js, security design option A) — extraction is what the shortcut
   // staleness check runs against the file on disk.
   const hc = require('../helper-credential.js');
   const script = hc.launcherScriptContent('user1',

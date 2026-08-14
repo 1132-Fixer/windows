@@ -3,7 +3,7 @@
 
 /**
  * UI state-capture harness for the Zoom-requirement guided recovery card
- * (§31 evidence tooling; UI directive 2026-08-09).
+ * (UI evidence tooling).
  *
  * Loads the REAL index.html / messages.js / run-verdict.js / renderer.js in
  * headless Chromium (global Playwright, resolved the same way the Chrome

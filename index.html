@@ -248,7 +248,7 @@
     }
     .home-intro strong { color: var(--text); }
     /* One scroll zone for the checklist + Zoom recovery card, so the card
-       stays reachable at 200% scaling / small windows (directive a11y). */
+       stays reachable at 200% scaling / small windows (accessibility). */
     .home-scroll {
       flex: 1;
       min-height: 0;
@@ -1208,7 +1208,7 @@
           <button class="log-toggle" id="logToggle" type="button" aria-expanded="true" aria-controls="fileList">
             <span class="chev" aria-hidden="true">▶</span><span id="logToggleLabel">Hide Advanced Details</span>
           </button>
-          <!-- Failure-only (W8-UX): copies the sanitized support report — or,
+          <!-- Failure-only: copies the sanitized support report — or,
                if that fails, the visible log lines — to the clipboard. -->
           <button class="log-toggle" id="copyErrBtn" type="button" aria-label="Copy the error details to the clipboard">Copy error details</button>
         </div>

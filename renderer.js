@@ -370,7 +370,7 @@ const zrCancelBtn    = document.getElementById('zrCancelBtn');
 const zrCancelNoteEl = document.getElementById('zrCancelNote');
 
 // Fill the card from the catalog so the DOM ships the byte-verbatim
-// directive strings the smoke pins.
+// strings the smoke test pins.
 document.getElementById('zrFlagLabel').textContent     = ZOOM_RECOVERY.FLAG_LABEL;
 document.getElementById('zrTitle').textContent         = ZOOM_RECOVERY.TITLE;
 document.getElementById('zrDesc').textContent          = ZOOM_RECOVERY.DESCRIPTION;
@@ -766,7 +766,7 @@ async function runFix() {
 // (loaded before this script; require()-able by tools/messages-smoke.js).
 
 // ============================================================
-// Copy error details (W8-UX) — failure-only chip next to the log toggle.
+// Copy error details — failure-only chip next to the log toggle.
 // Reuses the support-report IPC so the copied text is the SANITIZED bundle
 // (SIDs, username, home path, hostname redacted). If the report cannot be
 // built, falls back to the raw visible log lines — text already on screen.

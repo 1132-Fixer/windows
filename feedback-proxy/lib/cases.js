@@ -145,7 +145,7 @@ async function insertCase(client, principal, fields, idemKey) {
   return c;
 }
 
-/** Directive state rules: what a user reply does to the case. */
+/** State rules: what a user reply does to the case. */
 function userReplyState(state) {
   if (state === 'waiting_for_user') return 'in_review';
   if (state === 'resolved') return 'reopened';

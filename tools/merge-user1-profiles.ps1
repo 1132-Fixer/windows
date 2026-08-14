@@ -21,7 +21,7 @@ function Write-Section($t) {
     Write-Host ('=' * 70) -ForegroundColor Cyan
 }
 
-# Junction-safe recursive listing (W4-HANG): Windows PowerShell 5.1's
+# Junction-safe recursive listing (hang guard): Windows PowerShell 5.1's
 # Get-ChildItem -Recurse FOLLOWS directory reparse points, and default
 # profiles contain cyclic ones (AppData\Local\Application Data ->
 # AppData\Local), so a plain -Recurse over a profile can loop forever — and

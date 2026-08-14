@@ -36,8 +36,8 @@ for (const code of Object.keys(m.FRIENDLY_ERRORS)) {
 }
 {
   const msg = m.FRIENDLY_ERRORS.zoom_not_found;
-  check(/zoom\.us\/download/.test(msg), 'zoom_not_found says WHERE to download the MSI (W8-UX)');
-  check(!/C:\\Program Files\\Zoom/.test(msg), 'zoom_not_found no longer hardcodes the x64 path the W1 resolver looks beyond');
+  check(/zoom\.us\/download/.test(msg), 'zoom_not_found says WHERE to download the MSI');
+  check(!/C:\\Program Files\\Zoom/.test(msg), 'zoom_not_found no longer hardcodes the x64 path the install resolver looks beyond');
 }
 
 console.log('messages-smoke: fix/scan/shortcut failures');
@@ -102,10 +102,10 @@ console.log('messages-smoke: checklist group mapping (§9)');
     'groups are contiguous and cover the full taxonomy in order');
 }
 
-console.log('messages-smoke: Zoom recovery card (directive 2026-08-09, byte-verbatim)');
+console.log('messages-smoke: Zoom recovery card (byte-verbatim)');
 {
   const z = m.ZOOM_RECOVERY;
-  // Title, primary description, helper texts — byte-exact per the directive.
+  // Title, primary description, helper texts — byte-exact per the approved copy.
   check(z.TITLE === 'Zoom Workplace needs to be installed', 'title byte-exact');
   check(z.DESCRIPTION === '1132 Fixer uses the computer-wide version of Zoom Workplace. We could not find that version on this PC.', 'primary description byte-exact');
   check(z.HELPER_LABEL === 'What does this mean?', 'helper label byte-exact');
@@ -124,7 +124,7 @@ console.log('messages-smoke: Zoom recovery card (directive 2026-08-09, byte-verb
   check(z.ACTIONS.choose === 'Choose installer file', 'choose action label byte-exact');
   check(z.ACTIONS.cancel === 'Cancel setup', 'cancel action label byte-exact');
   // The seven state strings — byte-exact incl. the U+2026 ellipsis and
-  // straight apostrophes the directive uses.
+  // straight apostrophes the approved copy uses.
   check(z.STATES.downloading === "Opening Zoom's official download page…", 'Downloading state byte-exact');
   check(z.STATES.waiting === 'Install Zoom Workplace, then return here and select Check again.', 'Waiting state byte-exact');
   check(z.STATES.checking === 'Checking for Zoom Workplace…', 'Checking state byte-exact');
@@ -133,7 +133,7 @@ console.log('messages-smoke: Zoom recovery card (directive 2026-08-09, byte-verb
   check(z.STATES.wrong_version === 'We found Zoom, but it is installed only for one Windows user. Install the computer-wide MSI version to continue.', 'Wrong-version state byte-exact');
   check(z.STATES.offline === "We could not open Zoom's download page. Check your internet connection, or choose an MSI installer already saved on this computer.", 'Offline state byte-exact');
 
-  // Truthfulness rule (operator amendment 2026-08-09): cancel copy states
+  // Truthfulness rule: cancel copy states
   // the computer is unchanged + detection is read-only; the UAC copy
   // describes the ONE real automatic behavior precisely and promises no
   // credential handling.

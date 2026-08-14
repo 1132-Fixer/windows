@@ -1,4 +1,4 @@
-// Regression smoke for the W6-SHORTCUT encoding fix (#93 #111, FileNotFound
+// Regression smoke for the shortcut encoding fix (#93 #111, FileNotFound
 // class on OneDrive-redirected / non-ASCII Desktop folders).
 //
 // Mechanism under test: Windows PowerShell 5.1 writes REDIRECTED stdout in
