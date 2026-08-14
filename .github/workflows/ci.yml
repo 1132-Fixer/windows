@@ -39,6 +39,13 @@ jobs:
       - name: Build NSIS installer
         run: npm run build:installer
 
+      # package.json "files" is a broad glob with a deny list, so what ships
+      # depends on what is in the working tree at build time. This enumerates
+      # the real payload and fails on an unexpected executable, script, key,
+      # database or archive. See docs/security/BINARY-POLICY.md.
+      - name: Package inventory and allowlist
+        run: node scripts/package-inventory.mjs --unpacked dist/win-unpacked
+
       - name: List build artifacts
         run: |
           echo "=== Build Output ==="
