@@ -301,18 +301,26 @@ function assetPresent(release, name) {
   // REST release object only — never an asset GET. See the header note: an
   // asset GET here increments the download_count that the deletion gate for
   // this repository reads, and CI ran this on every commit.
-  console.log('updater-channel-smoke: residual old channel (REST metadata only, do not delete)');
+  // Old-channel telemetry (REST metadata only). Under the compatibility-bridge
+  // policy the legacy feed is EXPECTED to carry the current release (that is the
+  // bridge <=5.5.1 clients take), so the tag is asserted "not ahead of source"
+  // rather than "not equal to current". download_count is logged as telemetry
+  // only — it is NOT a retirement gate (see the objective condition in
+  // docs/RELEASE-MIGRATION-2026-08.md). Never GET the latest.yml asset here: an
+  // asset GET inflates that counter and CI runs this on every commit.
+  console.log('updater-channel-smoke: legacy old channel telemetry (REST only, do not delete)');
   try {
     const oldRel = await githubJson(`https://api.github.com/repos/${OLD_OWNER}/${OLD_REPO}/releases/latest`);
     const names = (oldRel.assets || []).map((a) => a.name);
     const n = assetCount(oldRel, 'latest.yml');
-    console.log(`  note old-channel ${OLD_OWNER}/${OLD_REPO} tag=${oldRel.tag_name} latest.yml download_count=${n} (REST read, does not increment)`);
-    check(oldRel.tag_name !== `v${pkg.version}`, `old-channel tag ${oldRel.tag_name} is residual, not current v${pkg.version}`);
-    check(names.includes('latest.yml'), 'old-channel still publishes latest.yml (feed intact, not deleted)');
-    check(names.some((x) => x.endsWith('.exe')), 'old-channel still serves an installer (residual clients can still update)');
-    check(typeof n === 'number' && n > 0, `old-channel residual clients recorded (latest.yml downloads=${n})`);
+    const oldVer = (oldRel.tag_name || '').replace(/^v/, '');
+    const caughtUp = semverCmp(oldVer, pkg.version) === 0;
+    console.log(`  note old-channel ${OLD_OWNER}/${OLD_REPO} tag=${oldRel.tag_name} latest.yml download_count=${n} bridged=${caughtUp} (REST read, does not increment)`);
+    check(semverCmp(oldVer, pkg.version) <= 0, `old-channel tag ${oldRel.tag_name} is not ahead of source v${pkg.version} (bridge carries current or lags, never leads)`);
+    check(names.includes('latest.yml'), 'old-channel still publishes latest.yml (bridge intact, not deleted)');
+    check(names.some((x) => x.endsWith('.exe')), 'old-channel still serves an installer (<=5.5.1 clients can still update)');
   } catch (err) {
-    console.log(`  note old-channel REST metadata SKIPPED, its 4 assertions did not run: ${(err && err.message) || err}`);
+    console.log(`  note old-channel REST metadata SKIPPED, its assertions did not run: ${(err && err.message) || err}`);
   }
 
   if (failures) {
