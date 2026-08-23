@@ -88,9 +88,13 @@ that leaves no diff to review:
 
 - `.cursor/rules/caveman.mdc` shipped inside `app.asar`, because the deny list
   excludes `**/*.md` and that file is `.mdc`.
-- `design-system` is a git submodule. Building with submodules initialised would
-  have packaged the entire submodule; building without them would not. The
-  payload therefore depended on the checkout, not on the code.
+- `design-system` was a git submodule. Building with submodules initialised
+  would have packaged the entire submodule; building without them would not.
+  The payload therefore depended on the checkout, not on the code. The
+  submodule has since been removed entirely (its gitlink pointed at a commit
+  that no longer existed, which broke every recursive clone, Dependabot's
+  included). The `!design-system/**` exclusion in `build.files` is kept so a
+  future stray directory of that name still cannot ship.
 
 The inventory is the durable control. The `build.files` exclusions are the
 specific fix.
