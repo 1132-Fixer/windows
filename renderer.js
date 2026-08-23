@@ -21,7 +21,6 @@ const rescanBtn       = document.getElementById('rescanBtn');
 const detailsBtn      = document.getElementById('detailsBtn');
 const supportBtn      = document.getElementById('supportBtn');
 const buttonNote      = document.getElementById('buttonNote');
-const wizProgressFill = document.getElementById('wizProgressFill');
 const checkList       = document.getElementById('checkList');
 const stageTracker    = document.getElementById('stageTracker');
 const receiptPanel    = document.getElementById('receiptPanel');
@@ -160,6 +159,7 @@ function worstStatus(statuses) {
 // green tick to every tone it did not enumerate.)
 function setStatus(tone, text) {
   const badge = document.getElementById('statusBadge');
+  badge.hidden = false; // re-shown after the repairing state hid it
   badge.className = 'status-badge' + (tone ? ' ' + tone : '');
   badge.setAttribute('data-tone', tone || 'unknown');
   document.getElementById('statusBadgeIcon').textContent = summaryIcon(tone);
@@ -168,8 +168,31 @@ function setStatus(tone, text) {
 
 const STAGE_ORDER = ['prep', 'verify', 'consent', 'launch', 'receipt'];
 const STAGE_LABEL = {
-  prep: 'Preparing', verify: 'Verifying', consent: 'Consent', launch: 'Launch', receipt: 'Verify'
+  prep: 'Preparing the repair', verify: 'Repairing helper account',
+  consent: 'Camera & microphone access', launch: 'Launch Zoom', receipt: 'Verify repair'
 };
+// Consumer-language detail for the ACTIVE step (design critique 2026-08-23:
+// no engineering copy like account names in the primary UI — the raw log
+// stays behind View details).
+const STAGE_DETAIL = {
+  prep: 'Getting things ready…',
+  verify: 'Setting up the helper account…',
+  consent: 'Configuring camera & microphone access…',
+  launch: 'Starting Zoom…',
+  receipt: 'Checking the repair…'
+};
+
+// Paint the friendly detail line under the active step (and announce it
+// through the visually-hidden live region).
+function paintStageDetail() {
+  const active = stageTracker.querySelector('.stage-pill[data-state="active"]');
+  stageTracker.querySelectorAll('.stage-detail').forEach(el => { el.textContent = ''; });
+  if (active) {
+    const text = STAGE_DETAIL[active.getAttribute('data-stage')] || '';
+    active.querySelector('.stage-detail').textContent = text;
+    wizFixAction.textContent = text;
+  }
+}
 
 // Map a fix-log [N/8] step number onto our 5-stage UI.
 function stageForStep(n) {
@@ -200,9 +223,11 @@ function updateFixProgress() {
     if (st === 'done' || st === 'warn' || st === 'fail') done++;
     else if (st === 'active') active = 0.5;
   }
-  wizProgressFill.style.width = `${Math.min(100, ((done + active) / STAGE_ORDER.length) * 100)}%`;
   const step = Math.max(1, Math.min(STAGE_ORDER.length, done + (active ? 1 : 0) || 1));
-  document.getElementById('wizStepLine').textContent = `Step ${step} of ${STAGE_ORDER.length}`;
+  const activeEl = stageTracker.querySelector('.stage-pill[data-state="active"] .stage-pill-label');
+  document.getElementById('wizStepLine').textContent =
+    `Step ${step} of ${STAGE_ORDER.length}` + (activeEl ? ` · ${activeEl.textContent}` : '');
+  paintStageDetail();
 }
 
 function resetStages() {
@@ -291,7 +316,6 @@ function addFileItem(text, className = '') {
   if (m) {
     const stage = stageForStep(parseInt(m[1], 10));
     if (stage) advanceStageTo(stage);
-    if (isRunning && m[2]) wizFixAction.textContent = m[2];
   }
 }
 
@@ -920,15 +944,17 @@ async function runFix() {
   const wantShortcut = document.getElementById('shortcutOptInput').checked;
 
   isRunning = true;
-  setStatus('scanning', 'Repairing');
-  setActions({ fix: true, fixDisabled: true, fixLabel: 'Repairing…' });
+  // No CTA during automatic work, and ONE status voice: the wizard body
+  // itself. The header badge hides until an outcome lands (setStatus
+  // re-shows it).
+  setActions({});
+  document.getElementById('statusBadge').hidden = true;
 
   // Wizard: fixing pane — stage tracker + latest action. The raw log keeps
   // recording underneath in Advanced details, collapsed.
   setWizardPane('fixing');
   resetStages();
   advanceStageTo('prep');
-  wizFixAction.textContent = WIZARD.FIXING_START;
   receiptPanel.classList.remove('visible');
   copyErrBtn.classList.remove('visible'); // failure-only; re-shown on FIX FAILED
   clearFileList();
@@ -1430,7 +1456,7 @@ supportBtn.addEventListener('click', () => openSupportReport());
   };
   try {
     const elevated = await window.electronAPI.isElevated();
-    paint(elevated === true ? 'Administrator' : 'Not administrator', elevated === true ? 'ok' : 'bad');
+    paint(elevated === true ? 'Running as administrator' : 'Not running as administrator', elevated === true ? 'ok' : 'bad');
   } catch (_) {
     paint('Admin rights unknown', 'bad');
   }

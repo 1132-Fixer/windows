@@ -25,7 +25,7 @@
     {
       "name": "01-issue-found-920x700.png: independence disclosure present",
       "ok": true,
-      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+      "detail": "Open Source·Independent project — not affiliated with Zoom."
     },
     {
       "name": "01: primary 448×48±4",
@@ -65,7 +65,7 @@
     {
       "name": "02-issue-found-768x620.png: independence disclosure present",
       "ok": true,
-      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+      "detail": "Open Source·Independent project — not affiliated with Zoom."
     },
     {
       "name": "02: primary not touching edges",
@@ -95,12 +95,27 @@
     {
       "name": "03-repairing-920x700.png: independence disclosure present",
       "ok": true,
-      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+      "detail": "Open Source·Independent project — not affiliated with Zoom."
     },
     {
-      "name": "03: progress ≤480 × 6–8",
+      "name": "03: no second progress bar (step rail is the indicator)",
       "ok": true,
-      "detail": "480x6"
+      "detail": ""
+    },
+    {
+      "name": "03: no CTA during automatic work",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "03: consumer-language detail on active step",
+      "ok": true,
+      "detail": "Setting up the helper account…"
+    },
+    {
+      "name": "03: no redundant header status during repair",
+      "ok": true,
+      "detail": ""
     },
     {
       "name": "03: no console output visible",
@@ -130,7 +145,7 @@
     {
       "name": "04-admin-required-920x700.png: independence disclosure present",
       "ok": true,
-      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+      "detail": "Open Source·Independent project — not affiliated with Zoom."
     },
     {
       "name": "04: heading",
@@ -165,7 +180,7 @@
     {
       "name": "05-complete-920x700.png: independence disclosure present",
       "ok": true,
-      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+      "detail": "Open Source·Independent project — not affiliated with Zoom."
     },
     {
       "name": "05: heading",
@@ -200,7 +215,7 @@
     {
       "name": "06-failure-920x700.png: independence disclosure present",
       "ok": true,
-      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+      "detail": "Open Source·Independent project — not affiliated with Zoom."
     },
     {
       "name": "06: heading",
@@ -230,7 +245,7 @@
     {
       "name": "07-explore-920x700.png: independence disclosure present",
       "ok": true,
-      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+      "detail": "Open Source·Independent project — not affiliated with Zoom."
     },
     {
       "name": "07: modal 760px",
@@ -280,7 +295,7 @@
     {
       "name": "08-explore-820x620.png: independence disclosure present",
       "ok": true,
-      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+      "detail": "Open Source·Independent project — not affiliated with Zoom."
     },
     {
       "name": "explore: 7 destination cards",
@@ -325,7 +340,7 @@
     {
       "name": "09-explore-keyboard-focus-920x700.png: independence disclosure present",
       "ok": true,
-      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+      "detail": "Open Source·Independent project — not affiliated with Zoom."
     },
     {
       "name": "09: a destination card holds keyboard focus",
@@ -355,7 +370,7 @@
     {
       "name": "10-advanced-details-920x700.png: independence disclosure present",
       "ok": true,
-      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+      "detail": "Open Source·Independent project — not affiliated with Zoom."
     },
     {
       "name": "10: advanced details expanded",
@@ -385,7 +400,7 @@
     {
       "name": "11-open-source-disclosure-920x700.png: independence disclosure present",
       "ok": true,
-      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+      "detail": "Open Source·Independent project — not affiliated with Zoom."
     },
     {
       "name": "11: disclosure stays one quiet line at 920",
@@ -395,12 +410,12 @@
     {
       "name": "11: open-source indicator present",
       "ok": true,
-      "detail": "{\"aria\":\"Open Source. Independent project. Not affiliated with Zoom.\",\"hasIcon\":true,\"os\":\"Open Source\"}"
+      "detail": "{\"aria\":\"Open Source. Independent project — not affiliated with Zoom.\",\"hasIcon\":true,\"os\":\"Open Source\"}"
     },
     {
       "name": "11: accessible name exact",
       "ok": true,
-      "detail": "Open Source. Independent project. Not affiliated with Zoom."
+      "detail": "Open Source. Independent project — not affiliated with Zoom."
     }
   ]
 }

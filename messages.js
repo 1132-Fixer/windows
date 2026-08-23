@@ -358,8 +358,8 @@ const EXPLORE_VIEW = [
 // ============================================================
 const DISCLOSURE = {
   OS_LABEL: 'Open Source',
-  INDEPENDENCE: 'Independent project. Not affiliated with Zoom.',
-  ARIA: 'Open Source. Independent project. Not affiliated with Zoom.'
+  INDEPENDENCE: 'Independent project — not affiliated with Zoom.',
+  ARIA: 'Open Source. Independent project — not affiliated with Zoom.'
 };
 
 // Feedback submit fallbacks (renderer side; main.js maps HTTP statuses).

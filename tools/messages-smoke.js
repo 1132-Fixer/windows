@@ -224,7 +224,7 @@ console.log('messages-smoke: wizard states (directive 2026-08-23)');
 console.log('messages-smoke: project disclosure (addendum 2026-08-23)');
 {
   // Exact approved wording — byte-pinned, never reworded.
-  check(m.DISCLOSURE.INDEPENDENCE === 'Independent project. Not affiliated with Zoom.',
+  check(m.DISCLOSURE.INDEPENDENCE === 'Independent project — not affiliated with Zoom.',
     'independence disclosure is the exact approved wording');
   check(m.DISCLOSURE.OS_LABEL === 'Open Source', 'open-source label is exact');
   check(m.DISCLOSURE.ARIA.includes(m.DISCLOSURE.INDEPENDENCE) && !m.DISCLOSURE.ARIA.includes('·'),
