@@ -25,7 +25,7 @@
   "author": "1132 Fixer",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^43.3.0",
+    "electron": "^43.4.1",
     "electron-builder": "^24.9.1"
   },
   "build": {
