@@ -6,12 +6,13 @@ already in the field poll a different feed — see
 Version truth is `package.json`. This document is the live channel record,
 not a release.
 
-## Current feed — what `main` publishes to
+## Feed `main` publishes to — no clients yet
 
 | | |
 | --- | --- |
 | Source of version truth | `package.json` `version` (today: `5.6.0`) |
-| Publish target | `build.publish` → GitHub `1132-Fixer` / `windows` |
+| Publish target | `build.publish` on `main` → GitHub `1132-Fixer` / `windows` |
+| Clients on this feed today | **none** — no shipped binary was built from a commit carrying it |
 | Feed URL | `https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml` |
 | Integrity | SHA-512 of the Setup installer, inside `latest.yml` |
 | Transport | HTTPS only. First hop and every redirect must pass `isAllowedUpdaterUrl` (#156) |
@@ -25,6 +26,11 @@ banner.
 Proof: `tools/updater-channel-smoke.js` (wired into `npm test`) fetches the
 live feed through the allowlist, then asserts `latest.yml` `version` equals
 `package.json`.
+
+PR #161 introduced that smoke and pinned this document. It changed `main`
+only: no release was published and **zero field clients moved**. This feed
+governs the **next** build, and acquires its first client when a build cut
+from `main` is installed.
 
 Do not random-bump `package.json`. A bump without a matching published
 `latest.yml` fails that test. Do not publish a GitHub Release from a
@@ -62,7 +68,7 @@ Live counts on 2026-08-23, read from the REST release object:
 
 | Channel | Latest tag | `latest.yml` downloads |
 | --- | --- | --- |
-| `1132-Fixer/windows` (current) | v5.6.0 | 478 |
+| `1132-Fixer/windows` (`main`'s target, no clients) | v5.6.0 | 478 |
 | `PrimeUpYourLife/1132-Fixer-Windows-Releases` (old) | v5.5.1 | 2246 |
 
 **Read these counts through the REST release object, never by GETting the
@@ -91,7 +97,21 @@ this counter.
 arbitrary hosts. Residual clients keep working only because their *already
 installed* binary has the old URL baked in.
 
-Do not delete `PrimeUpYourLife/1132-Fixer-Windows-Releases`.
+## Retirement — two populations, one exit
+
+A v5.7 cut from `main` would be published here and proxied by the broker, so
+**broker/v5.6.0 clients migrate by updating**. Legacy `<=5.5.1` clients never
+consult the broker and never see this repository, so the same release moves
+**zero** of them. They have **no decay mechanism** — the count falls only when
+a user reinstalls by hand, which the project can neither observe nor drive.
+
+**Archive over delete.** Do not delete
+`PrimeUpYourLife/1132-Fixer-Windows-Releases`. If it is ever retired, archive
+it: archiving freezes the repository while keeping every release asset and its
+`latest.yml` reachable, so legacy updater checks keep resolving instead of
+404ing. Deletion is irreversible and breaks those clients silently.
+
+See [`../RELEASE-MIGRATION-2026-08.md`](../RELEASE-MIGRATION-2026-08.md#retiring-the-old-channel--two-populations).
 
 ## Related
 

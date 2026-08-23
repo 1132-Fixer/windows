@@ -135,18 +135,28 @@ Every fix below removes a rendering that claimed more than the data supported.
   install mints its own support token on first use — sealed at rest with
   Windows DPAPI), while plain reports keep the existing feedback path.
 
-### Documented — updater channel is this repository's GitHub Releases
+### Documented — three live updater channels, and which clients are on each
 
-- Current builds fetch `latest.yml` from
+- `build.publish` on `main` targets
   `https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml`.
-  `package.json` remains `5.6.0` (no random bump). `build.publish` is GitHub
-  `1132-Fixer/windows`. HTTPS + SHA-512 integrity + `isAllowedUpdaterUrl`
+  That feed governs the **next** build and has **no clients today** — no
+  shipped binary was built from a commit carrying it. `package.json` remains
+  `5.6.0` (no random bump). HTTPS + SHA-512 integrity + `isAllowedUpdaterUrl`
   (#156). `verifyUpdateCodeSignature` stays false.
-- Residual v5.5.1 clients still poll `PrimeUpYourLife/1132-Fixer-Windows-Releases`
-  (`latest.yml` download_count 2216 on 2026-08-23, up from census 2212). That
-  repository is not deleted. Current source does not fetch it.
+- The shipped **v5.6.0** binaries were built at tag `v5.6.0`, whose
+  `build.publish` is the generic broker
+  `https://botify-network.com/downloads/1132-fixer/updates`. That broker is a
+  live proxy of this repository's releases and is what the **entire current
+  install base** polls.
+- Residual v5.5.1 and earlier clients still poll
+  `PrimeUpYourLife/1132-Fixer-Windows-Releases` (`latest.yml` download_count
+  2216 on 2026-08-23). That repository is not deleted, and should be archived
+  rather than deleted if ever retired. Current source does not fetch it.
+- A build's feed is fixed at build time; `autoUpdater.setFeedURL` is never
+  called, so no published release can move an already-installed client to a
+  different channel.
 - Coverage: `tools/updater-channel-smoke.js` asserts live `latest.yml` version
-  equals `package.json`.
+  equals `package.json`, and that the broker has not diverged from it.
 
 ## [5.6.0] - 2026-08-08 — finds your Zoom, tells the truth, and locks the helper account down
 

@@ -86,13 +86,16 @@ fails `isAllowedUpdaterUrl()`:
   `github-releases.githubusercontent.com`
 
 `autoUpdater.setFeedURL` is never called. electron-updater reads
-`build.publish` from `package.json` (GitHub provider, owner `1132-Fixer`,
-repo `windows`). The renderer has no API that can change that.
+`build.publish` from `package.json` — on `main` that is the GitHub provider,
+owner `1132-Fixer`, repo `windows`. The renderer has no API that can change
+that. Note that the value is fixed at build time: the shipped v5.6.0 binaries
+were built at a tag whose `build.publish` is the generic `botify-network.com`
+broker, so they poll the broker, not this repository.
 
 Live channel, residual old-channel clients, and the version-match test are
 recorded in [`../development/updater-channel.md`](../development/updater-channel.md).
 `PrimeUpYourLife/1132-Fixer-Windows-Releases` is still serving v5.5.1
-`latest.yml` and must not be deleted.
+`latest.yml` and must not be deleted; if retired, archive it.
 
 `verifyUpdateCodeSignature` stays `false` until a release is actually signed.
 Enabling it while artifacts are unsigned permanently breaks the update
