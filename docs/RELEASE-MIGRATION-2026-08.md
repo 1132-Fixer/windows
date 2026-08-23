@@ -144,11 +144,13 @@ An updater URL compiled into a shipped binary is a **compatibility contract**.
 
 ### v6.0.0 is a one-time pinned transition release — NOT an every-release mirror
 
-The legacy feed carries **exactly one** release: **v6.0.0**, published there
-once. Future releases are **not** mirrored to it. This is sufficient — and
-measured (see [Measured upgrade proof](#measured-upgrade-proof-2026-08-23)) —
-because a single hop moves a legacy client permanently onto the current
-channel:
+The legacy feed requires **one permanently available transition release:
+v6.0.0**. Historical releases (v5.3.x–v5.5.1) may remain on that repo; the
+contract is not that the repo holds only one release, but that **v6.0.0 stays
+pinned and unchanged as the transition bridge and that future normal releases
+are not mirrored there**. This is sufficient — and measured (see
+[Measured upgrade proof](#measured-upgrade-proof-2026-08-23)) — because a
+single hop moves a legacy client permanently onto the current channel:
 
 ```
 <=5.5.1 install

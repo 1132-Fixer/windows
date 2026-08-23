@@ -272,16 +272,39 @@ function assetPresent(release, name) {
     check(!!oldRel.tag_name, `legacy bridge still serving a release (${oldRel.tag_name || 'none'})`);
     check(assetPresent(oldRel, 'latest.yml'), 'legacy bridge latest release still carries latest.yml (old clients can discover an update)');
     check(assetPresent(oldRel, `1132-Fixer-Setup-${oldVer}.exe`), `legacy bridge latest release carries its Setup installer (1132-Fixer-Setup-${oldVer}.exe)`);
-    // The pinned one-time transition release MUST remain available and unchanged
-    // on the legacy feed — that single release is the whole bridge for <=5.5.1
-    // clients (docs/RELEASE-MIGRATION-2026-08.md). Guard it by tag specifically,
-    // independent of which release is "latest", so a future release elsewhere
-    // can never make this pass while the transition has been removed.
+    // The pinned transition release must remain available AND byte-identical to
+    // the canonical 1132-Fixer/windows v6.0.0 release. Presence is not the
+    // contract (docs/RELEASE-MIGRATION-2026-08.md): a <=5.5.1 client installs
+    // whatever bytes sit behind these names, so a drifted Setup would ship a
+    // different binary under the same version. Compare GitHub's per-asset
+    // content digests (sha256) — cryptographic, and no large download needed.
+    const canon = await githubJson(`https://api.github.com/repos/${CURRENT_OWNER}/${CURRENT_REPO}/releases/tags/v${TRANSITION_VERSION}`);
     const trans = await githubJson(`https://api.github.com/repos/${OLD_OWNER}/${OLD_REPO}/releases/tags/v${TRANSITION_VERSION}`);
     check(!!trans && trans.tag_name === `v${TRANSITION_VERSION}`, `pinned transition release v${TRANSITION_VERSION} still present on the legacy feed`);
-    check(assetPresent(trans, 'latest.yml') && assetPresent(trans, `1132-Fixer-Setup-${TRANSITION_VERSION}.exe`), `pinned transition v${TRANSITION_VERSION} still carries latest.yml + Setup (bridge intact)`);
+    const digestOf = (rel, name) => { const a = (rel.assets || []).find((x) => x.name === name); return (a && a.digest) || null; };
+    // Artifacts an old electron-updater actually consumes to discover+install.
+    const REQUIRED = ['latest.yml', `1132-Fixer-Setup-${TRANSITION_VERSION}.exe`];
+    // blockmap is only meaningful when the canonical release still ships one
+    // (this client sets disableDifferentialDownload, so treat it as conditional).
+    const CONDITIONAL = [`1132-Fixer-Setup-${TRANSITION_VERSION}.exe.blockmap`];
+    for (const name of REQUIRED) {
+      const cd = digestOf(canon, name);
+      const od = digestOf(trans, name);
+      check(!!cd, `canonical v${TRANSITION_VERSION} exposes a content digest for ${name}`);
+      check(!!od, `legacy v${TRANSITION_VERSION} exposes a content digest for ${name}`);
+      check(!!cd && !!od && cd === od, `bridge artifact ${name} is byte-identical to canonical (legacy ${od || 'missing'} == canonical ${cd || 'missing'})`);
+    }
+    for (const name of CONDITIONAL) {
+      const cd = digestOf(canon, name);
+      if (!cd) { console.log(`  note ${name} not published on canonical v${TRANSITION_VERSION}; skipping bridge digest comparison`); continue; }
+      const od = digestOf(trans, name);
+      check(!!od && od === cd, `bridge artifact ${name} is byte-identical to canonical (legacy ${od || 'missing'} == canonical ${cd})`);
+    }
+    // A later normal release must never become the legacy feed's effective
+    // "latest": <=5.5.1 clients resolve releases/latest, which must stay v6.0.0.
+    check(oldVer === TRANSITION_VERSION, `legacy feed effective latest is still v${TRANSITION_VERSION} (found v${oldVer || '?'})`);
   } catch (err) {
-    check(false, `legacy compatibility bridge / pinned transition unreachable — <=5.5.1 clients would be stranded: ${(err && err.message) || err}`);
+    check(false, `legacy compatibility bridge / pinned transition unverifiable — <=5.5.1 clients would be at risk: ${(err && err.message) || err}`);
   }
 
   // The broker is what the shipped field polls (header note 2). If it stops
