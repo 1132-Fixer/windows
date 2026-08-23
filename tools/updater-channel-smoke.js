@@ -42,6 +42,10 @@ const CURRENT_REPO = 'windows';
 const CURRENT_FEED = `https://github.com/${CURRENT_OWNER}/${CURRENT_REPO}/releases/latest/download/latest.yml`;
 const OLD_OWNER = 'PrimeUpYourLife';
 const OLD_REPO = '1132-Fixer-Windows-Releases';
+// The single pinned transition release on the legacy feed. <=5.5.1 clients take
+// exactly this one release, then move to the current channel. It must stay
+// available and unchanged; future releases are NOT mirrored to the legacy feed.
+const TRANSITION_VERSION = '6.0.0';
 // Kept as a string for the allowlist-rejection assertions below. It is never
 // fetched — see the header note on download_count contamination.
 const OLD_FEED = `https://github.com/${OLD_OWNER}/${OLD_REPO}/releases/latest/download/latest.yml`;
@@ -268,8 +272,16 @@ function assetPresent(release, name) {
     check(!!oldRel.tag_name, `legacy bridge still serving a release (${oldRel.tag_name || 'none'})`);
     check(assetPresent(oldRel, 'latest.yml'), 'legacy bridge latest release still carries latest.yml (old clients can discover an update)');
     check(assetPresent(oldRel, `1132-Fixer-Setup-${oldVer}.exe`), `legacy bridge latest release carries its Setup installer (1132-Fixer-Setup-${oldVer}.exe)`);
+    // The pinned one-time transition release MUST remain available and unchanged
+    // on the legacy feed — that single release is the whole bridge for <=5.5.1
+    // clients (docs/RELEASE-MIGRATION-2026-08.md). Guard it by tag specifically,
+    // independent of which release is "latest", so a future release elsewhere
+    // can never make this pass while the transition has been removed.
+    const trans = await githubJson(`https://api.github.com/repos/${OLD_OWNER}/${OLD_REPO}/releases/tags/v${TRANSITION_VERSION}`);
+    check(!!trans && trans.tag_name === `v${TRANSITION_VERSION}`, `pinned transition release v${TRANSITION_VERSION} still present on the legacy feed`);
+    check(assetPresent(trans, 'latest.yml') && assetPresent(trans, `1132-Fixer-Setup-${TRANSITION_VERSION}.exe`), `pinned transition v${TRANSITION_VERSION} still carries latest.yml + Setup (bridge intact)`);
   } catch (err) {
-    check(false, `legacy compatibility bridge unreachable — <=5.5.1 clients would be stranded: ${(err && err.message) || err}`);
+    check(false, `legacy compatibility bridge / pinned transition unreachable — <=5.5.1 clients would be stranded: ${(err && err.message) || err}`);
   }
 
   // The broker is what the shipped field polls (header note 2). If it stops
