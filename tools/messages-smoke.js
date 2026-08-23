@@ -88,7 +88,7 @@ for (const key of Object.keys(m.FRAME_SERVER_STATES)) {
 console.log('messages-smoke: checklist group mapping (§9)');
 {
   const TAXONOMY = ['App', 'Zoom', 'Helper account', 'Privacy policies', 'Camera service'];
-  const EXPECTED_KEYS = ['admin', 'zoom', 'helperUser', 'seclogon', 'camPolicy', 'micPolicy', 'hku', 'frameServer'];
+  const EXPECTED_KEYS = ['admin', 'zoom', 'helperUser', 'helperProfile', 'seclogon', 'camPolicy', 'micPolicy', 'hku', 'frameServer'];
   check(JSON.stringify(m.CHECK_ORDER.map(c => c.key)) === JSON.stringify(EXPECTED_KEYS),
     'CHECK_ORDER keys and display order unchanged');
   check(m.CHECK_ORDER.every(c => typeof c.label === 'string' && c.label.length > 0),
