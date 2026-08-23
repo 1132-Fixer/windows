@@ -76,7 +76,7 @@ function scanFailureMessage(err) {
 function shortcutFailureMessage(rawError) {
   const detail = rawError ? String(rawError) : '';
   return 'Could not create the shortcut. Nothing else was changed — you can try again with the ' +
-    '"Create Zoom Helper Shortcut" button.' +
+    '"Create desktop shortcut" button.' +
     (detail ? ` Detail for support: ${detail}` : '');
 }
 
@@ -258,8 +258,8 @@ const WIZARD_GROUPS = CHECK_ORDER.reduce((groups, c) => {
 }, []);
 
 const WIZARD = {
-  READY_TITLE:    "You're all set",
-  READY_SUB:      'Everything checks out. The Zoom helper is ready to use.',
+  READY_TITLE:    'Everything looks good',
+  READY_SUB:      '1132 Fixer found no problems.',
   READY_WARN_TITLE: 'Ready, with warnings',
   READY_WARN_SUB: 'The fix can run, but some checks reported warnings — open Advanced details to see them.',
   UNKNOWN_TITLE:  "Couldn't verify everything",
@@ -278,13 +278,12 @@ const WIZARD = {
   ADMIN_RESTARTING: 'Restarting with administrator access…',
   FIXING_TITLE:   'Repairing Zoom',
   FIXING_START:   'Starting…',
-  SUCCESS_TITLE:  'Fix complete',
-  SUCCESS_SUB:    'Zoom is ready to use.',
+  SUCCESS_TITLE:  'Zoom is ready',
+  SUCCESS_SUB:    'The helper account is set up and ready to use.',
   PARTIAL_TITLE:  'Finished — some items need attention',
   PARTIAL_SUB:    'The fix ran, but some steps could not be completed. Open Advanced details to see exactly what needs attention.',
   WARNINGS_SUB:   'The fix finished with warnings. Open Advanced details to read them.',
   FAIL_TITLE:     "Couldn't complete the repair",
-  FIX_NOTE:       '1132 Fixer repairs the helper account without changing your Zoom files or data.',
   SHORTCUT_NOT_READY_TITLE: "Shortcut isn't ready yet",
   SHORTCUT_NOT_READY_SUB:   'Run the repair once before creating the Zoom Helper shortcut — it stores the sign-in the shortcut needs.',
   SHORTCUT_FAILED_TITLE:    "The shortcut couldn't be created",
@@ -299,11 +298,16 @@ const WIZARD = {
 function wizardFixFoundTitle(count) {
   return count === 1 ? 'One fix found' : `${count} fixes found`;
 }
+// Safety is stated ONCE, here (design review P0-4) — no second
+// explanatory line elsewhere on the screen.
 function wizardFixFoundSub(labels) {
   const list = (Array.isArray(labels) ? labels : []).filter(Boolean);
-  const what = list.length ? list.join(', ') : 'A repairable item';
-  const plural = list.length > 1;
-  return `${what} ${plural ? 'need' : 'needs'} a repair. 1132 Fixer can fix ${plural ? 'these' : 'this'} automatically.`;
+  if (list.length === 1) {
+    const label = list[0].charAt(0).toLowerCase() + list[0].slice(1);
+    return `The ${label} needs repair. Your Zoom files and data won't be changed.`;
+  }
+  const what = list.length ? list.join(', ') : 'Repairable items';
+  return `${what} need repair. Your Zoom files and data won't be changed.`;
 }
 // Manual blockers — name them, plainly, without the raw diagnostics.
 function wizardBlockedSub(labels) {

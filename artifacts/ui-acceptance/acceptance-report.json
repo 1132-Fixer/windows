@@ -8,9 +8,9 @@
       "detail": "cx=460.0 vs 460"
     },
     {
-      "name": "01-issue-found-920x700.png: header 72±4",
+      "name": "01-issue-found-920x700.png: header 64±4",
       "ok": true,
-      "detail": "h=72"
+      "detail": "h=64"
     },
     {
       "name": "01-issue-found-920x700.png: footer 52±4",
@@ -28,14 +28,14 @@
       "detail": "Open Source·Independent project. Not affiliated with Zoom."
     },
     {
-      "name": "01: primary 480×48±4",
+      "name": "01: primary 448×48±4",
       "ok": true,
-      "detail": "480x48"
+      "detail": "448x48"
     },
     {
-      "name": "01: state icon 44±4",
+      "name": "01: state icon 32±4",
       "ok": true,
-      "detail": "44x44"
+      "detail": "32x32"
     },
     {
       "name": "01: heading",
@@ -48,9 +48,9 @@
       "detail": "cx=384.0 vs 384"
     },
     {
-      "name": "02-issue-found-768x620.png: header 72±4",
+      "name": "02-issue-found-768x620.png: header 64±4",
       "ok": true,
-      "detail": "h=72"
+      "detail": "h=64"
     },
     {
       "name": "02-issue-found-768x620.png: footer 52±4",
@@ -70,7 +70,7 @@
     {
       "name": "02: primary not touching edges",
       "ok": true,
-      "detail": "x=144 w=480"
+      "detail": "x=160 w=448"
     },
     {
       "name": "03-repairing-920x700.png: icon centered",
@@ -78,9 +78,9 @@
       "detail": "cx=460.0 vs 460"
     },
     {
-      "name": "03-repairing-920x700.png: header 72±4",
+      "name": "03-repairing-920x700.png: header 64±4",
       "ok": true,
-      "detail": "h=72"
+      "detail": "h=64"
     },
     {
       "name": "03-repairing-920x700.png: footer 52±4",
@@ -113,9 +113,9 @@
       "detail": "cx=460.0 vs 460"
     },
     {
-      "name": "04-admin-required-920x700.png: header 72±4",
+      "name": "04-admin-required-920x700.png: header 64±4",
       "ok": true,
-      "detail": "h=72"
+      "detail": "h=64"
     },
     {
       "name": "04-admin-required-920x700.png: footer 52±4",
@@ -148,9 +148,9 @@
       "detail": "cx=460.0 vs 460"
     },
     {
-      "name": "05-complete-920x700.png: header 72±4",
+      "name": "05-complete-920x700.png: header 64±4",
       "ok": true,
-      "detail": "h=72"
+      "detail": "h=64"
     },
     {
       "name": "05-complete-920x700.png: footer 52±4",
@@ -170,7 +170,7 @@
     {
       "name": "05: heading",
       "ok": true,
-      "detail": "Fix complete"
+      "detail": "Zoom is ready"
     },
     {
       "name": "05: Open Zoom primary present",
@@ -183,9 +183,9 @@
       "detail": "cx=460.0 vs 460"
     },
     {
-      "name": "06-failure-920x700.png: header 72±4",
+      "name": "06-failure-920x700.png: header 64±4",
       "ok": true,
-      "detail": "h=72"
+      "detail": "h=64"
     },
     {
       "name": "06-failure-920x700.png: footer 52±4",
@@ -213,9 +213,9 @@
       "detail": "cx=460.0 vs 460"
     },
     {
-      "name": "07-explore-920x700.png: header 72±4",
+      "name": "07-explore-920x700.png: header 64±4",
       "ok": true,
-      "detail": "h=72"
+      "detail": "h=64"
     },
     {
       "name": "07-explore-920x700.png: footer 52±4",
@@ -263,9 +263,9 @@
       "detail": "cx=410.0 vs 410"
     },
     {
-      "name": "08-explore-820x620.png: header 72±4",
+      "name": "08-explore-820x620.png: header 64±4",
       "ok": true,
-      "detail": "h=72"
+      "detail": "h=64"
     },
     {
       "name": "08-explore-820x620.png: footer 52±4",
@@ -308,9 +308,9 @@
       "detail": "cx=460.0 vs 460"
     },
     {
-      "name": "09-explore-keyboard-focus-920x700.png: header 72±4",
+      "name": "09-explore-keyboard-focus-920x700.png: header 64±4",
       "ok": true,
-      "detail": "h=72"
+      "detail": "h=64"
     },
     {
       "name": "09-explore-keyboard-focus-920x700.png: footer 52±4",
@@ -338,9 +338,9 @@
       "detail": "cx=460.0 vs 460"
     },
     {
-      "name": "10-advanced-details-920x700.png: header 72±4",
+      "name": "10-advanced-details-920x700.png: header 64±4",
       "ok": true,
-      "detail": "h=72"
+      "detail": "h=64"
     },
     {
       "name": "10-advanced-details-920x700.png: footer 52±4",
@@ -368,9 +368,9 @@
       "detail": "cx=460.0 vs 460"
     },
     {
-      "name": "11-open-source-disclosure-920x700.png: header 72±4",
+      "name": "11-open-source-disclosure-920x700.png: header 64±4",
       "ok": true,
-      "detail": "h=72"
+      "detail": "h=64"
     },
     {
       "name": "11-open-source-disclosure-920x700.png: footer 52±4",
@@ -390,7 +390,7 @@
     {
       "name": "11: disclosure stays one quiet line at 920",
       "ok": true,
-      "detail": "h=32"
+      "detail": "h=16"
     },
     {
       "name": "11: open-source indicator present",

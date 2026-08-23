@@ -980,7 +980,7 @@
       justify-content: flex-end;
       margin: 0;
       padding: 0 var(--s-6);
-      height: 72px;
+      height: 64px;
       background: transparent;
       border: 0;
       border-bottom: 1px solid var(--border);
@@ -998,7 +998,7 @@
     .exit-badge { display: none; }
     /* Status is an INDICATOR, never a button: soft tint, no border, no
        hover affordance. Tone classes keep their colors. */
-    .status-badge { margin-left: 0; font-size: 12px; padding: 5px 12px; }
+    .status-badge { margin-left: 0; font-size: 12px; padding: 4px 10px; }
     .status-badge, .status-badge.scanning, .status-badge.done,
     .status-badge.warn, .status-badge.error, .status-badge.action { border-color: transparent; }
     .chk-list { gap: 0; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--s-2) var(--s-4); }
@@ -1062,6 +1062,9 @@
       flex-direction: column;
       align-items: center;
       overflow: hidden;
+      /* Optical center sits slightly ABOVE the mathematical center
+         (design review P0-3, raised further per baseline sign-off). */
+      padding-bottom: 80px;
     }
     .wizard {
       width: 100%;
@@ -1087,19 +1090,21 @@
     .wiz-pane::-webkit-scrollbar { width: 8px; }
     .wiz-pane::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
     @keyframes wiz-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-    .wiz-title { font-size: 24px; line-height: 30px; font-weight: 650; color: var(--text); }
-    .wiz-sub { font-size: 15px; line-height: 22px; color: var(--muted); max-width: 520px; overflow-wrap: anywhere; margin-top: var(--s-3); }
+    .wiz-title { font-size: 24px; line-height: 32px; font-weight: 700; color: var(--text); }
+    .wiz-sub { font-size: 14px; line-height: 20px; color: var(--muted); max-width: 520px; overflow-wrap: anywhere; margin-top: var(--s-3); }
     .wiz-sub[hidden] { display: none; }
     .wiz-hint { font-size: 12px; line-height: 16px; color: var(--dim); margin-top: var(--s-4); }
     .wiz-glyph { color: var(--muted); margin-bottom: var(--s-5); }
-    .wiz-glyph svg { width: 44px; height: 44px; display: block; }
+    .wiz-glyph svg { width: 32px; height: 32px; display: block; }
     .wiz-glyph[data-tone="ok"]   { color: var(--success); }
     .wiz-glyph[data-tone="fix"]  { color: var(--accent); }
     .wiz-glyph[data-tone="warn"] { color: var(--warning); }
     .wiz-glyph[data-tone="err"]  { color: var(--danger); }
-    /* Grouped summary checks (checking pane). */
-    .wiz-checks { display: flex; flex-direction: column; gap: var(--s-3); align-items: flex-start; margin-top: var(--s-5); }
-    .wiz-check { display: flex; align-items: center; gap: var(--s-2); font-size: 15px; line-height: 22px; color: var(--muted); }
+    /* Grouped summary checks (checking pane) — a fixed-width component so
+       icons and labels align deliberately; pending rows recede, resolved
+       rows brighten. */
+    .wiz-checks { display: flex; flex-direction: column; gap: var(--s-4); align-items: stretch; width: 312px; max-width: 100%; margin-top: var(--s-5); text-align: left; }
+    .wiz-check { display: flex; align-items: center; gap: var(--s-3); font-size: 15px; line-height: 22px; color: var(--text); }
     .wiz-check .chk-icon { width: 16px; height: 16px; flex-shrink: 0; }
     .wiz-check[data-status="ready"]      .chk-icon { color: var(--success); }
     .wiz-check[data-status="repairable"] .chk-icon { color: var(--accent); }
@@ -1107,7 +1112,7 @@
     .wiz-check[data-status="blocked"]    .chk-icon { color: var(--danger); }
     .wiz-check[data-status="pending"]    .chk-icon { color: var(--disabled); }
     .wiz-check[data-status="unknown"]    .chk-icon { color: var(--warning); }
-    .wiz-check[data-status="pending"] { opacity: 0.75; }
+    .wiz-check[data-status="pending"] { opacity: 0.55; color: var(--muted); }
     /* Repairing state (§19): vertical task rows + thin progress bar. */
     .wizard .stage-tracker {
       display: flex;
@@ -1135,6 +1140,7 @@
     }
     .wiz-progress-fill { height: 100%; width: 0%; background: var(--accent); border-radius: var(--r-pill); transition: width 300ms ease-out; }
     .wiz-action-line { font-size: 13px; line-height: 18px; color: var(--dim); min-height: 18px; margin-top: var(--s-3); }
+    .wiz-step-line { font-size: 12px; line-height: 16px; font-weight: 500; color: var(--dim); margin-top: var(--s-2); }
     .wizard .zoom-recovery { text-align: left; width: 100%; margin-top: var(--s-5); border-radius: var(--r-md); }
     /* Advanced details (§18): a 32px text disclosure between the state
        description and the primary action — never a large pill. */
@@ -1192,9 +1198,25 @@
       padding-bottom: var(--s-4);
     }
     .action-area .button-container { width: 100%; justify-content: center; margin: 0; }
-    .action-area .btn-primary { flex: 0 1 480px; min-height: 48px; }
+    .action-area .btn-primary { flex: 0 1 448px; min-height: 48px; }
     .action-area .btn[hidden] { display: none; }
-    .secondary-row { display: flex; align-items: center; justify-content: center; gap: var(--s-5); flex-wrap: wrap; }
+    /* Repair option checkbox — part of the transaction, quiet by design. */
+    .shortcut-opt {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--s-3);
+      cursor: pointer;
+      text-align: left;
+      padding: var(--s-1) var(--s-2);
+      border-radius: var(--r-sm);
+    }
+    .shortcut-opt[hidden] { display: none; }
+    .shortcut-opt:hover { background: rgba(168, 181, 199, 0.06); }
+    .shortcut-opt input { margin-top: 3px; accent-color: var(--accent); width: 15px; height: 15px; }
+    .shortcut-opt-copy { display: flex; flex-direction: column; gap: 0; }
+    .shortcut-opt-title { font-size: 13px; line-height: 18px; font-weight: 600; color: var(--muted); }
+    .shortcut-opt-sub { font-size: 12px; line-height: 16px; color: var(--dim); }
+    .secondary-row { display: flex; align-items: center; justify-content: center; gap: var(--s-8); flex-wrap: wrap; }
     .btn-quiet {
       background: transparent;
       border: 0;
@@ -1202,23 +1224,24 @@
       padding: 6px 12px;
       border-radius: var(--r-sm);
       color: var(--muted);
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
     }
     .btn-quiet:hover:not(:disabled) { color: var(--text); background: rgba(168, 181, 199, 0.08); border: 0; }
     .action-area .button-note { text-align: center; }
-    /* Project disclosure (addendum §G): one quiet caption line above the
-       footer — icon + "Open Source" + the exact independence wording. No
-       pill, no card, no warning colors; wraps cleanly, never truncates. */
+    /* Project disclosure — one quiet trust line, integrated into the
+       single footer (design review item 12): badge + "Open Source" + the
+       exact independence wording. No pill, no card, no warning colors;
+       wraps cleanly, never truncates. */
     .project-disclosure {
-      flex: 0 0 auto;
-      min-height: 32px;
+      flex: 1 1 auto;
+      min-width: 0;
       display: flex;
       align-items: center;
       justify-content: center;
       flex-wrap: wrap;
       column-gap: 6px;
-      padding: 0 var(--s-6);
+      padding: 0 var(--s-3);
       margin: 0;
       font-size: 12px;
       line-height: 16px;
@@ -1227,15 +1250,23 @@
       position: relative;
       z-index: 1;
     }
-    .project-disclosure .os-icon { width: 14px; height: 14px; flex-shrink: 0; color: var(--muted); }
+    .project-disclosure .os-icon { width: 16px; height: 16px; flex-shrink: 0; }
     .project-disclosure .os-label { font-weight: 600; color: var(--muted); }
     .project-disclosure .os-sep { color: var(--dim); }
     .project-disclosure .os-independence { font-weight: 400; color: var(--dim); }
-    .explore-disclosure { min-height: 24px; margin-top: var(--s-4); padding: 0; font-size: 11px; }
+    .explore-disclosure { flex: 0 0 auto; min-height: 24px; margin-top: var(--s-4); padding: 0; font-size: 11px; }
     /* Utility footer (§23): 52px, hairline on top only. */
     .footer .hazard-bar { background: var(--border); }
-    .footer-content { min-height: 52px; padding: 0 var(--s-6); }
+    .footer-content { min-height: 52px; max-height: 56px; padding: 0 var(--s-6); }
     .footer-content .badge { font-size: 12px; padding: 6px 12px; }
+    .footer-meta { gap: var(--s-1); flex-wrap: nowrap; }
+    /* Narrow widths: tighten before ever wrapping (spec §42). */
+    @media (max-width: 840px) {
+      .footer-content { padding: 0 var(--s-4); }
+      .footer-content .badge { padding: 6px 8px; }
+      .project-disclosure { font-size: 11px; column-gap: 4px; padding: 0 var(--s-2); }
+      .project-disclosure .os-icon { width: 14px; height: 14px; }
+    }
     /* ============================================================
        EXPLORE LAUNCHER (§24–§36) — curated ecosystem panel on the same
        navy system. 760px modal, featured 1132 card, 2-column Botify
@@ -1443,6 +1474,7 @@
            log stays behind Advanced details. -->
       <div class="wiz-pane" id="wizFixing">
         <h2 class="wiz-title">Repairing Zoom</h2>
+        <p class="wiz-step-line" id="wizStepLine" aria-hidden="true"></p>
         <div class="stage-tracker active" id="stageTracker" role="list" aria-label="Repair stages">
           <div class="stage-pill" data-stage="prep"    data-state="pending" role="listitem"><span class="stage-pill-dot"></span><span class="stage-pill-label">Preparing the repair</span></div>
           <div class="stage-pill" data-stage="verify"  data-state="pending" role="listitem"><span class="stage-pill-dot"></span><span class="stage-pill-label">Repairing the helper account</span></div>
@@ -1471,11 +1503,10 @@
          does. -->
     <div class="adv-region">
       <div class="log-actions">
-        <button class="log-toggle visible" id="logToggle" type="button" aria-expanded="false" aria-controls="advPanel">
-          <span class="chev" aria-hidden="true">▶</span><span id="logToggleLabel">Advanced details</span>
-        </button>
         <!-- Failure-only (W8-UX): copies the sanitized support report — or,
-             if that fails, the visible log lines — to the clipboard. -->
+             if that fails, the visible log lines — to the clipboard. The
+             panel itself is toggled by the single "View details" control
+             in the secondary action row. -->
         <button class="log-toggle" id="copyErrBtn" type="button" aria-label="Copy the error details to the clipboard">Copy error details</button>
       </div>
       <div class="adv-panel hidden" id="advPanel">
@@ -1493,13 +1524,22 @@
       <div class="button-container">
         <button id="elevateBtn" class="btn btn-primary" hidden>Continue as administrator</button>
         <button id="fixBtn" class="btn btn-primary" hidden aria-label="Run the full fix now">Fix now</button>
-        <button id="launchBtn" class="btn btn-primary" hidden aria-label="Open Zoom using the helper account">Open Zoom</button>
-        <button id="shortcutBtn" class="btn btn-primary" hidden><img class="btn-icon" src="assets/1132-helper-shortcut.png" alt="" aria-hidden="true" width="24" height="24">Create Zoom Helper Shortcut</button>
+        <button id="launchBtn" class="btn btn-primary" hidden aria-label="Open Zoom as the user1 helper account">Open Zoom as user1</button>
+        <button id="shortcutBtn" class="btn btn-primary" hidden><img class="btn-icon" src="assets/1132-helper-shortcut.png" alt="" aria-hidden="true" width="24" height="24"><span id="shortcutBtnLabel">Create desktop shortcut</span></button>
       </div>
+      <!-- Repair option (operator directive 2026-08-23): the desktop
+           shortcut is part of the repair transaction — checked by default,
+           idempotent (replaces the managed shortcut, never duplicates). -->
+      <label class="shortcut-opt" id="shortcutOpt" hidden>
+        <input type="checkbox" id="shortcutOptInput" checked>
+        <span class="shortcut-opt-copy">
+          <span class="shortcut-opt-title">Create desktop shortcut</span>
+          <span class="shortcut-opt-sub">Launch Zoom as User1</span>
+        </span>
+      </label>
       <div class="secondary-row">
         <button id="rescanBtn" class="btn-quiet" type="button" hidden>Check again</button>
-        <button id="detailsBtn" class="btn-quiet" type="button" hidden>View details</button>
-        <button id="receiptBtn" class="btn-quiet" type="button" hidden>View receipt</button>
+        <button id="detailsBtn" class="btn-quiet" type="button" hidden aria-controls="advPanel" aria-expanded="false">View details</button>
         <button id="supportBtn" class="btn-quiet" type="button" hidden>Support Report</button>
       </div>
       <p class="button-note" id="buttonNote" hidden></p>
@@ -1507,22 +1547,24 @@
    </div>
   </div>
 
-  <!-- Persistent trust line (addendum 2026-08-23): open-source indicator +
-       the exact independence disclosure. Informational, never a CTA; text
-       injected from the messages.js DISCLOSURE catalog. -->
-  <p class="project-disclosure" id="projectDisclosure" role="note"></p>
-
   <div class="footer">
     <div class="hazard-bar" aria-hidden="true"></div>
     <div class="footer-content">
-      <span class="badge version-badge" id="appVersion">v—</span>
+      <!-- Hidden until real values arrive: a "v—" placeholder and a live
+           "Checking rights…" line would compete with the header status. -->
+      <span class="badge version-badge" id="appVersion" hidden></span>
+      <!-- Persistent trust line (addendum 2026-08-23), integrated into the
+           single footer: open-source badge + the exact independence
+           disclosure. Informational, never a CTA; text injected from the
+           messages.js DISCLOSURE catalog. -->
+      <p class="project-disclosure" id="projectDisclosure" role="note"></p>
       <div class="footer-meta">
-        <button class="badge feedback-badge" id="btnSupport" aria-label="Submit feedback or a support report">Feedback &amp; Report</button>
+        <button class="badge feedback-badge" id="btnSupport" aria-label="Submit feedback or a support report">Feedback</button>
         <button class="badge site-badge" id="btnExplore" aria-label="Explore — choose a website to open in your browser">Explore</button>
         <!-- Neutral until isElevated() answers. Shipping "Administrator" in
              the green admin-badge class asserted elevation before anything
              had been measured, and kept asserting it if the probe threw. -->
-        <span class="badge" id="adminBadge" role="status">Checking rights…</span>
+        <span class="badge" id="adminBadge" role="status" hidden></span>
       </div>
     </div>
   </div>

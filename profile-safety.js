@@ -23,10 +23,11 @@ const HISTORICAL_ZOOM_EXE = 'C:\\Program Files\\Zoom\\bin\\Zoom.exe';
 const HISTORICAL_ZOOM_DIR = 'C:\\Program Files\\Zoom\\bin';
 const ZOOM_X86_EXE = 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe';
 
-// Current desktop shortcut (2026-08-07 branding). The shortcut LAUNCHES
-// Zoom as user1; the filename is the branded helper name, not the old
-// "Launch Zoom as user1.lnk" (that name is legacy, cleaned after create).
-const PRIMARY_SHORTCUT_FILENAME = 'Open Zoom with 1132 Helper.lnk';
+// Current desktop shortcut (operator naming ruling 2026-08-23): the name
+// says exactly what the shortcut does — launch Zoom as User1. Previous
+// names ("Open Zoom with 1132 Helper.lnk", "Launch Zoom as user1.lnk")
+// are legacy and cleaned up after a successful create.
+const PRIMARY_SHORTCUT_FILENAME = 'Zoom — User1.lnk';
 const PRIMARY_SHORTCUT_ICON = '1132-helper-shortcut.ico';
 const PRIMARY_SHORTCUT_ICON_INDEX = 0;
 const PRIMARY_SHORTCUT_DESCRIPTION =

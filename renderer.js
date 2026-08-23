@@ -19,15 +19,12 @@ const launchBtn       = document.getElementById('launchBtn');
 const shortcutBtn     = document.getElementById('shortcutBtn');
 const rescanBtn       = document.getElementById('rescanBtn');
 const detailsBtn      = document.getElementById('detailsBtn');
-const receiptBtn      = document.getElementById('receiptBtn');
 const supportBtn      = document.getElementById('supportBtn');
 const buttonNote      = document.getElementById('buttonNote');
 const wizProgressFill = document.getElementById('wizProgressFill');
 const checkList       = document.getElementById('checkList');
 const stageTracker    = document.getElementById('stageTracker');
 const receiptPanel    = document.getElementById('receiptPanel');
-const logToggle       = document.getElementById('logToggle');
-const logToggleLabel  = document.getElementById('logToggleLabel');
 const copyErrBtn      = document.getElementById('copyErrBtn');
 const advPanel        = document.getElementById('advPanel');
 const wizChecks       = document.getElementById('wizChecks');
@@ -62,7 +59,9 @@ function setWizardPane(name) {
 // Large state glyphs (result / notice panes).
 const WIZ_GLYPH = {
   ok:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="16.5 9 10.5 15.2 7.5 12.2"/></svg>`,
-  fix:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-7-7 8-8 .7 1.3z"/><line x1="9" y1="15" x2="4.5" y2="19.5"/></svg>`,
+  // A real wrench (design review P0-2): reads as "repair" in under a
+  // second, never as a pin or tag.
+  fix:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
   warn: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>`,
   err:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`
 };
@@ -97,8 +96,9 @@ function showNoticePane(tone, title, sub) {
 // state opts in to exactly the actions it allows. The *Quiet flags demote
 // a button to a secondary chip so two primaries never compete.
 function setActions({ fix = false, fixDisabled = false, fixQuiet = false, fixLabel = 'Fix now',
-                      shortcut = false, shortcutQuiet = false, elevate = false, launch = false,
-                      rescan = false, details = false, receipt = false, support = false,
+                      shortcut = false, shortcutQuiet = false, shortcutLabel = 'Create desktop shortcut',
+                      shortcutOption = false, elevate = false, launch = false,
+                      rescan = false, details = false, support = false,
                       note = '' } = {}) {
   elevateBtn.hidden = !elevate;
   fixBtn.hidden = !fix;
@@ -110,9 +110,10 @@ function setActions({ fix = false, fixDisabled = false, fixQuiet = false, fixLab
   shortcutBtn.hidden = !shortcut;
   shortcutBtn.classList.toggle('btn-primary', !shortcutQuiet);
   shortcutBtn.classList.toggle('btn-quiet', !!shortcutQuiet);
+  document.getElementById('shortcutBtnLabel').textContent = shortcutLabel;
+  document.getElementById('shortcutOpt').hidden = !shortcutOption;
   rescanBtn.hidden = !rescan;
   detailsBtn.hidden = !details;
-  receiptBtn.hidden = !receipt;
   supportBtn.hidden = !support;
   buttonNote.textContent = note;
   buttonNote.hidden = !note;
@@ -200,6 +201,8 @@ function updateFixProgress() {
     else if (st === 'active') active = 0.5;
   }
   wizProgressFill.style.width = `${Math.min(100, ((done + active) / STAGE_ORDER.length) * 100)}%`;
+  const step = Math.max(1, Math.min(STAGE_ORDER.length, done + (active ? 1 : 0) || 1));
+  document.getElementById('wizStepLine').textContent = `Step ${step} of ${STAGE_ORDER.length}`;
 }
 
 function resetStages() {
@@ -298,17 +301,16 @@ function addEmptyLine() {
 
 // Advanced details — one collapsed chip; the panel (checklist + receipt +
 // log) scrolls internally so the window never grows a scrollbar.
+// ONE details control (design review P0-1): "View details" in the
+// secondary action row is the single toggle for the diagnostics panel
+// (checklist + receipt + log); it flips to "Hide details" while open.
+// The panel scrolls internally so the window never does.
 function setLogExpanded(expanded) {
-  logToggle.classList.toggle('expanded', expanded);
-  logToggle.setAttribute('aria-expanded', String(expanded));
   advPanel.classList.toggle('hidden', !expanded);
-  logToggleLabel.textContent = expanded ? 'Hide advanced details' : 'Advanced details';
+  detailsBtn.textContent = expanded ? 'Hide details' : 'View details';
+  detailsBtn.setAttribute('aria-expanded', String(expanded));
+  detailsBtn.setAttribute('aria-controls', 'advPanel');
 }
-
-logToggle.addEventListener('click', () => {
-  const expanded = logToggle.classList.contains('expanded');
-  setLogExpanded(!expanded);
-});
 
 // ============================================================
 // Status icon SVGs — shared between checklist + receipt.
@@ -534,24 +536,27 @@ async function presentScanResult({ statuses, repairableLabels, blockedLabels, qu
     setActions({ fix: canRunFix, fixQuiet: true, fixLabel: 'Run the fix anyway', rescan: true, details: true });
   } else if (statuses.indexOf('repairable') !== -1) {
     showResultPane('fix', wizardFixFoundTitle(repairableLabels.length), wizardFixFoundSub(repairableLabels));
-    setActions({ fix: true, rescan: true, details: true, note: WIZARD.FIX_NOTE });
+    // The desktop shortcut rides the repair transaction as a checked-by-
+    // default option (operator directive 2026-08-23).
+    setActions({ fix: true, shortcutOption: true, rescan: true, details: true });
   } else if (statuses.indexOf('warning') !== -1) {
     showResultPane('warn', WIZARD.READY_WARN_TITLE, WIZARD.READY_WARN_SUB);
     setActions({ fix: canRunFix, fixQuiet: true, fixLabel: 'Run the fix anyway', rescan: true, details: true });
   } else {
+    // Healthy terminal state: launching as User1 is the point of the app,
+    // so it stays the primary action; the managed shortcut can always be
+    // recreated (users delete desktop icons).
     showResultPane('ok', WIZARD.READY_TITLE, WIZARD.READY_SUB);
-    // Offer the desktop shortcut as the next optional step only when it is
-    // actually missing or stale; a valid shortcut needs no second CTA.
-    let offerShortcut = true;
+    let shortcutMissing = true;
     try {
       const st = await window.electronAPI.shortcutExists();
-      offerShortcut = !(st && st.exists && st.valid);
-    } catch (_) { /* unknown -> offering the button is harmless */ }
+      shortcutMissing = !(st && st.exists && st.valid);
+    } catch (_) { /* unknown -> offering recreate is harmless */ }
     setActions({
-      shortcut: offerShortcut,
-      fix: canRunFix, fixQuiet: true, fixLabel: 'Run the fix anyway',
-      rescan: true, details: true,
-      note: offerShortcut ? 'Optional: one desktop shortcut starts Zoom as the helper.' : ''
+      launch: true,
+      shortcut: true, shortcutQuiet: true,
+      shortcutLabel: shortcutMissing ? 'Create desktop shortcut' : 'Recreate desktop shortcut',
+      rescan: true, details: true
     });
   }
 }
@@ -910,6 +915,10 @@ function onFixButtonClick() {
 async function runFix() {
   if (isRunning) return;
 
+  // The desktop-shortcut option rides the repair transaction — read it
+  // before the actions area is repainted for the running state.
+  const wantShortcut = document.getElementById('shortcutOptInput').checked;
+
   isRunning = true;
   setStatus('scanning', 'Repairing');
   setActions({ fix: true, fixDisabled: true, fixLabel: 'Repairing…' });
@@ -962,8 +971,9 @@ async function runFix() {
         warnings.forEach(w => addFileItem(`  • [${w.code}] ${w.message}`, 'failed'));
       }
 
-      // Desktop shortcut: created automatically when missing or stale —
-      // part of "one click does everything", no prompt.
+      // Desktop shortcut: part of the same transaction when the option is
+      // checked (default). Idempotent — the managed shortcut is replaced
+      // in place and legacy names are cleaned, never duplicated.
       //
       // Isolated from the verdict above. This block lives INSIDE the same
       // try as the fix itself, so a throw here used to be caught by the
@@ -973,17 +983,22 @@ async function runFix() {
       addEmptyLine();
       let shortcutNote = '';
       let shortcutFailed = false;
+      let shortcutSkipped = false;
       try {
         const status = await window.electronAPI.shortcutExists();
         if (status && status.exists && status.valid) {
           addFileItem(`Desktop shortcut already present: ${status.path}`, 'success');
-          shortcutNote = 'Your desktop shortcut is ready.';
+          shortcutNote = 'Desktop shortcut is ready: Zoom — User1';
+        } else if (!wantShortcut) {
+          shortcutSkipped = true;
+          addFileItem('Desktop shortcut skipped (option unchecked).', 'header');
+          shortcutNote = 'Desktop shortcut not created — you can create it from this screen.';
         } else {
           if (status && status.exists && status.stale) {
             addFileItem('An existing desktop shortcut no longer points at this app — replacing it.', 'failed');
           }
           const sc = await createShortcut(true);
-          if (sc.ok) shortcutNote = 'A Zoom Helper shortcut was placed on your desktop.';
+          if (sc.ok) shortcutNote = 'Desktop shortcut created: Zoom — User1';
           else shortcutFailed = true;
         }
       } catch (err) {
@@ -992,36 +1007,29 @@ async function runFix() {
         shortcutFailed = true;
         addFileItem(
           'Could not check whether the desktop shortcut exists, so it was not created. ' +
-          'The fix itself is unaffected — use the "Create Zoom Helper Shortcut" button to try again.' +
+          'The fix itself is unaffected — use the "Create desktop shortcut" button to try again.' +
           (err && err.message ? ` Detail for support: ${err.message}` : ''),
           'failed'
         );
       }
 
-      // Wizard outcome pane (§21) — a real terminal screen: Open Zoom is
-      // the next step; receipt and support are one quiet click away.
+      // Wizard outcome pane — a real terminal screen: Launch as User1 is
+      // the next step; details and support are one quiet click away.
+      const outcomeActions = {
+        launch: !shortcutFailed,
+        shortcut: shortcutFailed || shortcutSkipped,
+        shortcutQuiet: shortcutSkipped && !shortcutFailed,
+        rescan: true, details: true, support: true,
+        note: shortcutNote
+      };
       if (partial) {
         showNoticePane('warn', WIZARD.PARTIAL_TITLE, WIZARD.PARTIAL_SUB);
-        setActions({
-          shortcut: shortcutFailed, launch: !shortcutFailed,
-          rescan: true, details: true, support: true,
-          note: shortcutNote
-        });
       } else if (warnings.length) {
         showNoticePane('ok', WIZARD.SUCCESS_TITLE, WIZARD.WARNINGS_SUB);
-        setActions({
-          shortcut: shortcutFailed, launch: !shortcutFailed,
-          rescan: true, receipt: true, support: true,
-          note: shortcutNote
-        });
       } else {
         showNoticePane('ok', WIZARD.SUCCESS_TITLE, WIZARD.SUCCESS_SUB);
-        setActions({
-          shortcut: shortcutFailed, launch: !shortcutFailed,
-          rescan: true, receipt: true, support: true,
-          note: shortcutNote
-        });
       }
+      setActions(outcomeActions);
     } else {
       const res = result || {};
       addFileItem(`FIX FAILED: ${friendlyError(res.error)}`, 'failed');
@@ -1240,8 +1248,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Explicit manual rescan (§9) — same guarded entry point as the
   // focus-rescan; runEnvironmentScan() no-ops while a scan or fix runs.
   rescanBtn.addEventListener('click', () => runEnvironmentScan());
-  // "View details" — same panel as the Advanced-details chip.
-  detailsBtn.addEventListener('click', () => setLogExpanded(true));
+  // "View details" — the single diagnostics toggle (flips to Hide details).
+  detailsBtn.addEventListener('click', () => setLogExpanded(advPanel.classList.contains('hidden')));
   shortcutBtn.addEventListener('click', async () => {
     // Direct create — no confirmation round-trip. The raw result logs to
     // Advanced details; the wizard shows the friendly outcome.
@@ -1392,13 +1400,6 @@ launchBtn.addEventListener('click', async () => {
   setTimeout(() => { launchBtn.disabled = false; }, 1500);
 });
 
-// "View receipt" — the receipt lives in Advanced details; open the panel
-// and bring it into view.
-receiptBtn.addEventListener('click', () => {
-  setLogExpanded(true);
-  receiptPanel.scrollIntoView({ block: 'nearest' });
-});
-
 // "Support Report" — same sanitized report modal as the feedback flow.
 supportBtn.addEventListener('click', () => openSupportReport());
 
@@ -1406,25 +1407,30 @@ supportBtn.addEventListener('click', () => openSupportReport());
 // Footer: app version + admin badge
 // ============================================================
 (async () => {
+  // Version stays hidden until the real value arrives — no "v—" placeholder.
   try {
     const v = await window.electronAPI.getVersion();
-    document.getElementById('appVersion').textContent = 'v' + v;
-  } catch (_) {}
+    const el = document.getElementById('appVersion');
+    el.textContent = 'v' + v;
+    el.hidden = false;
+  } catch (_) { /* stays hidden */ }
   // The badge ships neutral ("Checking rights…") and is only promoted to the
   // green Administrator state by a measured `true`. A throw leaves it saying
   // the rights are unknown rather than silently asserting Administrator,
   // which is what the old static markup plus an empty catch produced.
+  // Privilege status is quiet metadata: hidden until measured (the header
+  // badge is the ONE live indicator while checks run), then a plain
+  // dot + text — never a button, never a second live region.
   const ab = document.getElementById('adminBadge');
   const paint = (text, tone) => {
     ab.textContent = text;
     ab.classList.toggle('admin-badge', tone === 'ok');
-    ab.style.color       = tone === 'ok' ? '' : 'var(--danger)';
-    ab.style.borderColor = tone === 'ok' ? '' : 'var(--danger-bd)';
-    ab.style.background  = tone === 'ok' ? '' : 'var(--danger-bg)';
+    ab.style.color = tone === 'ok' ? '' : 'var(--danger)';
+    ab.hidden = false;
   };
   try {
     const elevated = await window.electronAPI.isElevated();
-    paint(elevated === true ? 'Administrator' : 'Not Admin', elevated === true ? 'ok' : 'bad');
+    paint(elevated === true ? 'Administrator' : 'Not administrator', elevated === true ? 'ok' : 'bad');
   } catch (_) {
     paint('Admin rights unknown', 'bad');
   }
@@ -1504,12 +1510,13 @@ const EXPLORE_FALLBACK_SVG =
 // DISCLOSURE catalog into both instances (shell + Explore), so the exact
 // approved wording lives in one place. Informational only: no canonical
 // click target was mandated, so nothing here is a link.
-const OS_ICON_SVG =
-  `<svg class="os-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="8 6 3 12 8 18"/><polyline points="16 6 21 12 16 18"/></svg>`;
+// Icon: the operator's 1132 open-source badge (assets/brand/
+// open-source-badge.png) at 16px — trust metadata, never a CTA.
 function renderDisclosure(el) {
   if (!el) return;
   el.setAttribute('aria-label', DISCLOSURE.ARIA);
-  el.innerHTML = `${OS_ICON_SVG}<span class="os-label">${escapeHtml(DISCLOSURE.OS_LABEL)}</span>` +
+  el.innerHTML = `<img class="os-icon" src="assets/brand/open-source-badge.png" alt="" aria-hidden="true">` +
+    `<span class="os-label">${escapeHtml(DISCLOSURE.OS_LABEL)}</span>` +
     `<span class="os-sep" aria-hidden="true">·</span>` +
     `<span class="os-independence">${escapeHtml(DISCLOSURE.INDEPENDENCE)}</span>`;
 }

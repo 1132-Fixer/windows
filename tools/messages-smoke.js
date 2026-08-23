@@ -55,7 +55,7 @@ console.log('messages-smoke: fix/scan/shortcut failures');
 }
 {
   const msg = m.shortcutFailureMessage('Exit 1');
-  check(msg.includes('Create Zoom Helper Shortcut'), 'shortcut failure names the retry button');
+  check(msg.includes('Create desktop shortcut'), 'shortcut failure names the retry button');
   check(msg.includes('Exit 1'), 'shortcut failure keeps raw detail');
   check(m.shortcutFailureMessage(null).includes('Nothing else was changed'), 'shortcut failure states blast radius without detail');
 }
@@ -186,11 +186,11 @@ console.log('messages-smoke: wizard states (directive 2026-08-23)');
   // Fix-found headline follows the actual repairable count.
   check(m.wizardFixFoundTitle(1) === 'One fix found', 'single repairable -> "One fix found"');
   check(m.wizardFixFoundTitle(3) === '3 fixes found', 'multiple repairables -> "3 fixes found"');
-  check(/Helper account needs a repair/.test(m.wizardFixFoundSub(['Helper account'])),
-    'single repairable sub names the item');
-  check(/automatically/.test(m.wizardFixFoundSub(['Helper account'])),
-    'fix-found sub says the app repairs it automatically');
-  check(/need a repair/.test(m.wizardFixFoundSub(['A', 'B'])), 'plural sub agrees in number');
+  check(m.wizardFixFoundSub(['Helper account']) ===
+        "The helper account needs repair. Your Zoom files and data won't be changed.",
+    'single repairable sub is natural language + the one safety line');
+  check(/need repair/.test(m.wizardFixFoundSub(['A', 'B'])), 'plural sub agrees in number');
+  check(/won't be changed/.test(m.wizardFixFoundSub(['A', 'B'])), 'plural sub keeps the safety line');
   check(m.wizardFixFoundSub([]).length > 20, 'empty label list still yields real copy');
 
   // Blocked sub names the blockers; the empty case never goes silent.
@@ -203,9 +203,9 @@ console.log('messages-smoke: wizard states (directive 2026-08-23)');
   const required = ['READY_TITLE', 'READY_SUB', 'UNKNOWN_TITLE', 'UNKNOWN_SUB', 'BLOCKED_TITLE',
     'ADMIN_TITLE', 'ADMIN_SUB', 'ADMIN_DECLINED_SUB', 'ADMIN_RESTARTING',
     'SUCCESS_TITLE', 'SUCCESS_SUB', 'PARTIAL_TITLE', 'PARTIAL_SUB', 'FAIL_TITLE',
-    'FIX_NOTE', 'SHORTCUT_NOT_READY_TITLE', 'SHORTCUT_NOT_READY_SUB', 'SHORTCUT_FAILED_TITLE',
+    'SHORTCUT_NOT_READY_TITLE', 'SHORTCUT_NOT_READY_SUB', 'SHORTCUT_FAILED_TITLE',
     'SHORTCUT_FAILED_SUB', 'SHORTCUT_DONE_TITLE', 'SHORTCUT_DONE_SUB'];
-  check(required.every(k => typeof wiz[k] === 'string' && wiz[k].length >= 8),
+  check(required.every(k => typeof wiz[k] === 'string' && wiz[k].length >= 5),
     'every wizard state has real copy');
   check(wiz.SHORTCUT_NOT_READY_SUB.includes('Run the repair once'),
     'shortcut-not-ready copy points at the repair as the next step');

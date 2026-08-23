@@ -2747,6 +2747,7 @@ async function runFixFlow(event) {
 const SHORTCUT_FILENAME = profileSafety.PRIMARY_SHORTCUT_FILENAME;
 const LEGACY_SHORTCUT_FILENAMES = [
   `Launch Zoom as ${FIX_USER}.lnk`,
+  'Open Zoom with 1132 Helper.lnk', // pre-6.1 name, superseded 2026-08-23
 ];
 const LAUNCHER_SCRIPT_NAME = `launch-zoom-as-${FIX_USER}.ps1`;
 const LAUNCHER_SCRIPT_PATH = () => path.join(app.getPath('appData'), '1132 Fixer', LAUNCHER_SCRIPT_NAME);
