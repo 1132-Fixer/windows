@@ -371,8 +371,16 @@ async function renderScenario(pageUrl, scenario, variant, fileName, meta) {
 // ---------------------------------------------------------------- old tree
 function extractOldTree(sha) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-ui-old-'));
-  for (const f of ['index.html', 'messages.js', 'run-verdict.js', 'renderer.js']) {
-    const buf = execFileSync('git', ['show', `${sha}:${f}`], { cwd: ROOT, maxBuffer: 16 * 1024 * 1024 });
+  // ui-state.js is optional: base commits older than the truthful-UI-state
+  // change do not have it, and index.html there does not load it.
+  for (const f of ['index.html', 'messages.js', 'run-verdict.js', 'ui-state.js', 'renderer.js']) {
+    let buf;
+    try {
+      buf = execFileSync('git', ['show', `${sha}:${f}`], { cwd: ROOT, maxBuffer: 16 * 1024 * 1024 });
+    } catch (_) {
+      if (f === 'ui-state.js') continue;
+      throw new Error(`extractOldTree: ${f} missing at ${sha}`);
+    }
     fs.writeFileSync(path.join(tmp, f), buf);
   }
   // Assets are identical at both commits (verified by git diff --stat).

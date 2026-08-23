@@ -25,6 +25,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Coverage: `tools/electron-security-smoke.js` (isolation flags, IPC
   allowlist rejects, updater URL not arbitrary).
 
+### Fixed — truthful UI state: unknown is never rendered as success
+
+Wrong-data-state audit of the renderer and the main → renderer status path.
+Every fix below removes a rendering that claimed more than the data supported.
+
+- **Summary badge no longer reports a repair as "Ready".** `preflight-scan`
+  ranks `repairable` above `warning`, so a scan carrying both rolls up as
+  `overall: 'repairable'` — and the renderer had no branch for it, falling
+  through to the green tick. A detected TEMP or suffixed helper profile is
+  exactly a `repairable` card, so the headline badge read green while the
+  row below it said TEMP. The summary is now derived from the row statuses
+  actually on screen and is never greener than the worst of them.
+- **An unrecognised check status no longer draws the success tick.** The
+  icon map ended in `default: svgCheck(...)` and the badge word in
+  `STATUS_BADGE[status] || ''` — so an unknown state rendered as a green
+  check with an empty badge, i.e. state conveyed by colour alone, in the
+  wrong colour. `unknown` is now a first-class row state with its own icon,
+  word and styling.
+- **A check the scan did not return is no longer dropped from the list.**
+  The row loop used `if (!card) continue`, which silently shortened the
+  checklist so a check that never ran looked identical to one that passed.
+  Every row renders every scan; a missing one renders as unknown.
+- **Not running as Administrator no longer hides the other eight checks.**
+  The elevation gate rendered a single blocked row; the rest vanished. They
+  now render as unknown ("needs Administrator rights… not a pass"), and the
+  admin row states plainly what needs elevation and that nothing on the
+  computer has been changed. An elevation probe that throws is treated as
+  not elevated, not as permission to continue.
+- **The page no longer ships a green "✓ Ready" badge and a green
+  "Administrator" footer badge as static markup.** Both asserted a settled,
+  passing state before anything had been measured — and kept asserting it if
+  the probe never returned. They ship neutral and are promoted only by a
+  measured result.
+- **`get-system-info` no longer hardcodes `admin: true`.** The feedback
+  dialog printed "Admin: Yes" for every session, including non-elevated
+  ones, contradicting the footer badge reading the same probe and misleading
+  support triage. It is now measured, with an explicit Unknown rendering.
+- **Shortcut creation no longer fails silently, and no longer rewrites the
+  fix verdict.** `createShortcut()` had no error handling: an IPC rejection
+  from the toolbar button produced an unhandled rejection and nothing at all
+  on screen. The same throw raised from the post-fix shortcut step was caught
+  by the run handler and repainted an already-successful fix as FIX FAILED.
+  The shortcut is now an isolated operation that reports its own outcome.
+- **A successful run with no receipt no longer hides the receipt panel.**
+  The four receipt results are reported as unknown instead of disappearing
+  under a FIX COMPLETE headline.
+- **The update banner no longer renders unknown or failed as silence.** An
+  unrecognised or malformed `update-status` payload hid the banner, which
+  reads as "you are up to date"; the `error` banner auto-hid after 6 seconds,
+  so a failed update check erased its own evidence. Both now state that the
+  update state could not be confirmed and stay until dismissed.
+- **A Zoom installer that never started, or a declined Windows
+  administrator prompt, no longer reads as one in progress.**
+  `zoom-run-installer` can resolve `{ started: false }` with no message; the
+  card changed nothing, leaving the pre-launch notice promising a Windows
+  prompt and an automatic re-check. The installer's exit code was also
+  discarded, so a declined elevation (1223) or cancelled install (1602) fed
+  straight into a silent re-check.
+- **A disabled "Fix now" always states a reason.** An empty blocker list hid
+  the note entirely, leaving a dead button unexplained. It also now carries
+  `aria-describedby` — a disabled button is not focusable, so the `title`
+  alone never reached assistive technology.
+- Accessibility, scoped to the surfaces above: each checklist row carries an
+  accessible name of label + state + detail so it is not understood by icon
+  colour; every state has a non-empty badge word; the list reports
+  `aria-busy` while scanning; the summary badge (`role="status"`) announces
+  every transition.
+- New `ui-state.js` holds the pure, DOM-free state → rendering map (same
+  browser-script + `module.exports` pattern as `messages.js` and
+  `run-verdict.js`). Coverage: `tools/ui-state-smoke.js` — including an
+  exhaustive sweep proving that for **every** status string that is not
+  exactly `ready`, both the icon and the badge word differ from the ready
+  rendering, and that a `repairable` row can never roll up to the green
+  summary.
+
 ### Fixed — TEMP-profile fallback is no longer a silent success
 
 - After Zoom launches as `user1`, the fix logs the effective `USERPROFILE`,
