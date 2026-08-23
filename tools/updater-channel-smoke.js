@@ -5,9 +5,28 @@
 // on the same fetch the portable notice uses. Does not publish a release.
 // Does not flip verifyUpdateCodeSignature.
 //
-// The leftover PrimeUpYourLife/1132-Fixer-Windows-Releases feed is recorded
-// as residual v5.5.1 clients. It is not the current channel and must not
-// be deleted. Exit 0 PASS / 1 FAIL.
+// Three live channels exist and this test treats each differently:
+//
+//   1. 1132-Fixer/windows GitHub Releases — what `build.publish` on main
+//      targets. Fetched through the allowlist and asserted hard.
+//   2. botify-network.com/downloads/1132-fixer/updates — the generic broker
+//      baked into the shipped v5.6.0 binaries (`build.publish` at tag v5.6.0
+//      is the generic provider, not GitHub), so it is the feed every install
+//      in the field actually polls. It is deliberately NOT on
+//      isAllowedUpdaterUrl's allowlist and main.js must never bake it in;
+//      both of those are asserted below. This test reaches it directly to
+//      prove the two live channels do not diverge.
+//   3. PrimeUpYourLife/1132-Fixer-Windows-Releases — residual <=5.5.1
+//      clients. Not the current channel and must not be deleted.
+//
+// The old channel is read via the GitHub REST release object ONLY. This test
+// used to GET its latest.yml asset on every `npm test`, hence on every CI run,
+// which inflated that asset's download_count — the exact number the
+// deletion gate for that repository reads. Reading the release object returns
+// the same metadata and increments nothing. Never point an asset GET at a feed
+// whose download_count is a decision input.
+//
+// Exit 0 PASS / 1 FAIL.
 
 'use strict';
 
@@ -23,7 +42,10 @@ const CURRENT_REPO = 'windows';
 const CURRENT_FEED = `https://github.com/${CURRENT_OWNER}/${CURRENT_REPO}/releases/latest/download/latest.yml`;
 const OLD_OWNER = 'PrimeUpYourLife';
 const OLD_REPO = '1132-Fixer-Windows-Releases';
+// Kept as a string for the allowlist-rejection assertions below. It is never
+// fetched — see the header note on download_count contamination.
 const OLD_FEED = `https://github.com/${OLD_OWNER}/${OLD_REPO}/releases/latest/download/latest.yml`;
+const BROKER_FEED = 'https://botify-network.com/downloads/1132-fixer/updates/latest.yml';
 const USER_AGENT = '1132Fixer-updater-channel-smoke';
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -83,6 +105,9 @@ function httpsGetTextAllowed(url, redirectsLeft = 5) {
   });
 }
 
+// No allowlist. Used only for the broker, which is intentionally off the app's
+// updater allowlist (the app must never poll it) but is still the feed the
+// shipped binaries use, so this test has to be able to read it.
 function httpsGetTextRaw(url, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
     if (!String(url).startsWith('https://')) {
@@ -186,29 +211,47 @@ console.log('updater-channel-smoke: HTTPS + isAllowedUpdaterUrl');
     console.log(`  note current-channel GitHub API skipped: ${(err && err.message) || err}`);
   }
 
-  console.log('updater-channel-smoke: residual old channel (do not delete)');
-  let oldYml = '';
-  try {
-    oldYml = await httpsGetTextRaw(OLD_FEED);
-  } catch (err) {
-    console.log(`  note old-channel latest.yml unreachable: ${(err && err.message) || err}`);
-  }
-  if (oldYml) {
-    const oldMeta = parseLatestYml(oldYml);
-    check(oldMeta.version !== pkg.version, `old-channel latest.yml is residual ${oldMeta.version}, not current ${pkg.version}`);
-    check(!!oldMeta.sha512, 'old-channel latest.yml still has sha512 (still serving)');
-    console.log(`  note old-channel version=${oldMeta.version} path=${oldMeta.path}`);
+  // The broker is what the shipped field polls (header note 2). If it stops
+  // serving, or serves something other than what this repository published,
+  // every install in the field is affected and nothing else in CI would see
+  // it. Both conditions are hard failures, reported as separate checks so the
+  // log distinguishes "broker down" from "broker drifted".
+  console.log('updater-channel-smoke: live broker channel (shipped v5.6.0 clients poll this)');
+  let brokerYml = '';
+  let brokerErr = null;
+  for (let attempt = 1; attempt <= 2 && !brokerYml; attempt++) {
     try {
-      const oldRel = await githubJson(`https://api.github.com/repos/${OLD_OWNER}/${OLD_REPO}/releases/latest`);
-      const n = assetCount(oldRel, 'latest.yml');
-      console.log(`  note old-channel ${OLD_OWNER}/${OLD_REPO} tag=${oldRel.tag_name} latest.yml download_count=${n}`);
-      check(oldRel.tag_name !== `v${pkg.version}`, `old-channel tag ${oldRel.tag_name} is not the current package.json version`);
-      if (typeof n === 'number') {
-        check(n > 0, `old-channel residual clients recorded (latest.yml downloads=${n})`);
-      }
+      brokerYml = await httpsGetTextRaw(BROKER_FEED);
     } catch (err) {
-      console.log(`  note old-channel GitHub API skipped: ${(err && err.message) || err}`);
+      brokerErr = err;
+      if (attempt < 2) await new Promise((r) => { setTimeout(r, 2000); });
     }
+  }
+  check(!!brokerYml, `broker latest.yml reachable over https${brokerYml ? '' : `: ${(brokerErr && brokerErr.message) || brokerErr}`}`);
+  if (brokerYml) {
+    const brokerMeta = parseLatestYml(brokerYml);
+    console.log(`  note broker version=${brokerMeta.version} path=${brokerMeta.path}`);
+    check(!!meta.version && brokerMeta.version === meta.version, `broker version ${brokerMeta.version || '(missing)'} matches current channel ${meta.version || '(missing)'}`);
+    check(!!meta.sha512 && brokerMeta.sha512 === meta.sha512, 'broker installer SHA-512 matches the current channel (same binary)');
+    check(!!meta.path && brokerMeta.path === meta.path, `broker path ${brokerMeta.path || '(missing)'} matches current channel ${meta.path || '(missing)'}`);
+    check(meta.size > 0 && brokerMeta.size === meta.size, `broker installer size matches the current channel (${brokerMeta.size || 0})`);
+  }
+
+  // REST release object only — never an asset GET. See the header note: an
+  // asset GET here increments the download_count that the deletion gate for
+  // this repository reads, and CI ran this on every commit.
+  console.log('updater-channel-smoke: residual old channel (REST metadata only, do not delete)');
+  try {
+    const oldRel = await githubJson(`https://api.github.com/repos/${OLD_OWNER}/${OLD_REPO}/releases/latest`);
+    const names = (oldRel.assets || []).map((a) => a.name);
+    const n = assetCount(oldRel, 'latest.yml');
+    console.log(`  note old-channel ${OLD_OWNER}/${OLD_REPO} tag=${oldRel.tag_name} latest.yml download_count=${n} (REST read, does not increment)`);
+    check(oldRel.tag_name !== `v${pkg.version}`, `old-channel tag ${oldRel.tag_name} is residual, not current v${pkg.version}`);
+    check(names.includes('latest.yml'), 'old-channel still publishes latest.yml (feed intact, not deleted)');
+    check(names.some((x) => x.endsWith('.exe')), 'old-channel still serves an installer (residual clients can still update)');
+    check(typeof n === 'number' && n > 0, `old-channel residual clients recorded (latest.yml downloads=${n})`);
+  } catch (err) {
+    console.log(`  note old-channel REST metadata SKIPPED, its 4 assertions did not run: ${(err && err.message) || err}`);
   }
 
   if (failures) {
