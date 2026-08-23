@@ -6,11 +6,14 @@ const os = require('os');
 const https = require('https');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
+const electronSecurity = require('./src/main/electron-security');
+electronSecurity.installIpcAllowlist(ipcMain);
 const config = require('./src/main/config');
 const supportClient = require('./src/main/support-client');
 const zoomDetect = require('./zoom-detect');
 const messages = require('./messages');
 const helperCred = require('./helper-credential');
+const profileSafety = require('./profile-safety');
 const { computeRunVerdict, deletionOutcome, consentOutcome, profsvcRefreshResult } = require('./run-verdict');
 
 autoUpdater.autoDownload = true;
@@ -139,11 +142,18 @@ const UPDATE_RECHECK_MS = 4 * 60 * 60 * 1000; // long-open apps re-check every 4
 // https.get does not follow redirects, so walk them (bounded).
 function httpsGetText(url, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
+    if (!electronSecurity.isAllowedUpdaterUrl(url)) {
+      return reject(new Error('updater URL not allowed'));
+    }
     const req = https.get(url, { headers: { 'User-Agent': `1132Fixer/${app.getVersion()}` }, timeout: 15000 }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         if (redirectsLeft <= 0) return reject(new Error('too many redirects'));
-        return resolve(httpsGetText(new URL(res.headers.location, url).toString(), redirectsLeft - 1));
+        const next = new URL(res.headers.location, url).toString();
+        if (!electronSecurity.isAllowedUpdaterUrl(next)) {
+          return reject(new Error('updater redirect not allowed'));
+        }
+        return resolve(httpsGetText(next, redirectsLeft - 1));
       }
       if (res.statusCode !== 200) {
         res.resume();
@@ -189,14 +199,12 @@ async function checkPortableUpdate() {
   }
 }
 
-ipcMain.handle('open-download-page', () => {
-  shell.openExternal(RELEASES_LATEST_URL);
-  return { success: true };
+ipcMain.handle('open-download-page', async () => {
+  return electronSecurity.openExternalSafe(shell.openExternal.bind(shell), RELEASES_LATEST_URL);
 });
 
-ipcMain.handle('open-website', () => {
-  shell.openExternal(WEBSITE_URL);
-  return { success: true };
+ipcMain.handle('open-website', async () => {
+  return electronSecurity.openExternalSafe(shell.openExternal.bind(shell), WEBSITE_URL);
 });
 
 const FIX_USER = 'user1';
@@ -248,15 +256,10 @@ async function resolveZoomInstall() {
     return { path: p, dir, source, perUserPath };
   };
 
-  const defaults = [
-    { path: ZOOM_PATH, dir: ZOOM_DIR, source: 'default-x64' },
-    { path: ZOOM_X86_PATH, dir: path.dirname(ZOOM_X86_PATH), source: 'default-x86' }
-  ];
-  for (const c of defaults) {
-    if (fs.existsSync(c.path)) {
-      const hit = found(c.path, c.dir, c.source);
-      if (hit) return hit;
-    }
+  const defaultsHit = profileSafety.discoverZoomExe(p => fs.existsSync(p));
+  if (defaultsHit.path) {
+    const hit = found(defaultsHit.path, defaultsHit.dir, defaultsHit.source);
+    if (hit) return hit;
   }
 
   // Registry fallback: a machine-wide MSI installed to a custom dir still
@@ -334,8 +337,11 @@ function sha256File(file) {
 
 ipcMain.handle('zoom-open-download', async () => {
   try {
-    await shell.openExternal(messages.ZOOM_RECOVERY.DOWNLOAD_URL);
-    return { success: true };
+    const opened = await electronSecurity.openExternalSafe(
+      shell.openExternal.bind(shell),
+      messages.ZOOM_RECOVERY.DOWNLOAD_URL
+    );
+    return { success: opened.success === true };
   } catch (_) {
     // Offline / no browser handler ΓÇö renderer shows the Offline state.
     return { success: false };
@@ -350,7 +356,11 @@ ipcMain.handle('zoom-choose-installer', async () => {
     properties: ['openFile']
   });
   if (pick.canceled || !pick.filePaths || !pick.filePaths.length) return { canceled: true };
-  const file = pick.filePaths[0];
+  const picked = electronSecurity.isSafeUserSelectedPath(pick.filePaths[0], { ext: '.msi' });
+  if (!picked.ok) {
+    return { ok: false, message: messages.zoomInstallerRefusal('not_msi_ext') };
+  }
+  const file = picked.path;
 
   // (i) It IS an MSI: extension + OLE compound-file magic.
   if (!/\.msi$/i.test(file)) {
@@ -377,7 +387,11 @@ ipcMain.handle('zoom-choose-installer', async () => {
   if ([...file].some(ch => ch.charCodeAt(0) < 0x20)) {
     return { ok: false, message: messages.zoomInstallerRefusal('unreadable', 'unsupported characters in the file path') };
   }
-  const psPath = file.replace(/'/g, "''");
+  const quoted = electronSecurity.psSingleQuote(file);
+  if (!quoted.ok) {
+    return { ok: false, message: messages.zoomInstallerRefusal('unreadable', 'unsupported characters in the file path') };
+  }
+  const psPath = quoted.literal.slice(1, -1);
 
   // (ii) Authenticode: Status must be Valid AND the signer CN must exactly
   // match one of the two accepted Zoom publisher names ΓÇö no substrings.
@@ -511,11 +525,7 @@ function createWindow() {
     frame: false,
     titleBarStyle: 'hidden',
     show: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      nodeIntegration: false,
-      contextIsolation: true
-    },
+    webPreferences: electronSecurity.rendererWebPreferences(path.join(__dirname, 'preload.js')),
     // getIconPath() resolves packaged (resources/icon.ico) vs dev
     // (assets/icon.ico); the old literal only existed when packaged.
     icon: getIconPath()
@@ -549,6 +559,7 @@ function createWindow() {
     }
   });
 
+  electronSecurity.hardenWebContents(mainWindow.webContents, { appRoot: app.getAppPath() });
   mainWindow.loadFile('index.html');
   mainWindow.setMenu(null);
 }
@@ -609,6 +620,10 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   app.quit();
+});
+
+app.on('before-quit', () => {
+  killActiveChildren();
 });
 
 // ============================================================
@@ -700,8 +715,8 @@ function getIconPath() {
 // directory that will not exist on the user's machine tomorrow.
 function getHelperIconPath() {
   return app.isPackaged
-    ? path.join(process.resourcesPath, '1132-helper-shortcut.ico')
-    : path.join(__dirname, 'assets', '1132-helper-shortcut.ico');
+    ? path.join(process.resourcesPath, profileSafety.PRIMARY_SHORTCUT_ICON)
+    : path.join(__dirname, 'assets', profileSafety.PRIMARY_SHORTCUT_ICON);
 }
 
 function getFirstRunScriptPath() {
@@ -1490,7 +1505,14 @@ ipcMain.handle('run-fix', async (event) => {
 });
 
 async function runFixFlow(event) {
-  const send = (line, kind = 'out') => event.sender.send('fix-log', { line, kind });
+  // Secrets minted mid-run (helper password) are pushed here so every log
+  // line is redacted. Presence assertions live in profile-safety-smoke.js;
+  // never print the secret, never put it on CreateProcess argv.
+  const secrets = [];
+  const send = (line, kind = 'out') => event.sender.send('fix-log', {
+    line: profileSafety.redactSecrets(line, secrets),
+    kind
+  });
   const noop = () => {};
   const warnings = [];
   // Per-step outcome ledger (additive ΓÇö success/warnings/blockers/receipt all
@@ -1880,11 +1902,15 @@ async function runFixFlow(event) {
   // construction (helper-credential.js). Never logged, never persisted in
   // plain text.
   const fixPass = helperCred.generateHelperPassword();
-  // /y auto-answers net.exe's ">14 characters" DOS-compat confirmation
-  // prompt, which would otherwise wait forever on our piped, never-written
-  // stdin now that the password is 24 chars.
-  const create = await runProcess('net.exe',
-    ['user', FIX_USER, fixPass, '/add', '/y'], send);
+  secrets.push(fixPass);
+  // Password rides in a tmp PowerShell file (same residual as Zoom launch)
+  // — never as a net.exe CreateProcess argument, which Win32_Process would
+  // enumerate. /y auto-answers net.exe's ">14 characters" DOS-compat prompt.
+  const create = await runPSScript(
+    profileSafety.accountCreateScript(FIX_USER, fixPass),
+    send,
+    { heartbeatMs: 5000, heartbeatLabel: 'net user /add', timeoutMs: 60000 }
+  );
   if (create.code !== 0) {
     send(`ERROR: failed to create '${FIX_USER}'.`, 'err');
     send('  Common cause: password complexity policy rejected the password.', 'err');
@@ -2093,6 +2119,37 @@ async function runFixFlow(event) {
   send(`  Profile source: ${profile.source}, path: ${newUserProfile}`, 'out');
   if (profile.sid) send(`  SID: ${profile.sid}`, 'out');
 
+  // ============================================================
+  // STEP 6-guard: Verify the launch landed in the REAL C:\Users\user1
+  // profile and log the effective environment. Unique logic from closed
+  // unmerged PR #40 (ec91d45), rewritten on current main: a TEMP/suffixed
+  // landing is a failed profile-setup step (NEEDS ATTENTION), never a
+  // silent green. No TEMP-folder deletes, no ProfileList guessing.
+  // ============================================================
+  const profileLaunch = profileSafety.evaluateLaunchProfile({
+    profilePath: newUserProfile,
+    source: profile.source,
+    username: FIX_USER
+  });
+  send('  Launched-profile environment:', 'out');
+  send(`    USERPROFILE   = ${profileLaunch.env.USERPROFILE}`, 'out');
+  send(`    APPDATA       = ${profileLaunch.env.APPDATA}`, 'out');
+  send(`    LOCALAPPDATA  = ${profileLaunch.env.LOCALAPPDATA}`, 'out');
+  if (profileLaunch.ok) {
+    send(`  ${profileLaunch.message}`, 'out');
+  } else {
+    send(`  WARNING: Zoom did NOT land in ${profileSafety.canonicalProfilePath(FIX_USER)}.`, 'err');
+    send(`           Resolved: ${newUserProfile} (source: ${profile.source}).`, 'err');
+    send('           Windows fell back to a TEMP/suffixed profile - the 1132', 'err');
+    send('           identity may not be clean. Remediation: reboot once, then', 'err');
+    send('           re-run the fix (the ProfSvc hive-handle flush only fully', 'err');
+    send('           releases stale handles across a reboot).', 'err');
+    warnings.push({
+      code: profileLaunch.code || 'temp_or_suffixed_profile',
+      message: profileLaunch.message
+    });
+  }
+
   // Pre-seed ACLs on the freshly-created profile's registry hive files
   // (NTUSER.DAT + UsrClass.dat). Without an explicit grant, NTFS
   // inheritance on the new profile can leave SYSTEM/Administrators
@@ -2169,8 +2226,12 @@ async function runFixFlow(event) {
   {
     const profileIssueCodes = ['firstrun_missing', 'shortcut_failed', 'firstrun_deploy_failed'];
     const profileIssues = warnings.filter(w => profileIssueCodes.includes(w.code));
-    step('profile-setup', `Set up the ${FIX_USER} profile`,
-      profileIssues.length ? 'warn' : 'ok', profileIssues.map(w => w.code).join(', '));
+    if (profileLaunch && profileLaunch.silentSuccessForbidden) {
+      step('profile-setup', `Set up the ${FIX_USER} profile`, 'fail', profileLaunch.message);
+    } else {
+      step('profile-setup', `Set up the ${FIX_USER} profile`,
+        profileIssues.length ? 'warn' : 'ok', profileIssues.map(w => w.code).join(', '));
+    }
   }
 
   // ============================================================
@@ -2560,6 +2621,10 @@ async function runFixFlow(event) {
   if (clearAttempts > 0) {
     receipt.dataClear = `deleted ${Math.max(0, clearAttempts - clearFailures)} of ${clearAttempts}`;
   }
+  if (typeof profileLaunch !== 'undefined' && profileLaunch) {
+    receipt.profileKind = profileLaunch.kind;
+    receipt.profilePath = newUserProfile;
+  }
 
   const verdict = computeRunVerdict(steps, warnings, []);
   if (verdict.partial) {
@@ -2601,7 +2666,7 @@ async function runFixFlow(event) {
 // successful create. Exact names only: never a glob, never a prefix match, so
 // a user's own shortcuts are never touched.
 // ============================================================
-const SHORTCUT_FILENAME = 'Open Zoom with 1132 Helper.lnk';
+const SHORTCUT_FILENAME = profileSafety.PRIMARY_SHORTCUT_FILENAME;
 const LEGACY_SHORTCUT_FILENAMES = [
   `Launch Zoom as ${FIX_USER}.lnk`,
 ];
@@ -3038,6 +3103,27 @@ ipcMain.handle('preflight-scan', async () => {
     $out['user1_exists'] = $false
     try { if (Get-LocalUser -Name '${FIX_USER}' -EA SilentlyContinue) { $out['user1_exists'] = $true } } catch {}
     $out['user1_admin'] = $false
+    # Read-only helper-profile inventory (TEMP identification, ProfileList,
+    # ownership). Never deletes TEMP folders, the helper profile, or registry keys.
+    $out['profile_image_path'] = ''
+    $out['profile_list_bak'] = $false
+    $out['profile_owner'] = ''
+    $out['profile_folder_exists'] = $false
+    $out['profile_ntuser'] = $false
+    $folder = 'C:\\Users\\${FIX_USER}'
+    try { $out['profile_folder_exists'] = [bool](Test-Path -LiteralPath $folder) } catch {}
+    if ($sid) {
+      $plKey = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\' + $sid
+      try {
+        $pip = (Get-ItemProperty -Path $plKey -EA SilentlyContinue).ProfileImagePath
+        if ($pip) { $out['profile_image_path'] = [string]$pip }
+      } catch {}
+      try { $out['profile_list_bak'] = [bool](Test-Path -LiteralPath ($plKey + '.bak')) } catch {}
+    }
+    if ($out['profile_folder_exists']) {
+      try { $out['profile_owner'] = [string](Get-Acl -LiteralPath $folder).Owner } catch {}
+      try { $out['profile_ntuser'] = [IO.File]::Exists((Join-Path $folder 'NTUSER.DAT')) } catch {}
+    }
     if ($out['user1_exists']) {
       try {
         foreach ($m in (Get-LocalGroupMember -SID 'S-1-5-32-544' -EA Stop)) {
@@ -3120,6 +3206,22 @@ ipcMain.handle('preflight-scan', async () => {
       cards.helperUser = { status: 'warning', label: 'Helper account', message: `Stale profile folder at ${helperProfileDir} with no account. FIX NOW will clean it up.` };
     }
   }
+
+  // --- Helper profile (TEMP / canonical / ownership / ProfileList) --
+  // Inventory only. A TEMP ProfileImagePath is repairable (FIX NOW
+  // rebuilds the real helper profile). Probe failure is a warning, never ready:
+  // unknown is not success. Nothing here deletes TEMP folders by name.
+  cards.helperProfile = profileSafety.classifyHelperProfileCard(probeFailed ? { probeFailed: true } : {
+    probeFailed: false,
+    accountExists: !!probeData.user1_exists,
+    folderExists: !!probeData.profile_folder_exists || helperProfileExists,
+    folderPath: helperProfileDir,
+    profileImagePath: probeData.profile_image_path || '',
+    owner: probeData.profile_owner || '',
+    profileListBak: !!probeData.profile_list_bak,
+    ntuserPresent: !!probeData.profile_ntuser,
+    username: FIX_USER
+  });
 
   // --- Secondary Logon (seclogon) -----------------------------
   // Hard gate (W3-LAUNCH): launching Zoom as user1 rides Start-Process

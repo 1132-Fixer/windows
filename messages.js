@@ -16,8 +16,9 @@
 const CHECK_ORDER = [
   { key: 'admin',       label: 'Administrator',       group: 'App' },
   { key: 'zoom',        label: 'Zoom Workplace',      group: 'Zoom' },
-  { key: 'helperUser',  label: 'Helper account',      group: 'Helper account' },
-  { key: 'seclogon',    label: 'Secondary Logon',     group: 'Helper account' },
+  { key: 'helperUser',    label: 'Helper account',      group: 'Helper account' },
+  { key: 'helperProfile', label: 'Helper profile',      group: 'Helper account' },
+  { key: 'seclogon',      label: 'Secondary Logon',     group: 'Helper account' },
   { key: 'camPolicy',   label: 'Camera policy',       group: 'Privacy policies' },
   { key: 'micPolicy',   label: 'Microphone policy',   group: 'Privacy policies' },
   { key: 'hku',         label: 'User registry hive',  group: 'Privacy policies' },
@@ -37,6 +38,9 @@ const FRIENDLY_ERRORS = {
   launch_failed:            'Zoom could not be launched as user1. Common causes: Secondary Logon service disabled, password policy mismatch, or user1 lacks permission to start C:\\Program Files\\Zoom\\bin\\Zoom.exe. Re-run as Administrator or check the log above for the exact PowerShell exception.',
   seclogon_disabled:        'The Secondary Logon service is disabled. It is required to launch processes under another local account. Run this from an admin shell and retry:  sc.exe config seclogon start= demand  &  sc.exe start seclogon',
   profile_not_materialized: 'The user1 profile did not appear in time. The account was created and Zoom was launched, but the per-user profile setup was skipped.',
+  temp_or_suffixed_profile: 'Windows did not land Zoom in the real C:\\Users\\user1 profile — it fell back to a TEMP or suffixed profile. The 1132 identity may not be clean. Reboot once, then run the fix again. 1132 Fixer does not delete TEMP folders by name guessing.',
+  temp_profile_fallback:    'Windows gave user1 a temporary profile instead of C:\\Users\\user1. The 1132 identity may not be clean. Reboot once, then run the fix again.',
+  suffixed_profile:         'Windows created a suffixed profile (user1.MACHINE) instead of C:\\Users\\user1. Reboot once, then run the fix again.',
   tool_probe_failed:        'The PowerShell tool probe failed. PowerShell itself may be missing or restricted by AppLocker/policy. The fix cannot continue.'
 };
 

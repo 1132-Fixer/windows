@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security — Electron IPC isolation and updater URL allowlist
+
+- Renderer isolation is now explicit: `contextIsolation`, `sandbox`,
+  `webSecurity` on; `nodeIntegration` (including workers/subframes),
+  `webviewTag`, and `allowRunningInsecureContent` off. `webContents`
+  denies `window.open`, off-app navigation, webviews, and permission
+  requests. Shutdown kills tracked child process trees on `before-quit`.
+- `ipcMain.handle` is wrapped by an allowlist. Unknown channels cannot be
+  registered. Invoke payloads are schema-checked (`submit-feedback`,
+  `support-report`); extra arguments on zero-arg channels are dropped.
+- `openExternal` and the portable `latest.yml` fetch refuse anything that
+  is not https on the named GitHub/CDN/site/Zoom allowlist. Redirects
+  cannot leave that list. The renderer still cannot supply those URLs.
+- User-selected Zoom MSI paths are resolved and quoted before PowerShell
+  interpolation (control characters, NTFS ADS, wrong extension refused).
+- Coverage: `tools/electron-security-smoke.js` (isolation flags, IPC
+  allowlist rejects, updater URL not arbitrary).
+
+### Fixed — TEMP-profile fallback is no longer a silent success
+
+- After Zoom launches as `user1`, the fix logs the effective `USERPROFILE`,
+  `APPDATA`, and `LOCALAPPDATA` and classifies the landing path. A TEMP
+  profile (`C:\Users\TEMP*`) or a suffixed profile (`user1.MACHINE`) fails
+  the profile-setup step, so the run ends **FIX COMPLETE — NEEDS ATTENTION**
+  instead of a green success (unique STEP-6 guard from closed unmerged PR #40,
+  rewritten on current `main`; the stale branch was not merged wholesale).
+- The environment checklist now inventories the helper profile (account,
+  ProfileList image path, folder ownership, TEMP identification). Probe
+  failure is a warning, never a clean-ready row. 1132 Fixer still does not
+  delete `C:\Users\TEMP*` or ProfileList keys by name guessing — FIX NOW
+  rebuilds through the existing account/profile flow.
+- The helper-account password is no longer passed as a `net.exe` CreateProcess
+  argument (it already rode in a tmp PowerShell file for Zoom launch). Log
+  lines are redacted against that secret.
+- Coverage: `tools/profile-safety-smoke.js` (TEMP detection, path
+  classification, no silent TEMP launch, quoting, env construction, mocked
+  Zoom-exe discovery, shortcut name/icon, privilege unknown ≠ success,
+  credential presence assertions that never print the secret).
+
 ### Added — attach a screenshot of the error to a bug report (#141)
 
 - The in-app Bug Report form gains an "Attach screenshot" control: file
