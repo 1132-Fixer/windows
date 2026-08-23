@@ -52,7 +52,9 @@ would break the update channel rather than secure it.
 
 ## 2. Expected publisher
 
-`package.json` declares `build.win.publisherName: "High Texas"`.
+`package.json` declares `build.win.signtoolOptions.publisherName: "High Texas"`.
+(electron-builder 26 moved this key out of `win` into `win.signtoolOptions`;
+declaring it there is metadata only and does not enable signing.)
 
 Today that string is **display metadata only**. It is written into the NSIS
 installer and the Windows uninstall registry entry; no certificate has ever

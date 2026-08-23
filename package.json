@@ -62,7 +62,9 @@
       "icon": "assets/icon.ico",
       "requestedExecutionLevel": "requireAdministrator",
       "signAndEditExecutable": true,
-      "publisherName": "High Texas",
+      "signtoolOptions": {
+        "publisherName": "High Texas"
+      },
       "verifyUpdateCodeSignature": false
     },
     "nsis": {

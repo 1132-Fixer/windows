@@ -41,7 +41,7 @@ const OUT = path.resolve(argOf('--out', path.join(DIST, 'signature-state.json'))
 const pkg = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
 const win = pkg.build?.win ?? {};
 const verifyFlag = win.verifyUpdateCodeSignature === true;
-const expectedPublisher = win.publisherName ?? null;
+const expectedPublisher = win.signtoolOptions?.publisherName ?? win.publisherName ?? null;
 
 // A certificate was offered to this build if either variable carries a value.
 const certConfigured = Boolean(process.env.CSC_LINK) || Boolean(process.env.WIN_CSC_LINK);
