@@ -60,24 +60,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   install mints its own support token on first use — sealed at rest with
   Windows DPAPI), while plain reports keep the existing feedback path.
 
-### Changed — update feed moves to the Botify Network download broker (#136)
+### Documented — updater channel is this repository's GitHub Releases
 
-- The updater feed and the portable "download it" link now point at the
-  Botify Network download broker
-  (`botify-network.com/downloads/1132-fixer/updates` /
-  `…/downloads/1132-fixer/latest`) instead of anonymous GitHub release
-  URLs. Releases keep publishing on this repository's GitHub Releases —
-  the broker reads them server-side, so the repository can stay private
-  and installed apps need no GitHub access. `build.publish` becomes the
-  matching `generic` provider (the release workflow already creates the
-  GitHub release itself with `-p never`, unchanged). The first release
-  tag after this change must wait until the broker's `1132-fixer` entry
-  is live.
-- The `npm run release` script drops `--publish always` for `--publish never`:
-  electron-builder cannot upload to a `generic` provider, so `always` no longer
-  publishes anything and only implied one. Publishing stays exclusively on the
-  tag-triggered `release.yml` (`action-gh-release`), which uploads `latest.yml`
-  and the installers to this repo's GitHub Releases for the broker to serve.
+- Current builds fetch `latest.yml` from
+  `https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml`.
+  `package.json` remains `5.6.0` (no random bump). `build.publish` is GitHub
+  `1132-Fixer/windows`. HTTPS + SHA-512 integrity + `isAllowedUpdaterUrl`
+  (#156). `verifyUpdateCodeSignature` stays false.
+- Residual v5.5.1 clients still poll `PrimeUpYourLife/1132-Fixer-Windows-Releases`
+  (`latest.yml` download_count 2216 on 2026-08-23, up from census 2212). That
+  repository is not deleted. Current source does not fetch it.
+- Coverage: `tools/updater-channel-smoke.js` asserts live `latest.yml` version
+  equals `package.json`.
 
 ## [5.6.0] - 2026-08-08 — finds your Zoom, tells the truth, and locks the helper account down
 

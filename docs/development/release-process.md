@@ -135,7 +135,10 @@ bucket, and exhausting it must not red a release that has already shipped.
 
 `latest.yml` carries the version, the installer filename, its SHA-512, and its
 size. `electron-updater` on the client compares the downloaded installer against
-that SHA-512.
+that SHA-512. The live feed is this repository:
+`https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml`.
+`tools/updater-channel-smoke.js` asserts that file's `version` equals
+`package.json`. See [`updater-channel.md`](updater-channel.md).
 
 `scripts/validate-release-assets.mjs` then re-reads the published release from
 the GitHub API and confirms every filename referenced by `latest.yml` resolves

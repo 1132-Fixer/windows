@@ -2,29 +2,53 @@
 
 ## Canonical home
 
-Public source, CI, issues, and GitHub Releases for the Windows app:
+Public source, CI, issues, GitHub Releases, and the **current updater feed**
+for the Windows app:
 
 **https://github.com/1132-Fixer/windows**
 
-This repository is the survivor. Do not delete it.
+Feed (HTTPS):
+`https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml`
 
-## Old download repo
+`package.json` is the version source of truth. This repository is the
+survivor. Do not delete it.
 
-`PrimeUpYourLife/1132-Fixer-Windows-Releases` is a leftover public release channel.
-It is not the product source. After it is transferred to the `1132-Fixer` organization
-and installed apps are rerouted, that releases-only repository may be deleted.
-The Windows product repository stays.
+## Old download repo — deletion blocked
+
+`PrimeUpYourLife/1132-Fixer-Windows-Releases` is a leftover public release
+channel. It is not the product source. It is **still live** and **must not
+be deleted**.
+
+Live residual (2026-08-23, GitHub Releases API):
+
+| Channel | Latest tag | `latest.yml` downloads |
+| --- | --- | --- |
+| `1132-Fixer/windows` (current) | v5.6.0 | 440 |
+| `PrimeUpYourLife/1132-Fixer-Windows-Releases` (old) | v5.5.1 | 2216 |
+
+Census the same day recorded **2212** old-channel downloads; the count is
+still rising. Those polls are field clients on v5.5.1 (and earlier) whose
+baked-in feed is the old repo. Deleting it would 404 their updater checks.
+There is no in-app path to reach them after a 404. They install once from
+this repository's Releases page (or https://1132-fixer.xyz/).
+
+See [`development/updater-channel.md`](development/updater-channel.md).
 
 ## Updater
 
 | Install | Feed |
 | --- | --- |
-| New builds from this branch | GitHub Releases on `1132-Fixer/windows` |
-| v5.6.0 already shipped | generic `https://botify-network.com/downloads/1132-fixer/updates` (broker currently failing — see Botify-Network-Website#297) |
-| v5.5.1 and earlier | old Releases-repo `latest.yml` (broken unless that repo still serves assets) |
+| Current source / current builds | GitHub Releases on `1132-Fixer/windows` (`latest.yml`, SHA-512; URL gated by `isAllowedUpdaterUrl`) |
+| v5.6.0 already shipped | this repository's GitHub Releases (same `latest.yml`); a generic broker URL was tried and is **not** the live feed |
+| v5.5.1 and earlier | old Releases-repo `latest.yml` — **still serving** |
 
-There is no in-app path to reach stranded v5.5.1 users if their baked-in URL 404s.
-Those users install once from this repository's Releases page (or https://1132-fixer.xyz/).
+Current `package.json` `build.publish` is GitHub provider, owner `1132-Fixer`,
+repo `windows`. `autoUpdater.setFeedURL` is never called. Portable fetches
+the named `LATEST_YML_URL`. HTTPS only; redirects cannot leave the allowlist.
+
+Do not flip `verifyUpdateCodeSignature` while artifacts are unsigned. Do not
+publish a GitHub Release from a channel-docs change. Do not random-bump
+`package.json`.
 
 ## User comms
 
@@ -38,6 +62,7 @@ Those users install once from this repository's Releases page (or https://1132-f
 
 1. Merge the open-source README / LICENSE / updater-home change set.
 2. Keep this repository public.
-3. Transfer `1132-Fixer-Windows-Releases` to `1132-Fixer`, then delete it only after the updater reroute is verified.
+3. **Do not delete** `PrimeUpYourLife/1132-Fixer-Windows-Releases` while
+   residual `latest.yml` downloads continue.
 4. Next `v*` tag publishes Setup, Portable, checksums, and `latest.yml` here.
 5. Keep https://1132-fixer.xyz/ pointed at this Releases page.
