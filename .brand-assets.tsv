@@ -1,0 +1,11 @@
+# canonical path	shipped path
+assets/exports/windows/icon.png	assets/icon.png
+assets/exports/windows/icon.ico	assets/icon.ico
+assets/exports/windows/logo-transparent.png	assets/logo-transparent.png
+assets/exports/windows/1132-fixer-logo-transparent.png	assets/1132-fixer-logo-transparent.png
+assets/exports/windows/1132-helper-shortcut.png	assets/1132-helper-shortcut.png
+assets/exports/windows/1132-helper-shortcut.ico	assets/1132-helper-shortcut.ico
+assets/exports/windows/social-preview.png	assets/social-preview.png
+assets/exports/windows/social-preview-root.png	social-preview.png
+assets/exports/windows/logo-mark.svg	assets/brand/logo-mark.svg
+assets/exports/windows/tray.svg	assets/brand/tray.svg
