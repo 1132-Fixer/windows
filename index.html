@@ -282,6 +282,9 @@
     .chk-row[data-status="warning"]    { border-left-color: var(--warning); }
     .chk-row[data-status="blocked"]    { border-left-color: var(--danger); }
     .chk-row[data-status="pending"]    { border-left-color: var(--border-strong); opacity: 0.65; }
+    /* A state this version does not recognise, or a check the scan never
+       reported. Presented as a warning, never as ready. */
+    .chk-row[data-status="unknown"]    { border-left-color: var(--warning); }
     .chk-icon { width: 18px; height: 18px; flex-shrink: 0; color: var(--dim); }
     .chk-label { font-weight: 600; color: var(--text); min-width: 160px; }
     /* min-width:0 lets the flex item shrink below its longest token;
@@ -303,11 +306,13 @@
     .chk-row[data-status="warning"]    .chk-icon { color: var(--warning); }
     .chk-row[data-status="blocked"]    .chk-icon { color: var(--danger); }
     .chk-row[data-status="pending"]    .chk-icon { color: var(--disabled); }
+    .chk-row[data-status="unknown"]    .chk-icon { color: var(--warning); }
     .chk-row[data-status="ready"]      .chk-badge { color: var(--success); background: var(--success-bg); border-color: var(--success-bd); }
     .chk-row[data-status="repairable"] .chk-badge { color: var(--accent); background: var(--accent-bg); border-color: var(--accent-bd); }
     .chk-row[data-status="warning"]    .chk-badge { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-bd); }
     .chk-row[data-status="blocked"]    .chk-badge { color: var(--danger); background: var(--danger-bg); border-color: var(--danger-bd); }
     .chk-row[data-status="pending"]    .chk-badge { color: var(--muted); background: var(--panel-3); border-color: var(--border); }
+    .chk-row[data-status="unknown"]    .chk-badge { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-bd); }
     /* §9 Doctor grouping — small dim label rows between checklist sections.
        Visual-only (aria-hidden): each row's own label + badge stays the
        screen-reader story, so the list keeps valid listitem-only children. */
@@ -1103,9 +1108,14 @@
           <span class="logo-desc">Zoom diagnostic &amp; repair</span>
         </div>
       </div>
-      <div class="status-badge" id="statusBadge" role="status" aria-live="polite">
-        <span class="status-icon" id="statusBadgeIcon" aria-hidden="true">✓</span>
-        <span id="statusBadgeText">Ready</span>
+      <!-- Ships in the SCANNING state, not a green tick. Nothing has been
+           checked at first paint, and this markup is also what stays on
+           screen if the elevation probe or the scan never returns — a
+           static "✓ Ready" there was an unknown state rendered as a
+           settled, passing one. -->
+      <div class="status-badge scanning" id="statusBadge" role="status" aria-live="polite" data-tone="scanning">
+        <span class="status-icon" id="statusBadgeIcon" aria-hidden="true">↻</span>
+        <span id="statusBadgeText">Checking</span>
       </div>
     </div>
   </div>
@@ -1132,7 +1142,7 @@
         stay unchanged. Do <strong>not</strong> run while signed in as user1.
       </div>
       <div class="home-scroll">
-        <div class="chk-list" id="checkList" role="list" aria-label="Environment checks"></div>
+        <div class="chk-list" id="checkList" role="list" aria-label="Environment checks" aria-busy="true"></div>
 
         <!-- ============================================================
              Zoom Workplace guided recovery card (operator directive
@@ -1235,7 +1245,10 @@
       <div class="footer-meta">
         <button class="badge feedback-badge" id="btnSupport" aria-label="Submit feedback or a support report">Feedback &amp; Report</button>
         <button class="badge site-badge" id="btnVisitSite" aria-label="Open the 1132 Fixer website">Visit Website</button>
-        <span class="badge admin-badge" id="adminBadge" role="status">Administrator</span>
+        <!-- Neutral until isElevated() answers. Shipping "Administrator" in
+             the green admin-badge class asserted elevation before anything
+             had been measured, and kept asserting it if the probe threw. -->
+        <span class="badge" id="adminBadge" role="status">Checking rights…</span>
       </div>
     </div>
   </div>
@@ -1378,6 +1391,7 @@
 
   <script src="messages.js"></script>
   <script src="run-verdict.js"></script>
+  <script src="ui-state.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

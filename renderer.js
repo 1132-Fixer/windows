@@ -41,13 +41,15 @@ function showView(name) {
   runningView.classList.toggle('active', name === 'running' || name === 'done');
 }
 
-function setStatus(className, text) {
+// Summary badge. `tone` is one of the .status-badge CSS classes; the icon
+// comes from ui-state.js so an unrecognised tone renders '?' and never the
+// check mark. (This used to be a ternary chain whose final `: '✓'` gave a
+// green tick to every tone it did not enumerate.)
+function setStatus(tone, text) {
   const badge = document.getElementById('statusBadge');
-  badge.className = 'status-badge' + (className ? ' ' + className : '');
-  document.getElementById('statusBadgeIcon').textContent =
-    className === 'error' ? '⨯' :
-    className === 'warn' ? '!' :
-    className === 'scanning' ? '↻' : '✓';
+  badge.className = 'status-badge' + (tone ? ' ' + tone : '');
+  badge.setAttribute('data-tone', tone || 'unknown');
+  document.getElementById('statusBadgeIcon').textContent = summaryIcon(tone);
   document.getElementById('statusBadgeText').textContent = text;
 }
 
@@ -181,13 +183,9 @@ logToggle.addEventListener('click', () => {
 // Status icon SVGs — shared between checklist + receipt.
 // Inline strings so the renderer ships nothing extra.
 // ============================================================
-const STATUS_BADGE = {
-  ready:      'Ready',
-  repairable: 'Repairable',
-  warning:    'Warning',
-  blocked:    'Blocked',
-  pending:    'Checking'
-};
+// Row badge words live in ui-state.js (CHECK_STATUS_BADGE) so the
+// status -> word -> icon mapping is one table, covered by
+// tools/ui-state-smoke.js, and has an explicit 'unknown' entry.
 
 function svgCheck(klass)  { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`; }
 function svgWrench(klass) { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-7-7 8-8 .7 1.3z"/><line x1="9" y1="15" x2="4.5" y2="19.5"/></svg>`; }
@@ -195,15 +193,20 @@ function svgWarn(klass)   { return `<svg class="${klass}" viewBox="0 0 24 24" fi
 function svgBlock(klass)  { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`; }
 function svgDot(klass)    { return `<svg class="${klass}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/></svg>`; }
 
+// status -> SVG. The status is normalised first (ui-state.js), so a state
+// this version does not know renders the WARNING glyph and the "Unknown"
+// badge word rather than borrowing the success tick.
+const CHECK_ICON_SVG = {
+  check:  svgCheck,
+  wrench: svgWrench,
+  warn:   svgWarn,
+  block:  svgBlock,
+  dot:    svgDot
+};
+
 function iconForStatus(status, klass) {
-  switch (status) {
-    case 'ready':      return svgCheck(klass);
-    case 'repairable': return svgWrench(klass);
-    case 'warning':    return svgWarn(klass);
-    case 'blocked':    return svgBlock(klass);
-    case 'pending':    return svgDot(klass);
-    default:           return svgCheck(klass);
-  }
+  const draw = CHECK_ICON_SVG[iconKeyForCheckStatus(status)] || svgWarn;
+  return draw(klass);
 }
 
 // ============================================================
@@ -231,17 +234,27 @@ const CARD_COVERED_BLOCKER_CODES = new Set([
   'not_elevated', 'zoom_not_found', 'seclogon_disabled', 'seclogon_start_failed'
 ]);
 
-function updateFixDisabledNote(blockedLabels) {
-  if (!blockedLabels || !blockedLabels.length) {
+// canRunFix is passed explicitly so a DISABLED button with an empty reason
+// list still says something. Previously an empty list hid the note outright,
+// leaving a dead button with no explanation anywhere on screen or in the
+// accessibility tree — a silent no-op.
+//
+// A disabled button is not focusable, so `title` alone never reaches a
+// screen-reader user. The note carries role="status" in index.html and is
+// wired to the button with aria-describedby.
+function updateFixDisabledNote(blockedLabels, canRunFix) {
+  const text = fixDisabledNoteText(blockedLabels, canRunFix);
+  if (!text) {
     fixDisabledNote.hidden = true;
     fixDisabledNote.textContent = '';
     fixBtn.title = '';
+    fixBtn.removeAttribute('aria-describedby');
     return;
   }
-  const text = `Fix now is disabled by: ${blockedLabels.join(', ')}`;
   fixDisabledNote.textContent = text;
   fixDisabledNote.hidden = false;
   fixBtn.title = text;
+  fixBtn.setAttribute('aria-describedby', 'fixDisabledNote');
 }
 
 // §9 group label row — visual-only (aria-hidden) so the role="list"
@@ -255,15 +268,24 @@ function renderGroupHeader(name) {
 }
 
 function renderCheckRow(key, label, status, message) {
+  // Normalise first: data-status, icon and badge word must all describe the
+  // SAME state. The badge word used to be `STATUS_BADGE[status] || ''`, so an
+  // unrecognised status produced a tick with an EMPTY badge — state conveyed
+  // by colour alone, and the wrong colour at that.
+  const state = normalizeCheckStatus(status);
+  const badge = badgeForCheckStatus(state);
   const row = document.createElement('div');
   row.className = 'chk-row';
-  row.setAttribute('data-status', status);
+  row.setAttribute('data-status', state);
   row.setAttribute('data-key', key);
   row.setAttribute('role', 'listitem');
-  row.innerHTML = `${iconForStatus(status, 'chk-icon')}
+  // Accessible name carries label + state + detail in text, so the row does
+  // not depend on the icon colour to be understood.
+  row.setAttribute('aria-label', `${label}: ${badge}. ${message || ''}`.trim());
+  row.innerHTML = `${iconForStatus(state, 'chk-icon')}
     <span class="chk-label">${escapeHtml(label)}</span>
     <span class="chk-msg">${escapeHtml(message)}</span>
-    <span class="chk-badge">${STATUS_BADGE[status] || ''}</span>`;
+    <span class="chk-badge">${escapeHtml(badge)}</span>`;
   return row;
 }
 
@@ -275,8 +297,9 @@ async function runEnvironmentScan() {
   scanInProgress = true;
   lastScanAt = Date.now();
   setStatus('scanning', 'Checking');
+  checkList.setAttribute('aria-busy', 'true');
   fixBtn.disabled = true;
-  updateFixDisabledNote([]);
+  updateFixDisabledNote([], true);
 
   // Show all rows immediately as pending so the screen never sits empty.
   checkList.innerHTML = '';
@@ -288,45 +311,51 @@ async function runEnvironmentScan() {
 
   try {
     const result = await window.electronAPI.preflightScan();
+    const cards = (result && result.cards && typeof result.cards === 'object') ? result.cards : {};
     checkList.innerHTML = '';
     let lastGroup = null;
+    // Every CHECK_ORDER row is rendered, every time. A card the scan did not
+    // return is rendered UNKNOWN — it used to be `continue`, which silently
+    // shortened the list, so a check that never ran was indistinguishable
+    // from a check that passed (nothing on screen said it was missing).
+    const renderedStatuses = [];
     for (const c of CHECK_ORDER) {
-      const card = result.cards[c.key];
-      if (!card) continue;
-      // Header only when a row of the group actually renders — a missing
-      // card must not leave an orphaned group label.
+      const card = cards[c.key];
       if (c.group !== lastGroup) { checkList.appendChild(renderGroupHeader(c.group)); lastGroup = c.group; }
-      checkList.appendChild(renderCheckRow(c.key, card.label || c.label, card.status, card.message || ''));
+      const status  = card ? normalizeCheckStatus(card.status) : 'unknown';
+      const message = card ? (card.message || '') : MISSING_CARD_MESSAGE;
+      renderedStatuses.push(status);
+      checkList.appendChild(renderCheckRow(c.key, (card && card.label) || c.label, status, message));
     }
-    canRunFix = !!result.canRunFix;
-    if (result.overall === 'blocked') {
-      setStatus('error', 'Blocked');
-    } else if (result.overall === 'warning') {
-      setStatus('warn', 'Ready');
-    } else {
-      setStatus('done', 'Ready');
-    }
+    canRunFix = !!(result && result.canRunFix);
+    // Summary is computed from what is ACTUALLY on screen, never from the
+    // roll-up label alone. `overall === 'repairable'` (what a detected TEMP
+    // helper profile produces) previously fell through to the green
+    // "Ready" badge; an unknown row now also refuses to roll up green.
+    const summary = summarizeChecks(renderedStatuses, result && result.overall, canRunFix);
+    setStatus(summary.tone, summary.text);
     fixBtn.disabled = !canRunFix;
     const blockedLabels = CHECK_ORDER
-      .map(c => result.cards[c.key])
-      .filter(card => card && card.status === 'blocked')
+      .map(c => cards[c.key])
+      .filter(card => card && normalizeCheckStatus(card.status) === 'blocked')
       .map(card => card.label);
     // Blockers without a checklist card (F-W22) — name them by message.
-    const nonCardBlockers = (Array.isArray(result.blockers) ? result.blockers : [])
+    const nonCardBlockers = ((result && Array.isArray(result.blockers)) ? result.blockers : [])
       .filter(b => b && !CARD_COVERED_BLOCKER_CODES.has(b.code))
       .map(b => b.message || b.code);
-    updateFixDisabledNote(canRunFix ? [] : blockedLabels.concat(nonCardBlockers));
-    updateZoomRecovery(result.cards.zoom, result.info && result.info.zoomInstall);
+    updateFixDisabledNote(blockedLabels.concat(nonCardBlockers), canRunFix);
+    updateZoomRecovery(cards.zoom, result && result.info && result.info.zoomInstall);
   } catch (err) {
     checkList.innerHTML = '';
     checkList.appendChild(renderCheckRow('scan', 'Environment scan', 'blocked', scanFailureMessage(err)));
     canRunFix = false;
     setStatus('error', 'Error');
     fixBtn.disabled = true;
-    updateFixDisabledNote(['Environment scan']);
+    updateFixDisabledNote(['Environment scan'], false);
     updateZoomRecovery(null, null); // scan state unknown — hide the card
   } finally {
     scanInProgress = false;
+    checkList.setAttribute('aria-busy', 'false');
   }
 }
 
@@ -481,6 +510,13 @@ zrChooseBtn.addEventListener('click', async () => {
       } else if (run && run.message) {
         // Re-check refused the file (it changed after validation) — nothing ran.
         zrSetState(run.message);
+      } else {
+        // { started: false } with NO message — the approved descriptor was
+        // already consumed, or the spawn threw. Nothing launched. Without
+        // this branch the pre-launch UAC notice stayed on screen promising
+        // a Windows prompt and an automatic re-check, neither of which
+        // happened: a launch that never ran, rendered as one in progress.
+        zrSetState(INSTALLER_NOT_STARTED);
       }
     } else if (r && !r.canceled) {
       // Explained refusal naming the exact failed check — nothing was run.
@@ -502,7 +538,15 @@ zrCancelBtn.addEventListener('click', () => window.electronAPI.quitApp());
 // ============================================================
 function renderFixReceipt(receipt, warnings) {
   if (!receipt) {
-    receiptPanel.classList.remove('visible');
+    // A run that reports success but returns no receipt has proven none of
+    // the four things the receipt exists to prove. Hiding the panel made
+    // that absence invisible under a "FIX COMPLETE" headline — the missing
+    // evidence read as "nothing to report".
+    lastReceipt = null;
+    receiptPanel.innerHTML = `
+      <div class="receipt-title">FIX RECEIPT — NOT AVAILABLE</div>
+      <div class="receipt-foot">${escapeHtml(RECEIPT_MISSING_MESSAGE)}</div>`;
+    receiptPanel.classList.add('visible');
     return;
   }
   lastReceipt = receipt;
@@ -722,13 +766,32 @@ async function runFix() {
 
       // Desktop shortcut: created automatically when missing or stale —
       // part of "one click does everything", no prompt.
-      const status = await window.electronAPI.shortcutExists();
-      if (status && status.exists && status.valid) {
-        addEmptyLine();
-        addFileItem(`Desktop shortcut already present: ${status.path}`, 'success');
-      } else {
-        addEmptyLine();
-        await createShortcut(true);
+      //
+      // Isolated from the verdict above. This block lives INSIDE the same
+      // try as the fix itself, so a throw here used to be caught by the
+      // outer handler and repaint a fix that had already SUCCEEDED as
+      // "FIX FAILED". The shortcut is a separate operation with a separate
+      // outcome, and it reports itself.
+      addEmptyLine();
+      try {
+        const status = await window.electronAPI.shortcutExists();
+        if (status && status.exists && status.valid) {
+          addFileItem(`Desktop shortcut already present: ${status.path}`, 'success');
+        } else {
+          if (status && status.exists && status.stale) {
+            addFileItem('An existing desktop shortcut no longer points at this app — replacing it.', 'failed');
+          }
+          await createShortcut(true);
+        }
+      } catch (err) {
+        // Unknown shortcut state: say so, and do not imply the shortcut is
+        // there. The fix verdict above is untouched.
+        addFileItem(
+          'Could not check whether the desktop shortcut exists, so it was not created. ' +
+          'The fix itself is unaffected — use the "Create Zoom Helper Shortcut" button to try again.' +
+          (err && err.message ? ` Detail for support: ${err.message}` : ''),
+          'failed'
+        );
       }
     } else {
       const res = result || {};
@@ -799,14 +862,28 @@ copyErrBtn.addEventListener('click', async () => {
 // ============================================================
 // Shortcut helper — direct create, no prompt.
 // ============================================================
+// Never throws: the two callers (the post-fix step and the toolbar button)
+// must not have their own outcome rewritten by a shortcut failure. It used
+// to have no try/catch at all, so an IPC rejection from the toolbar button
+// produced an unhandled rejection and NOTHING on screen — the user clicked
+// and the app said neither "done" nor "failed".
+// Returns true only when the shortcut was actually created.
 async function createShortcut(showHeader) {
   if (showHeader) {
     addFileItem('CREATING ZOOM HELPER SHORTCUT...', 'header');
   }
-  const result = await window.electronAPI.createShortcut();
-  if (!result.success) {
-    addFileItem(shortcutFailureMessage(result.error), 'failed');
-    return;
+  let result;
+  try {
+    result = await window.electronAPI.createShortcut();
+  } catch (err) {
+    addFileItem(shortcutFailureMessage(err && err.message), 'failed');
+    return false;
+  }
+  // A missing/void result is not a success. `result.success` on undefined
+  // used to throw here and get swallowed by the caller.
+  if (!result || !result.success) {
+    addFileItem(shortcutFailureMessage(result && result.error), 'failed');
+    return false;
   }
   addFileItem(`Shortcut created: ${result.path}`, 'success');
 
@@ -823,6 +900,7 @@ async function createShortcut(showHeader) {
   } else if ((result.legacyRemoved || []).length) {
     addFileItem(`Older shortcut removed: ${result.legacyRemoved.join(', ')}`, 'success');
   }
+  return true;
 }
 
 // ============================================================
@@ -863,52 +941,43 @@ function ubHide() {
   updateBanner.classList.remove('visible');
 }
 
+// State -> banner view lives in ui-state.js (updateBannerView), covered by
+// tools/ui-state-smoke.js. Two behaviours changed there:
+//
+//  - a payload with no state, or a state this version does not recognise,
+//    used to hit `default: ubHide()` and render as an EMPTY banner. An
+//    empty update banner reads as "you are up to date"; an update state we
+//    could not determine is not that. It now says so, with a Later button
+//    so it is still dismissable.
+//  - the 'error' banner auto-hid itself after 6 seconds, so a failed
+//    update check erased its own evidence and left the app looking
+//    current. It now stays until the user dismisses it.
 function handleUpdateStatus(data) {
-  if (!data || !data.state) return;
   ubClearTimers();
-  const v = data.version ? `v${data.version}` : 'update';
-  switch (data.state) {
-    case 'downloading':
-      ubShow({ msg: `Downloading ${v} in the background… ${data.percent || 0}%`, progress: data.percent || 0 });
-      break;
-    case 'restarting': {
-      let remaining = data.seconds || 10;
-      const render = () => ubShow({
-        msg: `Update ${v} is ready — restarting in ${remaining}s to install.`,
-        restartBtn: true,
-        laterBtn: true
-      });
+  const view = updateBannerView(data);
+  if (!view.show) { ubHide(); return; }
+  if (view.countdown) {
+    let remaining = view.seconds;
+    const render = () => ubShow({
+      msg: view.msg.replace('{s}', String(remaining)),
+      restartBtn: !!view.restartBtn,
+      laterBtn: !!view.laterBtn
+    });
+    render();
+    ubTickTimer = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) { ubClearTimers(); return; }
       render();
-      ubTickTimer = setInterval(() => {
-        remaining -= 1;
-        if (remaining <= 0) { ubClearTimers(); return; }
-        render();
-      }, 1000);
-      break;
-    }
-    case 'deferred':
-      ubShow({
-        msg: `Update ${v} is ready — it installs automatically when you exit the app.`,
-        restartBtn: true
-      });
-      break;
-    case 'manual':
-      // Portable build: cannot self-update; offer the download page.
-      ubShow({
-        msg: `Update ${v} is available. This portable version can't update itself — download the new one.`,
-        downloadBtn: true,
-        laterBtn: true
-      });
-      break;
-    case 'error':
-      ubShow({ msg: 'Update check failed — will retry on next launch.' });
-      ubHideTimer = setTimeout(ubHide, 6000);
-      break;
-    case 'idle':
-    default:
-      ubHide();
-      break;
+    }, 1000);
+    return;
   }
+  ubShow({
+    msg: view.msg,
+    restartBtn: !!view.restartBtn,
+    downloadBtn: !!view.downloadBtn,
+    laterBtn: !!view.laterBtn,
+    progress: typeof view.progress === 'number' ? view.progress : null
+  });
 }
 
 ubRestart.addEventListener('click', () => {
@@ -963,30 +1032,65 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Installer exited — run the promised read-only re-check automatically.
   // If a scan is already in flight, the pending flag makes ITS result use
   // the re-check state strings instead of starting a second scan.
-  window.electronAPI.onZoomInstallerDone(() => {
+  window.electronAPI.onZoomInstallerDone((info) => {
     // Installer exited: the "Cancel setup" label and unchanged-computer note
     // are true again.
     zrSetInstalling(false);
     if (isRunning) return;
     zrRecheckPending = true;
+    // A non-zero msiexec exit means the install did NOT complete — the most
+    // common cause is the user declining the Windows administrator prompt
+    // (1223) or cancelling the installer (1602). The exit code was being
+    // dropped, so a declined elevation went straight into a silent re-check.
+    // A decline must not read as progress.
+    const declined = installerExitNote(info && info.code);
     if (!scanInProgress) {
-      zrSetState(ZOOM_RECOVERY.STATES.checking);
+      zrSetState(declined || ZOOM_RECOVERY.STATES.checking);
       runEnvironmentScan();
+    } else if (declined) {
+      zrSetState(declined);
     }
   });
 
   // Initial state: home view + auto-run the environment checklist.
   showView('home');
   setStageTracker(false);
-  const elevated = await window.electronAPI.isElevated();
-  if (!elevated) {
+
+  // Elevation gate. If the probe itself throws we do NOT fall through to a
+  // scan and we do NOT leave the page in its static "Ready" state: an
+  // unverified elevation is unknown, and unknown is not permission to run.
+  let elevated = null;
+  try {
+    elevated = await window.electronAPI.isElevated();
+  } catch (err) {
+    elevated = null;
+  }
+
+  if (elevated !== true) {
+    // Say what is needed, and what declining costs — nothing is repaired,
+    // and the other checks did not run, so their state is unknown rather
+    // than passing. Rendering only the admin row used to make the other
+    // eight checks vanish, which reads as "nothing else to report".
     checkList.innerHTML = '';
-    checkList.appendChild(renderCheckRow('admin', 'Administrator', 'blocked',
-      'Not running as Administrator. Close this app, right-click it → Run as administrator.'));
+    const adminMsg = elevated === false
+      ? 'Not running as Administrator. Creating the helper account, writing camera and microphone ' +
+        'consent, and launching Zoom as user1 all require it. Nothing has been changed on this ' +
+        'computer. Close 1132 Fixer, right-click its icon and choose "Run as administrator".'
+      : 'Could not confirm whether 1132 Fixer is running as Administrator, so it is treated as not ' +
+        'elevated. Nothing has been changed on this computer. Close 1132 Fixer, right-click its icon ' +
+        'and choose "Run as administrator".';
+    let group = null;
+    for (const c of CHECK_ORDER) {
+      if (c.group !== group) { checkList.appendChild(renderGroupHeader(c.group)); group = c.group; }
+      checkList.appendChild(c.key === 'admin'
+        ? renderCheckRow('admin', c.label, 'blocked', adminMsg)
+        : renderCheckRow(c.key, c.label, 'unknown', NOT_ELEVATED_CARD_MESSAGE));
+    }
+    checkList.setAttribute('aria-busy', 'false');
     fixBtn.disabled = true;
-    updateFixDisabledNote(['Administrator']);
+    updateFixDisabledNote(['Administrator'], false);
     shortcutBtn.disabled = true;
-    setStatus('error', 'Not Admin');
+    setStatus('error', elevated === false ? 'Not Admin' : 'Admin unknown');
     return;
   }
   shortcutBtn.disabled = false;
@@ -1001,17 +1105,24 @@ window.addEventListener('DOMContentLoaded', async () => {
     const v = await window.electronAPI.getVersion();
     document.getElementById('appVersion').textContent = 'v' + v;
   } catch (_) {}
+  // The badge ships neutral ("Checking rights…") and is only promoted to the
+  // green Administrator state by a measured `true`. A throw leaves it saying
+  // the rights are unknown rather than silently asserting Administrator,
+  // which is what the old static markup plus an empty catch produced.
+  const ab = document.getElementById('adminBadge');
+  const paint = (text, tone) => {
+    ab.textContent = text;
+    ab.classList.toggle('admin-badge', tone === 'ok');
+    ab.style.color       = tone === 'ok' ? '' : 'var(--danger)';
+    ab.style.borderColor = tone === 'ok' ? '' : 'var(--danger-bd)';
+    ab.style.background  = tone === 'ok' ? '' : 'var(--danger-bg)';
+  };
   try {
     const elevated = await window.electronAPI.isElevated();
-    const ab = document.getElementById('adminBadge');
-    if (!elevated) {
-      ab.textContent = 'Not Admin';
-      ab.classList.remove('admin-badge');
-      ab.style.color = 'var(--danger)';
-      ab.style.borderColor = 'var(--danger-bd)';
-      ab.style.background  = 'var(--danger-bg)';
-    }
-  } catch (_) {}
+    paint(elevated === true ? 'Administrator' : 'Not Admin', elevated === true ? 'ok' : 'bad');
+  } catch (_) {
+    paint('Admin rights unknown', 'bad');
+  }
 })();
 
 // ============================================================
@@ -1053,7 +1164,12 @@ async function loadSysInfo() {
   try {
     const info = await window.electronAPI.getSystemInfo();
     const el = document.getElementById('fbSysInfo');
-    el.textContent = `Version: ${info.version}\nOS: ${info.os}\nAdmin: ${info.admin ? 'Yes' : 'No'}`;
+    // Tri-state: true / false / null. null means the elevation probe itself
+    // failed — reported as Unknown, not folded into "No" and certainly not
+    // into "Yes" (which is what this line printed unconditionally before,
+    // because main hardcoded admin: true).
+    const admin = info.admin === true ? 'Yes' : info.admin === false ? 'No' : 'Unknown (could not check)';
+    el.textContent = `Version: ${info.version}\nOS: ${info.os}\nAdmin: ${admin}`;
   } catch (_) {
     document.getElementById('fbSysInfo').textContent = 'Could not load system info';
   }

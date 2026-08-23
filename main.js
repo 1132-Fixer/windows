@@ -2942,11 +2942,21 @@ ipcMain.handle('get-version', () => {
   return app.getVersion();
 });
 
-ipcMain.handle('get-system-info', () => {
+ipcMain.handle('get-system-info', async () => {
+  // `admin` was hardcoded true. The feedback dialog renders this verbatim as
+  // "Admin: Yes" and it is what a support report asserts about the run, so a
+  // non-elevated session was reporting itself as elevated — while the footer
+  // badge, reading the same probe, said "Not Admin". Measure it.
+  let admin = null;
+  try {
+    admin = await isElevatedSync();
+  } catch (_) {
+    admin = null;
+  }
   return {
     version: app.getVersion(),
     os: `Windows ${os.release()}`,
-    admin: true
+    admin
   };
 });
 
