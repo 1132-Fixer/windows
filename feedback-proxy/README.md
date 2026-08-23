@@ -49,7 +49,7 @@ shared key baked into the binary.
 cd feedback-proxy
 railway init
 railway variables set GH_ISSUES_TOKEN=github_pat_...        # the ONLY place this lives
-railway variables set GH_ISSUES_REPO=PrimeUpYourLife/1132-Fixer-Windows
+railway variables set GH_ISSUES_REPO=1132-Fixer/windows
 railway up
 railway domain            # -> https://<something>.up.railway.app
 ```
@@ -59,7 +59,7 @@ not a secret:
 
 ```bash
 gh variable set FEEDBACK_PROXY_URL \
-  --repo PrimeUpYourLife/1132-Fixer-Windows \
+  --repo 1132-Fixer/windows \
   --body "https://<something>.up.railway.app"
 ```
 
