@@ -124,43 +124,6 @@
       width: 100%;
       margin-bottom: var(--s-5);
     }
-    .logo {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 6px;
-    }
-    .logo img {
-      display: block;
-      width: 72px;
-      height: 72px;
-      object-fit: contain;
-      background: transparent;
-      border: 0;
-      border-radius: 0;
-      box-shadow: none;
-      filter: none;
-    }
-    .logo-title {
-      font-size: 24px;
-      font-weight: 600;
-      letter-spacing: 0.2px;
-      line-height: 1;
-      color: var(--text);
-      text-align: center;
-    }
-    .logo-sep {
-      width: 40px;
-      height: 2px;
-      background: var(--accent);
-      border-radius: 2px;
-    }
-    .logo-desc {
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 400;
-      letter-spacing: 0.2px;
-    }
 
     /* ============================================================
        MAIN PANE
@@ -177,8 +140,6 @@
       gap: 24px;
     }
 
-    .view { display: none; }
-    .view.active { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: var(--s-3); }
 
     /* ============================================================
        UPDATE BANNER — slim strip under the header. Driven by the
@@ -233,33 +194,9 @@
     }
 
     /* ============================================================
-       HOME VIEW — one-line pitch + live environment checklist.
-       The checklist auto-runs on launch; no wizard, no extra clicks.
+       ENVIRONMENT CHECKLIST — full per-check detail, rendered inside
+       the Advanced-details panel.
        ============================================================ */
-    .home-intro {
-      font-size: 14px;
-      color: var(--muted);
-      line-height: 1.55;
-      padding: 24px;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: var(--r-md);
-      box-shadow: var(--shadow-sm);
-    }
-    .home-intro strong { color: var(--text); }
-    /* One scroll zone for the checklist + Zoom recovery card, so the card
-       stays reachable at 200% scaling / small windows (directive a11y). */
-    .home-scroll {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: var(--s-3);
-      padding-right: 4px;
-    }
-    .home-scroll::-webkit-scrollbar { width: 8px; }
-    .home-scroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
     .chk-list {
       display: flex;
       flex-direction: column;
@@ -332,27 +269,6 @@
       color: var(--danger);
     }
     .fix-disabled-note[hidden] { display: none; }
-    /* "Check again" — explicit manual rescan next to the checklist it
-       re-runs (the throttled focus-rescan stays). Same chip recipe as
-       .log-toggle; 36px floor matches the footer badges' target size. */
-    .chk-rescan {
-      align-self: flex-start;
-      display: inline-flex;
-      align-items: center;
-      min-height: 36px;
-      padding: 8px var(--s-3);
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: var(--r-sm);
-      color: var(--muted);
-      font: inherit;
-      font-size: 12px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      cursor: pointer;
-      transition: color 0.2s, border-color 0.2s;
-    }
-    .chk-rescan:hover { color: var(--text); border-color: var(--border-strong); }
 
     /* ============================================================
        ZOOM RECOVERY CARD — guided recovery when the machine-wide Zoom
@@ -940,6 +856,7 @@
     }
     .fb-shot-status { text-align: left; margin-top: var(--s-2); }
 
+
     /* Support report modal — wider, single-screen */
     .sr-card { width: 720px; max-width: 95%; }
     .sr-textarea {
@@ -979,39 +896,45 @@
       letter-spacing: 0.2px;
     }
 
-    /* Design-system alignment: flat dark surfaces, Windows chrome, shared type/spacing. */
+    /* Design-system alignment (acceptance spec 2026-08-23 §4–§9): exact
+       navy tokens, three elevation layers (app bg / surface / modal), no
+       purple drift, restrained radii — PILL is reserved for status chips. */
     :root {
-      --bg: #0F1724;
+      --bg: #0F1724;              /* COLOR.APP_BG */
       --bg-top: #0F1724;
       --bg-bottom: #0F1724;
-      --panel: #202B3D;
-      --panel-2: #202B3D;
-      --panel-3: #2A2530;
-      --border: #33415A;
-      --border-strong: #33415A;
-      --text: #F5F7FA;
-      --muted: #9AA5B4;
-      --dim: #9AA5B4;
-      --disabled: #9AA5B4;
-      --accent: #2E78D6;
-      --accent-2: rgba(46, 120, 214, 0.9);
-      --success: #3CCF6E;
-      --warning: #FFB547;
-      --danger: #EF5350;
-      --info: #2E78D6;
-      --r-sm: 10px;
-      --r-md: 16px;
-      --r-lg: 24px;
-      --r-pill: 28px;
+      --panel: #172235;           /* COLOR.SURFACE_1 */
+      --panel-2: #1D2A3F;         /* COLOR.SURFACE_2 */
+      --panel-3: #1D2A3F;         /* (purple #2A2530 removed — one theme) */
+      --surface-hover: #243550;   /* COLOR.SURFACE_HOVER */
+      --surface-pressed: #293D5B; /* COLOR.SURFACE_PRESSED */
+      --border: #2B3D57;          /* COLOR.BORDER_SUBTLE */
+      --border-strong: #3B5578;   /* COLOR.BORDER_STRONG */
+      --text: #F5F7FB;
+      --muted: #A8B5C7;           /* COLOR.TEXT_SECONDARY */
+      --dim: #7F8DA1;             /* COLOR.TEXT_MUTED */
+      --disabled: #7F8DA1;
+      --accent: #337FDB;
+      --accent-2: #3B8AE8;        /* COLOR.ACCENT_HOVER */
+      --accent-pressed: #286BC2;
+      --focus: #71AFFF;
+      --success: #2BC66D;
+      --warning: #F3B84A;
+      --danger: #F05D67;
+      --info: #337FDB;
+      --r-sm: 10px;               /* RADIUS.CONTROL */
+      --r-md: 14px;               /* RADIUS.CARD */
+      --r-lg: 18px;               /* RADIUS.MODAL */
+      --r-pill: 999px;            /* status chips only */
       --s-1: 4px;
       --s-2: 8px;
       --s-3: 12px;
       --s-4: 16px;
-      --s-5: 24px;
-      --s-6: 32px;
-      --s-7: 48px;
-      --s-8: 64px;
-      --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+      --s-5: 20px;
+      --s-6: 24px;
+      --s-7: 32px;
+      --s-8: 40px;
+      --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
     }
     body { background: var(--bg); font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif; }
     body::before { display: none; }
@@ -1044,46 +967,362 @@
     .window-control:hover { background: rgba(154, 165, 180, 0.16); }
     .window-control.close:hover { background: var(--danger); }
     .window-control svg { width: 10px; height: 10px; stroke: currentColor; }
-    .header { align-items: stretch; padding: var(--s-4) var(--s-5) 0; }
+    /* ---- Compact product header (addendum 2026-08-23): ONE centered
+       product icon + right-aligned status. The icon is absolutely
+       centered against the FULL window width — the badge has zero
+       influence on its position. The left side is intentionally empty;
+       no product-name or subtitle text lives in the header. ---- */
+    .header { align-items: stretch; padding: 0; }
     .header-top {
-      justify-content: flex-start;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
       margin: 0;
-      padding: var(--s-4);
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: var(--r-lg);
+      padding: 0 var(--s-6);
+      height: 72px;
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      border-radius: 0;
     }
-    .logo { flex-direction: row; align-items: center; gap: var(--s-3); }
-    .logo img { width: 48px; height: 48px; }
-    .logo-copy { display: flex; flex-direction: column; gap: var(--s-1); }
-    .logo-title { font-size: 28px; line-height: 34px; font-weight: 700; text-align: left; }
-    .logo-desc { font-size: 12px; line-height: 16px; }
-    .logo-sep, .exit-badge { display: none; }
-    .status-badge { margin-left: auto; font-size: 12px; padding: var(--s-2) var(--s-3); }
-    .main { padding: var(--s-5); gap: var(--s-4); }
-    .view.active { gap: var(--s-4); }
-    .home-intro { padding: var(--s-4); box-shadow: none; line-height: 20px; }
-    .chk-list { gap: 0; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-2) var(--s-4); }
+    @media (max-width: 800px) { .header-top { padding: 0 var(--s-4); } }
+    .app-mark {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 40px;
+      height: 40px;
+    }
+    .exit-badge { display: none; }
+    /* Status is an INDICATOR, never a button: soft tint, no border, no
+       hover affordance. Tone classes keep their colors. */
+    .status-badge { margin-left: 0; font-size: 12px; padding: 5px 12px; }
+    .status-badge, .status-badge.scanning, .status-badge.done,
+    .status-badge.warn, .status-badge.error, .status-badge.action { border-color: transparent; }
+    .chk-list { gap: 0; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--s-2) var(--s-4); }
     .chk-row { padding: var(--s-3) 0; background: transparent; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
     .chk-row:last-child { border-bottom: 0; }
     .chk-row[data-status] { border-left: 0; }
     .chk-label { min-width: 156px; font-size: 13px; line-height: 18px; }
     .chk-msg { font-size: 14px; line-height: 20px; }
     .chk-badge { font-size: 12px; line-height: 16px; padding: var(--s-1) var(--s-2); border: 0; }
-    .button-container { justify-content: stretch; margin: 0; gap: var(--s-3); }
-    .btn { min-height: 46px; padding: var(--s-3) var(--s-4); border-radius: var(--r-md); transition: background 150ms ease-out, border-color 150ms ease-out; }
+    .button-container { justify-content: center; margin: 0; gap: var(--s-3); }
+    .btn { min-height: 44px; padding: var(--s-3) var(--s-4); border-radius: var(--r-sm); transition: background 150ms ease-out, border-color 150ms ease-out; }
     .btn:hover:not(:disabled), .btn-primary:hover:not(:disabled) { transform: none; }
-    .btn-primary { flex: 1; }
-    .button-note { text-align: left; font-size: 12px; line-height: 16px; font-weight: 400; }
-    .stage-tracker, .receipt, .file-list { box-shadow: none; border-radius: var(--r-lg); }
+    .button-note { text-align: center; font-size: 12px; line-height: 16px; font-weight: 400; }
+    .receipt, .file-list { box-shadow: none; border-radius: var(--r-md); }
     .file-list { font-family: 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; line-height: 20px; }
     .file-item { padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; }
-    .footer-content { padding: var(--s-3) var(--s-5) var(--s-4); }
-    .badge { min-height: 36px; border-radius: var(--r-md); }
+    /* ---- Quiet utility footer: chrome, not a second toolbar. Plain
+       version text, link-weight controls, and a status-only Admin
+       indicator (paint() may set inline colors; the !important rules keep
+       it from ever reading as a button). ---- */
+    .footer-content { padding: 0 var(--s-6); min-height: 52px; align-items: center; flex-wrap: nowrap; }
+    .badge { min-height: 32px; border-radius: var(--r-sm); font-weight: 600; }
+    .badge:hover { transform: none; }
+    .feedback-badge, .site-badge {
+      background: transparent;
+      border-color: transparent;
+      color: var(--muted);
+    }
+    .feedback-badge:hover, .site-badge:hover { color: var(--text); background: rgba(154, 165, 180, 0.10); }
+    .version-badge { background: transparent; border-color: transparent; color: var(--dim); padding-left: 0; }
+    #adminBadge {
+      cursor: default;
+      background: transparent !important;
+      border-color: transparent !important;
+      padding-right: 0;
+    }
+    #adminBadge:hover { transform: none; }
+    #adminBadge::before { content: '●'; margin-right: 6px; font-size: 9px; vertical-align: 1px; }
     .fb-overlay { background: rgba(15,23,36,0.72); backdrop-filter: none; }
     .fb-card { background: var(--panel-3); border-radius: var(--r-lg); box-shadow: none; }
     .fb-title { font-size: 20px; line-height: 26px; font-weight: 700; text-align: left; }
     .fb-choice, .fb-textarea, .sr-textarea, .fb-sysinfo { background: var(--panel-3); }
+    /* ============================================================
+       WIZARD WORKSPACE (acceptance spec §16–§22) — containerless. The
+       window is the container: no bordered billboard card. One shared
+       state layout (icon 44 → 20 → heading 24/30 → 12 → description →
+       20 → Advanced disclosure → 20 → primary 480×48 → 12 → secondary
+       row) hosts every state; only the content changes. Collapsed
+       states never scroll; only the expanded diagnostics panel may.
+       ============================================================ */
+    .status-badge.action { color: var(--accent); background: rgba(51, 127, 219, 0.12); }
+    .status-badge { min-height: 30px; }
+    .main { padding: var(--s-4) var(--s-6); gap: 0; overflow: hidden; }
+    .workspace {
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+      max-width: 640px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      overflow: hidden;
+    }
+    .wizard {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-top: auto; /* pairs with .action-area margin-bottom:auto to center the group */
+      min-height: 0;
+    }
+    .wiz-pane {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      width: 100%;
+    }
+    .wiz-pane.active {
+      display: flex;
+      max-height: 52vh;
+      overflow-y: auto; /* only a genuinely oversized pane (Zoom recovery) scrolls */
+      animation: wiz-in 200ms ease-out;
+    }
+    .wiz-pane::-webkit-scrollbar { width: 8px; }
+    .wiz-pane::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+    @keyframes wiz-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .wiz-title { font-size: 24px; line-height: 30px; font-weight: 650; color: var(--text); }
+    .wiz-sub { font-size: 15px; line-height: 22px; color: var(--muted); max-width: 520px; overflow-wrap: anywhere; margin-top: var(--s-3); }
+    .wiz-sub[hidden] { display: none; }
+    .wiz-hint { font-size: 12px; line-height: 16px; color: var(--dim); margin-top: var(--s-4); }
+    .wiz-glyph { color: var(--muted); margin-bottom: var(--s-5); }
+    .wiz-glyph svg { width: 44px; height: 44px; display: block; }
+    .wiz-glyph[data-tone="ok"]   { color: var(--success); }
+    .wiz-glyph[data-tone="fix"]  { color: var(--accent); }
+    .wiz-glyph[data-tone="warn"] { color: var(--warning); }
+    .wiz-glyph[data-tone="err"]  { color: var(--danger); }
+    /* Grouped summary checks (checking pane). */
+    .wiz-checks { display: flex; flex-direction: column; gap: var(--s-3); align-items: flex-start; margin-top: var(--s-5); }
+    .wiz-check { display: flex; align-items: center; gap: var(--s-2); font-size: 15px; line-height: 22px; color: var(--muted); }
+    .wiz-check .chk-icon { width: 16px; height: 16px; flex-shrink: 0; }
+    .wiz-check[data-status="ready"]      .chk-icon { color: var(--success); }
+    .wiz-check[data-status="repairable"] .chk-icon { color: var(--accent); }
+    .wiz-check[data-status="warning"]    .chk-icon { color: var(--warning); }
+    .wiz-check[data-status="blocked"]    .chk-icon { color: var(--danger); }
+    .wiz-check[data-status="pending"]    .chk-icon { color: var(--disabled); }
+    .wiz-check[data-status="unknown"]    .chk-icon { color: var(--warning); }
+    .wiz-check[data-status="pending"] { opacity: 0.75; }
+    /* Repairing state (§19): vertical task rows + thin progress bar. */
+    .wizard .stage-tracker {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--s-3);
+      width: auto;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      padding: 0;
+      margin-top: var(--s-5);
+    }
+    .stage-pill { flex: none; flex-direction: row; align-items: center; gap: var(--s-3); padding: 0; }
+    .stage-pill-label { font-size: 15px; line-height: 22px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--muted); }
+    .stage-sep { display: none; }
+    .wiz-progress {
+      width: 480px;
+      max-width: 100%;
+      height: 6px;
+      border-radius: var(--r-pill);
+      background: var(--panel-2);
+      overflow: hidden;
+      margin-top: var(--s-5);
+    }
+    .wiz-progress-fill { height: 100%; width: 0%; background: var(--accent); border-radius: var(--r-pill); transition: width 300ms ease-out; }
+    .wiz-action-line { font-size: 13px; line-height: 18px; color: var(--dim); min-height: 18px; margin-top: var(--s-3); }
+    .wizard .zoom-recovery { text-align: left; width: 100%; margin-top: var(--s-5); border-radius: var(--r-md); }
+    /* Advanced details (§18): a 32px text disclosure between the state
+       description and the primary action — never a large pill. */
+    .adv-region {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: var(--s-2);
+      min-height: 0;
+      margin-top: var(--s-5);
+    }
+    .log-actions { justify-content: center; }
+    .log-toggle {
+      display: none;
+      background: transparent;
+      border: 0;
+      min-height: 32px;
+      padding: 4px 10px;
+      border-radius: var(--r-sm);
+      color: var(--dim);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+    .log-toggle.visible { display: inline-flex; }
+    .log-toggle:hover { color: var(--text); background: rgba(168, 181, 199, 0.08); border: 0; }
+    .adv-panel {
+      width: 100%;
+      flex: 0 1 auto;
+      min-height: 0;
+      max-height: 30vh;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-3);
+      padding-right: 4px;
+      text-align: left;
+    }
+    .adv-panel.hidden { display: none; }
+    .adv-panel::-webkit-scrollbar { width: 8px; }
+    .adv-panel::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+    .adv-panel .chk-row { padding: var(--s-2) 0; }
+    .adv-panel .file-list { flex: none; max-height: 180px; margin-top: 0; }
+    /* Action area (§17): one dominant 480×48 primary; secondary actions
+       are a quiet text row beneath it. */
+    .action-area {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: var(--s-3);
+      margin-top: var(--s-5);
+      margin-bottom: auto;
+      padding-bottom: var(--s-4);
+    }
+    .action-area .button-container { width: 100%; justify-content: center; margin: 0; }
+    .action-area .btn-primary { flex: 0 1 480px; min-height: 48px; }
+    .action-area .btn[hidden] { display: none; }
+    .secondary-row { display: flex; align-items: center; justify-content: center; gap: var(--s-5); flex-wrap: wrap; }
+    .btn-quiet {
+      background: transparent;
+      border: 0;
+      min-height: 36px;
+      padding: 6px 12px;
+      border-radius: var(--r-sm);
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .btn-quiet:hover:not(:disabled) { color: var(--text); background: rgba(168, 181, 199, 0.08); border: 0; }
+    .action-area .button-note { text-align: center; }
+    /* Project disclosure (addendum §G): one quiet caption line above the
+       footer — icon + "Open Source" + the exact independence wording. No
+       pill, no card, no warning colors; wraps cleanly, never truncates. */
+    .project-disclosure {
+      flex: 0 0 auto;
+      min-height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      column-gap: 6px;
+      padding: 0 var(--s-6);
+      margin: 0;
+      font-size: 12px;
+      line-height: 16px;
+      text-align: center;
+      color: var(--dim);
+      position: relative;
+      z-index: 1;
+    }
+    .project-disclosure .os-icon { width: 14px; height: 14px; flex-shrink: 0; color: var(--muted); }
+    .project-disclosure .os-label { font-weight: 600; color: var(--muted); }
+    .project-disclosure .os-sep { color: var(--dim); }
+    .project-disclosure .os-independence { font-weight: 400; color: var(--dim); }
+    .explore-disclosure { min-height: 24px; margin-top: var(--s-4); padding: 0; font-size: 11px; }
+    /* Utility footer (§23): 52px, hairline on top only. */
+    .footer .hazard-bar { background: var(--border); }
+    .footer-content { min-height: 52px; padding: 0 var(--s-6); }
+    .footer-content .badge { font-size: 12px; padding: 6px 12px; }
+    /* ============================================================
+       EXPLORE LAUNCHER (§24–§36) — curated ecosystem panel on the same
+       navy system. 760px modal, featured 1132 card, 2-column Botify
+       grid of 72px destination cards with 40×40 logos, quiet section
+       labels, 32×32 top-right dismiss.
+       ============================================================ */
+    .explore-card {
+      width: 760px;
+      max-width: calc(100% - 32px);
+      max-height: calc(100% - 32px);
+      padding: var(--s-6);
+      position: relative;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.42);
+    }
+    .explore-close-x {
+      position: absolute;
+      top: var(--s-4);
+      right: var(--s-4);
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      background: transparent;
+      border: 0;
+      border-radius: 8px;
+      color: var(--muted);
+      cursor: pointer;
+      transition: background 130ms ease-out, color 130ms ease-out;
+    }
+    .explore-close-x:hover { background: var(--surface-hover); color: var(--text); }
+    .explore-close-x svg { width: 12px; height: 12px; stroke: currentColor; }
+    .explore-card .fb-title { font-size: 24px; line-height: 30px; font-weight: 650; margin-bottom: var(--s-2); }
+    .explore-sub { font-size: 14px; line-height: 20px; color: var(--muted); margin-bottom: var(--s-5); }
+    .explore-group {
+      font-size: 12px;
+      line-height: 16px;
+      font-weight: 650;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin: var(--s-5) 0 var(--s-2);
+    }
+    .explore-group:first-of-type { margin-top: 0; }
+    .explore-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3); }
+    .explore-grid.single { grid-template-columns: 1fr; }
+    @media (max-width: 700px) { .explore-grid { grid-template-columns: 1fr; } }
+    .explore-choice {
+      display: flex;
+      align-items: center;
+      gap: var(--s-3);
+      height: 72px;
+      padding: 14px 16px;
+      text-align: left;
+      font: inherit;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 130ms ease-out, border-color 130ms ease-out;
+    }
+    .explore-choice:hover { background: var(--surface-hover); border-color: var(--border-strong); }
+    .explore-choice:active { background: var(--surface-pressed); }
+    .explore-featured .explore-choice { border-color: var(--border-strong); background: linear-gradient(135deg, rgba(51, 127, 219, 0.14), var(--panel-2) 65%); }
+    .explore-logo {
+      width: 40px;
+      height: 40px;
+      flex-shrink: 0;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .explore-logo img { width: 40px; height: 40px; object-fit: contain; display: block; }
+    .explore-logo.fallback { background: var(--surface-hover); color: var(--muted); }
+    .explore-logo.fallback svg { width: 20px; height: 20px; }
+    .explore-copy { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+    .explore-name { font-size: 15px; line-height: 20px; font-weight: 600; color: var(--text); }
+    .explore-desc { font-size: 13px; line-height: 18px; font-weight: 400; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .explore-open { width: 16px; height: 16px; flex-shrink: 0; color: var(--dim); }
+    .explore-choice:hover .explore-open { color: var(--accent); }
+    .explore-body { min-height: 0; overflow-y: auto; }
+    .explore-body::-webkit-scrollbar { width: 8px; }
+    .explore-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
     }
@@ -1092,7 +1331,7 @@
 </head>
 <body>
   <div class="titlebar" aria-label="Window controls">
-    <span class="titlebar-name"><img src="assets/brand/logo-mark.svg" alt="">1132 Fixer</span>
+    <span class="titlebar-name"><img src="assets/brand/app-mark.png" alt="">1132 Fixer</span>
     <div class="window-controls">
       <button class="window-control" id="btnMinimize" aria-label="Minimize window"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1 5.5h8"/></svg></button>
       <button class="window-control" id="btnMaximize" aria-label="Maximize window"><svg viewBox="0 0 10 10" fill="none" aria-hidden="true"><rect x="1.5" y="1.5" width="7" height="7"/></svg></button>
@@ -1101,13 +1340,12 @@
   </div>
   <div class="header">
     <div class="header-top">
-      <div class="logo">
-        <img src="assets/logo-transparent.png" alt="">
-        <div class="logo-copy">
-          <span class="logo-title">1132 Fixer</span>
-          <span class="logo-desc">Zoom diagnostic &amp; repair</span>
-        </div>
-      </div>
+      <!-- Centered product icon — the ONLY in-app branding in the header
+           (addendum 2026-08-23): centered against the full window width
+           via absolute positioning, so the status badge can never push it
+           off center. No product-name or subtitle text; the icon carries
+           the accessible name. -->
+      <img class="app-mark" src="assets/brand/app-mark.png" alt="1132 Fixer">
       <!-- Ships in the SCANNING state, not a green tick. Nothing has been
            checked at first paint, and this markup is also what stays on
            screen if the elevation probe or the scan never returns — a
@@ -1130,23 +1368,33 @@
   </div>
 
   <div class="main" role="main">
+   <div class="workspace">
 
     <!-- ============================================================
-         Home view (initial) — one-line pitch + live environment
-         checklist. The checklist runs automatically on launch; the
-         FIX NOW button is a single click, no wizard, no dialogs.
+         WIZARD — the whole center is state-driven: one pane visible at
+         a time (checking → result → fixing → success / notice) on the
+         shared state layout. The window is the container — no billboard
+         card. Full diagnostics live in the collapsed Advanced-details
+         disclosure, never in the primary flow.
          ============================================================ -->
-    <section class="view active" id="homeView" aria-label="Environment checks">
-      <div class="home-intro">
-        Resets the <strong>user1</strong> helper account and opens Zoom. Your files and Zoom data
-        stay unchanged. Do <strong>not</strong> run while signed in as user1.
+    <section class="wizard" id="wizardCard" aria-label="Setup status">
+
+      <!-- CHECKING — grouped summary of the environment scan. -->
+      <div class="wiz-pane active" id="wizChecking" role="status">
+        <h2 class="wiz-title">Checking your setup…</h2>
+        <div class="wiz-checks" id="wizChecks" role="list" aria-label="Setup checks"></div>
+        <p class="wiz-hint">This usually takes a few seconds.</p>
       </div>
-      <div class="home-scroll">
-        <div class="chk-list" id="checkList" role="list" aria-label="Environment checks" aria-busy="true"></div>
+
+      <!-- RESULT — ready / fix available / action required. -->
+      <div class="wiz-pane" id="wizResult">
+        <div class="wiz-glyph" id="wizResultGlyph" aria-hidden="true"></div>
+        <h2 class="wiz-title" id="wizResultTitle"></h2>
+        <p class="wiz-sub" id="wizResultSub"></p>
 
         <!-- ============================================================
              Zoom Workplace guided recovery card (operator directive
-             2026-08-09). Rendered below the checklist card zone while the
+             2026-08-09). Rendered inside the result pane while the
              machine-wide Zoom requirement is BLOCKED. All copy is injected
              from the messages.js ZOOM_RECOVERY catalog at bootstrap so the
              DOM ships the byte-verbatim directive strings the smoke pins.
@@ -1186,57 +1434,83 @@
             <button class="btn" id="zrCancelBtn" type="button"></button>
           </div>
         </section>
+        <!-- One-line answer to "why is Fix now greyed out?" (#66) — filled by
+             the scan with the labels of the blocked checklist rows. -->
+        <div class="fix-disabled-note" id="fixDisabledNote" role="status" hidden></div>
       </div>
-      <!-- One-line answer to "why is Fix now greyed out?" (#66) — filled by
-           the scan with the labels of the blocked checklist rows. -->
-      <div class="fix-disabled-note" id="fixDisabledNote" role="status" hidden></div>
-      <!-- Manual rescan (§9) — lives inside homeView so it is only visible
-           there; runEnvironmentScan() self-guards against overlap. -->
-      <button class="chk-rescan" id="rescanBtn" type="button">Check again</button>
+
+      <!-- REPAIRING — vertical task rows + thin progress bar; the raw
+           log stays behind Advanced details. -->
+      <div class="wiz-pane" id="wizFixing">
+        <h2 class="wiz-title">Repairing Zoom</h2>
+        <div class="stage-tracker active" id="stageTracker" role="list" aria-label="Repair stages">
+          <div class="stage-pill" data-stage="prep"    data-state="pending" role="listitem"><span class="stage-pill-dot"></span><span class="stage-pill-label">Preparing the repair</span></div>
+          <div class="stage-pill" data-stage="verify"  data-state="pending" role="listitem"><span class="stage-pill-dot"></span><span class="stage-pill-label">Repairing the helper account</span></div>
+          <div class="stage-pill" data-stage="consent" data-state="pending" role="listitem"><span class="stage-pill-dot"></span><span class="stage-pill-label">Applying camera &amp; microphone consent</span></div>
+          <div class="stage-pill" data-stage="launch"  data-state="pending" role="listitem"><span class="stage-pill-dot"></span><span class="stage-pill-label">Launching Zoom</span></div>
+          <div class="stage-pill" data-stage="receipt" data-state="pending" role="listitem"><span class="stage-pill-dot"></span><span class="stage-pill-label">Verifying</span></div>
+        </div>
+        <div class="wiz-progress" aria-hidden="true"><div class="wiz-progress-fill" id="wizProgressFill"></div></div>
+        <p class="wiz-action-line" id="wizFixAction" role="status" aria-live="polite"></p>
+      </div>
+
+      <!-- SUCCESS / NOTICE — shared shape: glyph + title + one sentence.
+           Used for "You're all set", "Shortcut isn't ready yet", warnings
+           and failures; the tone comes from the glyph + copy, never from a
+           raw log line in the primary flow. -->
+      <div class="wiz-pane" id="wizNotice" role="status">
+        <div class="wiz-glyph" id="wizNoticeGlyph" aria-hidden="true"></div>
+        <h2 class="wiz-title" id="wizNoticeTitle"></h2>
+        <p class="wiz-sub" id="wizNoticeSub"></p>
+      </div>
     </section>
 
-    <!-- ============================================================
-         Running / Done view — stage tracker + log + receipt
-         ============================================================ -->
-    <section class="view" id="runningView" aria-label="Fix in progress">
-      <div class="stage-tracker" id="stageTracker" role="list" aria-label="Fix stages">
-        <div class="stage-pill" data-stage="prep"    data-state="pending" role="listitem"><span class="stage-pill-dot"></span><span class="stage-pill-label">Preparing</span></div>
-        <div class="stage-sep" aria-hidden="true"></div>
-        <div class="stage-pill" data-stage="verify"  data-state="pending" role="listitem"><span class="stage-pill-dot"></span><span class="stage-pill-label">Verifying</span></div>
-        <div class="stage-sep" aria-hidden="true"></div>
-        <div class="stage-pill" data-stage="consent" data-state="pending" role="listitem"><span class="stage-pill-dot"></span><span class="stage-pill-label">Consent</span></div>
-        <div class="stage-sep" aria-hidden="true"></div>
-        <div class="stage-pill" data-stage="launch"  data-state="pending" role="listitem"><span class="stage-pill-dot"></span><span class="stage-pill-label">Launch</span></div>
-        <div class="stage-sep" aria-hidden="true"></div>
-        <div class="stage-pill" data-stage="receipt" data-state="pending" role="listitem"><span class="stage-pill-dot"></span><span class="stage-pill-label">Verify</span></div>
+    <!-- Advanced details (§18) — a subtle text disclosure between the
+         state description and the primary action. Expanded content
+         (checklist, receipt, log) scrolls internally; the window never
+         does. -->
+    <div class="adv-region">
+      <div class="log-actions">
+        <button class="log-toggle visible" id="logToggle" type="button" aria-expanded="false" aria-controls="advPanel">
+          <span class="chev" aria-hidden="true">▶</span><span id="logToggleLabel">Advanced details</span>
+        </button>
+        <!-- Failure-only (W8-UX): copies the sanitized support report — or,
+             if that fails, the visible log lines — to the clipboard. -->
+        <button class="log-toggle" id="copyErrBtn" type="button" aria-label="Copy the error details to the clipboard">Copy error details</button>
       </div>
-
-      <div class="receipt" id="receiptPanel" role="region" aria-label="Fix receipt"></div>
-
-      <div class="log-region">
-        <div class="log-actions">
-          <button class="log-toggle" id="logToggle" type="button" aria-expanded="true" aria-controls="fileList">
-            <span class="chev" aria-hidden="true">▶</span><span id="logToggleLabel">Hide Advanced Details</span>
-          </button>
-          <!-- Failure-only (W8-UX): copies the sanitized support report — or,
-               if that fails, the visible log lines — to the clipboard. -->
-          <button class="log-toggle" id="copyErrBtn" type="button" aria-label="Copy the error details to the clipboard">Copy error details</button>
-        </div>
+      <div class="adv-panel hidden" id="advPanel">
+        <div class="chk-list" id="checkList" role="list" aria-label="Environment checks" aria-busy="true"></div>
+        <div class="receipt" id="receiptPanel" role="region" aria-label="Fix receipt"></div>
         <div class="file-list" id="fileList" role="log" aria-live="polite" aria-label="Fix log output">
           <div class="file-item loading">Loading...</div>
         </div>
       </div>
-    </section>
-
-    <div class="button-container">
-      <button id="fixBtn" class="btn btn-primary" disabled aria-label="Run the full fix now">Fix now</button>
-      <button id="shortcutBtn" class="btn"><img class="btn-icon" src="assets/1132-helper-shortcut.png" alt="" aria-hidden="true" width="24" height="24">Create Zoom Helper Shortcut</button>
     </div>
 
-    <p class="button-note">
-      One click — checks run automatically, then the fix applies end to end
-    </p>
+    <!-- Action area (§17) — one dominant primary per state; secondary
+         actions are a quiet text row beneath it. -->
+    <div class="action-area">
+      <div class="button-container">
+        <button id="elevateBtn" class="btn btn-primary" hidden>Continue as administrator</button>
+        <button id="fixBtn" class="btn btn-primary" hidden aria-label="Run the full fix now">Fix now</button>
+        <button id="launchBtn" class="btn btn-primary" hidden aria-label="Open Zoom using the helper account">Open Zoom</button>
+        <button id="shortcutBtn" class="btn btn-primary" hidden><img class="btn-icon" src="assets/1132-helper-shortcut.png" alt="" aria-hidden="true" width="24" height="24">Create Zoom Helper Shortcut</button>
+      </div>
+      <div class="secondary-row">
+        <button id="rescanBtn" class="btn-quiet" type="button" hidden>Check again</button>
+        <button id="detailsBtn" class="btn-quiet" type="button" hidden>View details</button>
+        <button id="receiptBtn" class="btn-quiet" type="button" hidden>View receipt</button>
+        <button id="supportBtn" class="btn-quiet" type="button" hidden>Support Report</button>
+      </div>
+      <p class="button-note" id="buttonNote" hidden></p>
+    </div>
+   </div>
   </div>
+
+  <!-- Persistent trust line (addendum 2026-08-23): open-source indicator +
+       the exact independence disclosure. Informational, never a CTA; text
+       injected from the messages.js DISCLOSURE catalog. -->
+  <p class="project-disclosure" id="projectDisclosure" role="note"></p>
 
   <div class="footer">
     <div class="hazard-bar" aria-hidden="true"></div>
@@ -1244,7 +1518,7 @@
       <span class="badge version-badge" id="appVersion">v—</span>
       <div class="footer-meta">
         <button class="badge feedback-badge" id="btnSupport" aria-label="Submit feedback or a support report">Feedback &amp; Report</button>
-        <button class="badge site-badge" id="btnVisitSite" aria-label="Open the 1132 Fixer website">Visit Website</button>
+        <button class="badge site-badge" id="btnExplore" aria-label="Explore — choose a website to open in your browser">Explore</button>
         <!-- Neutral until isElevated() answers. Shipping "Administrator" in
              the green admin-badge class asserted elevation before anything
              had been measured, and kept asserting it if the probe threw. -->
@@ -1365,6 +1639,33 @@
         </div>
         <div class="fb-status" id="fbContactStatus"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       Explore modal — destination chooser only (directive 2026-08-23).
+       Reuses the existing modal system (.fb-overlay/.fb-card) and the
+       feedback chooser's .fb-choice treatment; both destinations are
+       equal choices, Close is secondary. The sites open in the system
+       browser via a fixed destination-key IPC — never in this window.
+       ============================================================ -->
+  <div class="fb-overlay" id="exploreOverlay" role="dialog" aria-modal="true" aria-labelledby="exploreTitle">
+    <div class="fb-card explore-card">
+      <!-- 32×32 top-right dismiss (§26); Escape also closes. -->
+      <button class="explore-close-x" id="exploreClose" type="button" aria-label="Close Explore">
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m1 1 8 8M9 1 1 9"/></svg>
+      </button>
+      <div class="fb-title" id="exploreTitle">Explore</div>
+      <p class="explore-sub" id="exploreSub"></p>
+      <!-- Destination sections are rendered by renderer.js from the
+           EXPLORE_VIEW catalog (messages.js) — display data lives in ONE
+           place, and each button carries its fixed key in data-explore;
+           the key→URL map stays in the main process. -->
+      <div class="explore-body" id="exploreBody"></div>
+      <div class="fb-status" id="exploreStatus" role="status" aria-live="polite"></div>
+      <!-- Subdued trust line (addendum §K) — reinforces that this launcher
+           is not a Zoom-owned interface; stays secondary to the cards. -->
+      <p class="project-disclosure explore-disclosure" id="exploreDisclosure" role="note"></p>
     </div>
   </div>
 

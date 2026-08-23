@@ -135,7 +135,6 @@ ipcMain.handle('defer-update', () => {
 // ============================================================
 const RELEASES_LATEST_URL = 'https://github.com/1132-Fixer/windows/releases/latest';
 const LATEST_YML_URL = 'https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml';
-const WEBSITE_URL = 'https://1132-fixer.xyz/';
 const UPDATE_RECHECK_MS = 4 * 60 * 60 * 1000; // long-open apps re-check every 4h
 
 // GitHub's /releases/latest/download/* is a 302 to the CDN; plain
@@ -203,8 +202,15 @@ ipcMain.handle('open-download-page', async () => {
   return electronSecurity.openExternalSafe(shell.openExternal.bind(shell), RELEASES_LATEST_URL);
 });
 
-ipcMain.handle('open-website', async () => {
-  return electronSecurity.openExternalSafe(shell.openExternal.bind(shell), WEBSITE_URL);
+// Explore modal (operator directive 2026-08-23): the renderer sends a
+// destination KEY, never a URL. The key→URL map is trusted main-process
+// data (electron-security.EXPLORE_DESTINATIONS); the schema layer already
+// rejected unknown keys, and openExternalSafe still validates the mapped
+// URL against the https allowlist — the map is not a bypass.
+ipcMain.handle('open-explore-destination', async (_event, key) => {
+  const url = electronSecurity.exploreDestinationUrl(key);
+  if (!url) return { success: false, reason: 'destination not allowed' };
+  return electronSecurity.openExternalSafe(shell.openExternal.bind(shell), url);
 });
 
 const FIX_USER = 'user1';
@@ -564,22 +570,94 @@ function createWindow() {
   mainWindow.setMenu(null);
 }
 
+// Self-elevation flag (see relaunchElevated below) — declared before the
+// single-instance block because the lock handling special-cases it.
+const ELEVATE_RETRY_FLAG = '--self-elevate-attempted';
+
 // Single-instance lock. Without it, the post-update relaunch (and users
 // double-clicking during the silent install) produced two elevated windows
 // fighting over the same PowerShell children.
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
-if (!gotSingleInstanceLock) {
-  app.quit();
-} else {
+//
+// Elevated-relaunch race: the elevated instance starts while its
+// non-elevated parent is still shutting down. The parent releases its lock
+// before spawning, but the release can lag the process teardown — the
+// child's first lock attempt then fails and it used to die silently
+// (launch → UAC accepted → nothing opens). A child carrying
+// ELEVATE_RETRY_FLAG retries briefly instead; every other second instance
+// still quits immediately.
+const singleInstanceReady = (async () => {
+  if (app.requestSingleInstanceLock()) return true;
+  if (!process.argv.includes(ELEVATE_RETRY_FLAG)) return false;
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 250));
+    if (app.requestSingleInstanceLock()) return true;
+  }
+  return false;
+})();
+singleInstanceReady.then(got => {
+  if (!got) { app.quit(); return; }
   app.on('second-instance', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
   });
+});
+
+// ============================================================
+// Self-elevation (operator request 2026-08-23). The packaged exe already
+// carries requestedExecutionLevel=requireAdministrator, so Windows prompts
+// before it starts; this covers every run that still arrives non-elevated
+// (dev runs, launchers that strip the manifest). One automatic attempt per
+// launch — the relaunched instance carries a flag so a declined prompt can
+// never loop — and the renderer's "Restart as administrator" button retries
+// on demand. Start-Process -Verb RunAs IS the Windows approval prompt: the
+// app never sees, asks for, or stores a password.
+// ============================================================
+
+async function relaunchElevated() {
+  const exe = process.execPath;
+  // Dev runs need the app path argument back (electron.exe <appPath>);
+  // packaged runs are just the exe. The retry flag rides along either way.
+  const args = app.isPackaged ? [ELEVATE_RETRY_FLAG] : [app.getAppPath(), ELEVATE_RETRY_FLAG];
+  const psq = s => String(s).replace(/'/g, "''");
+  const argList = ` -ArgumentList @(${args.map(a => `'${psq(a)}'`).join(',')})`;
+  // Release the single-instance lock so the elevated instance can take it;
+  // reacquired below if the prompt is declined and this instance stays.
+  app.releaseSingleInstanceLock();
+  // No timeout: -Verb RunAs blocks until the user answers the UAC dialog
+  // (Windows itself expires an unanswered prompt, which lands in catch).
+  const r = await runPSCapture(`
+    try {
+      Start-Process -FilePath '${psq(exe)}'${argList} -Verb RunAs
+      Write-Output 'STARTED'
+    } catch {
+      Write-Output ('DECLINED: ' + $_.Exception.Message)
+    }
+  `);
+  const started = (r.stdout || '').includes('STARTED');
+  if (!started) app.requestSingleInstanceLock();
+  return started;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Second instance (except the elevated-relaunch retry) — quitting; never
+  // open a window from it.
+  if (!await singleInstanceReady) return;
+  // Automatic attempt, before any window: launch → Windows approval prompt
+  // → elevated instance opens and this one exits. Declined/failed → the
+  // window opens anyway and explains, with a retry button (never a loop:
+  // the relaunched instance carries ELEVATE_RETRY_FLAG).
+  if (!process.argv.includes(ELEVATE_RETRY_FLAG)) {
+    let elevated = false;
+    try { elevated = await isElevatedSync(); } catch (_) { /* treated as not elevated */ }
+    if (!elevated) {
+      let started = false;
+      try { started = await relaunchElevated(); } catch (_) { /* stay un-elevated */ }
+      if (started) { app.quit(); return; }
+    }
+  }
   createWindow();
 
   // Auto-update only makes sense for the packaged NSIS install. The portable
@@ -2832,6 +2910,54 @@ async function findExistingShortcuts() {
   });
 }
 
+// Legacy → DPAPI credential migration (create-shortcut upgrade path).
+// Reads the pre-6.0 plaintext launcher, and — only when it names the
+// expected helper user and carries a migratable password — seals that
+// password into helper-credential.bin exactly the way the fix run does
+// (DPAPI CurrentUser; password rides inside a tmp script file, never on a
+// command line; sealed to a .tmp sibling and renamed only once complete).
+// Returns true when the blob now exists. Never throws; any failure leaves
+// the launcher untouched so the legacy shortcut keeps working as-is.
+async function migrateLegacyLauncherCredential() {
+  let legacy = null;
+  try {
+    legacy = helperCred.extractLegacyLauncherCredential(
+      fs.readFileSync(LAUNCHER_SCRIPT_PATH(), 'utf8'), FIX_USER);
+  } catch (_) {
+    return false; // no launcher on disk, or unreadable — nothing to migrate
+  }
+  if (!legacy) return false;
+  const blobPath = CRED_BLOB_PATH();
+  const blobTmp = blobPath + '.tmp';
+  const psq = s => String(s).replace(/'/g, "''");
+  // isMigratableLegacyPassword guarantees no apostrophes/CR/LF, so the
+  // single-quoted interpolation below cannot be escaped.
+  const seal = await runPSCapture(`
+    try {
+      Add-Type -AssemblyName System.Security
+      $pt = [Text.Encoding]::UTF8.GetBytes('${legacy.password}')
+      $sealed = [Security.Cryptography.ProtectedData]::Protect($pt, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+      [Array]::Clear($pt, 0, $pt.Length)
+      [IO.File]::WriteAllBytes('${psq(blobTmp)}', $sealed)
+      Write-Output 'SEALED'
+    } catch {
+      Write-Output ('SEALFAIL: ' + $_.Exception.Message)
+    }
+  `);
+  if (!((seal.stdout || '').includes('SEALED') && fs.existsSync(blobTmp))) {
+    try { fs.rmSync(blobTmp, { force: true }); } catch (_) { /* best-effort sweep */ }
+    return false;
+  }
+  try {
+    fs.renameSync(blobTmp, blobPath);
+  } catch (_) {
+    try { fs.rmSync(blobTmp, { force: true }); } catch (_) { /* best-effort sweep */ }
+    return false;
+  }
+  console.log('[shortcut] migrated legacy plaintext launcher credential to DPAPI blob');
+  return true;
+}
+
 // ============================================================
 // IPC: create-shortcut (current user's desktop, one-click re-launch)
 // ============================================================
@@ -2861,11 +2987,21 @@ ipcMain.handle('create-shortcut', async () => {
   const scriptDir = path.dirname(scriptPath);
   // The launcher carries NO secret (W5 Option A): it reads the DPAPI-sealed
   // helper-credential.bin written by the last fix run. Without that blob
-  // there is no working sign-in to point a shortcut at ΓÇö FIX NOW is what
-  // mints and seals it ΓÇö so refuse with the next step instead of minting a
+  // there is no working sign-in to point a shortcut at — FIX NOW is what
+  // mints and seals it — so refuse with the next step instead of minting a
   // dead shortcut.
+  //
+  // Upgrade exception: a pre-6.0 install stored the sign-in as plaintext
+  // inside the launcher script itself (no blob existed yet), so after an
+  // in-place upgrade the blob is missing while a working credential IS on
+  // this PC. Migrate it: seal the legacy password with DPAPI, then let the
+  // normal path below rewrite the launcher in the secret-free format —
+  // which also removes the plaintext from disk.
   if (!fs.existsSync(CRED_BLOB_PATH())) {
-    return { success: false, error: 'No stored helper sign-in was found on this PC. Press FIX NOW once, then create the shortcut again.' };
+    const migrated = await migrateLegacyLauncherCredential();
+    if (!migrated) {
+      return { success: false, error: 'No stored helper sign-in was found on this PC. Press FIX NOW once, then create the shortcut again.' };
+    }
   }
   try {
     fs.mkdirSync(scriptDir, { recursive: true });
@@ -2913,6 +3049,26 @@ ipcMain.handle('create-shortcut', async () => {
   });
 });
 
+// "Open Zoom" on the Fix-complete screen — runs the SAME launcher script
+// the desktop shortcut points at (it unseals the DPAPI credential blob
+// itself; no secret rides in argv). Refuses honestly when the pair from
+// the last fix run is not on disk.
+ipcMain.handle('launch-zoom-helper', async () => {
+  const scriptPath = LAUNCHER_SCRIPT_PATH();
+  if (!fs.existsSync(scriptPath) || !fs.existsSync(CRED_BLOB_PATH())) {
+    return { success: false, reason: 'no stored helper sign-in — run the fix first' };
+  }
+  try {
+    const child = spawn('powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', scriptPath],
+      { windowsHide: true, detached: true, stdio: 'ignore' });
+    child.unref();
+    return { success: true };
+  } catch (err) {
+    return { success: false, reason: err.message };
+  }
+});
+
 ipcMain.handle('shortcut-exists', async () => {
   const found = await findExistingShortcuts();
   // valid === null means we found the shortcut but COM inspection failed ΓÇö
@@ -2932,6 +3088,16 @@ ipcMain.handle('shortcut-exists', async () => {
 
 ipcMain.handle('is-elevated', async () => {
   return isElevatedSync();
+});
+
+// Renderer retry for self-elevation. On success the elevated instance is
+// already starting, so this one quits itself (shortly after the reply so
+// the renderer can paint its "Restarting…" state).
+ipcMain.handle('relaunch-elevated', async () => {
+  let started = false;
+  try { started = await relaunchElevated(); } catch (_) { /* declined/failed */ }
+  if (started) setTimeout(() => app.quit(), 150);
+  return { started };
 });
 
 ipcMain.handle('quit-app', () => {

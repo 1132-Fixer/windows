@@ -1,0 +1,406 @@
+{
+  "label": "harness render, mocked electronAPI states — not the packaged app",
+  "generated": "2026-08-23",
+  "checks": [
+    {
+      "name": "01-issue-found-920x700.png: icon centered",
+      "ok": true,
+      "detail": "cx=460.0 vs 460"
+    },
+    {
+      "name": "01-issue-found-920x700.png: header 72±4",
+      "ok": true,
+      "detail": "h=72"
+    },
+    {
+      "name": "01-issue-found-920x700.png: footer 52±4",
+      "ok": true,
+      "detail": "h=52"
+    },
+    {
+      "name": "01-issue-found-920x700.png: no window scroll",
+      "ok": true,
+      "detail": "y=false x=false"
+    },
+    {
+      "name": "01-issue-found-920x700.png: independence disclosure present",
+      "ok": true,
+      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+    },
+    {
+      "name": "01: primary 480×48±4",
+      "ok": true,
+      "detail": "480x48"
+    },
+    {
+      "name": "01: state icon 44±4",
+      "ok": true,
+      "detail": "44x44"
+    },
+    {
+      "name": "01: heading",
+      "ok": true,
+      "detail": "One fix found"
+    },
+    {
+      "name": "02-issue-found-768x620.png: icon centered",
+      "ok": true,
+      "detail": "cx=384.0 vs 384"
+    },
+    {
+      "name": "02-issue-found-768x620.png: header 72±4",
+      "ok": true,
+      "detail": "h=72"
+    },
+    {
+      "name": "02-issue-found-768x620.png: footer 52±4",
+      "ok": true,
+      "detail": "h=52"
+    },
+    {
+      "name": "02-issue-found-768x620.png: no window scroll",
+      "ok": true,
+      "detail": "y=false x=false"
+    },
+    {
+      "name": "02-issue-found-768x620.png: independence disclosure present",
+      "ok": true,
+      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+    },
+    {
+      "name": "02: primary not touching edges",
+      "ok": true,
+      "detail": "x=144 w=480"
+    },
+    {
+      "name": "03-repairing-920x700.png: icon centered",
+      "ok": true,
+      "detail": "cx=460.0 vs 460"
+    },
+    {
+      "name": "03-repairing-920x700.png: header 72±4",
+      "ok": true,
+      "detail": "h=72"
+    },
+    {
+      "name": "03-repairing-920x700.png: footer 52±4",
+      "ok": true,
+      "detail": "h=52"
+    },
+    {
+      "name": "03-repairing-920x700.png: no window scroll",
+      "ok": true,
+      "detail": "y=false x=false"
+    },
+    {
+      "name": "03-repairing-920x700.png: independence disclosure present",
+      "ok": true,
+      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+    },
+    {
+      "name": "03: progress ≤480 × 6–8",
+      "ok": true,
+      "detail": "480x6"
+    },
+    {
+      "name": "03: no console output visible",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "04-admin-required-920x700.png: icon centered",
+      "ok": true,
+      "detail": "cx=460.0 vs 460"
+    },
+    {
+      "name": "04-admin-required-920x700.png: header 72±4",
+      "ok": true,
+      "detail": "h=72"
+    },
+    {
+      "name": "04-admin-required-920x700.png: footer 52±4",
+      "ok": true,
+      "detail": "h=52"
+    },
+    {
+      "name": "04-admin-required-920x700.png: no window scroll",
+      "ok": true,
+      "detail": "y=false x=false"
+    },
+    {
+      "name": "04-admin-required-920x700.png: independence disclosure present",
+      "ok": true,
+      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+    },
+    {
+      "name": "04: heading",
+      "ok": true,
+      "detail": "Administrator access required"
+    },
+    {
+      "name": "04: single dominant action",
+      "ok": true,
+      "detail": "Continue as administrator"
+    },
+    {
+      "name": "05-complete-920x700.png: icon centered",
+      "ok": true,
+      "detail": "cx=460.0 vs 460"
+    },
+    {
+      "name": "05-complete-920x700.png: header 72±4",
+      "ok": true,
+      "detail": "h=72"
+    },
+    {
+      "name": "05-complete-920x700.png: footer 52±4",
+      "ok": true,
+      "detail": "h=52"
+    },
+    {
+      "name": "05-complete-920x700.png: no window scroll",
+      "ok": true,
+      "detail": "y=false x=false"
+    },
+    {
+      "name": "05-complete-920x700.png: independence disclosure present",
+      "ok": true,
+      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+    },
+    {
+      "name": "05: heading",
+      "ok": true,
+      "detail": "Fix complete"
+    },
+    {
+      "name": "05: Open Zoom primary present",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "06-failure-920x700.png: icon centered",
+      "ok": true,
+      "detail": "cx=460.0 vs 460"
+    },
+    {
+      "name": "06-failure-920x700.png: header 72±4",
+      "ok": true,
+      "detail": "h=72"
+    },
+    {
+      "name": "06-failure-920x700.png: footer 52±4",
+      "ok": true,
+      "detail": "h=52"
+    },
+    {
+      "name": "06-failure-920x700.png: no window scroll",
+      "ok": true,
+      "detail": "y=false x=false"
+    },
+    {
+      "name": "06-failure-920x700.png: independence disclosure present",
+      "ok": true,
+      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+    },
+    {
+      "name": "06: heading",
+      "ok": true,
+      "detail": "Couldn't complete the repair"
+    },
+    {
+      "name": "07-explore-920x700.png: icon centered",
+      "ok": true,
+      "detail": "cx=460.0 vs 460"
+    },
+    {
+      "name": "07-explore-920x700.png: header 72±4",
+      "ok": true,
+      "detail": "h=72"
+    },
+    {
+      "name": "07-explore-920x700.png: footer 52±4",
+      "ok": true,
+      "detail": "h=52"
+    },
+    {
+      "name": "07-explore-920x700.png: no window scroll",
+      "ok": true,
+      "detail": "y=false x=false"
+    },
+    {
+      "name": "07-explore-920x700.png: independence disclosure present",
+      "ok": true,
+      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+    },
+    {
+      "name": "07: modal 760px",
+      "ok": true,
+      "detail": "760"
+    },
+    {
+      "name": "explore: 7 destination cards",
+      "ok": true,
+      "detail": "7"
+    },
+    {
+      "name": "explore: 72px cards",
+      "ok": true,
+      "detail": "72,72,72,72,72,72,72"
+    },
+    {
+      "name": "explore: 40×40 logo areas",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "explore: no card clipping",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "08-explore-820x620.png: icon centered",
+      "ok": true,
+      "detail": "cx=410.0 vs 410"
+    },
+    {
+      "name": "08-explore-820x620.png: header 72±4",
+      "ok": true,
+      "detail": "h=72"
+    },
+    {
+      "name": "08-explore-820x620.png: footer 52±4",
+      "ok": true,
+      "detail": "h=52"
+    },
+    {
+      "name": "08-explore-820x620.png: no window scroll",
+      "ok": true,
+      "detail": "y=false x=false"
+    },
+    {
+      "name": "08-explore-820x620.png: independence disclosure present",
+      "ok": true,
+      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+    },
+    {
+      "name": "explore: 7 destination cards",
+      "ok": true,
+      "detail": "7"
+    },
+    {
+      "name": "explore: 72px cards",
+      "ok": true,
+      "detail": "72,72,72,72,72,72,72"
+    },
+    {
+      "name": "explore: 40×40 logo areas",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "explore: no card clipping",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "09-explore-keyboard-focus-920x700.png: icon centered",
+      "ok": true,
+      "detail": "cx=460.0 vs 460"
+    },
+    {
+      "name": "09-explore-keyboard-focus-920x700.png: header 72±4",
+      "ok": true,
+      "detail": "h=72"
+    },
+    {
+      "name": "09-explore-keyboard-focus-920x700.png: footer 52±4",
+      "ok": true,
+      "detail": "h=52"
+    },
+    {
+      "name": "09-explore-keyboard-focus-920x700.png: no window scroll",
+      "ok": true,
+      "detail": "y=false x=false"
+    },
+    {
+      "name": "09-explore-keyboard-focus-920x700.png: independence disclosure present",
+      "ok": true,
+      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+    },
+    {
+      "name": "09: a destination card holds keyboard focus",
+      "ok": true,
+      "detail": "{\"inCard\":true,\"key\":\"fixer\"}"
+    },
+    {
+      "name": "10-advanced-details-920x700.png: icon centered",
+      "ok": true,
+      "detail": "cx=460.0 vs 460"
+    },
+    {
+      "name": "10-advanced-details-920x700.png: header 72±4",
+      "ok": true,
+      "detail": "h=72"
+    },
+    {
+      "name": "10-advanced-details-920x700.png: footer 52±4",
+      "ok": true,
+      "detail": "h=52"
+    },
+    {
+      "name": "10-advanced-details-920x700.png: no window scroll",
+      "ok": true,
+      "detail": "y=false x=false"
+    },
+    {
+      "name": "10-advanced-details-920x700.png: independence disclosure present",
+      "ok": true,
+      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+    },
+    {
+      "name": "10: advanced details expanded",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "11-open-source-disclosure-920x700.png: icon centered",
+      "ok": true,
+      "detail": "cx=460.0 vs 460"
+    },
+    {
+      "name": "11-open-source-disclosure-920x700.png: header 72±4",
+      "ok": true,
+      "detail": "h=72"
+    },
+    {
+      "name": "11-open-source-disclosure-920x700.png: footer 52±4",
+      "ok": true,
+      "detail": "h=52"
+    },
+    {
+      "name": "11-open-source-disclosure-920x700.png: no window scroll",
+      "ok": true,
+      "detail": "y=false x=false"
+    },
+    {
+      "name": "11-open-source-disclosure-920x700.png: independence disclosure present",
+      "ok": true,
+      "detail": "Open Source·Independent project. Not affiliated with Zoom."
+    },
+    {
+      "name": "11: disclosure stays one quiet line at 920",
+      "ok": true,
+      "detail": "h=32"
+    },
+    {
+      "name": "11: open-source indicator present",
+      "ok": true,
+      "detail": "{\"aria\":\"Open Source. Independent project. Not affiliated with Zoom.\",\"hasIcon\":true,\"os\":\"Open Source\"}"
+    },
+    {
+      "name": "11: accessible name exact",
+      "ok": true,
+      "detail": "Open Source. Independent project. Not affiliated with Zoom."
+    }
+  ]
+}

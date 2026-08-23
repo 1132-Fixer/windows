@@ -232,6 +232,132 @@ function zoomInstallerRefusal(code, detail) {
   }
 }
 
+// ============================================================
+// Wizard copy — the state-driven center card (UX simplification,
+// operator directive 2026-08-23). Titles/subtitles for each wizard
+// state live here so tools/messages-smoke.js can pin them and the
+// renderer stays presentation-only. Technical diagnostics stay in
+// Advanced details; nothing here repeats a raw code or log line.
+// ============================================================
+
+// Grouped summary rows for the CHECKING pane — derived from CHECK_ORDER so
+// the wizard can never drift from the real checklist. Each group's status
+// is the WORST of its rows (the same unknown!==success discipline).
+const WIZARD_GROUP_LABELS = {
+  'App':             'Administrator',
+  'Zoom':            'Zoom Workplace',
+  'Helper account':  'Helper account',
+  'Privacy policies':'Privacy policies',
+  'Camera service':  'Camera service'
+};
+const WIZARD_GROUPS = CHECK_ORDER.reduce((groups, c) => {
+  const last = groups[groups.length - 1];
+  if (last && last.group === c.group) { last.keys.push(c.key); return groups; }
+  groups.push({ group: c.group, label: WIZARD_GROUP_LABELS[c.group] || c.group, keys: [c.key] });
+  return groups;
+}, []);
+
+const WIZARD = {
+  READY_TITLE:    "You're all set",
+  READY_SUB:      'Everything checks out. The Zoom helper is ready to use.',
+  READY_WARN_TITLE: 'Ready, with warnings',
+  READY_WARN_SUB: 'The fix can run, but some checks reported warnings — open Advanced details to see them.',
+  UNKNOWN_TITLE:  "Couldn't verify everything",
+  UNKNOWN_SUB:    'Some checks did not report a result, so their state is unknown — not a pass. ' +
+                  'Select Check again; the per-check detail is under Advanced details.',
+  BLOCKED_TITLE:  'Action required',
+  ADMIN_TITLE:    'Administrator access required',
+  // Shown when the automatic elevation attempt did not go through (declined
+  // Windows prompt, or the probe could not confirm rights). The button is
+  // the retry; the manual right-click path stays as the fallback of record.
+  ADMIN_SUB:      '1132 Fixer needs administrator access to complete this repair. ' +
+                  'Nothing has been changed on this computer — Windows will ask for approval.',
+  ADMIN_DECLINED_SUB: 'Windows approval was declined or did not complete, so 1132 Fixer is still not ' +
+                  'running as Administrator. Nothing has been changed. Select "Continue as administrator" ' +
+                  'to try again — or close the app, right-click its icon and choose "Run as administrator".',
+  ADMIN_RESTARTING: 'Restarting with administrator access…',
+  FIXING_TITLE:   'Repairing Zoom',
+  FIXING_START:   'Starting…',
+  SUCCESS_TITLE:  'Fix complete',
+  SUCCESS_SUB:    'Zoom is ready to use.',
+  PARTIAL_TITLE:  'Finished — some items need attention',
+  PARTIAL_SUB:    'The fix ran, but some steps could not be completed. Open Advanced details to see exactly what needs attention.',
+  WARNINGS_SUB:   'The fix finished with warnings. Open Advanced details to read them.',
+  FAIL_TITLE:     "Couldn't complete the repair",
+  FIX_NOTE:       '1132 Fixer repairs the helper account without changing your Zoom files or data.',
+  SHORTCUT_NOT_READY_TITLE: "Shortcut isn't ready yet",
+  SHORTCUT_NOT_READY_SUB:   'Run the repair once before creating the Zoom Helper shortcut — it stores the sign-in the shortcut needs.',
+  SHORTCUT_FAILED_TITLE:    "The shortcut couldn't be created",
+  SHORTCUT_FAILED_SUB:      'Nothing else was changed — you can try again. The technical detail is under Advanced details.',
+  SHORTCUT_DONE_TITLE:      'Shortcut created',
+  SHORTCUT_DONE_SUB:        "It's on your desktop — double-click it to start Zoom as the helper."
+};
+
+// "One fix found" / "3 fixes found" — count comes from the repairable rows
+// actually rendered, so the headline can never promise more than the scan
+// reported.
+function wizardFixFoundTitle(count) {
+  return count === 1 ? 'One fix found' : `${count} fixes found`;
+}
+function wizardFixFoundSub(labels) {
+  const list = (Array.isArray(labels) ? labels : []).filter(Boolean);
+  const what = list.length ? list.join(', ') : 'A repairable item';
+  const plural = list.length > 1;
+  return `${what} ${plural ? 'need' : 'needs'} a repair. 1132 Fixer can fix ${plural ? 'these' : 'this'} automatically.`;
+}
+// Manual blockers — name them, plainly, without the raw diagnostics.
+function wizardBlockedSub(labels) {
+  const list = (Array.isArray(labels) ? labels : []).filter(Boolean);
+  if (!list.length) {
+    return 'Something on this PC blocks the fix, but this version could not name it. ' +
+      'Select Check again; if it stays blocked, send a support report.';
+  }
+  return `${list.join(', ')} ${list.length > 1 ? 'need' : 'needs'} your attention before the fix can run.`;
+}
+
+// ============================================================
+// Explore launcher catalog (directive 2026-08-23). Pure destination
+// VIEW data — display name, subtitle, logo asset, grouping — keyed by the
+// same fixed keys the security layer owns (electron-security.js
+// EXPLORE_DESTINATIONS). The renderer builds the modal from this list, so
+// destinations are never hand-duplicated across markup, and the smoke can
+// assert the view and the security map never drift.
+// logo:null = no supplied brand asset -> the renderer shows the generic
+// 40×40 fallback glyph (never a broken image, never invented artwork).
+// ============================================================
+const EXPLORE_COPY = {
+  TITLE: 'Explore',
+  SUB: 'Open 1132 and Botify Network services. Links open in your default browser.',
+  OPENED: 'Opened in your browser.',
+  FAILED: 'Could not open the website — try again.'
+};
+const EXPLORE_VIEW = [
+  { key: 'fixer',          name: '1132 Fixer',          subtitle: '1132-fixer.xyz',    logo: 'assets/explore/fixer.png',          category: '1132',           featured: true },
+  { key: 'botify',         name: 'Botify Network',      subtitle: 'botify-network.com', logo: 'assets/explore/botify.png',         category: 'Botify Network', featured: false },
+  { key: 'kickbot',        name: 'BotifyKickBot',       subtitle: 'App page',           logo: 'assets/explore/kickbot.png',        category: 'Botify Network', featured: false },
+  { key: 'modbot',         name: 'BotifyModBot',        subtitle: 'App page',           logo: 'assets/explore/modbot.png',         category: 'Botify Network', featured: false },
+  { key: 'emojiGenerator', name: 'Emoji Generator Bot', subtitle: 'App page',           logo: 'assets/explore/emojiGenerator.png', category: 'Botify Network', featured: false },
+  { key: 'makeItGif',      name: 'Make It GIF',         subtitle: 'App page',           logo: null,                                category: 'Botify Network', featured: false },
+  { key: 'gifDirectory',   name: 'GIF Directory',       subtitle: 'gif.directory',      logo: null,                                category: 'Other',          featured: false }
+];
+// Waiting Room Attendant: a brand asset is staged at
+// assets/explore/waiting-room-attendant.png, but the app has NO canonical
+// WRA destination URL, so it is deliberately NOT in this list (never guess
+// URLs). Add a row + an EXPLORE_DESTINATIONS entry when the canonical URL
+// is ruled.
+
+// ============================================================
+// Project disclosure (addendum 2026-08-23) — persistent trust line.
+// INDEPENDENCE is the exact approved wording; never reworded. Rendered
+// into the shell (above the footer) and, subdued, at the bottom of the
+// Explore panel — from this single source.
+// ============================================================
+const DISCLOSURE = {
+  OS_LABEL: 'Open Source',
+  INDEPENDENCE: 'Independent project. Not affiliated with Zoom.',
+  ARIA: 'Open Source. Independent project. Not affiliated with Zoom.'
+};
+
 // Feedback submit fallbacks (renderer side; main.js maps HTTP statuses).
 const FEEDBACK_FALLBACK = 'Could not send right now. Check your internet connection and try again in a minute.';
 const FEEDBACK_NETWORK  = 'Network error — the message was not sent. Check your internet connection and try again.';
@@ -251,6 +377,8 @@ if (typeof module !== 'undefined' && module.exports) {
     shortcutFailureMessage, HKU_STATES, FRAME_SERVER_STATES, describeHku,
     describeFrameServer, receiptStatusFor, describeUnrecognized,
     ZOOM_RECOVERY, zoomRecoveryTechDetails, zoomInstallerRefusal,
+    WIZARD_GROUPS, WIZARD, wizardFixFoundTitle, wizardFixFoundSub, wizardBlockedSub,
+    EXPLORE_COPY, EXPLORE_VIEW, DISCLOSURE,
     FEEDBACK_FALLBACK, FEEDBACK_NETWORK, reportBuildFailure
   };
 }

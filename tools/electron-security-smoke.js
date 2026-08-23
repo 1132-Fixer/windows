@@ -110,6 +110,106 @@ console.log('electron-security-smoke: preload and main stay on the allowlist');
   check(preloadSends.every((ch) => es.IPC_SEND_CHANNELS.includes(ch)), 'preload listeners are documented send channels');
 }
 
+console.log('electron-security-smoke: Explore destinations (directive 2026-08-23)');
+{
+  // Renderer sends KEYS; main owns the URL map. Exactly these seven
+  // destinations, each pinned to its exact URL.
+  const WANT = {
+    fixer: 'https://1132-fixer.xyz/',
+    botify: 'https://botify-network.com/',
+    gifDirectory: 'https://gif.directory/',
+    kickbot: 'https://botify-network.com/apps/botifykickbot',
+    modbot: 'https://botify-network.com/apps/botifymodbot',
+    emojiGenerator: 'https://botify-network.com/apps/emoji-generator-bot',
+    makeItGif: 'https://botify-network.com/apps/makeitgif',
+  };
+  check(Object.keys(es.EXPLORE_DESTINATIONS).sort().join(',') === Object.keys(WANT).sort().join(','),
+    'exactly the seven approved destination keys');
+  for (const [key, url] of Object.entries(WANT)) {
+    check(es.exploreDestinationUrl(key) === url, `${key} resolves only to ${url}`);
+  }
+  // Every mapped URL must itself pass the external allowlist — the map can
+  // never become a bypass.
+  check(Object.values(es.EXPLORE_DESTINATIONS).every(u => es.isAllowedExternalUrl(u)),
+    'every destination URL passes the external allowlist');
+  // Unknown keys, URL-shaped values, and arbitrary approved-host PATHS are
+  // rejected at the map…
+  for (const bad of ['github', '', null, undefined, 42, 'https://evil.example/',
+                     'https://botify-network.com/apps/not-approved', '/apps/botifykickbot',
+                     '__proto__', 'toString']) {
+    check(es.exploreDestinationUrl(bad) === null, `destination ${JSON.stringify(bad)} rejected`);
+  }
+  // …and at the IPC schema layer, so the handler never sees them.
+  for (const key of Object.keys(WANT)) {
+    check(es.validateInvoke('open-explore-destination', [key]).ok === true, `schema accepts ${key}`);
+  }
+  check(es.validateInvoke('open-explore-destination', ['https://evil.example/']).ok === false,
+    'schema rejects a renderer-supplied URL');
+  check(es.validateInvoke('open-explore-destination', ['https://botify-network.com/apps/other']).ok === false,
+    'schema rejects a renderer-supplied Botify path');
+  check(es.validateInvoke('open-explore-destination', ['unknown-key']).ok === false, 'schema rejects unknown keys');
+  check(es.validateInvoke('open-explore-destination', []).ok === false, 'schema rejects a missing key');
+  // The old arbitrary-free but redundant channel is gone — no dead IPC.
+  check(!es.IPC_INVOKE_CHANNELS.includes('open-website'), 'open-website channel removed');
+  check(!preloadSrc.includes('open-website') && !mainSrc.includes("ipcMain.handle('open-website'"),
+    'no dead open-website path in preload or main');
+  check(mainSrc.includes('exploreDestinationUrl'), 'main resolves keys through the trusted map');
+
+  // Footer + modal UI contract. The launcher panel is data-driven: the
+  // EXPLORE_VIEW catalog (messages.js) is the single source of display
+  // data, so the drift guard runs view-catalog ↔ security-map, and the
+  // runtime look is covered by ui-state-capture's explore state.
+  const indexSrc = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const rendererSrc = fs.readFileSync(path.join(ROOT, 'renderer.js'), 'utf8');
+  const messages = require('../messages.js');
+  check(indexSrc.includes('id="btnExplore"') && />Explore</.test(indexSrc), 'footer Explore control present');
+  check(!indexSrc.includes('Visit Website'), 'Visit Website footer label gone');
+  check(/id="exploreOverlay"[^>]*role="dialog"[^>]*aria-modal="true"[^>]*aria-labelledby="exploreTitle"/.test(indexSrc.replace(/\s+/g, ' ')),
+    'explore modal is a labelled aria-modal dialog');
+  const viewKeys = messages.EXPLORE_VIEW.map(d => d.key).sort();
+  check(viewKeys.join(',') === Object.keys(es.EXPLORE_DESTINATIONS).sort().join(','),
+    'EXPLORE_VIEW catalog carries exactly the approved destination keys');
+  const viewNames = messages.EXPLORE_VIEW.map(d => d.name);
+  for (const name of ['1132 Fixer', 'Botify Network', 'BotifyKickBot', 'BotifyModBot',
+                      'Emoji Generator Bot', 'Make It GIF', 'GIF Directory']) {
+    check(viewNames.includes(name), `catalog names destination "${name}"`);
+  }
+  check(messages.EXPLORE_VIEW.filter(d => d.featured).map(d => d.key).join(',') === 'fixer',
+    '1132 Fixer is the single featured destination');
+  // Logo assets: repo paths only — production code must never reference
+  // the user's Downloads directory — and every named asset must exist.
+  check(messages.EXPLORE_VIEW.every(d => d.logo === null || d.logo.startsWith('assets/explore/')),
+    'logo paths live under assets/explore/');
+  check(messages.EXPLORE_VIEW.every(d => d.logo === null || fs.existsSync(path.join(ROOT, d.logo))),
+    'every referenced logo asset exists');
+  const allUiSrc = indexSrc + rendererSrc + mainSrc + preloadSrc;
+  check(!/Downloads[\\/]/.test(allUiSrc), 'no runtime dependency on the Downloads directory');
+  check(indexSrc.includes('id="exploreClose"'), 'modal has a close affordance');
+  check(rendererSrc.includes('openExploreDestination(btn.dataset.explore)') &&
+        rendererSrc.includes(".explore-choice[data-explore]"),
+    'renderer sends only the fixed data-explore keys');
+  check(!/openExploreDestination\((?!btn\.dataset\.explore|key\b)/.test(rendererSrc),
+    'renderer never passes a computed/arbitrary destination');
+  check(/exploreOverlay\.addEventListener\('keydown'/.test(rendererSrc) && /Escape/.test(rendererSrc),
+    'Escape closes the modal');
+  check(/releaseExploreTrap = installFocusTrap\(exploreOverlay\)/.test(rendererSrc),
+    'focus is trapped and restored to the Explore button on close');
+
+  // Project disclosure (addendum): rendered into shell + Explore from the
+  // single DISCLOSURE catalog; no unsupported Zoom-endorsement wording in
+  // any UI source.
+  check(indexSrc.includes('id="projectDisclosure"') && indexSrc.includes('id="exploreDisclosure"'),
+    'disclosure instances exist in shell and Explore');
+  check(rendererSrc.includes('renderDisclosure(document.getElementById(\'projectDisclosure\'))') &&
+        rendererSrc.includes('renderDisclosure(document.getElementById(\'exploreDisclosure\'))'),
+    'both disclosure instances are filled from the DISCLOSURE catalog');
+  check(messages.DISCLOSURE.INDEPENDENCE === 'Independent project. Not affiliated with Zoom.',
+    'shell ships the exact independence wording');
+  for (const banned of ['Verified by Zoom', 'Zoom Certified', 'Zoom Partner', 'Official Zoom']) {
+    check(!allUiSrc.includes(banned), `UI never says "${banned}"`);
+  }
+}
+
 console.log('electron-security-smoke: updater URL is not arbitrary');
 {
   const goodFeed = 'https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml';
@@ -134,6 +234,13 @@ console.log('electron-security-smoke: openExternal and navigation');
 {
   check(es.isAllowedExternalUrl('https://github.com/1132-Fixer/windows/releases/latest'), 'releases page allowed');
   check(es.isAllowedExternalUrl('https://1132-fixer.xyz/'), 'product site allowed');
+  check(es.isAllowedExternalUrl('https://www.1132-fixer.xyz/'), 'product site www allowed');
+  check(es.isAllowedExternalUrl('https://botify-network.com/'), 'Botify Network site allowed');
+  check(es.isAllowedExternalUrl('https://www.botify-network.com/'), 'Botify Network www allowed');
+  check(!es.isAllowedExternalUrl('http://1132-fixer.xyz/'), 'http product site rejected');
+  check(!es.isAllowedExternalUrl('http://botify-network.com/'), 'http Botify site rejected');
+  check(!es.isAllowedExternalUrl('https://evil.botify-network.com/'), 'unapproved Botify subdomain rejected');
+  check(!es.isAllowedExternalUrl('https://botify-network.com.evil.example/'), 'Botify suffix host rejected');
   check(es.isAllowedExternalUrl('https://zoom.us/download/admin'), 'Zoom admin download allowed');
   check(!es.isAllowedExternalUrl('https://example.com/'), 'arbitrary site rejected');
   check(!es.isAllowedExternalUrl('https://zoom.us.evil.example/download'), 'Zoom suffix host rejected');

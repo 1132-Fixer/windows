@@ -6,8 +6,10 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   runFix: () => ipcRenderer.invoke('run-fix'),
   createShortcut: () => ipcRenderer.invoke('create-shortcut'),
+  launchZoomHelper: () => ipcRenderer.invoke('launch-zoom-helper'),
   shortcutExists: () => ipcRenderer.invoke('shortcut-exists'),
   isElevated: () => ipcRenderer.invoke('is-elevated'),
+  relaunchElevated: () => ipcRenderer.invoke('relaunch-elevated'),
   preflight: () => ipcRenderer.invoke('preflight'),
   preflightScan: () => ipcRenderer.invoke('preflight-scan'),
   supportReport: (context) => ipcRenderer.invoke('support-report', context),
@@ -32,7 +34,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   installUpdateNow: () => ipcRenderer.invoke('install-update-now'),
   deferUpdate: () => ipcRenderer.invoke('defer-update'),
   openDownloadPage: () => ipcRenderer.invoke('open-download-page'),
-  openWebsite: () => ipcRenderer.invoke('open-website'),
+  // Explore modal: destination KEY only ('fixer' | 'botify') — the URL
+  // mapping lives in the main process; arbitrary URLs cannot ride through.
+  openExploreDestination: (key) => ipcRenderer.invoke('open-explore-destination', key),
   minimizeWindow: () => ipcRenderer.invoke('window-minimize'),
   maximizeWindow: () => ipcRenderer.invoke('window-maximize'),
   quitApp: () => ipcRenderer.invoke('quit-app'),
