@@ -15,7 +15,7 @@
     "start": "electron .",
     "dev": "electron . --enable-logging",
     "inject-config": "node scripts/inject-config.js",
-    "test": "node tools/sanitizer-smoke.js && node tools/shortcut-legacy-smoke.js && node tools/messages-smoke.js && node tools/zoom-detection-smoke.js && node tools/run-verdict-smoke.js && node tools/ps-encoding-smoke.js && node tools/helper-credential-smoke.js",
+    "test": "node tools/sanitizer-smoke.js && node tools/shortcut-legacy-smoke.js && node tools/messages-smoke.js && node tools/zoom-detection-smoke.js && node tools/run-verdict-smoke.js && node tools/ps-encoding-smoke.js && node tools/helper-credential-smoke.js && node tools/electron-security-smoke.js",
     "postinstall": "node scripts/postinstall.js",
     "build": "node scripts/inject-config.js && electron-builder --win portable --x64 --publish never",
     "build:installer": "node scripts/inject-config.js && electron-builder --win nsis --x64 --publish never",
