@@ -25,7 +25,7 @@ the published release assets.
 | --- | --- | --- | --- |
 | `1132 Fixer.exe` | Electron official Windows x64 distribution, renamed by electron-builder | MIT (Electron), with Chromium components under their own terms | The application host |
 | `ffmpeg.dll` | Electron distribution | LGPL-2.1-or-later / Chromium terms | Chromium media |
-| `libGLESv2.dll`, `vk_swiftshader.dll`, `vulkan-1.dll`, `dxcompiler.dll`, `dxil.dll`, `d3dcompiler_47.dll` | Electron distribution | Chromium / ANGLE / SwiftShader / DirectX terms | Chromium graphics |
+| `libEGL.dll`, `libGLESv2.dll`, `vk_swiftshader.dll`, `vulkan-1.dll`, `dxcompiler.dll`, `dxil.dll`, `d3dcompiler_47.dll` | Electron distribution | Chromium / ANGLE / SwiftShader / DirectX terms | Chromium graphics |
 | `*.pak`, `icudtl.dat`, `*.bin`, `locales/*.pak` | Electron distribution | Chromium terms | Chromium resources and locales |
 | `LICENSES.chromium.html` | Electron distribution | n/a | Required attribution |
 
@@ -62,9 +62,36 @@ the asar, and because the packaging allowlist has to permit them by exact path
 
 ### 1.4 Third-party native components
 
-**None.** No third-party DLL, `.node` addon, driver, or bundled tool is packaged
-today. Adding one requires a row in §1 of this file before it may ship, and the
-packaging allowlist must be extended by exact path in the same pull request.
+One, and it was found by building the package inventory rather than by reading
+the source — which is the reason the inventory exists.
+
+| Binary | `resources/elevate.exe` |
+| --- | --- |
+| SHA-256 | `9b1fbf0c11c520ae714af8aa9af12cfd48503eedecd7398d8992ee94d1b4dc37` |
+| Size | 107,520 B |
+| Version | `1, 0, 0, 2894` — "Elevate Application", company "Johannes Passing" |
+| Origin | electron-builder's NSIS resource bundle, cached locally as `nsis-3.0.4.1/elevate.exe` |
+| Licence | Elevate, by Johannes Passing — permissive; attribution belongs in `NOTICE.md` |
+| Why it ships | electron-builder adds it for the `perMachine` NSIS installer's UAC elevation path. It is not referenced by any first-party code. |
+| Signed | **No** — `NotSigned`, like everything else this project ships today |
+| Owner | The `electron-builder` version in `devDependencies` |
+
+Two things follow that are worth stating rather than leaving implicit:
+
+- It is **not resolved through `package-lock.json`**. electron-builder downloads
+  its NSIS resource bundle at build time into a machine-level cache. A hosted
+  runner fetches it fresh on every release. That is a build-time supply-chain
+  dependency outside the lockfile, and the inventory check is currently the only
+  thing in this repository that would notice if the file changed.
+- Its hash is recorded above precisely so a change is visible. If a build
+  produces a different hash for `resources/elevate.exe`, treat it as a
+  supply-chain event and investigate before releasing — do not simply update the
+  number.
+
+No other third-party DLL, `.node` addon, driver, or bundled tool is packaged.
+Adding one requires a row in this section before it may ship, and
+`build/package-allowlist.json` must be extended by exact path in the same pull
+request.
 
 ## 2. Historical binaries in git history
 
@@ -108,8 +135,8 @@ route around by broadening the allowlist pattern.
 
 ## 4. What is never packaged
 
-The packaging allowlist fails the build if any of these reach the shipping
-artifact without an explicit, path-exact entry:
+`build/package-allowlist.json` fails the build if any of these reach the
+shipping artifact without an explicit, path-exact entry:
 
 `.exe` · `.dll` · `.msi` · `.sys` · `.node` · `.ps1` · `.bat` · `.cmd` ·
 `.key` · `.pfx` · `.pem` · `.p12` · `.cer` · `.crt` · `.env` · `.db` ·

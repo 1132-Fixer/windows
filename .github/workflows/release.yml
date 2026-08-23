@@ -141,6 +141,14 @@ jobs:
           }
           $checksums | Out-File -FilePath dist/checksums-sha256.txt -Encoding utf8
 
+      # What actually ships, enumerated and checked against
+      # build/package-allowlist.json. Fails on an unexpected executable,
+      # script, key, database or archive. See docs/security/BINARY-POLICY.md.
+      - name: Package inventory and allowlist
+        shell: pwsh
+        run: |
+          node scripts/package-inventory.mjs --unpacked dist/win-unpacked
+
       # Records the true Authenticode state of what was just built, and refuses
       # to publish the combinations that break the update channel. Runs BEFORE
       # the release is created so a refusal means nothing shipped.
@@ -185,6 +193,7 @@ jobs:
             dist/latest.yml
             dist/*.blockmap
             dist/signature-state.json
+            dist/package-inventory.json
 
       - name: Validate published release assets
         shell: pwsh
