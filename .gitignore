@@ -8,6 +8,16 @@ src/main/config.generated.js
 .env.*
 !.env.example
 
+# Signing material. A code signing certificate or key must never enter this
+# repository, on any branch. Local signing reads CSC_LINK from the environment.
+# See docs/security/code-signing.md.
+*.pfx
+*.p12
+*.pem
+*.key
+*.crt
+*.cer
+
 # Dependencies
 node_modules/
 

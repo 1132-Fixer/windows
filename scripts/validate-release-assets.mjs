@@ -10,11 +10,18 @@
 //   GITHUB_TOKEN or RELEASES_PAT — required to read release metadata
 //                                  (public releases work unauthenticated but
 //                                  rate limits are tight; CI sets GITHUB_TOKEN)
-//   RELEASES_OWNER — defaults to PrimeUpYourLife
-//   RELEASES_REPO  — defaults to 1132-Fixer-Windows
+//   RELEASES_OWNER — defaults to 1132-Fixer
+//   RELEASES_REPO  — defaults to windows
+//
+// The defaults used to name PrimeUpYourLife/1132-Fixer-Windows, which is this
+// repository's former name. That resolved only because GitHub 301-redirects a
+// renamed repository, so the release gate was validating a redirect rather than
+// a named target. A redirect can stop being the right answer the moment
+// something else is created at the old name, and the failure would be silent:
+// the release would validate against a repository nobody intended.
 
-const OWNER = process.env.RELEASES_OWNER || 'PrimeUpYourLife';
-const REPO  = process.env.RELEASES_REPO  || '1132-Fixer-Windows';
+const OWNER = process.env.RELEASES_OWNER || '1132-Fixer';
+const REPO  = process.env.RELEASES_REPO  || 'windows';
 const TOKEN = process.env.RELEASES_PAT || process.env.GITHUB_TOKEN || '';
 
 const tag = process.argv[2] || process.env.RELEASE_TAG || '';

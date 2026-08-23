@@ -1,5 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Channels here must stay in lockstep with IPC_INVOKE_CHANNELS /
+// IPC_SEND_CHANNELS in src/main/electron-security.js. Main will not
+// register any ipcMain.handle that is not on that allowlist.
 contextBridge.exposeInMainWorld('electronAPI', {
   runFix: () => ipcRenderer.invoke('run-fix'),
   createShortcut: () => ipcRenderer.invoke('create-shortcut'),

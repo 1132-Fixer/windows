@@ -6,6 +6,8 @@ const os = require('os');
 const https = require('https');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
+const electronSecurity = require('./src/main/electron-security');
+electronSecurity.installIpcAllowlist(ipcMain);
 const config = require('./src/main/config');
 const supportClient = require('./src/main/support-client');
 const zoomDetect = require('./zoom-detect');
@@ -140,11 +142,18 @@ const UPDATE_RECHECK_MS = 4 * 60 * 60 * 1000; // long-open apps re-check every 4
 // https.get does not follow redirects, so walk them (bounded).
 function httpsGetText(url, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
+    if (!electronSecurity.isAllowedUpdaterUrl(url)) {
+      return reject(new Error('updater URL not allowed'));
+    }
     const req = https.get(url, { headers: { 'User-Agent': `1132Fixer/${app.getVersion()}` }, timeout: 15000 }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         if (redirectsLeft <= 0) return reject(new Error('too many redirects'));
-        return resolve(httpsGetText(new URL(res.headers.location, url).toString(), redirectsLeft - 1));
+        const next = new URL(res.headers.location, url).toString();
+        if (!electronSecurity.isAllowedUpdaterUrl(next)) {
+          return reject(new Error('updater redirect not allowed'));
+        }
+        return resolve(httpsGetText(next, redirectsLeft - 1));
       }
       if (res.statusCode !== 200) {
         res.resume();
@@ -190,14 +199,12 @@ async function checkPortableUpdate() {
   }
 }
 
-ipcMain.handle('open-download-page', () => {
-  shell.openExternal(RELEASES_LATEST_URL);
-  return { success: true };
+ipcMain.handle('open-download-page', async () => {
+  return electronSecurity.openExternalSafe(shell.openExternal.bind(shell), RELEASES_LATEST_URL);
 });
 
-ipcMain.handle('open-website', () => {
-  shell.openExternal(WEBSITE_URL);
-  return { success: true };
+ipcMain.handle('open-website', async () => {
+  return electronSecurity.openExternalSafe(shell.openExternal.bind(shell), WEBSITE_URL);
 });
 
 const FIX_USER = 'user1';
@@ -330,8 +337,11 @@ function sha256File(file) {
 
 ipcMain.handle('zoom-open-download', async () => {
   try {
-    await shell.openExternal(messages.ZOOM_RECOVERY.DOWNLOAD_URL);
-    return { success: true };
+    const opened = await electronSecurity.openExternalSafe(
+      shell.openExternal.bind(shell),
+      messages.ZOOM_RECOVERY.DOWNLOAD_URL
+    );
+    return { success: opened.success === true };
   } catch (_) {
     // Offline / no browser handler ΓÇö renderer shows the Offline state.
     return { success: false };
@@ -346,7 +356,11 @@ ipcMain.handle('zoom-choose-installer', async () => {
     properties: ['openFile']
   });
   if (pick.canceled || !pick.filePaths || !pick.filePaths.length) return { canceled: true };
-  const file = pick.filePaths[0];
+  const picked = electronSecurity.isSafeUserSelectedPath(pick.filePaths[0], { ext: '.msi' });
+  if (!picked.ok) {
+    return { ok: false, message: messages.zoomInstallerRefusal('not_msi_ext') };
+  }
+  const file = picked.path;
 
   // (i) It IS an MSI: extension + OLE compound-file magic.
   if (!/\.msi$/i.test(file)) {
@@ -373,7 +387,11 @@ ipcMain.handle('zoom-choose-installer', async () => {
   if ([...file].some(ch => ch.charCodeAt(0) < 0x20)) {
     return { ok: false, message: messages.zoomInstallerRefusal('unreadable', 'unsupported characters in the file path') };
   }
-  const psPath = file.replace(/'/g, "''");
+  const quoted = electronSecurity.psSingleQuote(file);
+  if (!quoted.ok) {
+    return { ok: false, message: messages.zoomInstallerRefusal('unreadable', 'unsupported characters in the file path') };
+  }
+  const psPath = quoted.literal.slice(1, -1);
 
   // (ii) Authenticode: Status must be Valid AND the signer CN must exactly
   // match one of the two accepted Zoom publisher names ΓÇö no substrings.
@@ -507,11 +525,7 @@ function createWindow() {
     frame: false,
     titleBarStyle: 'hidden',
     show: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      nodeIntegration: false,
-      contextIsolation: true
-    },
+    webPreferences: electronSecurity.rendererWebPreferences(path.join(__dirname, 'preload.js')),
     // getIconPath() resolves packaged (resources/icon.ico) vs dev
     // (assets/icon.ico); the old literal only existed when packaged.
     icon: getIconPath()
@@ -545,6 +559,7 @@ function createWindow() {
     }
   });
 
+  electronSecurity.hardenWebContents(mainWindow.webContents, { appRoot: app.getAppPath() });
   mainWindow.loadFile('index.html');
   mainWindow.setMenu(null);
 }
@@ -605,6 +620,10 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   app.quit();
+});
+
+app.on('before-quit', () => {
+  killActiveChildren();
 });
 
 // ============================================================
