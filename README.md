@@ -104,7 +104,7 @@ Password: random ΓÇö a fresh one is generated on every fix run
 6. Sign in to Zoom in the new session.
 7. Create the desktop shortcut if you want faster access next time.
 
-If you installed **v5.5.1 or earlier**, automatic updates from the old download location no longer apply. Install the latest release from this repository once. After that, updates come from this project's GitHub Releases.
+Current Setup and Portable builds update from this repository's GitHub Releases (`latest.yml` on [`1132-Fixer/windows`](https://github.com/1132-Fixer/windows/releases/latest)). If you installed **v5.5.1 or earlier**, the old download location (`PrimeUpYourLife/1132-Fixer-Windows-Releases`) still answers updater checks but will not ship newer versions. Install the latest release from this repository once; after that, updates come from here.
 
 ## Privacy
 

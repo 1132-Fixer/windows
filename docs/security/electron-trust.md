@@ -89,6 +89,11 @@ fails `isAllowedUpdaterUrl()`:
 `build.publish` from `package.json` (GitHub provider, owner `1132-Fixer`,
 repo `windows`). The renderer has no API that can change that.
 
+Live channel, residual old-channel clients, and the version-match test are
+recorded in [`../development/updater-channel.md`](../development/updater-channel.md).
+`PrimeUpYourLife/1132-Fixer-Windows-Releases` is still serving v5.5.1
+`latest.yml` and must not be deleted.
+
 `verifyUpdateCodeSignature` stays `false` until a release is actually signed.
 Enabling it while artifacts are unsigned permanently breaks the update
 channel — see [`code-signing.md`](code-signing.md) §4 and

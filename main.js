@@ -127,11 +127,11 @@ ipcMain.handle('defer-update', () => {
 // Instead: fetch latest.yml from the release feed (same feed the NSIS
 // updater uses), compare versions, and surface a "download it" banner.
 // URLs mirror build.publish in package.json: the feed is this repository's
-// public GitHub Releases. Clients fetch latest.yml anonymously from
-// GitHub Releases server-side ΓÇö the repo stays PRIVATE and clients need
-// no GitHub access at all. The former 1132-Fixer-Windows-Releases repo
-// was deleted 2026-08-09 and is never recreated (#136). Releases are
-// still published on this repo; the broker serves them anonymously.
+// public GitHub Releases (1132-Fixer/windows latest.yml). HTTPS only;
+// first hop and every redirect must pass isAllowedUpdaterUrl. The leftover
+// PrimeUpYourLife/1132-Fixer-Windows-Releases channel is still live for
+// residual v5.5.1 clients and must not be deleted. Current builds do not
+// fetch it - that GitHub path is not on the allowlist.
 // ============================================================
 const RELEASES_LATEST_URL = 'https://github.com/1132-Fixer/windows/releases/latest';
 const LATEST_YML_URL = 'https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml';

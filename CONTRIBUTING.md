@@ -46,7 +46,7 @@ What does **not** belong here:
 
 ## Releases
 
-Maintainers publish by pushing a `v*` tag. GitHub Actions builds Setup and Portable artifacts onto this repository's Releases. Do not point the updater at a different repository without a documented migration.
+Maintainers publish by pushing a `v*` tag. GitHub Actions builds Setup and Portable artifacts onto this repository's Releases. The updater feed is `https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml`. Do not point the updater at a different repository without a documented migration. Do not delete `PrimeUpYourLife/1132-Fixer-Windows-Releases` while residual v5.5.1 clients still poll its `latest.yml`. Version truth is `package.json`; do not bump it without a matching release.
 
 ## Code of conduct
 
