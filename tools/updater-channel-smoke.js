@@ -184,6 +184,25 @@ console.log('updater-channel-smoke: HTTPS + isAllowedUpdaterUrl');
   check(mainSrc.includes('isAllowedUpdaterUrl'), 'httpsGetText consults isAllowedUpdaterUrl');
 }
 
+// Semver compare: -1 if a<b, 0 if equal, 1 if a>b. Numeric core only
+// (x.y.z); a pre-release suffix sorts below its release. Enough for the
+// release-ordering tolerance below.
+function semverCmp(a, b) {
+  const core = (v) => String(v || '0.0.0').split('-')[0].split('.').map((n) => parseInt(n, 10) || 0);
+  const [a0, a1, a2] = core(a);
+  const [b0, b1, b2] = core(b);
+  if (a0 !== b0) return a0 < b0 ? -1 : 1;
+  if (a1 !== b1) return a1 < b1 ? -1 : 1;
+  if (a2 !== b2) return a2 < b2 ? -1 : 1;
+  const aPre = String(a).includes('-'); const bPre = String(b).includes('-');
+  if (aPre !== bPre) return aPre ? -1 : 1;
+  return 0;
+}
+
+function assetPresent(release, name) {
+  return !!(release.assets || []).find((x) => x.name === name);
+}
+
 (async () => {
   console.log('updater-channel-smoke: live current channel latest.yml');
   let yml;
@@ -195,9 +214,28 @@ console.log('updater-channel-smoke: HTTPS + isAllowedUpdaterUrl');
   }
   const meta = parseLatestYml(yml);
   check(!!yml && yml.includes('version:'), 'current latest.yml downloaded over https via allowlist');
-  check(meta.version === pkg.version, `latest.yml version ${meta.version || '(missing)'} matches package.json ${pkg.version}`);
+
+  // Release-ordering tolerance. package.json is bumped before the tag is
+  // pushed, so between the bump landing on main and release.yml publishing the
+  // GitHub Release there is a window where the live latest.yml is one release
+  // BEHIND package.json. That window is expected, not drift. Treat it as:
+  //   feed == source  -> published; assert the version/path invariants strictly
+  //   feed <  source   -> release pending; PASS, but assert the feed is still
+  //                       internally consistent (path matches its OWN version)
+  //   feed >  source   -> feed ahead of source; hard failure (real drift)
+  // This is what keeps `main` green during a bump instead of red until publish.
+  const cmp = semverCmp(meta.version, pkg.version);
+  if (cmp === 0) {
+    check(true, `latest.yml version ${meta.version} matches package.json ${pkg.version} (published)`);
+    check(meta.path === `1132-Fixer-Setup-${pkg.version}.exe`, `latest.yml path is 1132-Fixer-Setup-${pkg.version}.exe`);
+  } else if (cmp < 0) {
+    console.log(`  note release pending: live latest.yml is ${meta.version}, package.json is ${pkg.version} — v${pkg.version} not published yet (tolerated)`);
+    check(true, `release pending: feed ${meta.version} is behind source ${pkg.version} (expected during a version bump)`);
+    check(meta.path === `1132-Fixer-Setup-${meta.version}.exe`, `pending: latest.yml path matches its own version (1132-Fixer-Setup-${meta.version}.exe)`);
+  } else {
+    check(false, `latest.yml version ${meta.version} is AHEAD of package.json ${pkg.version} — feed/source drift`);
+  }
   check(/^[A-Za-z0-9+/]+={0,2}$/.test(meta.sha512) && meta.sha512.length >= 64, 'latest.yml carries installer SHA-512 (integrity)');
-  check(meta.path === `1132-Fixer-Setup-${pkg.version}.exe`, `latest.yml path is 1132-Fixer-Setup-${pkg.version}.exe`);
   check(meta.size > 0, `latest.yml size is present (${meta.size || 0})`);
 
   let currentCounts = { latestYml: null, tag: null };
@@ -205,10 +243,33 @@ console.log('updater-channel-smoke: HTTPS + isAllowedUpdaterUrl');
     const rel = await githubJson(`https://api.github.com/repos/${CURRENT_OWNER}/${CURRENT_REPO}/releases/latest`);
     currentCounts.tag = rel.tag_name;
     currentCounts.latestYml = assetCount(rel, 'latest.yml');
-    check(rel.tag_name === `v${pkg.version}`, `GitHub latest tag ${rel.tag_name} matches package.json v${pkg.version}`);
+    // Same release-ordering tolerance as latest.yml: the tag may lag the bump
+    // until release.yml runs. Never-ahead is the invariant; equal is published.
+    check(semverCmp((rel.tag_name || '').replace(/^v/, ''), pkg.version) <= 0, `GitHub latest tag ${rel.tag_name} is not ahead of package.json v${pkg.version}`);
     console.log(`  note current-channel latest.yml download_count=${currentCounts.latestYml} tag=${currentCounts.tag}`);
   } catch (err) {
     console.log(`  note current-channel GitHub API skipped: ${(err && err.message) || err}`);
+  }
+
+  // Legacy compatibility bridge (channel 3). v5.5.1-and-earlier clients have
+  // PrimeUpYourLife/1132-Fixer-Windows-Releases baked in and can reach nothing
+  // else. The bridge policy (docs/RELEASE-MIGRATION-2026-08.md) requires that
+  // feed keep SERVING so those clients auto-migrate — it must not be deleted,
+  // emptied, or archived into unusability while a supported client still polls
+  // it. This asserts the feed still answers with a release that carries the
+  // metadata + installer an old electron-updater needs to discover an update.
+  // Read via the REST release object ONLY (never GET the latest.yml asset) so
+  // this test does not inflate the download_count that gates retirement.
+  console.log('updater-channel-smoke: legacy compatibility bridge (<=5.5.1 clients poll this)');
+  try {
+    const oldRel = await githubJson(`https://api.github.com/repos/${OLD_OWNER}/${OLD_REPO}/releases/latest`);
+    const oldVer = (oldRel.tag_name || '').replace(/^v/, '');
+    console.log(`  note legacy bridge latest tag=${oldRel.tag_name}`);
+    check(!!oldRel.tag_name, `legacy bridge still serving a release (${oldRel.tag_name || 'none'})`);
+    check(assetPresent(oldRel, 'latest.yml'), 'legacy bridge latest release still carries latest.yml (old clients can discover an update)');
+    check(assetPresent(oldRel, `1132-Fixer-Setup-${oldVer}.exe`), `legacy bridge latest release carries its Setup installer (1132-Fixer-Setup-${oldVer}.exe)`);
+  } catch (err) {
+    check(false, `legacy compatibility bridge unreachable — <=5.5.1 clients would be stranded: ${(err && err.message) || err}`);
   }
 
   // The broker is what the shipped field polls (header note 2). If it stops

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-08-23
+
+Version rollover to 6.0.0. No application-code change from 5.6.0; this is a
+release cut of the current `main` (see the "Unreleased" content below, now
+shipped). Application identity, updater channel configuration, and installer
+behaviour are unchanged from 5.6.0 — this is an in-place upgrade of the same
+application (`appId com.hightexas.1132fixer`), not a new product.
+
 ### Security — Electron IPC isolation and updater URL allowlist
 
 - Renderer isolation is now explicit: `contextIsolation`, `sandbox`,
@@ -712,5 +720,6 @@ The following manual cases must pass before tagging the release:
 - Direct publish of releases to the `1132-Fixer-Windows-Releases` repo
   for the auto-updater.
 
+[6.0.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.0.0
 [5.3.6]: https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Releases/releases/tag/v5.3.6
 [5.3.5]: https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Releases/releases/tag/v5.3.5

@@ -31,7 +31,7 @@ global.fetch = async (url, opts) => {
 
 process.env.PORT = String(PORT);
 process.env.GH_ISSUES_TOKEN = FAKE_TOKEN;
-process.env.GH_ISSUES_REPO = 'PrimeUpYourLife/1132-Fixer-Windows';
+process.env.GH_ISSUES_REPO = '1132-Fixer/windows';
 
 // Loading server.js starts it listening.
 require('./server.js');

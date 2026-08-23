@@ -16,7 +16,7 @@ path). Item 3 (cleanup / "Remove helper account" action + explicit
 account-status display) remains open as the separable follow-up.
 **Severity:** P0 (security architecture)
 **Tracking suggestion:** open at
-`https://github.com/PrimeUpYourLife/1132-Fixer-Windows/issues/new` once
+`https://github.com/1132-Fixer/windows/issues/new` once
 approved.
 
 ## Background
