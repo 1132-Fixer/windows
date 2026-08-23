@@ -77,6 +77,39 @@ console.log('helper-credential-smoke: launcherScriptContent');
   check(!script.includes('\ufeff'), 'no BOM inside the content (the writer prepends it exactly once)');
 }
 
+console.log('helper-credential-smoke: extractLegacyLauncherCredential (5.x upgrade path)');
+{
+  // The exact shape 5.x wrote (observed on real upgraded machines):
+  // plaintext single-quoted literal + PSCredential + Start-Process.
+  const legacy = [
+    `$p = ConvertTo-SecureString 'Aa1!xYz9Qr#Kp2Lm' -AsPlainText -Force`,
+    `$c = New-Object System.Management.Automation.PSCredential('user1', $p)`,
+    `Start-Process -FilePath 'C:\\Program Files\\Zoom\\bin\\Zoom.exe' -WorkingDirectory 'C:\\Program Files\\Zoom\\bin' -Credential $c`
+  ].join('\r\n');
+  const got = hc.extractLegacyLauncherCredential(legacy, 'user1');
+  check(!!got && got.password === 'Aa1!xYz9Qr#Kp2Lm', 'extracts the plaintext password from the legacy launcher');
+  check(hc.extractLegacyLauncherCredential(legacy, 'user2') === null, 'wrong helper user is refused');
+  check(hc.extractLegacyLauncherCredential('', 'user1') === null, 'empty script is refused');
+  check(hc.extractLegacyLauncherCredential(null, 'user1') === null, 'null script is refused');
+
+  // The CURRENT launcher format must never parse as a legacy credential —
+  // its ConvertTo-SecureString argument is the DPAPI-unseal expression,
+  // not a quoted literal.
+  const current = hc.launcherScriptContent('user1', 'C:\\Program Files\\Zoom\\bin\\Zoom.exe', 'C:\\Program Files\\Zoom\\bin');
+  check(hc.extractLegacyLauncherCredential(current, 'user1') === null, 'current secret-free launcher never matches');
+
+  // Migration-safety predicate: bans exactly what the sealing path cannot
+  // carry (apostrophes, CR/LF, non-printables), tolerates a 5.x alphabet
+  // that differs from today's.
+  check(hc.isMigratableLegacyPassword('Aa1!xYz9Qr#Kp2Lm'), 'realistic legacy password accepted');
+  check(hc.isMigratableLegacyPassword('legacy-Pass_123$'), 'different legacy alphabet still accepted');
+  check(!hc.isMigratableLegacyPassword("Aa1!'PS-escape"), 'apostrophe rejected (would escape the seal literal)');
+  check(!hc.isMigratableLegacyPassword('short'), 'too-short rejected');
+  check(!hc.isMigratableLegacyPassword('x'.repeat(65)), 'over-long rejected');
+  check(!hc.isMigratableLegacyPassword('bad\r\nnewline-pw'), 'CR/LF rejected');
+  check(!hc.isMigratableLegacyPassword(null), 'null rejected');
+}
+
 if (failures) {
   console.error(`helper-credential-smoke: ${failures} FAILURE(S)`);
   process.exit(1);

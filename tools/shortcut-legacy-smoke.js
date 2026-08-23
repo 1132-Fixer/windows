@@ -11,7 +11,7 @@ const os = require('os');
 const path = require('path');
 
 const FIX_USER = 'user1';
-const SHORTCUT_FILENAME = 'Open Zoom with 1132 Helper.lnk';
+const SHORTCUT_FILENAME = 'Zoom — User1.lnk';
 const LEGACY_SHORTCUT_FILENAMES = [`Launch Zoom as ${FIX_USER}.lnk`];
 
 let pass = 0, fail = 0;

@@ -1,27 +1,33 @@
 // ============================================================
 // 1132 Fixer renderer
 //
-// View model:
-//   home     -> one-line pitch + live environment checklist.
-//               The checklist runs AUTOMATICALLY on launch (and on
-//               window focus). FIX NOW is a single click: brief
-//               cancelable countdown on the button itself, then the
-//               whole flow runs end to end — no wizard, no dialogs.
-//   running  -> 5-stage tracker; raw log collapses to Advanced Details
-//   done     -> receipt; desktop shortcut auto-created; log re-expands
+// View model (state-driven wizard, one pane at a time in one card):
+//   checking -> grouped summary of the auto-run environment scan
+//   result   -> ready / fix available / action required
+//   fixing   -> 5-stage tracker + latest action line
+//   notice   -> success / warnings / failure / shortcut states
+// The full checklist, fix receipt and raw log live in the collapsed
+// Advanced-details region; the primary flow never shows raw output.
+// FIX NOW keeps its brief cancelable countdown; the repair, updater
+// and shortcut logic are unchanged underneath.
 // ============================================================
 
 const fileList        = document.getElementById('fileList');
+const elevateBtn      = document.getElementById('elevateBtn');
 const fixBtn          = document.getElementById('fixBtn');
+const launchBtn       = document.getElementById('launchBtn');
 const shortcutBtn     = document.getElementById('shortcutBtn');
-const homeView        = document.getElementById('homeView');
-const runningView     = document.getElementById('runningView');
+const rescanBtn       = document.getElementById('rescanBtn');
+const detailsBtn      = document.getElementById('detailsBtn');
+const supportBtn      = document.getElementById('supportBtn');
+const buttonNote      = document.getElementById('buttonNote');
 const checkList       = document.getElementById('checkList');
 const stageTracker    = document.getElementById('stageTracker');
 const receiptPanel    = document.getElementById('receiptPanel');
-const logToggle       = document.getElementById('logToggle');
-const logToggleLabel  = document.getElementById('logToggleLabel');
 const copyErrBtn      = document.getElementById('copyErrBtn');
+const advPanel        = document.getElementById('advPanel');
+const wizChecks       = document.getElementById('wizChecks');
+const wizFixAction    = document.getElementById('wizFixAction');
 
 let isRunning = false;
 let lastReceipt = null;
@@ -34,11 +40,117 @@ const LOG_BUFFER_MAX = 400;
 const LOG_DOM_MAX = 400;
 
 // ============================================================
-// View / stage helpers
+// Wizard panes / action area
 // ============================================================
-function showView(name) {
-  homeView.classList.toggle('active', name === 'home');
-  runningView.classList.toggle('active', name === 'running' || name === 'done');
+const WIZ_PANES = {
+  checking: document.getElementById('wizChecking'),
+  result:   document.getElementById('wizResult'),
+  fixing:   document.getElementById('wizFixing'),
+  notice:   document.getElementById('wizNotice')
+};
+
+function setWizardPane(name) {
+  for (const [key, el] of Object.entries(WIZ_PANES)) {
+    el.classList.toggle('active', key === name);
+  }
+}
+
+// Large state glyphs (result / notice panes).
+const WIZ_GLYPH = {
+  ok:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="16.5 9 10.5 15.2 7.5 12.2"/></svg>`,
+  // A real wrench (design review P0-2): reads as "repair" in under a
+  // second, never as a pin or tag.
+  fix:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
+  warn: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>`,
+  err:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`
+};
+
+function fillWizHeadline(glyphEl, titleEl, subEl, tone, title, sub) {
+  glyphEl.innerHTML = WIZ_GLYPH[tone] || WIZ_GLYPH.warn;
+  glyphEl.setAttribute('data-tone', tone);
+  titleEl.textContent = title;
+  subEl.textContent = sub || '';
+  subEl.hidden = !sub;
+}
+
+function showResultPane(tone, title, sub) {
+  fillWizHeadline(
+    document.getElementById('wizResultGlyph'),
+    document.getElementById('wizResultTitle'),
+    document.getElementById('wizResultSub'),
+    tone, title, sub);
+  setWizardPane('result');
+}
+
+function showNoticePane(tone, title, sub) {
+  fillWizHeadline(
+    document.getElementById('wizNoticeGlyph'),
+    document.getElementById('wizNoticeTitle'),
+    document.getElementById('wizNoticeSub'),
+    tone, title, sub);
+  setWizardPane('notice');
+}
+
+// ONE dominant CTA per state. Everything defaults to hidden; each wizard
+// state opts in to exactly the actions it allows. The *Quiet flags demote
+// a button to a secondary chip so two primaries never compete.
+function setActions({ fix = false, fixDisabled = false, fixQuiet = false, fixLabel = 'Fix now',
+                      shortcut = false, shortcutQuiet = false, shortcutLabel = 'Create desktop shortcut',
+                      shortcutOption = false, elevate = false, launch = false,
+                      rescan = false, details = false, support = false,
+                      note = '' } = {}) {
+  elevateBtn.hidden = !elevate;
+  fixBtn.hidden = !fix;
+  fixBtn.disabled = !!fixDisabled;
+  fixBtn.classList.toggle('btn-primary', !fixQuiet);
+  fixBtn.classList.toggle('btn-quiet', !!fixQuiet);
+  if (!fixCountdownTimer) fixBtn.textContent = fixLabel;
+  launchBtn.hidden = !launch;
+  shortcutBtn.hidden = !shortcut;
+  shortcutBtn.classList.toggle('btn-primary', !shortcutQuiet);
+  shortcutBtn.classList.toggle('btn-quiet', !!shortcutQuiet);
+  document.getElementById('shortcutBtnLabel').textContent = shortcutLabel;
+  document.getElementById('shortcutOpt').hidden = !shortcutOption;
+  rescanBtn.hidden = !rescan;
+  detailsBtn.hidden = !details;
+  supportBtn.hidden = !support;
+  buttonNote.textContent = note;
+  buttonNote.hidden = !note;
+  // The "Fix now is disabled by:" note exists to explain a VISIBLE disabled
+  // button. When the state hides the button entirely, the result pane's own
+  // copy names the blockers — the extra red line would say it twice.
+  if (!fix) {
+    const note66 = document.getElementById('fixDisabledNote');
+    note66.hidden = true;
+    note66.textContent = '';
+  }
+}
+
+// Grouped summary checks (checking pane) — WIZARD_GROUPS comes from
+// messages.js, derived from CHECK_ORDER so it can never drift from the
+// real checklist. statusByGroup maps group name -> normalized status.
+function renderWizChecks(statusByGroup) {
+  wizChecks.innerHTML = '';
+  for (const g of WIZARD_GROUPS) {
+    const status = normalizeCheckStatus(statusByGroup ? statusByGroup[g.group] : 'pending');
+    const row = document.createElement('div');
+    row.className = 'wiz-check';
+    row.setAttribute('data-status', status);
+    row.setAttribute('role', 'listitem');
+    row.setAttribute('aria-label', `${g.label}: ${badgeForCheckStatus(status)}`);
+    row.innerHTML = `${iconForStatus(status, 'chk-icon')}<span>${escapeHtml(g.label)}</span>`;
+    wizChecks.appendChild(row);
+  }
+}
+
+// Worst-of ranking for a group roll-up — same discipline as the summary
+// badge: a group is only as good as its worst row.
+const GROUP_STATUS_RANK = ['blocked', 'unknown', 'repairable', 'warning', 'pending', 'ready'];
+function worstStatus(statuses) {
+  for (const s of GROUP_STATUS_RANK) {
+    if (statuses.indexOf(s) !== -1) return s;
+  }
+  return 'unknown';
 }
 
 // Summary badge. `tone` is one of the .status-badge CSS classes; the icon
@@ -47,6 +159,7 @@ function showView(name) {
 // green tick to every tone it did not enumerate.)
 function setStatus(tone, text) {
   const badge = document.getElementById('statusBadge');
+  badge.hidden = false; // re-shown after the repairing state hid it
   badge.className = 'status-badge' + (tone ? ' ' + tone : '');
   badge.setAttribute('data-tone', tone || 'unknown');
   document.getElementById('statusBadgeIcon').textContent = summaryIcon(tone);
@@ -55,8 +168,31 @@ function setStatus(tone, text) {
 
 const STAGE_ORDER = ['prep', 'verify', 'consent', 'launch', 'receipt'];
 const STAGE_LABEL = {
-  prep: 'Preparing', verify: 'Verifying', consent: 'Consent', launch: 'Launch', receipt: 'Verify'
+  prep: 'Preparing the repair', verify: 'Repairing helper account',
+  consent: 'Camera & microphone access', launch: 'Launch Zoom', receipt: 'Verify repair'
 };
+// Consumer-language detail for the ACTIVE step (design critique 2026-08-23:
+// no engineering copy like account names in the primary UI — the raw log
+// stays behind View details).
+const STAGE_DETAIL = {
+  prep: 'Getting things ready…',
+  verify: 'Setting up the helper account…',
+  consent: 'Configuring camera & microphone access…',
+  launch: 'Starting Zoom…',
+  receipt: 'Checking the repair…'
+};
+
+// Paint the friendly detail line under the active step (and announce it
+// through the visually-hidden live region).
+function paintStageDetail() {
+  const active = stageTracker.querySelector('.stage-pill[data-state="active"]');
+  stageTracker.querySelectorAll('.stage-detail').forEach(el => { el.textContent = ''; });
+  if (active) {
+    const text = STAGE_DETAIL[active.getAttribute('data-stage')] || '';
+    active.querySelector('.stage-detail').textContent = text;
+    wizFixAction.textContent = text;
+  }
+}
 
 // Map a fix-log [N/8] step number onto our 5-stage UI.
 function stageForStep(n) {
@@ -74,6 +210,24 @@ function setStageTracker(active) {
 function setStageState(stage, state) {
   const el = stageTracker.querySelector(`.stage-pill[data-stage="${stage}"]`);
   if (el) el.setAttribute('data-state', state);
+  updateFixProgress();
+}
+
+// Thin repair progress bar (§19) — derived from the stage states, so it
+// can never disagree with the task rows above it.
+function updateFixProgress() {
+  let done = 0;
+  let active = 0;
+  for (const s of STAGE_ORDER) {
+    const st = stageTracker.querySelector(`.stage-pill[data-stage="${s}"]`)?.getAttribute('data-state');
+    if (st === 'done' || st === 'warn' || st === 'fail') done++;
+    else if (st === 'active') active = 0.5;
+  }
+  const step = Math.max(1, Math.min(STAGE_ORDER.length, done + (active ? 1 : 0) || 1));
+  const activeEl = stageTracker.querySelector('.stage-pill[data-state="active"] .stage-pill-label');
+  document.getElementById('wizStepLine').textContent =
+    `Step ${step} of ${STAGE_ORDER.length}` + (activeEl ? ` · ${activeEl.textContent}` : '');
+  paintStageDetail();
 }
 
 function resetStages() {
@@ -155,8 +309,10 @@ function addFileItem(text, className = '') {
   logBuffer.push(text);
   if (logBuffer.length > LOG_BUFFER_MAX) logBuffer.shift();
 
-  // Stage advancement — parse "[N/8] ..." header lines.
-  const m = /^\[(\d)\/8\]/.exec(text);
+  // Stage advancement — parse "[N/8] ..." header lines. The same line,
+  // minus its step prefix, becomes the wizard's current-action text so the
+  // primary flow narrates progress without exposing the raw log.
+  const m = /^\[(\d)\/8\]\s*(.*)/.exec(text);
   if (m) {
     const stage = stageForStep(parseInt(m[1], 10));
     if (stage) advanceStageTo(stage);
@@ -167,17 +323,18 @@ function addEmptyLine() {
   queueLogItem(' ', 'empty-line');
 }
 
+// Advanced details — one collapsed chip; the panel (checklist + receipt +
+// log) scrolls internally so the window never grows a scrollbar.
+// ONE details control (design review P0-1): "View details" in the
+// secondary action row is the single toggle for the diagnostics panel
+// (checklist + receipt + log); it flips to "Hide details" while open.
+// The panel scrolls internally so the window never does.
 function setLogExpanded(expanded) {
-  logToggle.classList.toggle('expanded', expanded);
-  logToggle.setAttribute('aria-expanded', String(expanded));
-  fileList.classList.toggle('hidden', !expanded);
-  logToggleLabel.textContent = expanded ? 'Hide Advanced Details' : 'Show Advanced Details';
+  advPanel.classList.toggle('hidden', !expanded);
+  detailsBtn.textContent = expanded ? 'Hide details' : 'View details';
+  detailsBtn.setAttribute('aria-expanded', String(expanded));
+  detailsBtn.setAttribute('aria-controls', 'advPanel');
 }
-
-logToggle.addEventListener('click', () => {
-  const expanded = logToggle.classList.contains('expanded');
-  setLogExpanded(!expanded);
-});
 
 // ============================================================
 // Status icon SVGs — shared between checklist + receipt.
@@ -289,19 +446,26 @@ function renderCheckRow(key, label, status, message) {
   return row;
 }
 
-async function runEnvironmentScan() {
+// quiet: refresh the data + badges WITHOUT flipping the wizard back to the
+// "Checking your setup…" pane — used by the throttled focus-rescan so the
+// screen does not churn every time the window regains focus.
+async function runEnvironmentScan(opts = {}) {
+  const quiet = !!opts.quiet;
   // fixCountdownTimer guard: a rescan during the 3s Fix-now countdown would
   // disable the button (killing its advertised click-to-cancel) and could
   // overlap the scan with the fix it is about to start.
   if (scanInProgress || isRunning || fixCountdownTimer) return;
   scanInProgress = true;
   lastScanAt = Date.now();
-  setStatus('scanning', 'Checking');
+  setStatus('scanning', 'Checking…');
   checkList.setAttribute('aria-busy', 'true');
-  fixBtn.disabled = true;
-  updateFixDisabledNote([], true);
+  if (!quiet) {
+    renderWizChecks(null); // all groups pending
+    setWizardPane('checking');
+    setActions({});
+  }
 
-  // Show all rows immediately as pending so the screen never sits empty.
+  // Show all rows immediately as pending so the panel never sits empty.
   checkList.innerHTML = '';
   let pendingGroup = null;
   for (const c of CHECK_ORDER) {
@@ -319,12 +483,14 @@ async function runEnvironmentScan() {
     // shortened the list, so a check that never ran was indistinguishable
     // from a check that passed (nothing on screen said it was missing).
     const renderedStatuses = [];
+    const statusByKey = {};
     for (const c of CHECK_ORDER) {
       const card = cards[c.key];
       if (c.group !== lastGroup) { checkList.appendChild(renderGroupHeader(c.group)); lastGroup = c.group; }
       const status  = card ? normalizeCheckStatus(card.status) : 'unknown';
       const message = card ? (card.message || '') : MISSING_CARD_MESSAGE;
       renderedStatuses.push(status);
+      statusByKey[c.key] = status;
       checkList.appendChild(renderCheckRow(c.key, (card && card.label) || c.label, status, message));
     }
     canRunFix = !!(result && result.canRunFix);
@@ -334,7 +500,6 @@ async function runEnvironmentScan() {
     // "Ready" badge; an unknown row now also refuses to roll up green.
     const summary = summarizeChecks(renderedStatuses, result && result.overall, canRunFix);
     setStatus(summary.tone, summary.text);
-    fixBtn.disabled = !canRunFix;
     const blockedLabels = CHECK_ORDER
       .map(c => cards[c.key])
       .filter(card => card && normalizeCheckStatus(card.status) === 'blocked')
@@ -345,27 +510,93 @@ async function runEnvironmentScan() {
       .map(b => b.message || b.code);
     updateFixDisabledNote(blockedLabels.concat(nonCardBlockers), canRunFix);
     updateZoomRecovery(cards.zoom, result && result.info && result.info.zoomInstall);
+
+    // Wizard: paint the grouped checks with their final states, then
+    // transition to the result pane.
+    const statusByGroup = {};
+    for (const g of WIZARD_GROUPS) {
+      statusByGroup[g.group] = worstStatus(g.keys.map(k => statusByKey[k]));
+    }
+    renderWizChecks(statusByGroup);
+    const repairableLabels = CHECK_ORDER
+      .filter(c => statusByKey[c.key] === 'repairable')
+      .map(c => (cards[c.key] && cards[c.key].label) || c.label);
+    await presentScanResult({
+      statuses: renderedStatuses,
+      repairableLabels,
+      blockedLabels: blockedLabels.concat(nonCardBlockers),
+      quiet
+    });
   } catch (err) {
     checkList.innerHTML = '';
     checkList.appendChild(renderCheckRow('scan', 'Environment scan', 'blocked', scanFailureMessage(err)));
     canRunFix = false;
-    setStatus('error', 'Error');
-    fixBtn.disabled = true;
+    setStatus('error', 'Something went wrong');
     updateFixDisabledNote(['Environment scan'], false);
     updateZoomRecovery(null, null); // scan state unknown — hide the card
+    showResultPane('err', 'The check could not finish', scanFailureMessage(err));
+    setActions({ rescan: true, details: true });
   } finally {
     scanInProgress = false;
     checkList.setAttribute('aria-busy', 'false');
   }
 }
 
+// Scan result -> wizard result pane + the one CTA that state allows.
+// Ranking mirrors the summary badge: blocked > unknown > repairable >
+// warning > ready — the pane can never look better than the badge.
+async function presentScanResult({ statuses, repairableLabels, blockedLabels, quiet }) {
+  // A short beat so the finished check marks are visible before the pane
+  // transitions (skipped for quiet refreshes).
+  if (!quiet) await new Promise(r => setTimeout(r, 650));
+
+  if (statuses.indexOf('blocked') !== -1 || !canRunFix) {
+    showResultPane('warn', WIZARD.BLOCKED_TITLE, wizardBlockedSub(blockedLabels));
+    // The Zoom recovery card (when Zoom is the blocker) renders inside this
+    // pane with its own guided actions; Check again + details cover the rest.
+    setActions({ rescan: true, details: true });
+  } else if (statuses.indexOf('unknown') !== -1) {
+    showResultPane('warn', WIZARD.UNKNOWN_TITLE, WIZARD.UNKNOWN_SUB);
+    setActions({ fix: canRunFix, fixQuiet: true, fixLabel: 'Run the fix anyway', rescan: true, details: true });
+  } else if (statuses.indexOf('repairable') !== -1) {
+    showResultPane('fix', wizardFixFoundTitle(repairableLabels.length), wizardFixFoundSub(repairableLabels));
+    // The desktop shortcut rides the repair transaction as a checked-by-
+    // default option (operator directive 2026-08-23).
+    setActions({ fix: true, shortcutOption: true, rescan: true, details: true });
+  } else if (statuses.indexOf('warning') !== -1) {
+    showResultPane('warn', WIZARD.READY_WARN_TITLE, WIZARD.READY_WARN_SUB);
+    setActions({ fix: canRunFix, fixQuiet: true, fixLabel: 'Run the fix anyway', rescan: true, details: true });
+  } else {
+    // Healthy terminal state: launching as User1 is the point of the app,
+    // so it stays the primary action; the managed shortcut can always be
+    // recreated (users delete desktop icons).
+    showResultPane('ok', WIZARD.READY_TITLE, WIZARD.READY_SUB);
+    let shortcutMissing = true;
+    try {
+      const st = await window.electronAPI.shortcutExists();
+      shortcutMissing = !(st && st.exists && st.valid);
+    } catch (_) { /* unknown -> offering recreate is harmless */ }
+    setActions({
+      launch: true,
+      shortcut: true, shortcutQuiet: true,
+      shortcutLabel: shortcutMissing ? 'Create desktop shortcut' : 'Recreate desktop shortcut',
+      rescan: true, details: true
+    });
+  }
+}
+
 // Re-scan when the user comes back to the window (e.g. after installing
-// Zoom or fixing a blocker) — throttled, home view only.
+// Zoom or fixing a blocker) — throttled, quiet (no pane churn), and only
+// while the app is idle on a scan-driven pane.
 window.addEventListener('focus', () => {
   if (isRunning || scanInProgress) return;
-  if (!homeView.classList.contains('active')) return;
+  // Never before the first scan: while the elevation gate is parked on its
+  // "Administrator rights needed" pane, a focus-rescan would replace that
+  // tailored guidance with the generic blocked pane.
+  if (!lastScanAt) return;
+  if (WIZ_PANES.fixing.classList.contains('active') || WIZ_PANES.notice.classList.contains('active')) return;
   if (Date.now() - lastScanAt < 10000) return;
-  runEnvironmentScan();
+  runEnvironmentScan({ quiet: true });
 });
 
 // ============================================================
@@ -708,22 +939,26 @@ function onFixButtonClick() {
 async function runFix() {
   if (isRunning) return;
 
-  isRunning = true;
-  fixBtn.disabled = true;
-  fixBtn.textContent = 'Fixing…';
-  shortcutBtn.disabled = true;
-  setStatus('scanning', 'Running');
+  // The desktop-shortcut option rides the repair transaction — read it
+  // before the actions area is repainted for the running state.
+  const wantShortcut = document.getElementById('shortcutOptInput').checked;
 
-  // Switch to running view.
-  showView('running');
+  isRunning = true;
+  // No CTA during automatic work, and ONE status voice: the wizard body
+  // itself. The header badge hides until an outcome lands (setStatus
+  // re-shows it).
+  setActions({});
+  document.getElementById('statusBadge').hidden = true;
+
+  // Wizard: fixing pane — stage tracker + latest action. The raw log keeps
+  // recording underneath in Advanced details, collapsed.
+  setWizardPane('fixing');
   resetStages();
-  setStageTracker(true);
   advanceStageTo('prep');
   receiptPanel.classList.remove('visible');
   copyErrBtn.classList.remove('visible'); // failure-only; re-shown on FIX FAILED
   clearFileList();
   setLogExpanded(false);
-  logToggle.classList.add('visible');
   addFileItem('STARTING FIX...', 'header');
   addEmptyLine();
 
@@ -746,11 +981,11 @@ async function runFix() {
       } else if (warnings.length) {
         addFileItem(verdict.header, 'header');
         finalizeStages('warn');
-        setStatus('warn', 'Done (warnings)');
+        setStatus('warn', 'Fixed (warnings)');
       } else {
         addFileItem(verdict.header, 'header');
         finalizeStages('ok');
-        setStatus('done', 'Done');
+        setStatus('done', 'Fixed');
       }
       renderFixReceipt(result.receipt, warnings);
 
@@ -761,11 +996,10 @@ async function runFix() {
         failedSteps.forEach(s => addFileItem(`  • ${s.label}: ${s.detail}`, 'failed'));
         warnings.forEach(w => addFileItem(`  • [${w.code}] ${w.message}`, 'failed'));
       }
-      // Re-expand log on completion so users can scroll back.
-      setLogExpanded(true);
 
-      // Desktop shortcut: created automatically when missing or stale —
-      // part of "one click does everything", no prompt.
+      // Desktop shortcut: part of the same transaction when the option is
+      // checked (default). Idempotent — the managed shortcut is replaced
+      // in place and legacy names are cleaned, never duplicated.
       //
       // Isolated from the verdict above. This block lives INSIDE the same
       // try as the fix itself, so a throw here used to be caught by the
@@ -773,26 +1007,55 @@ async function runFix() {
       // "FIX FAILED". The shortcut is a separate operation with a separate
       // outcome, and it reports itself.
       addEmptyLine();
+      let shortcutNote = '';
+      let shortcutFailed = false;
+      let shortcutSkipped = false;
       try {
         const status = await window.electronAPI.shortcutExists();
         if (status && status.exists && status.valid) {
           addFileItem(`Desktop shortcut already present: ${status.path}`, 'success');
+          shortcutNote = 'Desktop shortcut is ready: Zoom — User1';
+        } else if (!wantShortcut) {
+          shortcutSkipped = true;
+          addFileItem('Desktop shortcut skipped (option unchecked).', 'header');
+          shortcutNote = 'Desktop shortcut not created — you can create it from this screen.';
         } else {
           if (status && status.exists && status.stale) {
             addFileItem('An existing desktop shortcut no longer points at this app — replacing it.', 'failed');
           }
-          await createShortcut(true);
+          const sc = await createShortcut(true);
+          if (sc.ok) shortcutNote = 'Desktop shortcut created: Zoom — User1';
+          else shortcutFailed = true;
         }
       } catch (err) {
         // Unknown shortcut state: say so, and do not imply the shortcut is
         // there. The fix verdict above is untouched.
+        shortcutFailed = true;
         addFileItem(
           'Could not check whether the desktop shortcut exists, so it was not created. ' +
-          'The fix itself is unaffected — use the "Create Zoom Helper Shortcut" button to try again.' +
+          'The fix itself is unaffected — use the "Create desktop shortcut" button to try again.' +
           (err && err.message ? ` Detail for support: ${err.message}` : ''),
           'failed'
         );
       }
+
+      // Wizard outcome pane — a real terminal screen: Launch as User1 is
+      // the next step; details and support are one quiet click away.
+      const outcomeActions = {
+        launch: !shortcutFailed,
+        shortcut: shortcutFailed || shortcutSkipped,
+        shortcutQuiet: shortcutSkipped && !shortcutFailed,
+        rescan: true, details: true, support: true,
+        note: shortcutNote
+      };
+      if (partial) {
+        showNoticePane('warn', WIZARD.PARTIAL_TITLE, WIZARD.PARTIAL_SUB);
+      } else if (warnings.length) {
+        showNoticePane('ok', WIZARD.SUCCESS_TITLE, WIZARD.WARNINGS_SUB);
+      } else {
+        showNoticePane('ok', WIZARD.SUCCESS_TITLE, WIZARD.SUCCESS_SUB);
+      }
+      setActions(outcomeActions);
     } else {
       const res = result || {};
       addFileItem(`FIX FAILED: ${friendlyError(res.error)}`, 'failed');
@@ -803,8 +1066,9 @@ async function runFix() {
         res.warnings.forEach(w => addFileItem(`  • [${w.code}] ${w.message}`, 'failed'));
       }
       finalizeStages('fail');
-      setStatus('error', 'Failed');
-      setLogExpanded(true);
+      setStatus('error', 'Something went wrong');
+      showNoticePane('err', WIZARD.FAIL_TITLE, friendlyError(res.error));
+      setActions({ fix: true, fixLabel: 'Try again', details: true, support: true });
       copyErrBtn.classList.add('visible');
     }
   } catch (err) {
@@ -813,15 +1077,14 @@ async function runFix() {
     addEmptyLine();
     addFileItem(`FIX FAILED: ${unexpectedFixFailure(err)}`, 'failed');
     finalizeStages('fail');
-    setStatus('error', 'Failed');
-    setLogExpanded(true);
+    setStatus('error', 'Something went wrong');
+    showNoticePane('err', WIZARD.FAIL_TITLE, unexpectedFixFailure(err));
+    setActions({ fix: true, fixLabel: 'Try again', details: true, support: true });
     copyErrBtn.classList.add('visible');
   } finally {
-    // Always release the run lock and re-enable controls — even on a throw.
+    // Always release the run lock — the outcome branches above own the
+    // action-area state.
     isRunning = false;
-    fixBtn.disabled = false;
-    fixBtn.textContent = 'Run again';
-    shortcutBtn.disabled = false;
   }
 }
 
@@ -867,7 +1130,9 @@ copyErrBtn.addEventListener('click', async () => {
 // to have no try/catch at all, so an IPC rejection from the toolbar button
 // produced an unhandled rejection and NOTHING on screen — the user clicked
 // and the app said neither "done" nor "failed".
-// Returns true only when the shortcut was actually created.
+// Returns { ok, path?, error? } — ok true only when the shortcut was
+// actually created. The raw error goes to the log (Advanced details); the
+// callers translate the outcome into wizard copy.
 async function createShortcut(showHeader) {
   if (showHeader) {
     addFileItem('CREATING ZOOM HELPER SHORTCUT...', 'header');
@@ -877,13 +1142,13 @@ async function createShortcut(showHeader) {
     result = await window.electronAPI.createShortcut();
   } catch (err) {
     addFileItem(shortcutFailureMessage(err && err.message), 'failed');
-    return false;
+    return { ok: false, error: err && err.message };
   }
   // A missing/void result is not a success. `result.success` on undefined
   // used to throw here and get swallowed by the caller.
   if (!result || !result.success) {
     addFileItem(shortcutFailureMessage(result && result.error), 'failed');
-    return false;
+    return { ok: false, error: (result && result.error) || '' };
   }
   addFileItem(`Shortcut created: ${result.path}`, 'success');
 
@@ -900,7 +1165,7 @@ async function createShortcut(showHeader) {
   } else if ((result.legacyRemoved || []).length) {
     addFileItem(`Older shortcut removed: ${result.legacyRemoved.join(', ')}`, 'success');
   }
-  return true;
+  return { ok: true, path: result.path };
 }
 
 // ============================================================
@@ -1008,15 +1273,36 @@ window.addEventListener('DOMContentLoaded', async () => {
   fixBtn.addEventListener('click', onFixButtonClick);
   // Explicit manual rescan (§9) — same guarded entry point as the
   // focus-rescan; runEnvironmentScan() no-ops while a scan or fix runs.
-  document.getElementById('rescanBtn').addEventListener('click', () => runEnvironmentScan());
+  rescanBtn.addEventListener('click', () => runEnvironmentScan());
+  // "View details" — the single diagnostics toggle (flips to Hide details).
+  detailsBtn.addEventListener('click', () => setLogExpanded(advPanel.classList.contains('hidden')));
   shortcutBtn.addEventListener('click', async () => {
-    // Direct create — no confirmation round-trip. Logs land in the running
-    // view's log region; flip to it so the result is visible.
+    // Direct create — no confirmation round-trip. The raw result logs to
+    // Advanced details; the wizard shows the friendly outcome.
     if (isRunning) return;
-    showView('running');
-    logToggle.classList.add('visible');
-    setLogExpanded(true);
-    await createShortcut(true);
+    shortcutBtn.disabled = true;
+    const sc = await createShortcut(true);
+    shortcutBtn.disabled = false;
+    if (sc.ok) {
+      showNoticePane('ok', WIZARD.SHORTCUT_DONE_TITLE, WIZARD.SHORTCUT_DONE_SUB);
+      setActions({ rescan: true, details: true });
+      return;
+    }
+    // "No stored helper sign-in" is a sequencing state, not a failure: the
+    // repair has to run once before a shortcut can exist. Everything else
+    // is a genuine (but recoverable) failure — retry + details, never a
+    // red raw log line in the primary flow.
+    if (/no stored helper sign-in/i.test(sc.error || '')) {
+      showNoticePane('warn', WIZARD.SHORTCUT_NOT_READY_TITLE, WIZARD.SHORTCUT_NOT_READY_SUB);
+      setActions({
+        fix: canRunFix,
+        shortcut: !canRunFix, shortcutQuiet: true,
+        rescan: true, details: true
+      });
+    } else {
+      showNoticePane('warn', WIZARD.SHORTCUT_FAILED_TITLE, WIZARD.SHORTCUT_FAILED_SUB);
+      setActions({ shortcut: true, rescan: true, details: true });
+    }
   });
 
   window.electronAPI.onFixLog(({ line, kind }) => {
@@ -1052,9 +1338,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Initial state: home view + auto-run the environment checklist.
-  showView('home');
-  setStageTracker(false);
+  // Initial state: checking pane + auto-run the environment checklist.
+  setWizardPane('checking');
+  renderWizChecks(null);
+  setActions({});
+  setLogExpanded(false);
 
   // Elevation gate. If the probe itself throws we do NOT fall through to a
   // scan and we do NOT leave the page in its static "Ready" state: an
@@ -1067,18 +1355,19 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 
   if (elevated !== true) {
-    // Say what is needed, and what declining costs — nothing is repaired,
-    // and the other checks did not run, so their state is unknown rather
-    // than passing. Rendering only the admin row used to make the other
-    // eight checks vanish, which reads as "nothing else to report".
+    // Reaching this pane means the automatic self-elevation attempt at
+    // startup did not go through (Windows approval declined, or the probe
+    // could not confirm rights) — main.js relaunches elevated on its own
+    // before the window even shows. Say what is needed, and what declining
+    // costs — nothing is repaired, and the other checks did not run, so
+    // their state is unknown rather than passing. Rendering only the admin
+    // row used to make the other eight checks vanish, which reads as
+    // "nothing else to report".
     checkList.innerHTML = '';
     const adminMsg = elevated === false
-      ? 'Not running as Administrator. Creating the helper account, writing camera and microphone ' +
-        'consent, and launching Zoom as user1 all require it. Nothing has been changed on this ' +
-        'computer. Close 1132 Fixer, right-click its icon and choose "Run as administrator".'
+      ? WIZARD.ADMIN_SUB
       : 'Could not confirm whether 1132 Fixer is running as Administrator, so it is treated as not ' +
-        'elevated. Nothing has been changed on this computer. Close 1132 Fixer, right-click its icon ' +
-        'and choose "Run as administrator".';
+        'elevated. Nothing has been changed on this computer. ' + WIZARD.ADMIN_SUB;
     let group = null;
     for (const c of CHECK_ORDER) {
       if (c.group !== group) { checkList.appendChild(renderGroupHeader(c.group)); group = c.group; }
@@ -1087,39 +1376,87 @@ window.addEventListener('DOMContentLoaded', async () => {
         : renderCheckRow(c.key, c.label, 'unknown', NOT_ELEVATED_CARD_MESSAGE));
     }
     checkList.setAttribute('aria-busy', 'false');
-    fixBtn.disabled = true;
     updateFixDisabledNote(['Administrator'], false);
-    shortcutBtn.disabled = true;
-    setStatus('error', elevated === false ? 'Not Admin' : 'Admin unknown');
+    // Wizard: a genuine manual blocker — amber, with the retry as the one
+    // primary action (Windows shows its own approval prompt).
+    const groupStatuses = {};
+    for (const g of WIZARD_GROUPS) groupStatuses[g.group] = g.keys.includes('admin') ? 'blocked' : 'unknown';
+    renderWizChecks(groupStatuses);
+    setStatus('warn', 'Action required');
+    showResultPane('warn', WIZARD.ADMIN_TITLE, adminMsg);
+    setActions({ elevate: true, details: true });
     return;
   }
-  shortcutBtn.disabled = false;
   runEnvironmentScan();
 });
+
+// "Continue as administrator" — asks main to relaunch elevated. Windows
+// shows its own approval prompt; on success main quits this instance, so
+// the button only needs to handle the declined path.
+elevateBtn.addEventListener('click', async () => {
+  elevateBtn.disabled = true;
+  elevateBtn.textContent = 'Waiting for Windows approval…';
+  let started = false;
+  try {
+    const r = await window.electronAPI.relaunchElevated();
+    started = !!(r && r.started);
+  } catch (_) { /* treated as declined */ }
+  if (started) {
+    elevateBtn.textContent = WIZARD.ADMIN_RESTARTING;
+    return; // main.js quits this instance; the elevated one takes over
+  }
+  elevateBtn.disabled = false;
+  elevateBtn.textContent = 'Continue as administrator';
+  showResultPane('warn', WIZARD.ADMIN_TITLE, WIZARD.ADMIN_DECLINED_SUB);
+});
+
+// "Open Zoom" (§21) — runs the SAME launcher artifact the desktop
+// shortcut runs (no secret travels; the script unseals the DPAPI blob).
+launchBtn.addEventListener('click', async () => {
+  launchBtn.disabled = true;
+  let ok = false;
+  try {
+    const r = await window.electronAPI.launchZoomHelper();
+    ok = !!(r && r.success);
+  } catch (_) { /* reported below */ }
+  buttonNote.textContent = ok
+    ? 'Zoom is starting as the helper account.'
+    : 'Could not start Zoom — run the fix once, then try again.';
+  buttonNote.hidden = false;
+  setTimeout(() => { launchBtn.disabled = false; }, 1500);
+});
+
+// "Support Report" — same sanitized report modal as the feedback flow.
+supportBtn.addEventListener('click', () => openSupportReport());
 
 // ============================================================
 // Footer: app version + admin badge
 // ============================================================
 (async () => {
+  // Version stays hidden until the real value arrives — no "v—" placeholder.
   try {
     const v = await window.electronAPI.getVersion();
-    document.getElementById('appVersion').textContent = 'v' + v;
-  } catch (_) {}
+    const el = document.getElementById('appVersion');
+    el.textContent = 'v' + v;
+    el.hidden = false;
+  } catch (_) { /* stays hidden */ }
   // The badge ships neutral ("Checking rights…") and is only promoted to the
   // green Administrator state by a measured `true`. A throw leaves it saying
   // the rights are unknown rather than silently asserting Administrator,
   // which is what the old static markup plus an empty catch produced.
+  // Privilege status is quiet metadata: hidden until measured (the header
+  // badge is the ONE live indicator while checks run), then a plain
+  // dot + text — never a button, never a second live region.
   const ab = document.getElementById('adminBadge');
   const paint = (text, tone) => {
     ab.textContent = text;
     ab.classList.toggle('admin-badge', tone === 'ok');
-    ab.style.color       = tone === 'ok' ? '' : 'var(--danger)';
-    ab.style.borderColor = tone === 'ok' ? '' : 'var(--danger-bd)';
-    ab.style.background  = tone === 'ok' ? '' : 'var(--danger-bg)';
+    ab.style.color = tone === 'ok' ? '' : 'var(--danger)';
+    ab.hidden = false;
   };
   try {
     const elevated = await window.electronAPI.isElevated();
-    paint(elevated === true ? 'Administrator' : 'Not Admin', elevated === true ? 'ok' : 'bad');
+    paint(elevated === true ? 'Running as administrator' : 'Not running as administrator', elevated === true ? 'ok' : 'bad');
   } catch (_) {
     paint('Admin rights unknown', 'bad');
   }
@@ -1176,7 +1513,118 @@ async function loadSysInfo() {
 }
 
 document.getElementById('btnSupport').addEventListener('click', openFeedback);
-document.getElementById('btnVisitSite').addEventListener('click', () => window.electronAPI.openWebsite());
+
+// ============================================================
+// Explore modal (directive 2026-08-23) — a destination CHOOSER only. The
+// renderer sends a fixed key ('fixer' | 'botify'); the main process owns
+// the key→URL map and the https allowlist, and the site opens in the
+// system browser — this window never navigates anywhere.
+// ============================================================
+const exploreOverlay = document.getElementById('exploreOverlay');
+const exploreStatus  = document.getElementById('exploreStatus');
+let releaseExploreTrap = null;
+
+// External-open indicator (16×16) and the generic fallback glyph for
+// destinations without a supplied logo (§33: simple web glyph — never a
+// broken image, never invented artwork).
+const EXPLORE_OPEN_SVG =
+  `<svg class="explore-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
+const EXPLORE_FALLBACK_SVG =
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>`;
+
+// Project disclosure (addendum 2026-08-23) — filled from the messages.js
+// DISCLOSURE catalog into both instances (shell + Explore), so the exact
+// approved wording lives in one place. Informational only: no canonical
+// click target was mandated, so nothing here is a link.
+// Icon: the operator's 1132 open-source badge (assets/brand/
+// open-source-badge.png) at 16px — trust metadata, never a CTA.
+function renderDisclosure(el) {
+  if (!el) return;
+  el.setAttribute('aria-label', DISCLOSURE.ARIA);
+  el.innerHTML = `<img class="os-icon" src="assets/brand/open-source-badge.png" alt="" aria-hidden="true">` +
+    `<span class="os-label">${escapeHtml(DISCLOSURE.OS_LABEL)}</span>` +
+    `<span class="os-sep" aria-hidden="true">·</span>` +
+    `<span class="os-independence">${escapeHtml(DISCLOSURE.INDEPENDENCE)}</span>`;
+}
+renderDisclosure(document.getElementById('projectDisclosure'));
+renderDisclosure(document.getElementById('exploreDisclosure'));
+
+// Build the launcher panel from the EXPLORE_VIEW catalog (messages.js) —
+// destinations are declared once, never hand-duplicated across markup.
+// Each button carries its fixed key in data-explore; the key→URL map
+// stays in the main process.
+function buildExplore() {
+  document.getElementById('exploreSub').textContent = EXPLORE_COPY.SUB;
+  const body = document.getElementById('exploreBody');
+  body.innerHTML = '';
+  const cardHtml = (d) => `
+    <button class="explore-choice" type="button" data-explore="${d.key}"
+            aria-label="Open ${escapeHtml(d.name)} (${escapeHtml(d.subtitle)}) in your browser">
+      <span class="explore-logo${d.logo ? '' : ' fallback'}">${
+        d.logo ? `<img src="${d.logo}" alt="">` : EXPLORE_FALLBACK_SVG
+      }</span>
+      <span class="explore-copy">
+        <span class="explore-name">${escapeHtml(d.name)}</span>
+        <span class="explore-desc">${escapeHtml(d.subtitle)}</span>
+      </span>
+      ${EXPLORE_OPEN_SVG}
+    </button>`;
+  const categories = [];
+  for (const d of EXPLORE_VIEW) {
+    if (!categories.includes(d.category)) categories.push(d.category);
+  }
+  for (const cat of categories) {
+    const items = EXPLORE_VIEW.filter(d => d.category === cat);
+    const label = document.createElement('div');
+    label.className = 'explore-group';
+    label.setAttribute('aria-hidden', 'true');
+    label.textContent = cat;
+    body.appendChild(label);
+    const grid = document.createElement('div');
+    const featured = items.length === 1;
+    grid.className = 'explore-grid' + (featured ? ' single' : '');
+    if (items.every(d => d.featured)) grid.classList.add('explore-featured');
+    grid.innerHTML = items.map(cardHtml).join('');
+    body.appendChild(grid);
+  }
+  body.querySelectorAll('.explore-choice[data-explore]').forEach(btn => {
+    btn.addEventListener('click', () => openExploreDestination(btn.dataset.explore));
+  });
+}
+buildExplore();
+
+function openExplore() {
+  exploreStatus.textContent = '';
+  exploreStatus.className = 'fb-status';
+  exploreOverlay.classList.add('show');
+  // installFocusTrap moves focus in and restores it to the opener
+  // (the Explore button) on release.
+  releaseExploreTrap = installFocusTrap(exploreOverlay);
+}
+function closeExplore() {
+  exploreOverlay.classList.remove('show');
+  if (releaseExploreTrap) { releaseExploreTrap(); releaseExploreTrap = null; }
+}
+
+async function openExploreDestination(key) {
+  exploreStatus.className = 'fb-status';
+  let ok = false;
+  try {
+    const r = await window.electronAPI.openExploreDestination(key);
+    ok = !!(r && r.success);
+  } catch (_) { /* rejected key or IPC failure — reported below */ }
+  exploreStatus.textContent = ok ? EXPLORE_COPY.OPENED : EXPLORE_COPY.FAILED;
+  exploreStatus.classList.add(ok ? 'ok' : 'err');
+}
+
+document.getElementById('btnExplore').addEventListener('click', openExplore);
+document.getElementById('exploreClose').addEventListener('click', closeExplore);
+// Backdrop click and Escape both dismiss — this modal is unrelated to the
+// destructive fix flow, so normal dismissal is fine.
+exploreOverlay.addEventListener('click', (e) => { if (e.target === exploreOverlay) closeExplore(); });
+exploreOverlay.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.stopPropagation(); closeExplore(); }
+});
 ['fbClose', 'fbBugCancel', 'fbRatingCancel', 'fbContactCancel'].forEach(id => {
   document.getElementById(id).addEventListener('click', closeFeedback);
 });

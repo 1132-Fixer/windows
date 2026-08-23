@@ -161,7 +161,7 @@ console.log('profile-safety-smoke: Zoom exe discovery (mock paths)');
 console.log('profile-safety-smoke: shortcut name/icon');
 {
   const spec = ps.shortcutSpec();
-  check(spec.filename === 'Open Zoom with 1132 Helper.lnk', 'primary shortcut is the branded helper name');
+  check(spec.filename === 'Zoom — User1.lnk', 'primary shortcut name says exactly what it launches');
   check(spec.launchesAs === 'user1', 'shortcut launches Zoom as user1');
   check(spec.iconResource === '1132-helper-shortcut.ico', 'canonical 1132 helper icon resource');
   check(spec.iconIndex === 0, 'icon index is 0');

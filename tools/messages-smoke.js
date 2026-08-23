@@ -55,7 +55,7 @@ console.log('messages-smoke: fix/scan/shortcut failures');
 }
 {
   const msg = m.shortcutFailureMessage('Exit 1');
-  check(msg.includes('Create Zoom Helper Shortcut'), 'shortcut failure names the retry button');
+  check(msg.includes('Create desktop shortcut'), 'shortcut failure names the retry button');
   check(msg.includes('Exit 1'), 'shortcut failure keeps raw detail');
   check(m.shortcutFailureMessage(null).includes('Nothing else was changed'), 'shortcut failure states blast radius without detail');
 }
@@ -171,6 +171,69 @@ console.log('messages-smoke: Zoom recovery card (directive 2026-08-09, byte-verb
   const tdPer = m.zoomRecoveryTechDetails({ path: null, perUserPath: 'C:\\Users\\a\\AppData\\Roaming\\Zoom\\bin\\Zoom.exe' });
   check(tdPer.includes('C:\\Users\\a\\AppData\\Roaming\\Zoom\\bin\\Zoom.exe'), 'tech details show the per-user path when present');
   check(m.zoomRecoveryTechDetails(null).length > 40, 'tech details work without install data, no throw');
+}
+
+console.log('messages-smoke: wizard states (directive 2026-08-23)');
+{
+  // Group derivation can never drift from CHECK_ORDER: same keys, same order.
+  const derivedKeys = m.WIZARD_GROUPS.flatMap(g => g.keys);
+  check(JSON.stringify(derivedKeys) === JSON.stringify(m.CHECK_ORDER.map(c => c.key)),
+    'WIZARD_GROUPS covers every CHECK_ORDER key, in order');
+  check(m.WIZARD_GROUPS.every(g => g.label && g.label.length >= 3), 'every wizard group has a display label');
+  check(m.WIZARD_GROUPS[0].label === 'Administrator', 'App group presents as Administrator');
+  check(m.WIZARD_GROUPS[1].label === 'Zoom Workplace', 'Zoom group presents as Zoom Workplace');
+
+  // Fix-found headline follows the actual repairable count.
+  check(m.wizardFixFoundTitle(1) === 'One fix found', 'single repairable -> "One fix found"');
+  check(m.wizardFixFoundTitle(3) === '3 fixes found', 'multiple repairables -> "3 fixes found"');
+  check(m.wizardFixFoundSub(['Helper account']) ===
+        "The helper account needs repair. Your Zoom files and data won't be changed.",
+    'single repairable sub is natural language + the one safety line');
+  check(/need repair/.test(m.wizardFixFoundSub(['A', 'B'])), 'plural sub agrees in number');
+  check(/won't be changed/.test(m.wizardFixFoundSub(['A', 'B'])), 'plural sub keeps the safety line');
+  check(m.wizardFixFoundSub([]).length > 20, 'empty label list still yields real copy');
+
+  // Blocked sub names the blockers; the empty case never goes silent.
+  check(/Zoom Workplace needs your attention/.test(m.wizardBlockedSub(['Zoom Workplace'])),
+    'blocked sub names the blocker');
+  check(m.wizardBlockedSub([]).length > 40, 'blocked sub without labels still explains next steps');
+
+  // State copy exists, is real copy, and never leans on raw codes.
+  const wiz = m.WIZARD;
+  const required = ['READY_TITLE', 'READY_SUB', 'UNKNOWN_TITLE', 'UNKNOWN_SUB', 'BLOCKED_TITLE',
+    'ADMIN_TITLE', 'ADMIN_SUB', 'ADMIN_DECLINED_SUB', 'ADMIN_RESTARTING',
+    'SUCCESS_TITLE', 'SUCCESS_SUB', 'PARTIAL_TITLE', 'PARTIAL_SUB', 'FAIL_TITLE',
+    'SHORTCUT_NOT_READY_TITLE', 'SHORTCUT_NOT_READY_SUB', 'SHORTCUT_FAILED_TITLE',
+    'SHORTCUT_FAILED_SUB', 'SHORTCUT_DONE_TITLE', 'SHORTCUT_DONE_SUB'];
+  check(required.every(k => typeof wiz[k] === 'string' && wiz[k].length >= 5),
+    'every wizard state has real copy');
+  check(wiz.SHORTCUT_NOT_READY_SUB.includes('Run the repair once'),
+    'shortcut-not-ready copy points at the repair as the next step');
+  check(/unknown/i.test(wiz.UNKNOWN_SUB) && /not a pass/i.test(wiz.UNKNOWN_SUB),
+    'unknown state stays honest: unknown is not a pass');
+  check(/Advanced details/.test(wiz.PARTIAL_SUB), 'partial outcome points at Advanced details');
+
+  // Self-elevation honesty: approval happens in the WINDOWS prompt, the
+  // app never asks for a password, and a decline is reported as a decline.
+  check(/Windows will ask for approval/.test(wiz.ADMIN_SUB), 'admin sub says Windows asks for approval');
+  check(/Nothing has been changed/.test(wiz.ADMIN_SUB), 'admin sub states nothing changed yet');
+  check(/declined|did not complete/.test(wiz.ADMIN_DECLINED_SUB), 'declined copy names the decline');
+  check(/Run as administrator/.test(wiz.ADMIN_DECLINED_SUB), 'declined copy keeps the manual fallback');
+}
+
+console.log('messages-smoke: project disclosure (addendum 2026-08-23)');
+{
+  // Exact approved wording — byte-pinned, never reworded.
+  check(m.DISCLOSURE.INDEPENDENCE === 'Independent project — not affiliated with Zoom.',
+    'independence disclosure is the exact approved wording');
+  check(m.DISCLOSURE.OS_LABEL === 'Open Source', 'open-source label is exact');
+  check(m.DISCLOSURE.ARIA.includes(m.DISCLOSURE.INDEPENDENCE) && !m.DISCLOSURE.ARIA.includes('·'),
+    'accessible name carries the disclosure without the separator glyph');
+  // No unsupported endorsement language anywhere in the catalog.
+  const catalogText = JSON.stringify(m);
+  for (const banned of ['Verified by Zoom', 'Zoom Certified', 'Zoom Partner', 'Official Zoom', 'endorsed by Zoom']) {
+    check(!catalogText.includes(banned), `catalog never says "${banned}"`);
+  }
 }
 
 console.log('messages-smoke: catalog-wide bans');

@@ -98,6 +98,7 @@ const SUMMARY_TONE_ICON = {
   warn:     '!',
   error:    '⨯', // cross
   scanning: '↻', // refresh
+  action:   '●', // fix available — app-repairable, not a user warning
   unknown:  '?'
 };
 
@@ -119,22 +120,28 @@ function summarizeChecks(statuses, overall, canRunFix) {
   if (list.length === 0) {
     return { tone: 'error', text: 'No checks ran' };
   }
+  // A blocked row is a genuine external/manual blocker — amber "Action
+  // required". Red stays reserved for actual failures (scan threw, fix
+  // failed), which the runtime paths set directly.
   if (list.indexOf('blocked') !== -1 || overall === 'blocked' || canRunFix === false) {
-    return { tone: 'error', text: 'Blocked' };
+    return { tone: 'warn', text: 'Action required' };
   }
   // Unknown outranks every non-blocking state: we do not know, so we do
   // not claim.
   if (list.indexOf('unknown') !== -1) {
     return { tone: 'warn', text: 'Unknown' };
   }
+  // Repairable means the APP can fix it with one click — that is an offer,
+  // not a warning, so it gets the accent "Fix available" badge, never the
+  // generic amber "Action needed" it used to show.
   if (list.indexOf('repairable') !== -1) {
-    return { tone: 'warn', text: 'Action needed' };
+    return { tone: 'action', text: 'Fix available' };
   }
   if (list.indexOf('warning') !== -1) {
     return { tone: 'warn', text: 'Ready (warnings)' };
   }
   if (list.indexOf('pending') !== -1) {
-    return { tone: 'scanning', text: 'Checking' };
+    return { tone: 'scanning', text: 'Checking…' };
   }
   // Every row is 'ready'. Only a roll-up that agrees earns the green
   // badge; an unrecognised roll-up is reported as unknown.
@@ -177,7 +184,7 @@ function updateBannerView(data) {
   switch (state) {
     case 'downloading': {
       const pct = Math.max(0, Math.min(100, Number(d.percent) || 0));
-      return { show: true, msg: 'Downloading ' + v + ' in the background… ' + pct + '%', progress: pct };
+      return { show: true, msg: 'Updating to ' + v + ' — ' + pct + '%. You can keep using 1132 Fixer while it downloads.', progress: pct };
     }
     case 'restarting':
       return {

@@ -21,8 +21,10 @@ const path = require('path');
 const IPC_INVOKE_CHANNELS = Object.freeze([
   'run-fix',
   'create-shortcut',
+  'launch-zoom-helper',
   'shortcut-exists',
   'is-elevated',
+  'relaunch-elevated',
   'preflight',
   'preflight-scan',
   'support-report',
@@ -32,7 +34,7 @@ const IPC_INVOKE_CHANNELS = Object.freeze([
   'install-update-now',
   'defer-update',
   'open-download-page',
-  'open-website',
+  'open-explore-destination',
   'window-minimize',
   'window-maximize',
   'quit-app',
@@ -66,12 +68,39 @@ const UPDATER_CDN_HOSTS = new Set([
   'release-assets.githubusercontent.com',
   'github-releases.githubusercontent.com',
 ]);
-const WEBSITE_HOSTS = new Set(['1132-fixer.xyz', 'www.1132-fixer.xyz']);
+const WEBSITE_HOSTS = new Set([
+  '1132-fixer.xyz', 'www.1132-fixer.xyz',
+  'botify-network.com', 'www.botify-network.com',
+  'gif.directory', 'www.gif.directory',
+]);
 const ZOOM_HOSTS = new Set(['zoom.us', 'www.zoom.us']);
+
+// Explore modal destinations (operator directive 2026-08-23). The renderer
+// only ever sends one of these KEYS; the URL mapping lives here, in trusted
+// main-process code, so the renderer can never supply an arbitrary URL —
+// not even a different path on an approved host. Every URL must also pass
+// isAllowedExternalUrl — the map is not a bypass.
+const EXPLORE_DESTINATIONS = Object.freeze({
+  fixer: 'https://1132-fixer.xyz/',
+  botify: 'https://botify-network.com/',
+  gifDirectory: 'https://gif.directory/',
+  kickbot: 'https://botify-network.com/apps/botifykickbot',
+  modbot: 'https://botify-network.com/apps/botifymodbot',
+  emojiGenerator: 'https://botify-network.com/apps/emoji-generator-bot',
+  makeItGif: 'https://botify-network.com/apps/makeitgif',
+});
+
+// key -> approved https URL, or null for anything not in the fixed map.
+function exploreDestinationUrl(key) {
+  if (typeof key !== 'string') return null;
+  if (!Object.prototype.hasOwnProperty.call(EXPLORE_DESTINATIONS, key)) return null;
+  return EXPLORE_DESTINATIONS[key];
+}
 
 const IPC_SCHEMAS = Object.freeze({
   'submit-feedback': { args: ['feedback-type', 'feedback-text', 'screenshot?'] },
   'support-report': { args: ['support-context?'] },
+  'open-explore-destination': { args: ['explore-destination'] },
 });
 
 function rendererWebPreferences(preloadPath) {
@@ -232,6 +261,13 @@ function screenshotBytesLength(bytes) {
 
 function coerceArg(kind, value) {
   switch (kind) {
+    case 'explore-destination':
+      // Keys only — a URL-shaped value is rejected here before the handler
+      // ever sees it.
+      if (exploreDestinationUrl(value) === null) {
+        return { ok: false, reason: 'destination not allowed' };
+      }
+      return { ok: true, value };
     case 'feedback-type':
       if (typeof value !== 'string' || !FEEDBACK_TYPES.includes(value)) {
         return { ok: false, reason: 'type not allowed' };
@@ -355,6 +391,8 @@ module.exports = {
   parseHttpsUrl,
   isAllowedUpdaterUrl,
   isAllowedExternalUrl,
+  EXPLORE_DESTINATIONS,
+  exploreDestinationUrl,
   openExternalSafe,
   isAllowedRendererNavigation,
   hardenWebContents,

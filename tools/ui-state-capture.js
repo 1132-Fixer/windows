@@ -130,7 +130,8 @@ function mockScript(cfg) {
     },
     supportReport: async () => ({ markdown: '(mock support report)' }),
     onFixLog: () => () => {}, onUpdateStatus: () => () => {}, onZoomInstallerDone: () => () => {},
-    installUpdateNow: pending, deferUpdate: pending, openDownloadPage: pending, openWebsite: pending,
+    installUpdateNow: pending, deferUpdate: pending, openDownloadPage: pending,
+    openExploreDestination: async () => ({ success: true }),
     minimizeWindow: async () => {}, maximizeWindow: async () => {}, quitApp: async () => {},
     submitFeedback: async () => ({ success: true }),
     getVersion: async () => '5.6.0',
@@ -227,6 +228,13 @@ const SCENARIOS = [
     cfg: { scans: [blockedScan(PER_USER_INSTALL)] },
     action: { openTechDetails: true },
     expect: { cardVisible: true, techOpen: true }
+  },
+  {
+    id: 'explore-modal',
+    desc: 'Explore footer control opens the destination chooser modal (directive 2026-08-23)',
+    cfg: { scans: [readyScan()] },
+    action: { click: '#btnExplore' },
+    expect: { explore: true }
   }
 ];
 
@@ -308,6 +316,7 @@ async function renderScenario(pageUrl, scenario, variant, fileName, meta) {
       const card = document.getElementById('zoomRecovery');
       const st = document.getElementById('zrStatus');
       const tech = document.getElementById('zrTech');
+      const explore = document.getElementById('exploreOverlay');
       return {
         hasCard: !!card,
         cardVisible: !!card && !card.hidden,
@@ -316,6 +325,8 @@ async function renderScenario(pageUrl, scenario, variant, fileName, meta) {
         stateText: st ? st.textContent : null,
         techOpen: tech ? tech.closest('details').open : null,
         techText: tech ? tech.textContent : null,
+        exploreOpen: explore ? explore.classList.contains('show') : null,
+        exploreNames: explore ? Array.from(explore.querySelectorAll('.explore-name')).map(e => e.textContent) : [],
         bodyScrollW: document.body.scrollWidth,
         innerW: window.innerWidth
       };
@@ -323,7 +334,13 @@ async function renderScenario(pageUrl, scenario, variant, fileName, meta) {
 
     let ok = true;
     const problems = [];
-    if (exp.noCardElement) {
+    if (exp.explore) {
+      if (got.exploreOpen !== true) { ok = false; problems.push('explore modal not open'); }
+      const wantNames = '1132 Fixer|Botify Network|BotifyKickBot|BotifyModBot|Emoji Generator Bot|Make It GIF|GIF Directory';
+      if (got.exploreNames.join('|') !== wantNames) {
+        ok = false; problems.push(`destinations: ${JSON.stringify(got.exploreNames)}`);
+      }
+    } else if (exp.noCardElement) {
       if (got.hasCard) { ok = false; problems.push('old tree unexpectedly has #zoomRecovery'); }
     } else {
       if (got.cardVisible !== exp.cardVisible) { ok = false; problems.push(`cardVisible=${got.cardVisible}`); }

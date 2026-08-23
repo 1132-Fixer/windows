@@ -94,8 +94,13 @@ check(tone(['ready', 'ready'], 'ready', true) === GREEN, 'all-ready + overall re
 // 'repairable' branch and fell through to the green badge.
 check(tone(['ready', 'repairable'], 'repairable', true) !== GREEN,
   'a repairable row cannot produce the green summary');
-check(ui.summarizeChecks(['ready', 'repairable'], 'repairable', true).text === 'Action needed',
-  'a repairable row summarises as "Action needed"');
+// Wizard state language (directive 2026-08-23): repairable = the APP can
+// fix it — an accent "Fix available" offer, never the generic amber
+// "Action needed" it used to show.
+check(ui.summarizeChecks(['ready', 'repairable'], 'repairable', true).text === 'Fix available',
+  'a repairable row summarises as "Fix available"');
+check(ui.summarizeChecks(['ready', 'repairable'], 'repairable', true).tone === 'action',
+  'repairable uses the accent "action" tone, not amber');
 check(tone(['ready', 'repairable', 'warning'], 'repairable', true) !== GREEN,
   'repairable + warning (overall=repairable) cannot produce the green summary');
 
@@ -106,7 +111,11 @@ check(tone(['ready', 'ready', 'repairable', 'ready'], 'repairable', true) !== GR
   'TEMP/suffixed helper profile (repairable) never rolls up green');
 
 check(tone(['ready', 'warning'], 'warning', true) !== GREEN, 'a warning row cannot produce the green summary');
-check(tone(['ready', 'blocked'], 'blocked', false) === 'error', 'a blocked row summarises as error');
+// Blocked = a genuine external/manual blocker — amber "Action required".
+// Red stays reserved for actual failures (scan threw, fix failed).
+check(tone(['ready', 'blocked'], 'blocked', false) === 'warn', 'a blocked row summarises as amber');
+check(ui.summarizeChecks(['ready', 'blocked'], 'blocked', false).text === 'Action required',
+  'a blocked row summarises as "Action required"');
 check(tone(['ready', 'unknown'], 'ready', true) !== GREEN, 'an unknown row cannot produce the green summary');
 check(ui.summarizeChecks(['ready', 'unknown'], 'ready', true).text === 'Unknown',
   'an unknown row summarises as "Unknown"');
@@ -117,7 +126,8 @@ check(tone(['ready', 'pending'], 'ready', true) === 'scanning', 'a still-pending
 // may be a state it cannot see.
 check(tone(['ready', 'ready'], 'brand-new-rollup', true) !== GREEN,
   'an unrecognised overall label cannot produce the green summary');
-check(tone(['ready'], 'ready', false) === 'error',
+check(tone(['ready'], 'ready', false) === 'warn' &&
+      ui.summarizeChecks(['ready'], 'ready', false).text === 'Action required',
   'canRunFix=false is reported even when no card is blocked (non-card blockers)');
 
 // Zero rows is "nothing was checked", not "nothing is wrong".
@@ -129,7 +139,7 @@ check(tone(undefined, 'ready', true) === 'error', 'a missing status list is an e
 console.log('ui-state-smoke: summary icon');
 
 check(ui.summaryIcon('done') === '✓', "tone 'done' is the tick");
-for (const t of ['warn', 'error', 'scanning', 'unknown', '', undefined, 'brand-new', 'toString']) {
+for (const t of ['warn', 'error', 'scanning', 'action', 'unknown', '', undefined, 'brand-new', 'toString']) {
   check(ui.summaryIcon(t) !== '✓', `tone ${JSON.stringify(t)} is NOT the tick`);
 }
 

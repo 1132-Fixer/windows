@@ -69,11 +69,20 @@ file dialog and is re-validated in the main process.
 `https:` with no userinfo, on:
 
 - `github.com/1132-Fixer/windows/...` (releases page)
-- `1132-fixer.xyz`
+- `1132-fixer.xyz` / `www.1132-fixer.xyz`
+- `botify-network.com` / `www.botify-network.com` (Explore destinations)
+- `gif.directory` / `www.gif.directory` (Explore destination)
 - `zoom.us` / `www.zoom.us` (the catalog admin download)
 
 Anything else, including `http:`, `file:`, `javascript:`, a GitHub repo that
 is not this one, or a suffix host (`github.com.evil.example`), is refused.
+
+The footer's Explore modal never sends a URL over IPC at all: the renderer
+sends one of the fixed destination keys in `EXPLORE_DESTINATIONS`
+(`open-explore-destination` schema rejects everything else), the main
+process maps the key to its hard-coded URL, and that URL still has to pass
+`openExternalSafe()`. A renderer compromise cannot open an arbitrary page —
+not even a different path on an approved host.
 
 ## Updater feed
 

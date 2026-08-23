@@ -99,6 +99,38 @@ function launcherScriptContent(fixUser, zoomPath, zoomDir) {
   ].join('\r\n');
 }
 
+// Legacy launcher parser (pre-6.0 upgrade path). Installs made by 5.x wrote
+// the helper password as a plaintext single-quoted literal inside the
+// launcher script itself — no DPAPI blob existed yet. After an in-place
+// upgrade the blob is therefore missing while a WORKING sign-in is sitting
+// on disk, and create-shortcut used to refuse with "No stored helper
+// sign-in was found" — factually wrong, and a dead end until the next
+// elevated fix run. This extracts that credential so the caller can seal
+// it with DPAPI and rewrite the launcher in the secret-free format,
+// removing the plaintext from disk in the same motion.
+//
+// Only the exact legacy shape is accepted: a quoted ConvertTo-SecureString
+// literal AND a PSCredential naming the expected helper user. The current
+// launcher format never matches (its ConvertTo-SecureString argument is a
+// DPAPI-unseal expression, not a quoted literal).
+function extractLegacyLauncherCredential(scriptText, fixUser) {
+  const text = String(scriptText || '');
+  const pw = /ConvertTo-SecureString\s+'([^']+)'\s+-AsPlainText/.exec(text);
+  if (!pw) return null;
+  const user = /PSCredential\('([^']+)'/.exec(text);
+  if (!user || user[1] !== fixUser) return null;
+  return isMigratableLegacyPassword(pw[1]) ? { password: pw[1] } : null;
+}
+
+// Migration-safety predicate. The 5.x alphabet is not guaranteed to match
+// today's, so this only bans what would actually be unsafe on the sealing
+// path (a single-quoted PS literal inside a tmp script file): apostrophes
+// and CR/LF terminate the literal; everything else must be printable ASCII.
+// Length bounds reject obvious garbage without stranding a real password.
+function isMigratableLegacyPassword(pw) {
+  return typeof pw === 'string' && /^[\x20-\x7E]{8,64}$/.test(pw) && !pw.includes("'");
+}
+
 module.exports = {
   PASSWORD_LENGTH,
   PASSWORD_ALPHABET,
@@ -106,5 +138,7 @@ module.exports = {
   generateHelperPassword,
   isSafeHelperPassword,
   CRED_BLOB_NAME,
-  launcherScriptContent
+  launcherScriptContent,
+  extractLegacyLauncherCredential,
+  isMigratableLegacyPassword
 };
