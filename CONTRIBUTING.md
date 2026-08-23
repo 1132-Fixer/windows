@@ -46,7 +46,7 @@ What does **not** belong here:
 
 ## Releases
 
-Maintainers publish by pushing a `v*` tag. GitHub Actions builds Setup and Portable artifacts onto this repository's Releases. The updater feed is `https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml`. Do not point the updater at a different repository without a documented migration. Do not delete `PrimeUpYourLife/1132-Fixer-Windows-Releases` while residual v5.5.1 clients still poll its `latest.yml`. Version truth is `package.json`; do not bump it without a matching release.
+Maintainers publish by pushing a `v*` tag. GitHub Actions builds Setup and Portable artifacts onto this repository's Releases. The feed a build polls is fixed at build time by `build.publish` in the commit it was built from; `main` sets that to `https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml`, which the **next** build will use and which no shipped binary polls yet. Shipped v5.6.0 binaries poll the generic `botify-network.com` broker, and v5.5.1 and earlier poll the old Releases repo — see [`docs/development/updater-channel.md`](docs/development/updater-channel.md). Do not point the updater at a different repository without a documented migration. Do not delete `PrimeUpYourLife/1132-Fixer-Windows-Releases` while residual v5.5.1 clients still poll its `latest.yml`; archive it rather than deleting it. Version truth is `package.json`; do not bump it without a matching release.
 
 ## Code of conduct
 
