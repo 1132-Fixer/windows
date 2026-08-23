@@ -85,7 +85,7 @@ const provenance = {
   product: {
     name: pkg.name,
     version: pkg.version,
-    publisherName: pkg.build?.win?.publisherName ?? null,
+    publisherName: pkg.build?.win?.signtoolOptions?.publisherName ?? pkg.build?.win?.publisherName ?? null,
   },
 
   source: {

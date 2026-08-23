@@ -26,7 +26,7 @@
   "license": "MIT",
   "devDependencies": {
     "electron": "^43.4.1",
-    "electron-builder": "^24.9.1"
+    "electron-builder": "^26.15.3"
   },
   "overrides": {
     "tar": "^7.5.22"
@@ -62,7 +62,9 @@
       "icon": "assets/icon.ico",
       "requestedExecutionLevel": "requireAdministrator",
       "signAndEditExecutable": true,
-      "publisherName": "High Texas",
+      "signtoolOptions": {
+        "publisherName": "High Texas"
+      },
       "verifyUpdateCodeSignature": false
     },
     "nsis": {

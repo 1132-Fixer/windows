@@ -88,7 +88,10 @@ packages.push({
   licenseConcluded: pkg.license ?? 'NOASSERTION',
   licenseDeclared: pkg.license ?? 'NOASSERTION',
   copyrightText: pkg.build?.copyright ?? 'NOASSERTION',
-  supplier: `Organization: ${pkg.build?.win?.publisherName ?? pkg.author ?? 'NOASSERTION'}`,
+  supplier: `Organization: ${pkg.build?.win?.signtoolOptions?.publisherName ??
+    pkg.build?.win?.publisherName ??
+    pkg.author ??
+    'NOASSERTION'}`,
   primaryPackagePurpose: 'APPLICATION',
   externalRefs: [
     {
