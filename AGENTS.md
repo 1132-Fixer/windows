@@ -1,11 +1,11 @@
 # AGENTS.md
 
 ## Design System
-- `design-system/` is a git submodule (`https://github.com/1132-fixer/design-system.git`) and the source of truth for all design decisions.
-- For any design matter — colors, typography, spacing, components, icons, visual patterns — consult `design-system/` first and follow its tokens/components.
-- Do not invent new visual patterns, colors, or component styles that diverge from `design-system/`.
-- If `design-system/` lacks guidance for a needed case, ask the user before improvising rather than guessing.
-- Run `git submodule update --init --recursive` if `design-system/` appears empty.
+- The source of truth for all design decisions is the separate repository `https://github.com/1132-Fixer/design-system` (docs and tokens; nothing in it is built, imported, or shipped by this repo).
+- For any design matter — colors, typography, spacing, components, icons, visual patterns — consult that repository first and follow its tokens/components.
+- Do not invent new visual patterns, colors, or component styles that diverge from it.
+- If it lacks guidance for a needed case, ask the user before improvising rather than guessing.
+- It is **not** a git submodule of this repository. It used to be, pointing at a commit that no longer exists after the design-system history was rewritten, which broke every `git clone --recurse-submodules` — including Dependabot's, which aborted before reading a manifest and so could not open a PR for three open security advisories. Clone it separately if you need it; do not re-add it as a submodule.
 
 ## Instructions
 
