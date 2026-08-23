@@ -105,21 +105,23 @@ different exits, and only one of them has an exit at all.
 
 | Population | Feed | Does a v5.7 cut from `main` reach it? |
 | --- | --- | --- |
-| v5.6.0 broker clients | `botify-network.com` broker | **Yes.** The broker proxies this repository's releases, so a v5.7 published here is offered on their next poll. They migrate by updating. |
-| v5.5.1 and earlier | old Releases repo, baked in | **Only if a release is published to the old Releases repo.** They never consult the broker and never see this repository — so the migration release is published to their feed as well (see below). |
+| v5.6.0 broker clients | `botify-network.com` broker | **Yes, automatically.** The broker proxies this repository's releases, so any release published here is offered on their next poll. They migrate by updating — no action on the old feed. |
+| v5.5.1 and earlier | old Releases repo, baked in | **Via the one-time pinned v6.0.0 transition release** already on that feed. They discover 6.0.0 once, upgrade in place, and thereafter poll the current channel. No further old-feed publishing is needed. |
 
-A release cut from `main` drains the broker population automatically. The
-legacy population is drained by **publishing the same release to the old
-Releases feed** so their baked-in updater discovers it and upgrades in place —
-see [Legacy compatibility bridge](#legacy-compatibility-bridge). This replaces
-the earlier "migrate by manual reinstall" plan, which is no longer policy:
-manual reinstall is not an acceptable migration path.
+The broker population drains automatically as releases are cut from `main`. The
+legacy population drains through the **single pinned v6.0.0 transition
+release** on the old feed: their baked-in updater discovers it once and upgrades
+in place, after which they are on the current channel — see
+[v6.0.0 is a one-time pinned transition release](#v600-is-a-one-time-pinned-transition-release--not-an-every-release-mirror).
+This replaces the earlier "migrate by manual reinstall" plan, which is no
+longer policy: manual reinstall is not an acceptable migration path.
 
-**Do not delete, and do not freeze into unusability.** The old feed must keep
-answering AND keep receiving the transition release while any supported client
-still polls it. Deleting it breaks those clients silently; archiving it in a
-way that blocks new releases would strand them at their current version. Retire
-it only under the [objective condition](#legacy-compatibility-bridge) below.
+**Do not delete, and do not remove or alter the pinned v6.0.0 release.** The old
+feed must keep answering AND keep serving that exact transition release while
+any supported `<=5.5.1` client still polls it. Deleting it, or replacing/removing
+the v6.0.0 assets, breaks those clients silently. Future releases do **not** need
+to be added here. Retire only under the
+[objective condition](#objective-retirement-condition-not-download-count) below.
 
 ## Legacy compatibility bridge
 
@@ -140,57 +142,72 @@ An updater URL compiled into a shipped binary is a **compatibility contract**.
 | signing | unsigned; `verifyUpdateCodeSignature: false` — the installed client does not require a signed update |
 | app identity | `com.hightexas.1132fixer` (unchanged — the update is an in-place upgrade) |
 
-### The bridge is a single release, published to both feeds
+### v6.0.0 is a one-time pinned transition release — NOT an every-release mirror
 
-A `<=5.5.1` client and a v5.6.0 broker client are migrated by the **same
-release**, no separate transition build required, because one release does both
-steps automatically:
+The legacy feed requires **one permanently available transition release:
+v6.0.0**. Historical releases (v5.3.x–v5.5.1) may remain on that repo; the
+contract is not that the repo holds only one release, but that **v6.0.0 stays
+pinned and unchanged as the transition bridge and that future normal releases
+are not mirrored there**. This is sufficient — and measured (see
+[Measured upgrade proof](#measured-upgrade-proof-2026-08-23)) — because a
+single hop moves a legacy client permanently onto the current channel:
 
 ```
 <=5.5.1 install
   -> polls the old PrimeUpYourLife latest.yml (baked in)
-  -> discovers 6.0.0 there  (we publish 6.0.0 to the old feed too)
-  -> installs 1132-Fixer-Setup-6.0.0.exe as the SAME app (same appId)
+  -> discovers the pinned 6.0.0 transition release there
+  -> installs 1132-Fixer-Setup-6.0.0.exe as the SAME app (same appId, in place)
   -> now running 6.0.0, whose baked app-update.yml is github/1132-Fixer/windows
   -> from here on polls the CURRENT channel and gets every future release
 ```
 
-Step 2 works because 6.0.0 is built from `main`, where `build.publish` is
-`github/1132-Fixer/windows`, so the upgraded client's feed is the current
-channel — the migration is self-completing after one hop.
+The hand-off works because 6.0.0 is built from `main`, where `build.publish` is
+`github/1132-Fixer/windows`. So a `<=5.5.1` client only ever needs to see
+**one** release on the old feed — 6.0.0 — after which the old feed is
+irrelevant to it. **Do not add per-release mirroring** to `release.yml`; the
+transition release alone discharges the compatibility contract. (`release.yml`
+today publishes only to `1132-Fixer/windows`, which is correct.)
 
-**What we publish to the old feed:** the identical `latest.yml`, Setup, and
-`.blockmap` artifacts produced by the `1132-Fixer/windows` release (same
-bytes, same SHA-512). Nothing is rebuilt for the old feed, so the two can never
-diverge.
+**What is pinned on the old feed:** the identical `latest.yml`, Setup, and
+`.blockmap` bytes from the `1132-Fixer/windows` v6.0.0 release (same SHA-512).
+It was uploaded once and must remain available and unchanged.
+
+### When per-release mirroring WOULD become necessary
+
+Only if a future change made 6.0.0 unable to move a client to the current
+channel — e.g. the current channel's provider/host changes in a way a
+`>=6.0.0` baked client cannot follow. That is not the case today (the
+post-upgrade baked feed is `github/1132-Fixer/windows`, proven by test). If it
+ever changes, cut a NEW pinned transition release rather than resuming a
+standing mirror.
 
 ### Objective retirement condition (not download-count)
 
 The old feed may be retired **only** when both hold, and never on
 download-count alone:
 
-1. The current-channel telemetry/feed shows no supported client generation
-   whose baked-in feed is still `PrimeUpYourLife/1132-Fixer-Windows-Releases`
-   (i.e. every `<=5.5.1` install that checks in has already taken the bridge
-   hop to a build that polls the current channel); and
-2. A measured `<=5.5.1 -> 6.0.0` automatic upgrade has been reproduced and is
-   on record (see the testing section of the release notes / this file).
+1. No supported client generation still has
+   `PrimeUpYourLife/1132-Fixer-Windows-Releases` baked in (every `<=5.5.1`
+   install that checks in has already taken the one-hop bridge to a build that
+   polls the current channel); and
+2. The measured `<=5.5.1 -> 6.0.0` automatic upgrade on record
+   ([below](#measured-upgrade-proof-2026-08-23)) still reproduces.
 
-Until then the feed stays live AND keeps receiving each new release. Retire by
-leaving it reachable (archive that still serves assets is fine); never in a way
-that blocks a needed transition release.
+Until then the feed stays live and **retains the pinned v6.0.0 transition
+release**. Retire by leaving it reachable (an archive that still serves the
+v6.0.0 assets is fine); never in a way that removes or alters that release.
 
 ## Checklist
 
 1. Merge the open-source README / LICENSE / updater-home change set.
 2. Keep this repository public.
-3. **Do not delete** `PrimeUpYourLife/1132-Fixer-Windows-Releases`, and keep
-   publishing each release to it, until the
+3. **Do not delete** `PrimeUpYourLife/1132-Fixer-Windows-Releases`, and **keep
+   the pinned v6.0.0 transition release available and unchanged**, until the
    [objective retirement condition](#objective-retirement-condition-not-download-count)
-   is met. It is an active compatibility bridge, not a frozen archive.
-4. Next `v*` tag publishes Setup, Portable, checksums, and `latest.yml` here
-   **and** the same Setup + `latest.yml` + `.blockmap` are mirrored to the
-   legacy feed for `<=5.5.1` clients.
+   is met. It is a one-time compatibility bridge, not an every-release mirror.
+4. Each `v*` tag publishes Setup, Portable, checksums, and `latest.yml` to
+   `1132-Fixer/windows` **only**. Do not mirror future releases to the legacy
+   feed unless [testing proves it necessary](#when-per-release-mirroring-would-become-necessary).
 5. Keep https://1132-fixer.xyz/ pointed at this Releases page.
 
 ---
@@ -254,3 +271,46 @@ release/update endpoint for `<=5.5.1` clients and is never a MOVE target — see
 the deletion-blocked warning above. The MOVE rows point at
 `PrimeUpYourLife/1132-Fixer-Windows` (**no -Releases**), the pre-migration
 *source* repo, which is a project pointer, not release infrastructure.
+
+---
+
+## Measured upgrade proof (2026-08-23)
+
+Both upgrade paths were exercised **end-to-end on a real Windows 11 machine**
+(Smart App Control = enforced), driven by each client's **own** electron-updater
+— not simulated with HTTP/feed calls. In every case the app was merely launched;
+it checked its baked feed, downloaded 6.0.0, and `quitAndInstall`-ed on its own.
+
+**Evidence tiers reached:** STATIC CONFIGURATION ✓ · FEED DISCOVERY ✓ ·
+ARTIFACT EQUIVALENCE ✓ · **INSTALLED AUTO-UPDATE ✓ (both populations).**
+
+### Legacy path — v5.5.1 → 6.0.0 (legacy PrimeUpYourLife feed)
+
+| Step | Evidence |
+| --- | --- |
+| starting install | real `1132 Fixer` **5.5.1**, `C:\Program Files\1132 Fixer\1132 Fixer`, uninstall GUID `c20c91ed-7fa6-5700-98ba-65c22b67c802` |
+| feed queried | installed `resources/app-update.yml` = `github / PrimeUpYourLife / 1132-Fixer-Windows-Releases` |
+| version discovered | 6.0.0 (app downloaded `temp-1132-Fixer-Setup-6.0.0.exe` into the updater cache automatically) |
+| install | app `quitAndInstall`-ed unattended; registry `DisplayVersion` → **6.0.0** at the **same GUID** |
+| post-update feed | `resources/app-update.yml` now = `github / 1132-Fixer / windows` (current channel) |
+| identity | same GUID, **one** uninstall entry, same install path, `1132 Fixer.exe` → 6.0.0.0 |
+| settings | `%APPDATA%\1132 Fixer\launch-zoom-as-user1.ps1` unchanged (SHA-256 `0BA70DC8…` before and after) |
+| side-by-side | none — one Start-Menu shortcut, one uninstall entry, no duplicate app dir |
+| manual reinstall | not required |
+
+### Current path — v5.6.0 → 6.0.0 (botify broker feed)
+
+| Step | Evidence |
+| --- | --- |
+| starting install | `1132 Fixer` **5.6.0**, same GUID `c20c91ed…` |
+| feed queried | installed `app-update.yml` = `generic / https://botify-network.com/downloads/1132-fixer/updates` |
+| version discovered | 6.0.0 (app downloaded it from the broker automatically) |
+| install / post-state | `quitAndInstall` → **6.0.0**, same GUID, one uninstall entry, feed now `github/1132-Fixer/windows`, settings SHA `0BA70DC8…` unchanged |
+
+### What this proves about the pinned bridge
+
+The legacy client's post-update baked feed is `github/1132-Fixer/windows` —
+so after the single 6.0.0 hop it no longer polls the legacy feed at all. That
+is the measured basis for pinning 6.0.0 as a one-time transition and **not**
+mirroring future releases. Note: 6.0.0 is unsigned and SAC-enforced did not
+block the update (the installed client sets `verifyUpdateCodeSignature: false`).

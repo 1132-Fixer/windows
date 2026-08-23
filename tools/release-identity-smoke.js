@@ -71,6 +71,12 @@ const migDoc = path.join(ROOT, 'docs', 'RELEASE-MIGRATION-2026-08.md');
 const mig = fs.existsSync(migDoc) ? fs.readFileSync(migDoc, 'utf8') : '';
 check(mig.includes(LEGACY_FEED_REPO) && /compatibility bridge/i.test(mig), 'migration doc documents the legacy compatibility bridge');
 check(!/migrate by manual reinstall|manually reinstall/i.test(mig) || /not an acceptable|no longer policy|not acceptable/i.test(mig), 'migration doc does not present manual reinstall as the migration strategy');
+// Pinned-transition policy: the doc must describe v6.0.0 as a one-time pinned
+// transition and must NOT claim every future release is mirrored to the legacy
+// feed (release.yml does not do that). Keeps code and docs in agreement.
+check(/pinned/i.test(mig) && mig.includes('6.0.0') && /not[^.]*mirror|one-time|do not mirror/i.test(mig), 'migration doc describes v6.0.0 as a one-time pinned transition (not an every-release mirror)');
+const relYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+check(!relYml.includes(LEGACY_FEED_REPO), 'release.yml does not publish to the legacy feed (docs must not claim it does)');
 
 if (failures) { console.error(`release-identity-smoke: ${failures} FAIL`); process.exit(1); }
 console.log('release-identity-smoke: PASS');
