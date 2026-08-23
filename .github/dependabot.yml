@@ -1,3 +1,18 @@
+# Dependabot clones this repository WITH SUBMODULES. A submodule gitlink that
+# points at a commit the submodule's remote no longer has makes that clone
+# fail, and Dependabot aborts before it can read any manifest — so no update
+# PR can be opened, rebased or closed, including security updates.
+#
+# That happened here: `design-system` was registered as a submodule pinned to
+# 1eb05d6f0a48c4c923aecd3d2796a73a6c48b3d9, which was force-pushed out of
+# 1132-Fixer/design-system. Every Dependabot run failed with
+# "upload-pack: not our ref", and the tmp / @tootallnate/once /
+# @xmldom/xmldom / lodash advisories could not get a PR at all. The submodule
+# was unused and has been removed.
+#
+# Do not add a submodule to this repository unless something actually builds
+# against it, and never pin one to a commit on a branch that gets rewritten.
+
 version: 2
 
 updates:
