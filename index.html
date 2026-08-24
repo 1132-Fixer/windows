@@ -1056,28 +1056,57 @@
        ============================================================ */
     .status-badge.action { color: var(--accent); background: rgba(51, 127, 219, 0.12); }
     .status-badge { min-height: 30px; }
-    .main { padding: var(--s-4) var(--s-6); gap: 0; overflow: hidden; }
+    /* The main pane centers ONE card both axes; the card owns the padding,
+       so the workspace itself carries none. */
+    .main { padding: var(--s-4) var(--s-6) var(--s-5); gap: 0; overflow: hidden; justify-content: center; align-items: center; }
     .workspace {
-      flex: 1 1 auto;
+      flex: 0 1 auto;
       min-height: 0;
       width: 100%;
-      max-width: 640px;
+      max-width: 560px;
       margin: 0 auto;
       display: flex;
       flex-direction: column;
       align-items: center;
+      justify-content: center;
       overflow: hidden;
-      /* Optical center sits slightly ABOVE the mathematical center
-         (design review P0-3, raised further per baseline sign-off). */
-      padding-bottom: 80px;
+    }
+    /* ============================================================
+       REPAIR PANEL — the single centered card. One stable geometry for
+       every state: a min-height keeps success/error/checking from
+       resizing the workspace, and the card centers its own content so
+       each pane lands on the same optical axis. Only the internal
+       diagnostics disclosure scrolls; the card and window never do.
+       ============================================================ */
+    .repair-panel {
+      width: 100%;
+      /* One stable card box for every state: content centers inside it so
+         checking / result / repairing / success / error all occupy the
+         same rectangle and never resize or reposition the workspace. The
+         card only grows past this when a genuinely oversized pane (Zoom
+         recovery) needs it, and then its own pane — not the window —
+         scrolls. */
+      min-height: 416px;
+      max-height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: var(--s-4);
+      padding: var(--s-6) var(--s-6) var(--s-5);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255,255,255,0.02) inset;
+      overflow: hidden;
     }
     .wizard {
       width: 100%;
       display: flex;
       flex-direction: column;
       align-items: center;
-      margin-top: auto; /* pairs with .action-area margin-bottom:auto to center the group */
       min-height: 0;
+      flex: 0 1 auto;
     }
     .wiz-pane {
       display: none;
@@ -1088,7 +1117,8 @@
     }
     .wiz-pane.active {
       display: flex;
-      max-height: 52vh;
+      width: 100%;
+      max-height: 46vh;
       overflow-y: auto; /* only a genuinely oversized pane (Zoom recovery) scrolls */
       animation: wiz-in 200ms ease-out;
     }
@@ -1189,8 +1219,15 @@
       align-items: center;
       gap: var(--s-2);
       min-height: 0;
-      margin-top: var(--s-5);
+      /* Spacing to neighbours is owned by the card's gap; the region only
+         adds its own margin when it actually has visible content (the
+         disclosure link / expanded panel), collapsing to nothing when the
+         state shows neither. */
+      margin-top: 0;
     }
+    /* When the disclosure link and panel are both hidden the region is empty
+       — remove it from the flow so it adds no gap above the actions. */
+    .adv-region:not(:has(.log-toggle.visible)):has(.adv-panel.hidden) { display: none; }
     .log-actions { justify-content: center; }
     .log-toggle {
       display: none;
@@ -1231,9 +1268,9 @@
       flex-direction: column;
       align-items: center;
       gap: var(--s-3);
-      margin-top: var(--s-5);
-      margin-bottom: auto;
-      padding-bottom: var(--s-4);
+      margin: 0;
+      padding-bottom: 0;
+      flex: 0 0 auto;
     }
     .action-area .button-container { width: 100%; justify-content: center; margin: 0; }
     .action-area .btn-primary { flex: 0 1 448px; min-height: 48px; }
@@ -1439,13 +1476,24 @@
 
   <div class="main" role="main">
    <div class="workspace">
+    <!-- ============================================================
+         REPAIR PANEL — ONE centered rounded card is the dominant object
+         of the main workspace (redesign 2026-08-23). The SAME stable
+         shell hosts every wizard state: the state-driven wizard body, the
+         status/explanation it carries, and the primary actions all live
+         inside this single card, so the workspace geometry never jumps as
+         the state changes. Header (product mark + summary badge) sits
+         above it; the footer stays restrained below. Full diagnostics live
+         in the collapsed Advanced-details disclosure inside the card, and
+         only that disclosure ever scrolls — the window never does.
+         ============================================================ -->
+    <div class="repair-panel" id="repairPanel">
 
     <!-- ============================================================
          WIZARD — the whole center is state-driven: one pane visible at
          a time (checking → result → fixing → success / notice) on the
-         shared state layout. The window is the container — no billboard
-         card. Full diagnostics live in the collapsed Advanced-details
-         disclosure, never in the primary flow.
+         shared state layout. Full diagnostics live in the collapsed
+         Advanced-details disclosure, never in the primary flow.
          ============================================================ -->
     <section class="wizard" id="wizardCard" aria-label="Setup status">
 
@@ -1585,6 +1633,7 @@
         <button id="supportBtn" class="btn-quiet" type="button" hidden>Support Report</button>
       </div>
       <p class="button-note" id="buttonNote" hidden></p>
+    </div>
     </div>
    </div>
   </div>

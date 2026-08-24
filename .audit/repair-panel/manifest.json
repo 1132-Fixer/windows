@@ -1,0 +1,142 @@
+{
+  "label": "harness render, mocked electronAPI — not the packaged app",
+  "generated": "2026-08-24T03:04:25.336Z",
+  "viewport": {
+    "width": 1000,
+    "height": 760
+  },
+  "captures": [
+    {
+      "file": "1-checking.png",
+      "scenario": "1-checking",
+      "description": "Environment scan in flight — Checking pane",
+      "label": "harness render, mocked electronAPI — not the packaged app",
+      "viewport": "1000x760",
+      "panel": {
+        "top": 192,
+        "bottom": 608,
+        "left": 220,
+        "right": 780,
+        "width": 560,
+        "height": 416
+      },
+      "centering": {
+        "above": 96,
+        "below": 99,
+        "delta": -3
+      },
+      "verdict": "PASS",
+      "problems": []
+    },
+    {
+      "file": "2-fix-available.png",
+      "scenario": "2-fix-available",
+      "description": "Repairable helper profile — Fix available result pane",
+      "label": "harness render, mocked electronAPI — not the packaged app",
+      "viewport": "1000x760",
+      "panel": {
+        "top": 192,
+        "bottom": 608,
+        "left": 220,
+        "right": 780,
+        "width": 560,
+        "height": 416
+      },
+      "centering": {
+        "above": 96,
+        "below": 99,
+        "delta": -3
+      },
+      "verdict": "PASS",
+      "problems": []
+    },
+    {
+      "file": "3-action-needed.png",
+      "scenario": "3-action-needed",
+      "description": "Non-Zoom blocker (Secondary Logon disabled) — Action required result pane",
+      "label": "harness render, mocked electronAPI — not the packaged app",
+      "viewport": "1000x760",
+      "panel": {
+        "top": 192,
+        "bottom": 608,
+        "left": 220,
+        "right": 780,
+        "width": 560,
+        "height": 416
+      },
+      "centering": {
+        "above": 96,
+        "below": 99,
+        "delta": -3
+      },
+      "verdict": "PASS",
+      "problems": []
+    },
+    {
+      "file": "4-repairing.png",
+      "scenario": "4-repairing",
+      "description": "Fix running — Repairing pane (stage rail)",
+      "label": "harness render, mocked electronAPI — not the packaged app",
+      "viewport": "1000x760",
+      "panel": {
+        "top": 192,
+        "bottom": 608,
+        "left": 220,
+        "right": 780,
+        "width": 560,
+        "height": 416
+      },
+      "centering": {
+        "above": 96,
+        "below": 99,
+        "delta": -3
+      },
+      "verdict": "PASS",
+      "problems": []
+    },
+    {
+      "file": "5-success.png",
+      "scenario": "5-success",
+      "description": "Fix succeeded — Success notice pane",
+      "label": "harness render, mocked electronAPI — not the packaged app",
+      "viewport": "1000x760",
+      "panel": {
+        "top": 192,
+        "bottom": 608,
+        "left": 220,
+        "right": 780,
+        "width": 560,
+        "height": 416
+      },
+      "centering": {
+        "above": 96,
+        "below": 99,
+        "delta": -3
+      },
+      "verdict": "PASS",
+      "problems": []
+    },
+    {
+      "file": "6-error.png",
+      "scenario": "6-error",
+      "description": "Fix failed — Error notice pane",
+      "label": "harness render, mocked electronAPI — not the packaged app",
+      "viewport": "1000x760",
+      "panel": {
+        "top": 192,
+        "bottom": 608,
+        "left": 220,
+        "right": 780,
+        "width": 560,
+        "height": 416
+      },
+      "centering": {
+        "above": 96,
+        "below": 99,
+        "delta": -3
+      },
+      "verdict": "PASS",
+      "problems": []
+    }
+  ]
+}
