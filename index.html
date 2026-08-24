@@ -1050,7 +1050,7 @@
        WIZARD WORKSPACE (acceptance spec §16–§22) — containerless. The
        window is the container: no bordered billboard card. One shared
        state layout (icon 44 → 20 → heading 24/30 → 12 → description →
-       20 → Advanced disclosure → 20 → primary 480×48 → 12 → secondary
+       20 → View details → 20 → primary 448×48 → 12 → secondary
        row) hosts every state; only the content changes. Collapsed
        states never scroll; only the expanded diagnostics panel may.
        ============================================================ */
@@ -1223,7 +1223,7 @@
     .adv-panel::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
     .adv-panel .chk-row { padding: var(--s-2) 0; }
     .adv-panel .file-list { flex: none; max-height: 180px; margin-top: 0; }
-    /* Action area (§17): one dominant 480×48 primary; secondary actions
+    /* Action area (§17): one dominant 448×48 primary; secondary actions
        are a quiet text row beneath it. */
     .action-area {
       width: 100%;
@@ -1509,8 +1509,9 @@
         <div class="fix-disabled-note" id="fixDisabledNote" role="status" hidden></div>
       </div>
 
-      <!-- REPAIRING — vertical task rows + thin progress bar; the raw
-           log stays behind Advanced details. -->
+      <!-- REPAIRING — the five-step vertical stage rail is the single
+           progress model (no continuous repair progress bar); the raw
+           log stays behind View details. -->
       <div class="wiz-pane" id="wizFixing">
         <h2 class="wiz-title">Repairing Zoom</h2>
         <p class="wiz-step-line" id="wizStepLine"></p>
@@ -1539,7 +1540,7 @@
       </div>
     </section>
 
-    <!-- Advanced details (§18) — a subtle text disclosure between the
+    <!-- View details (§18) — a subtle text disclosure between the
          state description and the primary action. Expanded content
          (checklist, receipt, log) scrolls internally; the window never
          does. -->
