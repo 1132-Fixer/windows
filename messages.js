@@ -336,12 +336,17 @@ const EXPLORE_COPY = {
   FAILED: 'Could not open the website — try again.'
 };
 const EXPLORE_VIEW = [
-  { key: 'fixer',          name: '1132 Fixer',          subtitle: '1132-fixer.xyz',    logo: 'assets/explore/fixer.png',          category: '1132',           featured: true },
+  { key: 'fixer',          name: '1132 Fixer',          subtitle: '1132-fixer.xyz',    logo: 'assets/explore/fixer.png',          category: '1132',           featured: true,
+    descriptor: 'Fix Zoom Error 1132',
+    description: 'One-click tools for resolving Zoom Error 1132 on Windows, macOS, and supported browsers.',
+    platforms: ['Windows', 'macOS', 'Browser'],
+    artwork: 'assets/explore/1132-featured.png',
+    openSource: true, independent: true, cta: 'Visit 1132 Fixer' },
   { key: 'botify',         name: 'Botify Network',      subtitle: 'botify-network.com', logo: 'assets/explore/botify.png',         category: 'Botify Network', featured: false },
   { key: 'kickbot',        name: 'BotifyKickBot',       subtitle: 'App page',           logo: 'assets/explore/kickbot.png',        category: 'Botify Network', featured: false },
   { key: 'modbot',         name: 'BotifyModBot',        subtitle: 'App page',           logo: 'assets/explore/modbot.png',         category: 'Botify Network', featured: false },
   { key: 'emojiGenerator', name: 'Emoji Generator Bot', subtitle: 'App page',           logo: 'assets/explore/emojiGenerator.png', category: 'Botify Network', featured: false },
-  { key: 'makeItGif',      name: 'Make It GIF',         subtitle: 'App page',           logo: null,                                category: 'Botify Network', featured: false },
+  { key: 'makeItGif',      name: 'Make It GIF',         subtitle: 'App page',           logo: 'assets/explore/makeitgif.png',      category: 'Botify Network', featured: false },
   { key: 'gifDirectory',   name: 'GIF Directory',       subtitle: 'gif.directory',      logo: null,                                category: 'Other',          featured: false }
 ];
 // Waiting Room Attendant: a brand asset is staged at

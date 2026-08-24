@@ -185,9 +185,15 @@ console.log('electron-security-smoke: Explore destinations (directive 2026-08-23
   const allUiSrc = indexSrc + rendererSrc + mainSrc + preloadSrc;
   check(!/Downloads[\\/]/.test(allUiSrc), 'no runtime dependency on the Downloads directory');
   check(indexSrc.includes('id="exploreClose"'), 'modal has a close affordance');
+  // The click wiring resolves keys from data-explore, and data-explore is ONLY
+  // ever assigned from d.key (a fixed catalog key) — never from user input — in
+  // both the compact rows and the featured card. The main process re-validates
+  // the key against EXPLORE_DESTINATIONS regardless.
   check(rendererSrc.includes('openExploreDestination(btn.dataset.explore)') &&
-        rendererSrc.includes(".explore-choice[data-explore]"),
-    'renderer sends only the fixed data-explore keys');
+        rendererSrc.includes("querySelectorAll('[data-explore]')") &&
+        /data-explore="\$\{d\.key\}"/.test(rendererSrc) &&
+        !/data-explore="\$\{(?!d\.key\})/.test(rendererSrc),
+    'renderer wires only fixed catalog data-explore keys to the destination IPC');
   check(!/openExploreDestination\((?!btn\.dataset\.explore|key\b)/.test(rendererSrc),
     'renderer never passes a computed/arbitrary destination');
   check(/exploreOverlay\.addEventListener\('keydown'/.test(rendererSrc) && /Escape/.test(rendererSrc),

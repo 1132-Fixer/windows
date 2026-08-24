@@ -1569,6 +1569,37 @@ function buildExplore() {
       </span>
       ${EXPLORE_OPEN_SVG}
     </button>`;
+  // Featured product card (1132 Fixer): a richer surface than the compact
+  // service rows. Reuses the fixed destination key + open-source-badge asset;
+  // the promo artwork on the right is decorative (aria-hidden), left-faded so
+  // it never competes with the card text. The full Zoom disclaimer is NOT
+  // duplicated here — the Explore footer already carries it.
+  const featuredCardHtml = (d) => `
+    <div class="efc">
+      <div class="efc-content">
+        <div class="efc-head">
+          <span class="efc-logo">${d.logo ? `<img src="${d.logo}" alt="">` : EXPLORE_FALLBACK_SVG}</span>
+          <span class="efc-titles">
+            <span class="efc-title">${escapeHtml(d.name)}</span>
+            <span class="efc-descriptor">${escapeHtml(d.descriptor || '')}</span>
+          </span>
+          ${Array.isArray(d.platforms) && d.platforms.length ? `<span class="efc-platforms">${
+            d.platforms.map(p => `<span class="efc-chip">${escapeHtml(p)}</span>`).join('')
+          }</span>` : ''}
+        </div>
+        ${d.description ? `<p class="efc-desc">${escapeHtml(d.description)}</p>` : ''}
+        <div class="efc-meta">
+          <span class="efc-url">${escapeHtml(d.subtitle)}</span>
+          ${d.openSource ? `<span class="efc-badge"><img src="assets/brand/open-source-badge.png" alt="" aria-hidden="true">Open Source</span>` : ''}
+          ${d.independent ? `<span class="efc-badge efc-badge-dim">Independent project</span>` : ''}
+        </div>
+        <button class="efc-cta" type="button" data-explore="${d.key}"
+                aria-label="Visit ${escapeHtml(d.name)} (${escapeHtml(d.subtitle)}) in your browser">
+          <span>${escapeHtml(d.cta || ('Visit ' + d.name))}</span>${EXPLORE_OPEN_SVG}
+        </button>
+      </div>
+      ${d.artwork ? `<div class="efc-artwork" aria-hidden="true"><img src="${d.artwork}" alt=""></div>` : ''}
+    </div>`;
   const categories = [];
   for (const d of EXPLORE_VIEW) {
     if (!categories.includes(d.category)) categories.push(d.category);
@@ -1581,13 +1612,13 @@ function buildExplore() {
     label.textContent = cat;
     body.appendChild(label);
     const grid = document.createElement('div');
-    const featured = items.length === 1;
-    grid.className = 'explore-grid' + (featured ? ' single' : '');
-    if (items.every(d => d.featured)) grid.classList.add('explore-featured');
-    grid.innerHTML = items.map(cardHtml).join('');
+    const allFeatured = items.every(d => d.featured);
+    grid.className = 'explore-grid' + (items.length === 1 ? ' single' : '');
+    if (allFeatured) grid.classList.add('explore-featured');
+    grid.innerHTML = items.map(d => d.featured ? featuredCardHtml(d) : cardHtml(d)).join('');
     body.appendChild(grid);
   }
-  body.querySelectorAll('.explore-choice[data-explore]').forEach(btn => {
+  body.querySelectorAll('[data-explore]').forEach(btn => {
     btn.addEventListener('click', () => openExploreDestination(btn.dataset.explore));
   });
 }
