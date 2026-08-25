@@ -1307,92 +1307,370 @@
       .project-disclosure .os-icon { width: 14px; height: 14px; }
     }
     /* ============================================================
-       EXPLORE LAUNCHER (§24–§36) — curated ecosystem panel on the same
-       navy system. 760px modal, featured 1132 card, 2-column Botify
-       grid of 72px destination cards with 40×40 logos, quiet section
-       labels, 32×32 top-right dismiss.
+       EXPLORE LAUNCHER (§24–§36, redesign 2026-08-25) — a product
+       directory, not a link list.
+
+       HIERARCHY IS THE WHOLE DESIGN. 1132 Fixer is the subject of this
+       panel, so it is a centered hero rather than the first cell of a
+       grid: its logo, name and type size are all a tier above anything
+       below it, and a reader can tell what this application is about
+       before reading a single secondary card.
+
+       THE DISCLAIMER LIVES INSIDE THE HERO. It used to be a global
+       footer, which read as a statement about every product listed —
+       including ones this project does not own and cannot speak for.
+
+       SIZED FOR THE REAL WINDOW. The host window is 900×700 (min
+       720×640), so the wide three-column layout is opt-in on a resized
+       window and the standard layout is what most users actually see.
+       The panel adapts to the host; the host is never enlarged to suit
+       the panel.
        ============================================================ */
+
+    /* Component-scoped semantic tokens. Mapped onto the existing
+       STYLEGUIDE palette rather than re-inventing colour, so the panel
+       stays native to the surrounding application. */
     .explore-card {
-      width: 760px;
-      max-width: calc(100% - 32px);
-      max-height: calc(100% - 32px);
-      padding: var(--s-6);
+      --explore-surface:        var(--panel);
+      --explore-surface-raised: var(--panel-2);
+      --explore-border:         var(--border);
+      --explore-border-strong:  rgba(122, 148, 190, 0.34);
+      --explore-text:           var(--text);
+      --explore-text-secondary: var(--muted);
+      --explore-text-muted:     var(--dim);
+      --explore-accent-blue:    var(--accent);
+      --explore-accent-violet:  #7C6BF0;
+      --explore-accent-purple:  #A855D6;
+      --explore-focus:          var(--accent-2);
+
+      width: min(94vw, 1160px);
+      max-height: calc(100vh - 24px);
+      padding: var(--s-4) var(--s-4) var(--s-4);
       position: relative;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: var(--r-lg);
-      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.42);
+      display: flex;
+      flex-direction: column;
+      background: var(--explore-surface);
+      border: 1px solid var(--explore-border-strong);
+      border-radius: 18px;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.46);
     }
+
+    /* ---- header ------------------------------------------------- */
+    .explore-card .fb-title {
+      font-size: 26px;
+      line-height: 32px;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+      margin-bottom: 2px;
+      padding-right: 56px;
+    }
+    .explore-sub {
+      font-size: 14px;
+      line-height: 20px;
+      color: var(--explore-text-secondary);
+      margin-bottom: var(--s-3);
+      padding-right: 56px;
+    }
+    /* 40×40 hit target even though the glyph is 12px — §26 asks for the
+       target, not the icon, to be reachable. */
     .explore-close-x {
       position: absolute;
-      top: var(--s-4);
-      right: var(--s-4);
-      width: 32px;
-      height: 32px;
+      top: var(--s-3);
+      right: var(--s-3);
+      width: 40px;
+      height: 40px;
       display: grid;
       place-items: center;
       background: transparent;
-      border: 0;
-      border-radius: 8px;
-      color: var(--muted);
+      border: 1px solid transparent;
+      border-radius: var(--r-pill);
+      color: var(--explore-text-secondary);
       cursor: pointer;
-      transition: background 130ms ease-out, color 130ms ease-out;
+      transition: background 130ms ease-out, color 130ms ease-out, border-color 130ms ease-out;
     }
-    .explore-close-x:hover { background: var(--surface-hover); color: var(--text); }
-    .explore-close-x svg { width: 12px; height: 12px; stroke: currentColor; }
-    .explore-card .fb-title { font-size: 24px; line-height: 30px; font-weight: 650; margin-bottom: var(--s-2); }
-    .explore-sub { font-size: 14px; line-height: 20px; color: var(--muted); margin-bottom: var(--s-5); }
-    .explore-group {
-      font-size: 12px;
-      line-height: 16px;
+    .explore-close-x:hover { background: var(--surface-hover); color: var(--explore-text); }
+    .explore-close-x:focus-visible {
+      outline: 2px solid var(--explore-focus);
+      outline-offset: 2px;
+      border-color: var(--explore-border-strong);
+    }
+    .explore-close-x svg { width: 13px; height: 13px; stroke: currentColor; }
+
+    /* ---- scrolling body ----------------------------------------- */
+    /* The body scrolls, never the card: the title and the close control
+       stay reachable at 125%/150% scaling and in a 640px-tall window,
+       which is the case that would otherwise clip the dismiss button. */
+    .explore-body { min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
+    .explore-body::-webkit-scrollbar { width: 8px; }
+    .explore-body::-webkit-scrollbar-thumb { background: var(--explore-border-strong); border-radius: 4px; }
+
+    /* ---- the 1132 Fixer hero ------------------------------------ */
+    .explore-hero {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: var(--s-3) var(--s-4) var(--s-4);
+      border: 1px solid rgba(58, 130, 247, 0.30);
+      border-radius: 16px;
+      background:
+        radial-gradient(120% 90% at 50% 0%, rgba(58, 130, 247, 0.16), transparent 62%),
+        linear-gradient(180deg, #1F2E4C 0%, #1B2740 100%);
+    }
+    .explore-hero-eyebrow {
+      font-size: 11px;
+      line-height: 14px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      color: #8FB6F5;
+      margin-bottom: 6px;
+    }
+    /* No mask, no overflow:hidden — a circular mark must keep its outer
+       ring, and a hexagon must keep its points. */
+    .explore-hero-logo {
+      width: 68px;
+      height: 68px;
+      display: grid;
+      place-items: center;
+      margin-bottom: var(--s-2);
+    }
+    .explore-hero-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    /* Stacked by default; a centred horizontal group on a short viewport,
+       which is what buys back the ~50px the three destination rows need. */
+    .explore-hero-main { display: flex; flex-direction: column; align-items: center; }
+    .explore-hero-copy { min-width: 0; }
+    .explore-hero-name {
+      font-size: 30px;
+      line-height: 36px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--explore-text);
+      margin: 0;
+    }
+    .explore-hero-desc {
+      font-size: 15px;
+      line-height: 20px;
+      color: #A9BEDE;
+      margin: 2px 0 0;
+    }
+    .explore-hero-actions {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--s-2);
+      margin-top: var(--s-3);
+      flex-wrap: wrap;
+    }
+    /* A status badge, not a control. There is no open-source destination
+       to send anyone to, so it must not look like it goes somewhere. */
+    .explore-badge {
+      font-size: 13px;
+      line-height: 18px;
+      font-weight: 600;
+      padding: 7px 14px;
+      border-radius: var(--r-pill);
+      color: #8FB6F5;
+      border: 1px solid rgba(58, 130, 247, 0.42);
+      background: rgba(58, 130, 247, 0.10);
+    }
+    .explore-visit {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--s-2);
+      font: inherit;
+      font-size: 14px;
       font-weight: 650;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--dim);
-      margin: var(--s-5) 0 var(--s-2);
+      padding: 9px 16px;
+      min-height: 38px;
+      border-radius: var(--r-sm);
+      color: #FFFFFF;
+      background: var(--accent);
+      border: 1px solid var(--accent-2);
+      cursor: pointer;
+      transition: background 120ms ease-out, transform 90ms ease-out;
     }
-    .explore-group:first-of-type { margin-top: 0; }
-    .explore-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3); }
-    .explore-grid.single { grid-template-columns: 1fr; }
-    @media (max-width: 700px) { .explore-grid { grid-template-columns: 1fr; } }
+    .explore-visit:hover { background: var(--accent-2); }
+    .explore-visit:active { transform: translateY(1px); }
+    .explore-visit:focus-visible { outline: 2px solid var(--explore-focus); outline-offset: 3px; }
+    .explore-visit .explore-open { color: currentColor; }
+    .explore-hero-note {
+      font-size: 13px;
+      line-height: 18px;
+      color: var(--explore-text-muted);
+      margin: var(--s-2) 0 0;
+    }
+
+    /* ---- the secondary directory -------------------------------- */
+    .explore-network-intro { text-align: center; margin: var(--s-3) 0 var(--s-2); }
+    .explore-network-title {
+      font-size: 15px;
+      line-height: 20px;
+      font-weight: 650;
+      color: var(--explore-text);
+      margin: 0;
+    }
+    .explore-network-sub {
+      font-size: 13px;
+      line-height: 18px;
+      color: var(--explore-text-muted);
+      margin: 2px 0 0;
+    }
+    .explore-section { margin-top: var(--s-4); }
+    .explore-section:first-of-type { margin-top: 0; }
+    .explore-group {
+      font-size: 11px;
+      line-height: 15px;
+      font-weight: 700;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+      color: var(--explore-text-muted);
+      margin: 0 0 var(--s-2);
+    }
+
+    /* minmax(0, 1fr), not 1fr: a bare 1fr floors at min-content, so one
+       long description would widen its column and push the grid past the
+       modal edge instead of wrapping inside its card. */
+    .explore-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-3); }
+
+    /* ---- one card component, three accent variants -------------- */
     .explore-choice {
       display: flex;
       align-items: center;
       gap: var(--s-3);
-      height: 72px;
-      padding: 14px 16px;
+      min-height: 62px;
+      padding: 12px 14px;
       text-align: left;
       font: inherit;
-      background: var(--panel-2);
-      border: 1px solid var(--border);
+      background: var(--explore-surface-raised);
+      border: 1px solid var(--explore-border);
+      border-left: 3px solid var(--explore-border);
       border-radius: var(--r-md);
-      color: var(--text);
+      color: var(--explore-text);
       cursor: pointer;
-      transition: background 130ms ease-out, border-color 130ms ease-out;
+      transition: background 120ms ease-out, border-color 120ms ease-out;
     }
-    .explore-choice:hover { background: var(--surface-hover); border-color: var(--border-strong); }
+    .explore-choice:hover { background: var(--surface-hover); border-color: var(--explore-border-strong); }
     .explore-choice:active { background: var(--surface-pressed); }
-    .explore-featured .explore-choice { border-color: var(--border-strong); background: linear-gradient(135deg, rgba(51, 127, 219, 0.14), var(--panel-2) 65%); }
+    /* Focus is an outline, hover is a fill — never the same signal, so a
+       keyboard user can always tell where they are. */
+    .explore-choice:focus-visible { outline: 2px solid var(--explore-focus); outline-offset: 2px; }
+    .explore-choice.accent-blue   { border-left-color: var(--explore-accent-blue); }
+    .explore-choice.accent-violet { border-left-color: var(--explore-accent-violet); }
+    .explore-choice.accent-purple { border-left-color: var(--explore-accent-purple); }
+
     .explore-logo {
-      width: 40px;
-      height: 40px;
+      width: 42px;
+      height: 42px;
       flex-shrink: 0;
       display: grid;
       place-items: center;
-      border-radius: 10px;
-      overflow: hidden;
     }
-    .explore-logo img { width: 40px; height: 40px; object-fit: contain; display: block; }
-    .explore-logo.fallback { background: var(--surface-hover); color: var(--muted); }
+    .explore-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .explore-logo.fallback {
+      background: var(--surface-hover);
+      color: var(--explore-text-muted);
+      border-radius: 10px;
+    }
     .explore-logo.fallback svg { width: 20px; height: 20px; }
-    .explore-copy { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
-    .explore-name { font-size: 15px; line-height: 20px; font-weight: 600; color: var(--text); }
-    .explore-desc { font-size: 13px; line-height: 18px; font-weight: 400; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .explore-open { width: 16px; height: 16px; flex-shrink: 0; color: var(--dim); }
-    .explore-choice:hover .explore-open { color: var(--accent); }
-    .explore-body { min-height: 0; overflow-y: auto; }
-    .explore-body::-webkit-scrollbar { width: 8px; }
-    .explore-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+
+    .explore-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+    .explore-name { font-size: 15px; line-height: 20px; font-weight: 650; color: var(--explore-text); }
+    .explore-desc {
+      font-size: 13px;
+      line-height: 17px;
+      font-weight: 400;
+      color: var(--explore-text-secondary);
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .explore-open { width: 17px; height: 17px; flex-shrink: 0; color: var(--explore-text-muted); }
+    .explore-choice:hover .explore-open { color: var(--accent-2); }
+
+    /* ---- STANDARD layout (720–879px) ----------------------------- */
+    /* Below the wide breakpoint an organization column would be under
+       220px, so the third card goes full width rather than being
+       squeezed to preserve a nominal three-column grid. */
+    .explore-grid-organizations > :nth-child(3) { grid-column: 1 / -1; }
+
+    /* ---- WIDE layout ---------------------------------------------
+       Breakpoint is CONTENT-DRIVEN, not a round number. The Explore
+       modal gets ~828 logical pixels of width, which leaves a 778px panel
+       — about 240px per organization column, wide enough for the longest
+       description to wrap to two readable lines. Anchoring the wide
+       layout at 820px is what lets the DEFAULT modal show Organizations
+       as one three-column row; pushing GIF Directory onto its own row
+       would add a fourth destination row and blow the height budget. */
+    @media (min-width: 820px) {
+      .explore-grid-organizations { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .explore-grid-organizations > :nth-child(3) { grid-column: auto; }
+    }
+
+    /* Only a genuinely large window gets the roomier vertical hero. */
+    @media (min-width: 1180px) and (min-height: 820px) {
+      .explore-hero-logo { width: 104px; height: 104px; }
+      .explore-hero-name { font-size: 36px; line-height: 44px; }
+      .explore-hero-desc { font-size: 17px; line-height: 23px; }
+    }
+
+    /* ---- SHORT VIEWPORT ------------------------------------------
+       The host window is 700px tall. The hero sizes this design would
+       otherwise use are tuned for a much taller window, and at 700px they
+       push the last row of cards off the bottom — so on a short viewport
+       the hero compresses rather than the directory scrolling. It stays
+       the largest element on the panel by a wide margin; it just stops
+       spending height it does not have. Tall windows keep the full hero. */
+    /* ---- SHORT VIEWPORT (the real 828x630 modal) -----------------
+       The Explore modal gets ~828x630 logical pixels at 100% scaling, and
+       the whole directory has to fit inside it: header, hero, three
+       destination rows, eight destinations, bottom padding and border,
+       with no scrollbar. That is a fixed budget of roughly 594px of
+       content, so the hero becomes a centred HORIZONTAL group — logo
+       beside the name rather than above it. It stays the largest, boldest,
+       centred element on the panel; it just stops being dominant by
+       consuming half the available height. */
+    @media (max-height: 800px) {
+      .explore-card { padding: var(--s-4) var(--s-4) var(--s-4); }
+      .explore-card .fb-title { font-size: 24px; line-height: 30px; }
+      .explore-sub { margin-bottom: 10px; }
+
+      .explore-hero { padding: 10px var(--s-4) 10px; }
+      .explore-hero-eyebrow { margin-bottom: 6px; }
+      .explore-hero-main { flex-direction: row; gap: var(--s-3); text-align: left; }
+      .explore-hero-logo { width: 60px; height: 60px; margin-bottom: 0; }
+      .explore-hero-name { font-size: 28px; line-height: 34px; }
+      .explore-hero-desc { font-size: 15px; line-height: 20px; }
+      .explore-hero-actions { margin-top: 10px; }
+      .explore-visit { min-height: 32px; padding: 6px 14px; }
+      .explore-badge { padding: 5px 12px; font-size: 12px; }
+      .explore-hero-note { margin-top: 8px; font-size: 12px; line-height: 16px; }
+
+      .explore-network-intro { margin: 10px 0 0; }
+      .explore-network-sub { display: none; }
+      .explore-section { margin-top: 10px; }
+      .explore-group { font-size: 10px; line-height: 14px; margin-bottom: 6px; }
+      .explore-grid { gap: 10px; }
+      .explore-choice { min-height: 58px; padding: 10px 12px; border-radius: 10px; }
+      .explore-logo { width: 38px; height: 38px; }
+      .explore-name { font-size: 14px; line-height: 18px; }
+      .explore-desc { font-size: 12px; line-height: 16px; }
+    }
+
+    /* ---- COMPACT layout ----------------------------------------- */
+    /* Below 720px, or whenever text scaling makes two columns unsafe,
+       every row collapses to one column in the same reading order. */
+    @media (max-width: 719px) {
+      .explore-card { padding: var(--s-4) var(--s-4) var(--s-4); }
+      .explore-grid { grid-template-columns: 1fr; }
+      .explore-hero { padding: var(--s-3) var(--s-4) var(--s-4); }
+      .explore-hero-logo { width: 84px; height: 84px; }
+      .explore-hero-name { font-size: 28px; line-height: 34px; }
+      .explore-hero-desc { font-size: 16px; line-height: 22px; }
+      .explore-card .fb-title { font-size: 23px; line-height: 29px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
     }
@@ -1733,7 +2011,7 @@
        equal choices, Close is secondary. The sites open in the system
        browser via a fixed destination-key IPC — never in this window.
        ============================================================ -->
-  <div class="fb-overlay" id="exploreOverlay" role="dialog" aria-modal="true" aria-labelledby="exploreTitle">
+  <div class="fb-overlay" id="exploreOverlay" role="dialog" aria-modal="true" aria-label="Explore" aria-labelledby="exploreTitle">
     <div class="fb-card explore-card">
       <!-- 32×32 top-right dismiss (§26); Escape also closes. -->
       <button class="explore-close-x" id="exploreClose" type="button" aria-label="Close Explore">
@@ -1747,9 +2025,10 @@
            the key→URL map stays in the main process. -->
       <div class="explore-body" id="exploreBody"></div>
       <div class="fb-status" id="exploreStatus" role="status" aria-live="polite"></div>
-      <!-- Subdued trust line (addendum §K) — reinforces that this launcher
-           is not a Zoom-owned interface; stays secondary to the cards. -->
-      <p class="project-disclosure explore-disclosure" id="exploreDisclosure" role="note"></p>
+      <!-- The independence line is NOT here any more. As a panel footer it
+           read as a statement about every product listed, including ones
+           this project does not own; it now lives inside the 1132 Fixer
+           hero, attached to the only product it describes. -->
     </div>
   </div>
 

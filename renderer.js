@@ -1547,7 +1547,8 @@ function renderDisclosure(el) {
     `<span class="os-independence">${escapeHtml(DISCLOSURE.INDEPENDENCE)}</span>`;
 }
 renderDisclosure(document.getElementById('projectDisclosure'));
-renderDisclosure(document.getElementById('exploreDisclosure'));
+// The Explore panel no longer renders a global disclosure line — the
+// independence statement is part of the 1132 Fixer hero, built below.
 
 // Build the launcher panel from the EXPLORE_VIEW catalog (messages.js) —
 // destinations are declared once, never hand-duplicated across markup.
@@ -1557,38 +1558,93 @@ function buildExplore() {
   document.getElementById('exploreSub').textContent = EXPLORE_COPY.SUB;
   const body = document.getElementById('exploreBody');
   body.innerHTML = '';
+
+  // ONE card component with variants, not a card per category. The
+  // variants differ only in accent rail and grid placement; duplicating
+  // the markup is how the old panel ended up with an orphaned half-width
+  // cell nobody could explain.
   const cardHtml = (d) => `
-    <button class="explore-choice" type="button" data-explore="${d.key}"
-            aria-label="Open ${escapeHtml(d.name)} (${escapeHtml(d.subtitle)}) in your browser">
-      <span class="explore-logo${d.logo ? '' : ' fallback'}">${
-        d.logo ? `<img src="${d.logo}" alt="">` : EXPLORE_FALLBACK_SVG
+    <button class="explore-choice${d.accent ? ' accent-' + d.accent : ''}" type="button" data-explore="${escapeHtml(d.id)}"
+            aria-label="Open ${escapeHtml(d.name)} in your default browser">
+      <span class="explore-logo${d.icon ? '' : ' fallback'}">${
+        d.icon ? `<img src="${escapeHtml(d.icon)}" alt="" loading="lazy">` : EXPLORE_FALLBACK_SVG
       }</span>
       <span class="explore-copy">
         <span class="explore-name">${escapeHtml(d.name)}</span>
-        <span class="explore-desc">${escapeHtml(d.subtitle)}</span>
+        <span class="explore-desc">${escapeHtml(d.description)}</span>
       </span>
       ${EXPLORE_OPEN_SVG}
     </button>`;
-  const categories = [];
-  for (const d of EXPLORE_VIEW) {
-    if (!categories.includes(d.category)) categories.push(d.category);
-  }
-  for (const cat of categories) {
-    const items = EXPLORE_VIEW.filter(d => d.category === cat);
-    const label = document.createElement('div');
+
+  // THE HERO. 1132 Fixer is the subject of this panel, so it is not a
+  // card in a grid - it is the panel's headline, and the disclaimer lives
+  // INSIDE it. The old global footer read as a statement about every
+  // product listed, including ones this project does not own.
+  const heroHtml = (d) => `
+    <section class="explore-hero" aria-labelledby="exploreHeroName">
+      <div class="explore-hero-eyebrow">FEATURED</div>
+      <div class="explore-hero-main">
+        <div class="explore-hero-logo">${
+          d.icon ? `<img src="${escapeHtml(d.icon)}" alt="">` : EXPLORE_FALLBACK_SVG
+        }</div>
+        <div class="explore-hero-copy">
+          <h3 class="explore-hero-name" id="exploreHeroName">${escapeHtml(d.name)}</h3>
+          <p class="explore-hero-desc">${escapeHtml(d.description)}</p>
+        </div>
+      </div>
+      <div class="explore-hero-actions">
+        <span class="explore-badge">${escapeHtml(DISCLOSURE.OS_LABEL)}</span>
+        <button class="explore-visit" type="button" data-explore="${escapeHtml(d.id)}"
+                aria-label="Open ${escapeHtml(d.name)} in your default browser">
+          <span>${escapeHtml(EXPLORE_COPY.VISIT)}</span>${EXPLORE_OPEN_SVG}
+        </button>
+      </div>
+      <p class="explore-hero-note" role="note">${escapeHtml(DISCLOSURE.INDEPENDENCE)}</p>
+    </section>`;
+
+  for (const cat of EXPLORE_CATEGORIES) {
+    const items = EXPLORE_VIEW.filter(d => d.category === cat.id);
+    if (!items.length) continue;
+
+    if (cat.id === 'featured') {
+      body.insertAdjacentHTML('beforeend', items.map(heroHtml).join(''));
+      // The secondary directory heading, rendered once between the hero
+      // and everything below it.
+      const intro = document.createElement('div');
+      intro.className = 'explore-network-intro';
+      intro.innerHTML =
+        `<h3 class="explore-network-title">${escapeHtml(EXPLORE_COPY.NETWORK_TITLE)}</h3>` +
+        `<p class="explore-network-sub">${escapeHtml(EXPLORE_COPY.NETWORK_SUB)}</p>`;
+      body.appendChild(intro);
+      continue;
+    }
+
+    const section = document.createElement('section');
+    section.className = 'explore-section explore-section-' + cat.id;
+
+    // The group label is a real heading the section is labelled by, not
+    // an aria-hidden decoration - a screen reader should be able to tell
+    // that GIF Directory sits under Organizations and not under Bots.
+    const labelId = 'exploreGroup-' + cat.id;
+    section.setAttribute('aria-labelledby', labelId);
+    const label = document.createElement('h3');
     label.className = 'explore-group';
-    label.setAttribute('aria-hidden', 'true');
-    label.textContent = cat;
-    body.appendChild(label);
+    label.id = labelId;
+    label.textContent = cat.label;
+    section.appendChild(label);
+
     const grid = document.createElement('div');
-    const featured = items.length === 1;
-    grid.className = 'explore-grid' + (featured ? ' single' : '');
-    if (items.every(d => d.featured)) grid.classList.add('explore-featured');
+    grid.className = 'explore-grid explore-grid-' + cat.id;
     grid.innerHTML = items.map(cardHtml).join('');
-    body.appendChild(grid);
+    section.appendChild(grid);
+    body.appendChild(section);
   }
-  body.querySelectorAll('.explore-choice[data-explore]').forEach(btn => {
-    btn.addEventListener('click', () => openExploreDestination(btn.dataset.explore));
+
+  // ONE listener per control. The trailing open-icon is inside the button
+  // and decorative, so a click on it bubbles to exactly one handler -
+  // there is no nested control to launch the browser twice.
+  body.querySelectorAll('[data-explore]').forEach(el => {
+    el.addEventListener('click', () => openExploreDestination(el.dataset.explore));
   });
 }
 buildExplore();
