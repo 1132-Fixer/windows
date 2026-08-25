@@ -1,9 +1,19 @@
-/design-system @patricktobias86 @high-texas
-/.brand-assets.tsv @patricktobias86 @high-texas
-/assets/ @patricktobias86 @high-texas
-/social-preview.png @patricktobias86 @high-texas
-/index.html @patricktobias86 @high-texas
-/styles.css @patricktobias86 @high-texas
-/build/ @patricktobias86 @high-texas
-/.github/CODEOWNERS @patricktobias86 @high-texas
-/.github/workflows/brand.yml @patricktobias86 @high-texas
+# Either write-capable code owner may satisfy code-owner review.
+# GitHub treats @JG2547 and @high-texas as separate principals. @high-texas
+# has read access and cannot count as a code owner, so @JG2547 is named directly.
+#
+# GitHub never counts a PR author's own approval. With last-push approval
+# enabled, the last pusher also cannot supply the required approval. On a PR
+# authored or last pushed by one owner, the other owner must approve.
+
+* @JG2547 @patricktobias86
+
+/design-system @JG2547 @patricktobias86
+/.brand-assets.tsv @JG2547 @patricktobias86
+/assets/ @JG2547 @patricktobias86
+/social-preview.png @JG2547 @patricktobias86
+/index.html @JG2547 @patricktobias86
+/styles.css @JG2547 @patricktobias86
+/build/ @JG2547 @patricktobias86
+/.github/CODEOWNERS @JG2547 @patricktobias86
+/.github/workflows/brand.yml @JG2547 @patricktobias86
