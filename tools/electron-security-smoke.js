@@ -231,6 +231,18 @@ console.log('electron-security-smoke: Explore destinations (directive 2026-08-23
   check(rendererSrc.includes('openExploreDestination(el.dataset.explore)') &&
         rendererSrc.includes("body.querySelectorAll('[data-explore]')"),
     'renderer sends only the fixed data-explore keys');
+  // Stronger than "the selector looks right" (carried over from #180): the
+  // click wiring resolves whatever is in data-explore, so the property that
+  // actually matters is that data-explore is ONLY ever interpolated from a
+  // fixed catalog id — in the secondary cards AND in the hero button — and
+  // never from anything else. A checked selector with an unchecked
+  // interpolation is a guard that reads well and proves nothing. The main
+  // process re-validates the key against EXPLORE_DESTINATIONS regardless.
+  const exploreInterpolations = [...rendererSrc.matchAll(/data-explore="\$\{([^}]*)\}"/g)].map(m => m[1].trim());
+  check(exploreInterpolations.length >= 2,
+    'both the card and the hero wire a data-explore key');
+  check(exploreInterpolations.every(expr => expr === 'escapeHtml(d.id)'),
+    'data-explore is only ever set from a fixed catalog id: ' + JSON.stringify(exploreInterpolations));
   // The independence line belongs to 1132 Fixer, not to the panel. As a
   // global footer it read as a statement about every product listed.
   check(!indexSrc.includes('id="exploreDisclosure"'),
