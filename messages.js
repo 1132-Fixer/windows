@@ -352,7 +352,7 @@ const EXPLORE_CATEGORIES = [
 ];
 const EXPLORE_VIEW = [
   // id           name                 description                     category         icon                                  accent      featured
-  { id: 'fixer',          name: '1132 Fixer',      description: 'Project website',            category: 'featured',       icon: 'assets/explore/fixer-hero.png',     accent: 'blue',   featured: true  },
+  { id: 'fixer',          name: '1132 Fixer',      description: 'Project website',            category: 'featured',       icon: 'assets/logo-transparent.png'   ,     accent: 'blue',   featured: true  },
   { id: 'botify',         name: 'Botify Network',  description: 'Network home',               category: 'organizations',  icon: 'assets/explore/botify.png',         accent: 'blue',   featured: false },
   { id: 'primeHosting',   name: 'Prime Hosting',   description: 'Hosting and developer services', category: 'organizations', icon: 'assets/explore/prime-hosting.png', accent: 'violet', featured: false },
   { id: 'gifDirectory',   name: 'GIF Directory',   description: 'Organize and discover GIFs', category: 'organizations',  icon: 'assets/explore/gif-directory.png',  accent: 'purple', featured: false },

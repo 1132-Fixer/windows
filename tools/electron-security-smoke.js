@@ -211,8 +211,19 @@ console.log('electron-security-smoke: Explore destinations (directive 2026-08-23
 
   // Logo assets: repo paths only — production code must never reference
   // the user's Downloads directory — and every named asset must exist.
-  check(messages.EXPLORE_VIEW.every(d => d.icon && d.icon.startsWith('assets/explore/')),
-    'icon paths live under assets/explore/');
+  check(messages.EXPLORE_VIEW.every(d => d.icon && d.icon.startsWith('assets/')),
+    'icon paths live under assets/');
+  // The hero uses the MANAGED brand export, not a derived copy. A
+  // downscaled duplicate would ship fine and then silently drift the day
+  // the design system updates the logo — which is the exact failure the
+  // brand-assets guard exists to catch. Pinned here so a future edit
+  // cannot quietly reintroduce one.
+  const heroIcon = messages.EXPLORE_VIEW.find(d => d.featured).icon;
+  check(heroIcon === 'assets/logo-transparent.png',
+    'the 1132 Fixer hero uses the managed brand export');
+  const brandTsv = fs.readFileSync(path.join(ROOT, '.brand-assets.tsv'), 'utf8');
+  check(brandTsv.split('\n').some(l => l.trim().endsWith('\t' + heroIcon)),
+    'the hero logo is a design-system managed asset in .brand-assets.tsv');
   check(messages.EXPLORE_VIEW.every(d => fs.existsSync(path.join(ROOT, d.icon))),
     'every referenced icon asset exists');
   // Every destination carries real artwork: a generic fallback is for a

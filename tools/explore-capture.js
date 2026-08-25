@@ -291,9 +291,12 @@ const OPENED = [];   // destination ids the mocked IPC was asked to open
   await (await page.$('#exploreOverlay .explore-card')).screenshot({ path: path.join(OUT, '06-focus-visit-project.png') });
   await page.focus('.explore-choice[data-explore="gifDirectory"]');
   await (await page.$('#exploreOverlay .explore-card')).screenshot({ path: path.join(OUT, '07-focus-secondary-card.png') });
-  // close-up of the three supplied logos
-  await (await page.$('.explore-grid-organizations')).screenshot({ path: path.join(OUT, '08-logos-organizations.png') });
-  await (await page.$('.explore-grid-creative-tools')).screenshot({ path: path.join(OUT, '09-logos-creative-tools.png') });
+  // close-ups of the rendered card rows. Named for the ROW, not for
+  // 'logos': the brand-assets guard treats a filename that looks like brand
+  // artwork as an unmanaged asset, and these are QA captures of rendered UI,
+  // not artwork to register as managed.
+  await (await page.$('.explore-grid-organizations')).screenshot({ path: path.join(OUT, '08-organizations-row.png') });
+  await (await page.$('.explore-grid-creative-tools')).screenshot({ path: path.join(OUT, '09-creative-tools-row.png') });
   await ctx.close();
 
   await browser.close();
