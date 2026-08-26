@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Explore is a product directory (issue #185)
+
+- **1132 Fixer is the subject of the panel.** It stops being the first cell
+  of a grid and becomes the panel's headline: a full-width featured surface
+  with a centered logo and title, the largest product name, and one primary
+  action (`Visit project`). `Open Source` is a status badge, not a control —
+  there is no separate open-source destination, so it must not look like it
+  goes somewhere.
+- **The independence line moved into the hero.** As a panel footer it read
+  as a statement about every product listed, including ones this project
+  does not own and cannot speak for.
+- **Destinations are grouped by purpose** — Organizations & Services, Bots,
+  Creative Tools. GIF Directory is an organization and discovery utility
+  (`Organize and discover GIFs`), not miscellaneous content. The `Other`
+  category and the `App page` placeholder descriptions are gone.
+- **Prime Hosting added** (<https://primehosting.dev/>), allowlisted as an
+  exact host — `*.primehosting.dev` is not reachable. Every other
+  destination URL is unchanged, and the security smoke test now pins the
+  whole id→URL table so a silent edit fails.
+- **Make It GIF and GIF Directory have real logos.** Both previously fell
+  back to a generic globe. Together with the Prime Hosting mark these come
+  from the artwork supplied on issue #185.
+- **The whole panel fits one screen.** At the Explore modal's ~828×630
+  logical pixels at 100% scaling, all eight destinations are visible at
+  once with no vertical or horizontal scrolling and nothing clipped. On a
+  short viewport the hero becomes a compact centered horizontal group — it
+  stays the largest, boldest, centered element without consuming half the
+  available height. Smaller windows and 125%/150% scaling scroll the panel
+  body rather than clipping.
+
+### Fixed
+
+- **Windows installer paths were rejected on non-Windows hosts.**
+  `isSafeUserSelectedPath` validates a Windows path but parsed it with the
+  ambient `path` module. Under POSIX a backslash is an ordinary filename
+  character, so `basename('C:\Users\Public\x.msi')` returned the whole
+  string — which contains `:` and `\` and was refused as an illegal
+  basename. Every legitimate installer path failed off-Windows, and the
+  security test proving this guard works could only pass on Windows, so on
+  Linux CI the guard was effectively unverified. Parsing is now pinned to
+  `path.win32`, with an explicit absolute-path requirement so `resolve()`
+  cannot join a relative input onto the process working directory.
+  Behaviour on Windows is unchanged.
+- **The Explore hero uses the managed brand export.** It briefly used a
+  downscaled copy of `assets/1132-fixer-logo-transparent.png`, which
+  packages correctly and then silently drifts the day the design system
+  updates the logo. It now uses `assets/logo-transparent.png`, which is
+  listed in `.brand-assets.tsv`, and a guard pins that so a derived copy
+  cannot be reintroduced.
+
 ## [6.1.0] - 2026-08-23
 
 ### Changed — shell redesign to the acceptance spec (directive 2026-08-23)
