@@ -43,8 +43,8 @@ check(messages.DISCLOSURE.LEGAL === LEGAL, 'About/legal independence statement i
 check(html.includes('id="projectDisclosure"'), 'footer disclosure node exists');
 check(renderer.includes('renderDisclosure(document.getElementById(\'projectDisclosure\'))'),
   'renderer fills the footer disclosure');
-check(shell.includes("document.getElementById('projectDisclosure')"),
-  'compact shell keeps the disclosure in the visible footer');
+check(shell.includes("aboutBtn.textContent = 'About'") && renderer.includes('DISCLOSURE.LEGAL'),
+  'independence disclosure remains available from About');
 check(readme.includes(LEGAL), 'README contains the complete independence statement');
 check(fs.existsSync(path.join(ROOT, 'docs', 'README.md')), 'docs index exists');
 check(fs.existsSync(path.join(ROOT, 'docs', 'security', 'threat-model.md')), 'threat model exists');

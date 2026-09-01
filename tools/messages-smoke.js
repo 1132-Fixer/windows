@@ -201,7 +201,8 @@ console.log('messages-smoke: wizard states (directive 2026-08-23)');
   // State copy exists, is real copy, and never leans on raw codes.
   const wiz = m.WIZARD;
   const required = ['READY_TITLE', 'READY_SUB', 'UNKNOWN_TITLE', 'UNKNOWN_SUB', 'BLOCKED_TITLE',
-    'ADMIN_TITLE', 'ADMIN_SUB', 'ADMIN_DECLINED_SUB', 'ADMIN_RESTARTING',
+    'ADMIN_TITLE', 'ADMIN_SUB', 'ADMIN_PRIMARY', 'ADMIN_CLOSE', 'ADMIN_DECLINED_SUB', 'ADMIN_RESTARTING',
+    'UNABLE_TITLE', 'UNABLE_SUB', 'TRY_AGAIN',
     'SUCCESS_TITLE', 'SUCCESS_SUB', 'PARTIAL_TITLE', 'PARTIAL_SUB', 'FAIL_TITLE',
     'SHORTCUT_NOT_READY_TITLE', 'SHORTCUT_NOT_READY_SUB', 'SHORTCUT_FAILED_TITLE',
     'SHORTCUT_FAILED_SUB', 'SHORTCUT_DONE_TITLE', 'SHORTCUT_DONE_SUB'];
@@ -218,10 +219,14 @@ console.log('messages-smoke: wizard states (directive 2026-08-23)');
 
   // Self-elevation honesty: approval happens in the WINDOWS prompt, the
   // app never asks for a password, and a decline is reported as a decline.
-  check(/Windows will ask for approval/.test(wiz.ADMIN_SUB), 'admin sub says Windows asks for approval');
-  check(/Nothing has been changed/.test(wiz.ADMIN_SUB), 'admin sub states nothing changed yet');
+  check(wiz.ADMIN_TITLE === 'Administrator access required', 'admin title is exact');
+  check(wiz.ADMIN_SUB === '1132 Fixer needs administrator access to create the fresh Windows setup used for Zoom.',
+    'admin sub names the helper-setup reason');
+  check(wiz.ADMIN_PRIMARY === 'Restart as administrator', 'admin primary is Restart as administrator');
+  check(wiz.ADMIN_CLOSE === 'Close', 'admin secondary is Close');
   check(/declined|did not complete/.test(wiz.ADMIN_DECLINED_SUB), 'declined copy names the decline');
-  check(/Run as administrator/.test(wiz.ADMIN_DECLINED_SUB), 'declined copy keeps the manual fallback');
+  check(wiz.UNABLE_TITLE === 'Unable to complete', 'startup failure title is Unable to complete');
+  check(wiz.TRY_AGAIN === 'Try again', 'retry label is Try again');
 }
 
 console.log('messages-smoke: project disclosure (addendum 2026-08-23)');

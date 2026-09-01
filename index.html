@@ -1860,7 +1860,7 @@
          actions are a quiet text row beneath it. -->
     <div class="action-area">
       <div class="button-container">
-        <button id="elevateBtn" class="btn btn-primary" hidden>Continue as administrator</button>
+        <button id="elevateBtn" class="btn btn-primary" hidden>Restart as administrator</button>
         <button id="fixBtn" class="btn btn-primary" hidden aria-label="Run the full fix now">Fix now</button>
         <button id="launchBtn" class="btn btn-primary" hidden aria-label="Open Zoom">Open Zoom</button>
         <button id="shortcutBtn" class="btn btn-primary" hidden><img class="btn-icon" src="assets/1132-helper-shortcut.png" alt="" aria-hidden="true" width="24" height="24"><span id="shortcutBtnLabel">Create desktop shortcut</span></button>
@@ -1877,6 +1877,7 @@
       </label>
       <div class="secondary-row">
         <button id="rescanBtn" class="btn-quiet" type="button" hidden>Check again</button>
+        <button id="closeBtn" class="btn-quiet" type="button" hidden>Close</button>
         <button id="detailsBtn" class="btn-quiet" type="button" hidden aria-controls="advPanel" aria-expanded="false">View details</button>
         <button id="supportBtn" class="btn-quiet" type="button" hidden>Support Report</button>
       </div>
@@ -1920,10 +1921,8 @@
       <p class="project-disclosure" id="projectDisclosure" role="note"></p>
       <div class="footer-meta">
         <button class="badge feedback-badge" id="btnSupport" aria-label="Submit feedback or a support report">Feedback</button>
-        <button class="badge site-badge" id="btnExplore" aria-label="Explore — choose a website to open in your browser">Explore</button>
-        <!-- Neutral until isElevated() answers. Shipping "Administrator" in
-             the green admin-badge class asserted elevation before anything
-             had been measured, and kept asserting it if the probe threw. -->
+        <button class="badge site-badge" id="btnExplore" hidden aria-label="Explore — choose a website to open in your browser">Explore</button>
+        <!-- Privilege status is not shown in the production footer. -->
         <span class="badge" id="adminBadge" role="status" hidden></span>
       </div>
     </div>

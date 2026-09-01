@@ -32,11 +32,11 @@ for (const text of [
 }
 
 check(shell.includes("document.getElementById('shortcutOpt')"), 'existing Create desktop shortcut option is retained');
-check(shell.includes("document.getElementById('projectDisclosure')"), 'independence disclosure is kept in the compact footer');
-check(shell.includes("document.getElementById('btnExplore')"), 'Explore is moved into the compact footer');
-check(!/body\.compact-shell-enabled #btnExplore\s*\{[^}]*display:\s*none/.test(shell),
-  'Explore is not globally hidden in compact chrome');
-check(shell.includes('compact-footer-explore'), 'Explore is a quiet footer text control');
+check(shell.includes("aboutBtn.textContent = 'About'"), 'independence disclosure is reachable from About');
+check(shell.includes("document.getElementById('btnExplore')"), 'Explore node is still referenced so it can be hidden');
+check(/body\.compact-shell-enabled #btnExplore/.test(shell) && /display:\s*none/.test(shell),
+  'Explore is hidden from compact production chrome');
+check(!shell.includes("footerMeta.appendChild(exploreBtn)"), 'Explore is not placed in the compact footer');
 check(!shell.includes("actionArea.appendChild(exploreBtn)"), 'Explore is not placed in the Fix now action area');
 check(!shell.includes("setCompactStatus('✓', 'Ready')"), 'ready state does not add a duplicate Ready pill');
 check(!/Everything looks good/.test(shell), 'shell never claims everything looks good');

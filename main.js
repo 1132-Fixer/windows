@@ -8,6 +8,8 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const electronSecurity = require('./src/main/electron-security');
 electronSecurity.installIpcAllowlist(ipcMain);
+const elevation = require('./src/main/elevation');
+const elevCtl = elevation.createElevationController();
 const config = require('./src/main/config');
 const supportClient = require('./src/main/support-client');
 const zoomDetect = require('./zoom-detect');
@@ -517,15 +519,24 @@ ipcMain.handle('window-maximize', () => {
   else mainWindow.maximize();
 });
 
-function createWindow() {
+function compactWindowBounds() {
   const workArea = screen.getPrimaryDisplay().workArea;
-  const minWidth = 720;
-  const minHeight = 560;
+  const width = Math.min(520, Math.max(440, workArea.width - 64));
+  const height = Math.min(640, Math.max(560, workArea.height - 64));
+  const x = workArea.x + Math.max(0, Math.round((workArea.width - width) / 2));
+  const y = workArea.y + Math.max(0, Math.round((workArea.height - height) / 2));
+  return { x, y, width, height };
+}
+
+function createWindow() {
+  const bounds = compactWindowBounds();
+  const minWidth = 440;
+  const minHeight = 520;
   mainWindow = new BrowserWindow({
-    x: workArea.x,
-    y: workArea.y,
-    width: Math.max(minWidth, workArea.width),
-    height: Math.max(minHeight, workArea.height),
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
     minWidth,
     minHeight,
     backgroundColor: '#0F1724',
@@ -577,7 +588,7 @@ function createWindow() {
 
 // Self-elevation flag (see relaunchElevated below) — declared before the
 // single-instance block because the lock handling special-cases it.
-const ELEVATE_RETRY_FLAG = '--self-elevate-attempted';
+const ELEVATE_RETRY_FLAG = elevCtl.retryFlag;
 
 // Single-instance lock. Without it, the post-update relaunch (and users
 // double-clicking during the silent install) produced two elevated windows
@@ -622,26 +633,21 @@ singleInstanceReady.then(got => {
 // ============================================================
 
 async function relaunchElevated() {
+  if (await isElevatedSync()) return false;
   const exe = process.execPath;
-  // Dev runs need the app path argument back (electron.exe <appPath>);
-  // packaged runs are just the exe. The retry flag rides along either way.
-  const args = app.isPackaged ? [ELEVATE_RETRY_FLAG] : [app.getAppPath(), ELEVATE_RETRY_FLAG];
-  const psq = s => String(s).replace(/'/g, "''");
-  const argList = ` -ArgumentList @(${args.map(a => `'${psq(a)}'`).join(',')})`;
-  // Release the single-instance lock so the elevated instance can take it;
-  // reacquired below if the prompt is declined and this instance stays.
   app.releaseSingleInstanceLock();
-  // No timeout: -Verb RunAs blocks until the user answers the UAC dialog
-  // (Windows itself expires an unanswered prompt, which lands in catch).
-  const r = await runPSCapture(`
-    try {
-      Start-Process -FilePath '${psq(exe)}'${argList} -Verb RunAs
-      Write-Output 'STARTED'
-    } catch {
-      Write-Output ('DECLINED: ' + $_.Exception.Message)
-    }
-  `);
-  const started = (r.stdout || '').includes('STARTED');
+  let started = false;
+  try {
+    const r = await elevCtl.relaunchElevated({
+      execPath: exe,
+      isPackaged: app.isPackaged,
+      appPath: app.getAppPath(),
+      argv: process.argv
+    });
+    started = !!r.started;
+  } catch (_) {
+    started = false;
+  }
   if (!started) app.requestSingleInstanceLock();
   return started;
 }
@@ -984,20 +990,10 @@ async function runPSCapture(scriptContent, opts = {}) {
 }
 
 // Elevation cannot change for the lifetime of the process, so probe once and
-// memoize. This check used to spawn net.exe on every preflight, every focus
-// re-scan, and twice at renderer bootstrap.
-let _elevatedPromise = null;
+// memoize. The probe reads TOKEN_ELEVATION (with an integrity-SID fallback).
+// It never uses net.exe session, username, or an unbounded child process.
 function isElevatedSync() {
-  if (_elevatedPromise) return _elevatedPromise;
-  // net.exe session is the standard Windows admin check: requires admin to enumerate sessions.
-  _elevatedPromise = new Promise(resolve => {
-    const child = spawn('net.exe', ['session'], { windowsHide: true });
-    child.stdout.on('data', () => {});
-    child.stderr.on('data', () => {});
-    child.on('error', () => resolve(false));
-    child.on('close', code => resolve(code === 0));
-  });
-  return _elevatedPromise;
+  return elevCtl.isElevated().then((r) => r.elevated === true).catch(() => false);
 }
 
 function userExists(username) {
@@ -3112,7 +3108,44 @@ ipcMain.handle('shortcut-exists', async () => {
 });
 
 ipcMain.handle('is-elevated', async () => {
-  return isElevatedSync();
+  try {
+    return await isElevatedSync();
+  } catch (_) {
+    return false;
+  }
+});
+
+ipcMain.handle('startup-status', async () => {
+  const t0 = Date.now();
+  elevation.logStage('startup-status', 'begin');
+  let elev = { elevated: false, method: 'failed', error: 'not probed', ms: 0 };
+  try {
+    elev = await elevCtl.isElevated();
+  } catch (err) {
+    elev = { elevated: false, method: 'failed', error: String(err && err.message || err), ms: Date.now() - t0 };
+  }
+  const interactiveUser = (os.userInfo().username || '').toLowerCase();
+  const runningAsTarget = interactiveUser === FIX_USER.toLowerCase();
+  let state = 'ready';
+  let stage = 'ready';
+  if (elev.elevated !== true) {
+    state = 'need-elevation';
+    stage = 'elevation';
+  } else if (runningAsTarget) {
+    state = 'blocked';
+    stage = 'interactive-user';
+  }
+  const result = {
+    state,
+    stage,
+    elevated: elev.elevated === true,
+    elevationMethod: elev.method,
+    elevationError: elev.error || null,
+    runningAsTarget,
+    elapsedMs: Date.now() - t0
+  };
+  elevation.logStage('startup-status', `state=${state} method=${elev.method} ${result.elapsedMs}ms`);
+  return result;
 });
 
 // Renderer retry for self-elevation. On success the elevated instance is
@@ -3483,7 +3516,7 @@ ipcMain.handle('preflight-scan', async () => {
     const fsStatus = probeData.fs_status;
     const fsStart  = probeData.fs_starttype;
     if (fsStatus === 'MISSING') {
-      cards.frameServer = { status: 'blocked', label: 'Camera Frame Server', message: 'Service not present on this Windows build ΓÇö cameras will not enumerate. This usually means a Windows N edition without the Media Feature Pack: install it via Settings > Apps > Optional features > "Media Feature Pack", restart Windows, then come back.' };
+      cards.frameServer = { status: 'warning', label: 'Camera Frame Server', message: 'Service not present on this Windows build — cameras may not enumerate. This does not mean Zoom error 1132 is absent or present. Open View details if you need the Media Feature Pack path.' };
     } else if (fsStart === 'Disabled') {
       cards.frameServer = { status: 'repairable', label: 'Camera Frame Server', message: 'Disabled. FIX NOW will set it to Manual so cameras can enumerate.' };
     } else if (fsStatus === 'Running' || fsStart === 'Manual' || fsStart === 'Automatic') {
