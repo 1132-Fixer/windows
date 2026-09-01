@@ -92,7 +92,7 @@ A future release must:
   `PrimeUpYourLife/1132-Fixer-Windows-Releases` repo was **not** deleted — it
   is still live and still serving v5.5.1 `latest.yml` to legacy clients, and
   must not be deleted (see
-  [`development/updater-channel.md`](development/updater-channel.md)); this work
+  [`../development/updater-channel.md`](../development/updater-channel.md)); this work
   would land in a minor/major bump at the earliest because it's a
   behavioral break for any user with an existing `user1` account.
 - Migration path for users with existing `user1`: detect the
