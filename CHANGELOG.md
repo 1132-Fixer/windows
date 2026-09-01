@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.2.0] - 2026-09-01
+
 ### Fixed
 
 - Support-service snapshot rebuilds take a per-scope advisory lock so two
@@ -905,6 +907,8 @@ The following manual cases must pass before tagging the release:
 - Direct publish of releases to the `1132-Fixer-Windows-Releases` repo
   for the auto-updater.
 
+[6.2.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.2.0
+[6.1.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.1.0
 [6.0.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.0.0
 [5.3.6]: https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Releases/releases/tag/v5.3.6
 [5.3.5]: https://github.com/PrimeUpYourLife/1132-Fixer-Windows-Releases/releases/tag/v5.3.5
