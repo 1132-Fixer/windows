@@ -48,19 +48,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   download bar is unrelated and still allowed — it represents a different
   operation.) Primary repair copy is consumer language; the helper
   account name and raw log stay behind **View details**.
-- **Wizard states:** *Checking* → *Fix available* (accent) →
-  *Repairing Zoom* (Step N of 5 via the stage rail) →
-  **Zoom is ready** (a real terminal success screen with **Open Zoom** —
-  the same launcher artifact as the desktop shortcut, via the allowlisted
-  `launch-zoom-helper` IPC — plus *View receipt* / *Support Report*).
-  Failures render as a clear consumer-language state offering *Try again*,
-  *View details*, and *Support Report*. When elevation is missing, a
-  single **Continue as administrator** action is shown. Manual blockers
-  read *Action required* (amber); red is reserved for actual failures.
-- **Footer is quiet utility chrome:** plain version text, link-weight
-  Feedback / Report and Explore, and a muted **● Running as
-  administrator** status indicator (green is reserved for successful
-  repair/completion, never for the privilege indicator).
+- **Wizard states:** *Checking* → **Ready to fix Zoom** (**Fix now**) →
+  *Fixing Zoom* → **You're all set** with **Open Zoom** and **Done**
+  (Open Zoom uses the same launcher artifact as the desktop shortcut via
+  the allowlisted `launch-zoom-helper` IPC). Failures offer **Try again**
+  and **View details**. Technical information stays behind **View details**,
+  never a *View receipt* label. When elevation is missing, **Continue as
+  administrator** is shown; after a declined prompt the retry is
+  **Restart as administrator**. Manual blockers read *Action required*
+  (amber); red is reserved for actual failures. The initial screen does
+  not say “Everything looks good” or “Open Zoom as user1”.
+- **Footer is quiet utility chrome:** plain version text, **Support**,
+  **Feedback**, and the exact independence line
+  `Independent project. Not affiliated with Zoom.` Compact repair chrome
+  does not put Explore or “Running as administrator” in the normal footer.
 - **Design tokens normalized** to the spec palette (SURFACE_1 `#172235`,
   SURFACE_2 `#1D2A3F`, borders `#2B3D57`/`#3B5578`, accent `#337FDB`,
   focus `#71AFFF`; the muddy purple `#2A2530` surface is gone), spacing
