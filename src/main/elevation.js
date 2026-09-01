@@ -12,8 +12,6 @@
  * Every child process here has an explicit timeout and is killed on expiry.
  */
 
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
@@ -69,18 +67,18 @@ function killTree(pid) {
   } catch (_) { /* already gone */ }
 }
 
-async function runPsFile(script, timeoutMs, spawnImpl) {
-  const tmp = path.join(os.tmpdir(), `fixer-elev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
-  fs.writeFileSync(tmp, `\ufeff${script}`, 'utf8');
-  try {
-    return await spawnImpl(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp],
-      timeoutMs
-    );
-  } finally {
-    fs.unlink(tmp, () => {});
-  }
+function systemPowerShell() {
+  return path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+}
+
+// In-memory -Command only. A temp .ps1 under %TEMP% is a SAC script-file
+// block ("part of this app") even when powershell.exe itself is trusted.
+function runPsCommand(script, timeoutMs, spawnImpl) {
+  return spawnImpl(
+    systemPowerShell(),
+    ['-NoProfile', '-NonInteractive', '-Command', String(script)],
+    timeoutMs
+  );
 }
 
 function runTimed(command, args, timeoutMs) {
@@ -181,7 +179,7 @@ function createElevationController(deps = {}) {
     // compiled the TOKEN_ELEVATION helper.
     const fast = probeWhoamiSync();
     if (fast) return fast;
-    const ps = await runPsFile(TOKEN_PROBE_PS, probeMs, spawnImpl);
+    const ps = await runPsCommand(TOKEN_PROBE_PS, probeMs, spawnImpl);
     const parsed = parseTokenProbe(ps.stdout);
     if (parsed.ok) {
       logStage('elevation.token', `ok elevated=${parsed.elevated} ${Date.now() - t0}ms`);
@@ -230,14 +228,14 @@ function createElevationController(deps = {}) {
     const argList = args.map((a) => `'${psSingleQuote(a)}'`).join(',');
     const script = [
       'try {',
-      `  Start-Process -FilePath '${psSingleQuote(exe)}' -ArgumentList @(${argList}) -Verb RunAs`,
+      `  Start-Process -LiteralPath '${psSingleQuote(exe)}' -ArgumentList @(${argList}) -Verb RunAs`,
       "  Write-Output 'STARTED'",
       '} catch {',
       "  Write-Output ('DECLINED: ' + $_.Exception.Message)",
       '}'
-    ].join('\r\n');
-    logStage('elevation.relaunch', 'Start-Process -Verb RunAs');
-    const r = await runPsFile(script, relaunchMs, spawnImpl);
+    ].join('; ');
+    logStage('elevation.relaunch', 'Start-Process -Verb RunAs (no script file)');
+    const r = await runPsCommand(script, relaunchMs, spawnImpl);
     const started = !r.timedOut && /STARTED/.test(r.stdout || '');
     const declined = /DECLINED/.test(r.stdout || '') || r.timedOut;
     logStage('elevation.relaunch', started ? 'started' : (declined ? 'declined-or-timeout' : 'failed'));

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- UAC relaunch no longer writes a temp `.ps1`. Smart App Control treats unknown script files as “part of this app”. The host exe is still unsigned, so SAC in enforcement still refuses to open it until a Trusted Root Program signature exists (publisher High Texas).
+
 ## [6.3.1] - 2026-09-01
 
 ### Fixed

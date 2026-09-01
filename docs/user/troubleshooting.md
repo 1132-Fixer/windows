@@ -10,6 +10,7 @@
 | The app says the helper profile is temporary | Run **Fix now** again. Do not use Zoom from a TEMP profile. |
 | You are signed in as `user1` | Sign out of that account first. 1132 Fixer cannot run while the helper account is the active Windows session. |
 | SmartScreen warns | Current releases are unsigned. See [code signing](../security/code-signing.md). |
+| Smart App Control will not open the app | Measured on this product: Code Integrity 3033/3077, policy `{0283ac0f-fff1-49ae-ada1-8a933130cad6}`, explorer/`svchost` loading `1132 Fixer.exe` that did not meet the Enterprise signing level. SAC does not allow a per-app exception. Do not turn SAC off. The unblock is an Authenticode signature from a CA in the Microsoft Trusted Root Program, publisher **High Texas**. Self-signed certificates do not satisfy SAC. See [code signing](../security/code-signing.md). |
 
 ## Camera and microphone as user1
 

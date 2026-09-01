@@ -30,8 +30,14 @@ console.log('elevation-startup-smoke: non-elevated startup requests elevation');
 check(main.includes('relaunchElevated'), 'main can relaunch elevated');
 check(main.includes('if (!elevated)') && main.includes('relaunchElevated()'),
   'non-elevated whenReady attempts relaunch before the window');
-check(/Start-Process[\s\S]*-Verb RunAs/.test(fs.readFileSync(path.join(ROOT, 'src', 'main', 'elevation.js'), 'utf8')),
-  'relaunch uses Windows runas');
+{
+  const elevSrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'elevation.js'), 'utf8');
+  check(/Start-Process[\s\S]*-Verb RunAs/.test(elevSrc), 'relaunch uses Windows runas');
+  check(elevSrc.includes("-Command") && elevSrc.includes('WindowsPowerShell'),
+    'relaunch uses System32 PowerShell -Command');
+  check(!elevSrc.includes('fixer-elev-') && !elevSrc.includes('-File'),
+    'relaunch does not write a temp .ps1 (SAC blocks unknown scripts)');
+}
 
 console.log('elevation-startup-smoke: already-elevated does not relaunch');
 check(main.includes('if (await isElevatedSync()) return false'),
