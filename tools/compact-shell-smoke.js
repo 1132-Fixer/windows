@@ -35,6 +35,10 @@ check(shell.includes("document.getElementById('shortcutOpt')"), 'existing Create
 check(shell.includes("document.getElementById('projectDisclosure')"), 'independence disclosure is kept in the compact footer');
 check(!shell.includes("setCompactStatus('✓', 'Ready')"), 'ready state does not add a duplicate Ready pill');
 check(!/Everything looks good/.test(shell), 'shell never claims everything looks good');
+check(shell.includes("appMark.src = 'assets/brand/app-mark.png'"), 'header mark is the canonical gear');
+check(shell.includes('topbar.appendChild(appMark)'), 'gear lives in the stable compact-topbar');
+check(!shell.includes('compact-brand-slot'), 'gear is not in a state-owned brand slot');
+check(!shell.includes('1132-helper-shortcut'), 'helper-shortcut artwork is not the header mark');
 
 console.log('compact-shell-smoke: four-step mapping');
 check(compactStageView('prep').step === 1, 'prep -> step 1');

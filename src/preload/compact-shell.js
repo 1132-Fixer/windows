@@ -46,8 +46,8 @@ body.compact-shell-enabled {
   overflow: hidden;
 }
 
-/* Retire the dashboard-like chrome. The compact top row becomes the drag
-   region and keeps only the state indicator + Exit affordance. */
+/* Retire the dashboard-like chrome. The compact top row is the stable
+   outer shell: window-centered product mark, status, and Exit. */
 body.compact-shell-enabled > .titlebar,
 body.compact-shell-enabled > .header,
 body.compact-shell-enabled > .footer {
@@ -55,11 +55,11 @@ body.compact-shell-enabled > .footer {
 }
 
 .compact-topbar {
-  height: 54px;
-  flex: 0 0 54px;
+  height: 64px;
+  flex: 0 0 64px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   padding: 0 24px;
   border-bottom: 1px solid transparent;
   -webkit-app-region: drag;
@@ -68,6 +68,21 @@ body.compact-shell-enabled > .footer {
 }
 
 .compact-topbar[hidden] { display: none !important; }
+
+/* Canonical product mark: assets/brand/app-mark.png. Centered on the
+   full window width so status/Exit never shift it. Same size and
+   coordinates in every wizard state. */
+.compact-topbar .app-mark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  pointer-events: none;
+  display: block;
+}
 
 .compact-status {
   display: inline-flex;
@@ -121,7 +136,7 @@ body[data-compact-state="cancelled"] .compact-status-icon { color: var(--compact
    dashboard. It only appears when the updater explicitly makes it visible. */
 body.compact-shell-enabled > .update-banner {
   position: absolute;
-  top: 54px;
+  top: 64px;
   left: 50%;
   transform: translateX(-50%);
   width: min(560px, calc(100% - 48px));
@@ -158,24 +173,6 @@ body.compact-shell-enabled .workspace {
   justify-content: center;
   gap: 0 !important;
   overflow: hidden;
-}
-
-.compact-brand-slot {
-  flex: 0 0 auto;
-  min-height: 62px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 18px;
-}
-.compact-brand-slot[hidden] { display: none !important; }
-.compact-brand-slot .app-mark {
-  position: static !important;
-  transform: none !important;
-  width: 58px !important;
-  height: 58px !important;
-  object-fit: contain;
-  display: block;
 }
 
 body.compact-shell-enabled .wizard {
@@ -313,8 +310,6 @@ body.compact-shell-enabled #wizFixing > .wiz-hint {
 }
 
 /* SUCCESS -------------------------------------------------------- */
-body[data-compact-state="success"] .compact-brand-slot,
-body[data-compact-state="cancelled"] .compact-brand-slot { display: none !important; }
 body[data-compact-state="success"] #wizNoticeGlyph {
   display: block !important;
   width: auto !important;
@@ -629,10 +624,9 @@ body[data-compact-state="blocked"] .zoom-recovery {
 }
 
 @media (max-width: 720px), (max-height: 650px) {
-  .compact-topbar { height: 48px; flex-basis: 48px; padding: 0 18px; }
+  .compact-topbar { height: 64px; flex-basis: 64px; padding: 0 18px; }
+  .compact-topbar .app-mark { width: 44px; height: 44px; }
   body.compact-shell-enabled > .main { padding-left: 18px !important; padding-right: 18px !important; }
-  .compact-brand-slot { min-height: 52px; margin-bottom: 12px; }
-  .compact-brand-slot .app-mark { width: 50px !important; height: 50px !important; }
   body.compact-shell-enabled .wiz-title { font-size: 22px !important; line-height: 28px !important; }
   body.compact-shell-enabled .action-area, .compact-run-actions { margin-top: 20px !important; }
   .compact-footer { min-height: 42px; flex-basis: 42px; }
@@ -692,16 +686,21 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     style.textContent = COMPACT_CSS;
     document.head.appendChild(style);
 
-    // Top row: state at left, one plain Exit affordance at right.
+    // Stable header: window-centered canonical gear, status + Exit on the right.
     const topbar = document.createElement('div');
     topbar.className = 'compact-topbar';
-    topbar.setAttribute('aria-label', '1132 Fixer status and window controls');
+    topbar.setAttribute('aria-label', '1132 Fixer');
     const compactStatus = document.createElement('div');
     compactStatus.className = 'compact-status';
     compactStatus.setAttribute('role', 'status');
     compactStatus.setAttribute('aria-live', 'polite');
     compactStatus.innerHTML = '<span class="compact-status-icon" aria-hidden="true"></span><span class="compact-status-text"></span>';
     topbar.appendChild(compactStatus);
+    appMark.src = 'assets/brand/app-mark.png';
+    appMark.alt = '1132 Fixer';
+    appMark.width = 44;
+    appMark.height = 44;
+    topbar.appendChild(appMark);
     const compactExitBtn = document.createElement('button');
     compactExitBtn.type = 'button';
     compactExitBtn.className = 'compact-exit';
@@ -709,14 +708,6 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     compactExitBtn.setAttribute('aria-label', 'Exit 1132 Fixer');
     topbar.appendChild(compactExitBtn);
     document.body.insertBefore(topbar, document.querySelector('.update-banner') || document.body.firstChild);
-
-    // Centered brand mark shared by Checking / Ready / Fixing.
-    const brandSlot = document.createElement('div');
-    brandSlot.className = 'compact-brand-slot';
-    brandSlot.setAttribute('aria-hidden', 'true');
-    appMark.alt = '';
-    brandSlot.appendChild(appMark);
-    workspace.insertBefore(brandSlot, wizard);
 
     // Checking copy + spinner. Existing grouped checks still populate in the
     // hidden diagnostics source and are available from View details later.
@@ -986,9 +977,10 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
       if (checkingTitle) checkingTitle.textContent = 'Checking…';
       if (fixingTitle) fixingTitle.textContent = 'Fixing Zoom';
 
-      // Default visibility before per-state overrides.
+      // Default visibility before per-state overrides. The product mark
+      // stays in the stable header in every state.
       topbar.hidden = false;
-      brandSlot.hidden = state === 'success' || state === 'cancelled' || state === 'error';
+      appMark.hidden = false;
       compactFooter.hidden = false;
 
       if (state === 'checking') {
