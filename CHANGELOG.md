@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Initial screen is **Ready to fix Zoom** with **Fix now**. A successful
+  preflight no longer claims “Everything looks good” or offers
+  “Open Zoom as user1” as the primary action.
+- **Fix now** always starts the complete `run-fix` helper-account reset,
+  after a short confirmation. It never calls the launch-only handler.
+- Compact wizard copy, independence footer, and no-scroll details dialog.
+
 ## [6.1.0] - 2026-08-23
 
 ### Changed — shell redesign to the acceptance spec (directive 2026-08-23)

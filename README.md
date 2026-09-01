@@ -5,8 +5,8 @@
 <h1 align="center">1132 Fixer for Windows</h1>
 
 <p align="center">
-  <strong>Open-source, one-click fix for Zoom Error 1132 on Windows.</strong><br>
-  Opens Zoom Workplace under a separate local helper account so a profile-tied 1132 ban no longer blocks you.
+  <strong>Independent open-source Windows profile-isolation utility for Zoom Error 1132.</strong><br>
+  Recreates a local helper account and starts an existing Zoom Workplace installation using that separate Windows profile.
 </p>
 
 <p align="center">
@@ -187,4 +187,6 @@ Secrets belong in GitHub Actions or the feedback service ΓÇö never in app sou
 
 ## Independent project
 
-1132 Fixer is not made by, endorsed by, or affiliated with Zoom Video Communications, Inc.
+Independent project. Not affiliated with, sponsored by, or endorsed by Zoom Communications, Inc.
+
+1132 Fixer is an independent open-source Windows profile-isolation utility that recreates a local helper account and starts an existing Zoom Workplace installation using that separate Windows profile. It works only on the user’s own Windows computer. It does not change the user’s main Windows profile or personal Zoom files, chats, contacts, or Zoom account data. Zoom Workplace must be installed separately. Obtain it from Zoom’s official Download Center. 1132 Fixer does not download, bundle, modify, or redistribute Zoom Workplace.

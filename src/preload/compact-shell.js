@@ -441,23 +441,42 @@ body[data-compact-state="cancelling"] .compact-cancel {
   min-height: 34px;
 }
 
-/* Details stay one quiet disclosure. The diagnostic content scrolls inside
-   the existing bounded panel rather than making the window scroll. */
+/* Details open as a dialog so they cannot grow the wizard or add nested
+   page scroll. The landing page stays a single no-scroll column. */
 body.compact-shell-enabled .adv-region {
-  flex: 0 1 auto !important;
+  flex: 0 0 auto !important;
   width: 100% !important;
   max-width: 520px;
-  margin: 8px 0 0 !important;
-  gap: 6px !important;
-  overflow: hidden;
-}
-body.compact-shell-enabled .adv-region .log-actions {
   margin: 0 !important;
+  gap: 0 !important;
+  overflow: visible;
+  min-height: 0;
 }
-body.compact-shell-enabled .adv-panel {
-  max-height: 210px !important;
-  padding: 10px 12px 0 0 !important;
+body.compact-shell-enabled .adv-region .log-actions { margin: 0 !important; }
+body.compact-shell-enabled .adv-panel.hidden { display: none !important; }
+body.compact-shell-enabled .adv-panel:not(.hidden) {
+  position: fixed !important;
+  inset: 64px 24px 72px !important;
+  z-index: 80;
+  max-height: none !important;
+  width: auto !important;
+  padding: 16px !important;
+  overflow-y: auto !important;
+  border: 1px solid var(--compact-border);
+  border-radius: 14px;
+  background: var(--compact-surface);
+  box-shadow: 0 18px 52px rgba(0,0,0,0.32);
 }
+body.compact-shell-enabled .wiz-pane.active {
+  max-height: none !important;
+  overflow: hidden !important;
+}
+body.compact-shell-enabled .workspace {
+  padding-bottom: 0 !important;
+  justify-content: center;
+}
+.compact-status:empty,
+.compact-status:has(.compact-status-text:empty) { display: none; }
 
 /* The compact shell owns the visible View details control location. */
 body[data-compact-state="fixing"] .action-area,
@@ -515,9 +534,26 @@ body[data-compact-state="cancelled"] .action-area {
 /* Hide shell-only or dashboard-oriented extras from the primary flow. They
    remain in the DOM and are still available through their dedicated modals. */
 body.compact-shell-enabled #adminBadge,
-body.compact-shell-enabled #projectDisclosure,
 body.compact-shell-enabled #btnExplore {
   display: none !important;
+}
+body.compact-shell-enabled #projectDisclosure {
+  display: flex !important;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--compact-dim);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  pointer-events: none;
+}
+body.compact-shell-enabled #projectDisclosure .os-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
 }
 
 /* Blocked/recovery and error states remain truthful rather than being forced
@@ -624,7 +660,7 @@ function compactStageView(stage) {
 function installCompactShell({ requestCancel, requestQuit } = {}) {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
-  window.addEventListener('DOMContentLoaded', () => {
+  const start = () => {
     const wizard = document.getElementById('wizardCard');
     const workspace = document.querySelector('.workspace');
     const appMark = document.querySelector('.app-mark');
@@ -688,7 +724,7 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     const checkingTitle = checking && checking.querySelector('.wiz-title');
     const checkingSub = document.createElement('p');
     checkingSub.className = 'compact-check-sub';
-    checkingSub.innerHTML = 'Making sure everything<br>is ready to continue.';
+    checkingSub.textContent = 'Making sure everything is ready.';
     const spinner = document.createElement('div');
     spinner.className = 'compact-spinner';
     spinner.setAttribute('aria-hidden', 'true');
@@ -764,6 +800,8 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     const compactFooter = document.createElement('div');
     compactFooter.className = 'compact-footer';
     if (appVersion) compactFooter.appendChild(appVersion);
+    const projectDisclosure = document.getElementById('projectDisclosure');
+    if (projectDisclosure) compactFooter.appendChild(projectDisclosure);
     const footerMeta = document.createElement('div');
     footerMeta.className = 'compact-footer-meta';
     const footerSupport = document.createElement('button');
@@ -778,6 +816,20 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
       feedbackBtn.textContent = 'Feedback';
       footerMeta.appendChild(feedbackBtn);
     }
+    const aboutBtn = document.createElement('button');
+    aboutBtn.type = 'button';
+    aboutBtn.className = 'compact-footer-about';
+    aboutBtn.textContent = 'About';
+    aboutBtn.setAttribute('aria-label', 'About 1132 Fixer');
+    aboutBtn.addEventListener('click', () => {
+      const about = document.getElementById('aboutOverlay');
+      if (about) {
+        about.hidden = false;
+        const close = document.getElementById('aboutClose');
+        if (close) close.focus();
+      }
+    });
+    footerMeta.appendChild(aboutBtn);
     compactFooter.appendChild(footerMeta);
     workspace.appendChild(compactFooter);
 
@@ -919,7 +971,7 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
       // A result is "ready" only when the canonical renderer exposed a valid
       // fix/launch path. A blocked result stays blocked; we never manufacture
       // permission to run a repair.
-      const resultCanProceed = pane === 'result' && !elevateVisible && !recoveryVisible && (fixVisible || launchVisible);
+      const resultCanProceed = pane === 'result' && !elevateVisible && !recoveryVisible && fixVisible;
       const fixOutcome = document.documentElement.dataset.fixOutcome || '';
       const success = pane === 'notice' && tone === 'done';
       const error = pane === 'notice' && tone === 'error';
@@ -935,9 +987,9 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
       if (fixingTitle) fixingTitle.textContent = 'Fixing Zoom';
 
       // Default visibility before per-state overrides.
-      topbar.hidden = state === 'checking' || state === 'success';
+      topbar.hidden = false;
       brandSlot.hidden = state === 'success' || state === 'cancelled' || state === 'error';
-      compactFooter.hidden = state !== 'ready';
+      compactFooter.hidden = false;
 
       if (state === 'checking') {
         setCompactStatus('', '');
@@ -945,19 +997,15 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
       }
 
       if (state === 'ready') {
-        setCompactStatus('✓', 'Ready');
+        setCompactStatus('', '');
         if (resultTitle) resultTitle.textContent = 'Ready to fix Zoom';
         if (resultSub) {
-          resultSub.textContent = "This will start Zoom with a fresh setup.\nYour personal files won't be changed.";
+          resultSub.textContent = 'Start Zoom with a fresh setup.\nYour personal files won’t be changed.';
           resultSub.hidden = false;
         }
 
-        // Healthy preflight used to promote "Open Zoom" even though the user
-        // had not chosen to rebuild yet. For the requested flow, expose the
-        // already-wired Fix now button instead. We only do this when the
-        // existing renderer proved a valid path (resultCanProceed above).
         setElementHidden(fixBtn, false);
-        if (!fixBtn.classList.contains('counting')) fixBtn.textContent = 'Fix now';
+        if (fixBtn.textContent !== 'Starting after check…') fixBtn.textContent = 'Fix now';
         setElementHidden(launchBtn, true);
         setElementHidden(shortcutBtn, true);
         setElementHidden(shortcutOpt, false);
@@ -1047,7 +1095,13 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     // selected its initial state and populated real version/elevation data.
     sync();
     window.setTimeout(scheduleSync, 0);
-  }, { once: true });
+  };
+
+  if (document.readyState === 'loading') {
+    window.addEventListener('DOMContentLoaded', start, { once: true });
+  } else {
+    start();
+  }
 }
 
 module.exports = {

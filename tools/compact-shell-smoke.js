@@ -18,8 +18,8 @@ for (const text of [
   'Checking…',
   'Making sure everything',
   'Ready to fix Zoom',
-  'This will start Zoom with a fresh setup.',
-  "Your personal files won't be changed.",
+  'Start Zoom with a fresh setup.',
+  'Your personal files won’t be changed.',
   'Fixing Zoom',
   'Getting things ready…',
   'Step ${view.step} of 4',
@@ -32,6 +32,9 @@ for (const text of [
 }
 
 check(shell.includes("document.getElementById('shortcutOpt')"), 'existing Create desktop shortcut option is retained');
+check(shell.includes("document.getElementById('projectDisclosure')"), 'independence disclosure is kept in the compact footer');
+check(!shell.includes("setCompactStatus('✓', 'Ready')"), 'ready state does not add a duplicate Ready pill');
+check(!/Everything looks good/.test(shell), 'shell never claims everything looks good');
 
 console.log('compact-shell-smoke: four-step mapping');
 check(compactStageView('prep').step === 1, 'prep -> step 1');
