@@ -72,6 +72,9 @@ const WEBSITE_HOSTS = new Set([
   '1132-fixer.xyz', 'www.1132-fixer.xyz',
   'botify-network.com', 'www.botify-network.com',
   'gif.directory', 'www.gif.directory',
+  // Prime Hosting (Explore redesign, issue #185). Exact host only — no
+  // wildcard, so *.primehosting.dev is NOT reachable.
+  'primehosting.dev', 'www.primehosting.dev',
 ]);
 const ZOOM_HOSTS = new Set(['zoom.us', 'www.zoom.us']);
 
@@ -88,6 +91,10 @@ const EXPLORE_DESTINATIONS = Object.freeze({
   modbot: 'https://botify-network.com/apps/botifymodbot',
   emojiGenerator: 'https://botify-network.com/apps/emoji-generator-bot',
   makeItGif: 'https://botify-network.com/apps/makeitgif',
+  // Prime Hosting (Explore addendum 2026-08-25). Exact origin, no
+  // subdomains: the map is a fixed key->URL table, so an entry here can
+  // never widen into a wildcard the way a host allowlist can.
+  primeHosting: 'https://primehosting.dev/',
 });
 
 // key -> approved https URL, or null for anything not in the fixed map.
@@ -226,14 +233,37 @@ function isSafeUserSelectedPath(filePath, opts = {}) {
   if ([...filePath].some((ch) => ch.charCodeAt(0) < 0x20)) {
     return { ok: false, reason: 'control characters' };
   }
-  const resolved = path.resolve(filePath);
-  const base = path.basename(resolved);
+
+  // path.win32, NOT the ambient path module.
+  //
+  // This validates a WINDOWS path — it is handed the result of a Windows
+  // file dialog — but it used to parse it with whatever platform the
+  // process happened to be running on. Under POSIX a backslash is an
+  // ordinary filename character, so path.basename('C:\\Users\\Public\\x.msi')
+  // returns the WHOLE string, which then contains ':' and '\\' and is
+  // refused as an illegal basename. Every legitimate installer path was
+  // rejected off-Windows, and the security smoke test that proves this
+  // guard works could not pass anywhere except Windows — so on Linux CI
+  // the guard was effectively unverified.
+  //
+  // Pinning the parser makes the check deterministic and identical on
+  // every host. On Windows the behaviour is unchanged.
+  const win = path.win32;
+
+  // A file dialog always returns an absolute path. Requiring one keeps
+  // resolve() from silently joining a relative input onto the running
+  // process's cwd — which off-Windows is a POSIX directory, and would
+  // produce a mixed-separator path nobody can reason about.
+  if (!win.isAbsolute(filePath)) return { ok: false, reason: 'not absolute' };
+
+  const resolved = win.resolve(filePath);
+  const base = win.basename(resolved);
   if (!base || base.includes(':') || base.includes('/') || base.includes('\\')) {
     return { ok: false, reason: 'illegal basename' };
   }
   if (opts.ext) {
     const want = opts.ext.startsWith('.') ? opts.ext.toLowerCase() : `.${String(opts.ext).toLowerCase()}`;
-    if (path.extname(resolved).toLowerCase() !== want) {
+    if (win.extname(resolved).toLowerCase() !== want) {
       return { ok: false, reason: 'extension' };
     }
   }

@@ -112,8 +112,10 @@ console.log('electron-security-smoke: preload and main stay on the allowlist');
 
 console.log('electron-security-smoke: Explore destinations (directive 2026-08-23)');
 {
-  // Renderer sends KEYS; main owns the URL map. Exactly these seven
-  // destinations, each pinned to its exact URL.
+  // Renderer sends KEYS; main owns the URL map. Exactly these eight
+  // destinations, each pinned to its exact URL. Prime Hosting joined the
+  // map in the Explore redesign (issue #185); every other URL is
+  // unchanged, and this table is what proves it.
   const WANT = {
     fixer: 'https://1132-fixer.xyz/',
     botify: 'https://botify-network.com/',
@@ -122,9 +124,10 @@ console.log('electron-security-smoke: Explore destinations (directive 2026-08-23
     modbot: 'https://botify-network.com/apps/botifymodbot',
     emojiGenerator: 'https://botify-network.com/apps/emoji-generator-bot',
     makeItGif: 'https://botify-network.com/apps/makeitgif',
+    primeHosting: 'https://primehosting.dev/',
   };
   check(Object.keys(es.EXPLORE_DESTINATIONS).sort().join(',') === Object.keys(WANT).sort().join(','),
-    'exactly the seven approved destination keys');
+    'exactly the eight approved destination keys');
   for (const [key, url] of Object.entries(WANT)) {
     check(es.exploreDestinationUrl(key) === url, `${key} resolves only to ${url}`);
   }
@@ -166,29 +169,98 @@ console.log('electron-security-smoke: Explore destinations (directive 2026-08-23
   check(!indexSrc.includes('Visit Website'), 'Visit Website footer label gone');
   check(/id="exploreOverlay"[^>]*role="dialog"[^>]*aria-modal="true"[^>]*aria-labelledby="exploreTitle"/.test(indexSrc.replace(/\s+/g, ' ')),
     'explore modal is a labelled aria-modal dialog');
-  const viewKeys = messages.EXPLORE_VIEW.map(d => d.key).sort();
-  check(viewKeys.join(',') === Object.keys(es.EXPLORE_DESTINATIONS).sort().join(','),
-    'EXPLORE_VIEW catalog carries exactly the approved destination keys');
-  const viewNames = messages.EXPLORE_VIEW.map(d => d.name);
-  for (const name of ['1132 Fixer', 'Botify Network', 'BotifyKickBot', 'BotifyModBot',
-                      'Emoji Generator Bot', 'Make It GIF', 'GIF Directory']) {
-    check(viewNames.includes(name), `catalog names destination "${name}"`);
+  const viewIds = messages.EXPLORE_VIEW.map(d => d.id).sort();
+  check(viewIds.join(',') === Object.keys(es.EXPLORE_DESTINATIONS).sort().join(','),
+    'EXPLORE_VIEW catalog carries exactly the approved destination ids');
+  check(new Set(viewIds).size === viewIds.length, 'every destination appears exactly once');
+
+  // Order IS focus order IS render order. Asserted as a list rather than
+  // as membership, because a reordering is invisible to a set check and
+  // is exactly what a careless edit produces.
+  check(messages.EXPLORE_VIEW.map(d => d.id).join(',') ===
+        'fixer,botify,primeHosting,gifDirectory,kickbot,modbot,emojiGenerator,makeItGif',
+    'destination order matches the approved hierarchy');
+
+  const byId = Object.fromEntries(messages.EXPLORE_VIEW.map(d => [d.id, d]));
+  const WANT_COPY = {
+    fixer:          ['1132 Fixer',      'Project website',                 'featured'],
+    botify:         ['Botify Network',  'Network home',                    'organizations'],
+    primeHosting:   ['Prime Hosting',   'Hosting and developer services',  'organizations'],
+    gifDirectory:   ['GIF Directory',   'Organize and discover GIFs',      'organizations'],
+    kickbot:        ['BotifyKickBot',   'Moderation bot',                  'bots'],
+    modbot:         ['BotifyModBot',    'Community management bot',        'bots'],
+    emojiGenerator: ['Emoji Generator', 'Create custom emoji',             'creative-tools'],
+    makeItGif:      ['Make It GIF',     'Create and convert GIFs',         'creative-tools'],
+  };
+  for (const [id, [name, description, category]] of Object.entries(WANT_COPY)) {
+    check(byId[id] && byId[id].name === name, `${id} is named "${name}"`);
+    check(byId[id] && byId[id].description === description, `${id} reads "${description}"`);
+    check(byId[id] && byId[id].category === category, `${id} is categorised ${category}`);
   }
-  check(messages.EXPLORE_VIEW.filter(d => d.featured).map(d => d.key).join(',') === 'fixer',
+  // GIF Directory is an organisation and discovery utility, not leftovers.
+  check(!messages.EXPLORE_VIEW.some(d => ['other', 'more'].includes(String(d.category).toLowerCase())),
+    'no "other" or "more" catch-all category');
+  check(!messages.EXPLORE_VIEW.some(d => /App page/i.test(d.description || '')),
+    'no placeholder "App page" descriptions remain');
+  check(messages.EXPLORE_CATEGORIES.map(c => c.id).join(',') ===
+        'featured,organizations,bots,creative-tools',
+    'exactly the four approved categories, in order');
+
+  check(messages.EXPLORE_VIEW.filter(d => d.featured).map(d => d.id).join(',') === 'fixer',
     '1132 Fixer is the single featured destination');
+
   // Logo assets: repo paths only — production code must never reference
   // the user's Downloads directory — and every named asset must exist.
-  check(messages.EXPLORE_VIEW.every(d => d.logo === null || d.logo.startsWith('assets/explore/')),
-    'logo paths live under assets/explore/');
-  check(messages.EXPLORE_VIEW.every(d => d.logo === null || fs.existsSync(path.join(ROOT, d.logo))),
-    'every referenced logo asset exists');
+  check(messages.EXPLORE_VIEW.every(d => d.icon && d.icon.startsWith('assets/')),
+    'icon paths live under assets/');
+  // The hero uses the MANAGED brand export, not a derived copy. A
+  // downscaled duplicate would ship fine and then silently drift the day
+  // the design system updates the logo — which is the exact failure the
+  // brand-assets guard exists to catch. Pinned here so a future edit
+  // cannot quietly reintroduce one.
+  const heroIcon = messages.EXPLORE_VIEW.find(d => d.featured).icon;
+  check(heroIcon === 'assets/logo-transparent.png',
+    'the 1132 Fixer hero uses the managed brand export');
+  const brandTsv = fs.readFileSync(path.join(ROOT, '.brand-assets.tsv'), 'utf8');
+  check(brandTsv.split('\n').some(l => l.trim().endsWith('\t' + heroIcon)),
+    'the hero logo is a design-system managed asset in .brand-assets.tsv');
+  check(messages.EXPLORE_VIEW.every(d => fs.existsSync(path.join(ROOT, d.icon))),
+    'every referenced icon asset exists');
+  // Every destination carries real artwork: a generic fallback is for a
+  // corrupt install, never for a product we simply never supplied a logo for.
+  check(messages.EXPLORE_VIEW.every(d => d.icon !== null),
+    'no destination falls back to the generic globe in normal operation');
+  // The three logos supplied on issue #185, at their canonical paths.
+  for (const asset of ['make-it-gif.png', 'gif-directory.png', 'prime-hosting.png']) {
+    check(fs.existsSync(path.join(ROOT, 'assets/explore', asset)), `supplied asset ${asset} is in the repo`);
+    check(messages.EXPLORE_VIEW.some(d => d.icon === 'assets/explore/' + asset),
+      `supplied asset ${asset} is actually used by a destination`);
+  }
   const allUiSrc = indexSrc + rendererSrc + mainSrc + preloadSrc;
   check(!/Downloads[\\/]/.test(allUiSrc), 'no runtime dependency on the Downloads directory');
   check(indexSrc.includes('id="exploreClose"'), 'modal has a close affordance');
-  check(rendererSrc.includes('openExploreDestination(btn.dataset.explore)') &&
-        rendererSrc.includes(".explore-choice[data-explore]"),
+  check(rendererSrc.includes('openExploreDestination(el.dataset.explore)') &&
+        rendererSrc.includes("body.querySelectorAll('[data-explore]')"),
     'renderer sends only the fixed data-explore keys');
-  check(!/openExploreDestination\((?!btn\.dataset\.explore|key\b)/.test(rendererSrc),
+  // Stronger than "the selector looks right" (carried over from #180): the
+  // click wiring resolves whatever is in data-explore, so the property that
+  // actually matters is that data-explore is ONLY ever interpolated from a
+  // fixed catalog id — in the secondary cards AND in the hero button — and
+  // never from anything else. A checked selector with an unchecked
+  // interpolation is a guard that reads well and proves nothing. The main
+  // process re-validates the key against EXPLORE_DESTINATIONS regardless.
+  const exploreInterpolations = [...rendererSrc.matchAll(/data-explore="\$\{([^}]*)\}"/g)].map(m => m[1].trim());
+  check(exploreInterpolations.length >= 2,
+    'both the card and the hero wire a data-explore key');
+  check(exploreInterpolations.every(expr => expr === 'escapeHtml(d.id)'),
+    'data-explore is only ever set from a fixed catalog id: ' + JSON.stringify(exploreInterpolations));
+  // The independence line belongs to 1132 Fixer, not to the panel. As a
+  // global footer it read as a statement about every product listed.
+  check(!indexSrc.includes('id="exploreDisclosure"'),
+    'the global Explore disclaimer footer is gone');
+  check(rendererSrc.includes('explore-hero-note') && rendererSrc.includes('DISCLOSURE.INDEPENDENCE'),
+    'the independence line is rendered inside the 1132 Fixer hero');
+  check(!/openExploreDestination\((?!el\.dataset\.explore|key\b)/.test(rendererSrc),
     'renderer never passes a computed/arbitrary destination');
   check(/exploreOverlay\.addEventListener\('keydown'/.test(rendererSrc) && /Escape/.test(rendererSrc),
     'Escape closes the modal');
@@ -198,11 +270,13 @@ console.log('electron-security-smoke: Explore destinations (directive 2026-08-23
   // Project disclosure (addendum): rendered into shell + Explore from the
   // single DISCLOSURE catalog; no unsupported Zoom-endorsement wording in
   // any UI source.
-  check(indexSrc.includes('id="projectDisclosure"') && indexSrc.includes('id="exploreDisclosure"'),
-    'disclosure instances exist in shell and Explore');
-  check(rendererSrc.includes('renderDisclosure(document.getElementById(\'projectDisclosure\'))') &&
-        rendererSrc.includes('renderDisclosure(document.getElementById(\'exploreDisclosure\'))'),
-    'both disclosure instances are filled from the DISCLOSURE catalog');
+  // The shell keeps its persistent disclosure line. The Explore panel's
+  // copy moved INTO the 1132 Fixer hero (issue #185): as a panel footer it
+  // read as a statement about every product listed, including ones this
+  // project does not own and cannot speak for.
+  check(indexSrc.includes('id="projectDisclosure"'), 'shell disclosure instance exists');
+  check(rendererSrc.includes('renderDisclosure(document.getElementById(\'projectDisclosure\'))'),
+    'the shell disclosure is filled from the DISCLOSURE catalog');
   check(messages.DISCLOSURE.INDEPENDENCE === 'Independent project. Not affiliated with Zoom.',
     'shell ships the exact independence wording');
   for (const banned of ['Verified by Zoom', 'Zoom Certified', 'Zoom Partner', 'Official Zoom']) {
@@ -284,6 +358,20 @@ console.log('electron-security-smoke: path validation and PS quoting');
   check(es.isSafeUserSelectedPath('C:\\Users\\Public\\ZoomInstallerFull.msi', { ext: '.exe' }).ok === false, 'exe rejected when msi required');
   check(es.isSafeUserSelectedPath('C:\\Users\\Public\\ZoomInstallerFull.msi:evil', { ext: '.msi' }).ok === false, 'NTFS ADS basename rejected');
   check(es.isSafeUserSelectedPath('C:\\Users\\Public\\Zoom\nInstaller.msi', { ext: '.msi' }).ok === false, 'newline in path rejected');
+  // CROSS-PLATFORM PARSING. This guard validates a WINDOWS path and used
+  // to parse it with the ambient path module, so under POSIX a backslash
+  // was an ordinary filename character: basename() returned the whole
+  // string, it contained ':' and '\\', and every legitimate installer path
+  // was refused as an illegal basename. The guard therefore could not be
+  // verified anywhere except Windows. These pin the win32 semantics.
+  check(msi.ok === true && msi.path === 'C:\\Users\\Public\\ZoomInstallerFull.msi',
+    'a Windows path keeps its win32 form on every host');
+  check(es.isSafeUserSelectedPath('C:\\Users\\Public\\..\\Zoom.msi', { ext: '.msi' }).path
+        === 'C:\\Users\\Zoom.msi', 'win32 traversal is normalised, not concatenated onto cwd');
+  check(es.isSafeUserSelectedPath('ZoomInstallerFull.msi', { ext: '.msi' }).ok === false,
+    'a relative path is refused rather than joined onto the process cwd');
+  check(es.isSafeUserSelectedPath('C:/Users/Public/Zoom.msi', { ext: '.msi' }).ok === true,
+    'forward slashes are accepted as win32 separators');
   const quoted = es.psSingleQuote("C:\\Users\\O'Brien\\Zoom.msi");
   check(quoted.ok && quoted.literal === "'C:\\Users\\O''Brien\\Zoom.msi'", 'PS single-quote doubles apostrophes');
   check(es.psSingleQuote('C:\\Users\\x\ny').ok === false, 'PS quote rejects control characters');

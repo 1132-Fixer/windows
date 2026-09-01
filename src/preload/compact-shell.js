@@ -499,6 +499,8 @@ body[data-compact-state="cancelled"] .action-area {
 .compact-footer-meta {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   gap: 4px;
 }
 .compact-footer .badge,
@@ -526,10 +528,10 @@ body[data-compact-state="cancelled"] .action-area {
 }
 .compact-footer button:hover { color: var(--compact-text) !important; background: rgba(168,181,199,0.07) !important; }
 
-/* Hide shell-only or dashboard-oriented extras from the primary flow. They
-   remain in the DOM and are still available through their dedicated modals. */
-body.compact-shell-enabled #adminBadge,
-body.compact-shell-enabled #btnExplore {
+/* Hide dashboard-oriented extras from the primary flow. Explore stays a
+   quiet footer text control so the product directory remains reachable
+   without competing with Fix now. */
+body.compact-shell-enabled #adminBadge {
   display: none !important;
 }
 body.compact-shell-enabled #projectDisclosure {
@@ -539,11 +541,18 @@ body.compact-shell-enabled #projectDisclosure {
   margin: 0;
   min-width: 0;
   flex: 1 1 auto;
+  overflow: hidden;
   color: var(--compact-dim);
   font-size: 11px;
   line-height: 14px;
   font-weight: 500;
   pointer-events: none;
+}
+body.compact-shell-enabled #projectDisclosure span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 body.compact-shell-enabled #projectDisclosure .os-icon {
   width: 14px;
@@ -786,8 +795,8 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     const exitKeepBtn = exitOverlay.querySelector('.compact-exit-keep');
     const exitConfirmBtn = exitOverlay.querySelector('.compact-exit-confirm');
 
-    // Minimal footer: real version + Support + Feedback. The app version node
-    // is moved, not copied, so the existing renderer continues to populate it.
+    // Minimal footer: independence disclosure, Explore, Support, Feedback,
+    // About. The app version node is moved, not copied.
     const compactFooter = document.createElement('div');
     compactFooter.className = 'compact-footer';
     if (appVersion) compactFooter.appendChild(appVersion);
@@ -795,6 +804,12 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     if (projectDisclosure) compactFooter.appendChild(projectDisclosure);
     const footerMeta = document.createElement('div');
     footerMeta.className = 'compact-footer-meta';
+    const exploreBtn = document.getElementById('btnExplore');
+    if (exploreBtn) {
+      exploreBtn.classList.remove('badge', 'site-badge');
+      exploreBtn.classList.add('compact-footer-explore');
+      footerMeta.appendChild(exploreBtn);
+    }
     const footerSupport = document.createElement('button');
     footerSupport.type = 'button';
     footerSupport.className = 'compact-footer-support';

@@ -77,6 +77,9 @@ check(!/header[\s\S]{0,800}1132-helper-shortcut/.test(html),
   'index.html header block does not reference the helper icon');
 
 console.log('brand-placement-smoke: compact shell keeps the mark in the stable header');
+check(!/body\.compact-shell-enabled #btnExplore\s*\{[^}]*display:\s*none/.test(shell),
+  'compact shell does not hide the Explore control');
+check(shell.includes('compact-footer-explore'), 'Explore is a footer text control, not a header mark');
 check(shell.includes("appMark.src = 'assets/brand/app-mark.png'"),
   'compact shell locks the header mark to app-mark.png');
 check(shell.includes('topbar.appendChild(appMark)'),
@@ -109,10 +112,14 @@ check(!shell.includes('1132-helper-shortcut'),
   'compact shell never loads the helper-shortcut artwork');
 
 console.log('brand-placement-smoke: Explore does not replace the header mark');
-check(messages.includes("logo: 'assets/explore/fixer.png'") || messages.includes("icon: 'assets/explore/fixer.png'"),
-  'Explore catalog uses the managed Explore 1132 Fixer asset');
-check(!messages.includes("logo: 'assets/brand/app-mark.png'"),
-  'Explore catalog does not steal the header product mark path as a substitute file');
+check(
+  messages.includes("icon: 'assets/logo-transparent.png'") ||
+  messages.includes("logo: 'assets/explore/fixer.png'") ||
+  messages.includes("icon: 'assets/explore/fixer.png'"),
+  'Explore featured card uses a managed 1132 Fixer logo export'
+);
+check(!messages.includes("icon: 'assets/brand/app-mark.png'") && !messages.includes("logo: 'assets/brand/app-mark.png'"),
+  'Explore catalog does not reuse the header product-mark path');
 check(!/helper-shortcut/.test(messages),
   'Explore catalog does not use the helper-shortcut icon');
 

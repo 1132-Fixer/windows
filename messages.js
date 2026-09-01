@@ -339,18 +339,35 @@ function wizardBlockedSub(labels) {
 // ============================================================
 const EXPLORE_COPY = {
   TITLE: 'Explore',
-  SUB: 'Open 1132 and Botify Network services. Links open in your default browser.',
+  SUB: 'Explore apps, bots, and tools. Links open in your browser.',
+  // The secondary directory heading. Deliberately quieter than the hero:
+  // 1132 Fixer is the subject of this panel, and everything below it is
+  // the network around it.
+  NETWORK_TITLE: 'Explore the network',
+  NETWORK_SUB: 'Organizations, bots, and creative tools',
+  VISIT: 'Visit project',
   OPENED: 'Opened in your browser.',
   FAILED: 'Could not open the website — try again.'
 };
+
+// Category order IS render order IS focus order. One list, so the three
+// can never drift apart - the ordering tests assert against this.
+const EXPLORE_CATEGORIES = [
+  { id: 'featured',       label: 'FEATURED' },
+  { id: 'organizations',  label: 'ORGANIZATIONS & SERVICES' },
+  { id: 'bots',           label: 'BOTS' },
+  { id: 'creative-tools', label: 'CREATIVE TOOLS' }
+];
 const EXPLORE_VIEW = [
-  { key: 'fixer',          name: '1132 Fixer',          subtitle: '1132-fixer.xyz',    logo: 'assets/explore/fixer.png',          category: '1132',           featured: true },
-  { key: 'botify',         name: 'Botify Network',      subtitle: 'botify-network.com', logo: 'assets/explore/botify.png',         category: 'Botify Network', featured: false },
-  { key: 'kickbot',        name: 'BotifyKickBot',       subtitle: 'App page',           logo: 'assets/explore/kickbot.png',        category: 'Botify Network', featured: false },
-  { key: 'modbot',         name: 'BotifyModBot',        subtitle: 'App page',           logo: 'assets/explore/modbot.png',         category: 'Botify Network', featured: false },
-  { key: 'emojiGenerator', name: 'Emoji Generator Bot', subtitle: 'App page',           logo: 'assets/explore/emojiGenerator.png', category: 'Botify Network', featured: false },
-  { key: 'makeItGif',      name: 'Make It GIF',         subtitle: 'App page',           logo: null,                                category: 'Botify Network', featured: false },
-  { key: 'gifDirectory',   name: 'GIF Directory',       subtitle: 'gif.directory',      logo: null,                                category: 'Other',          featured: false }
+  // id           name                 description                     category         icon                                  accent      featured
+  { id: 'fixer',          name: '1132 Fixer',      description: 'Project website',            category: 'featured',       icon: 'assets/logo-transparent.png'   ,     accent: 'blue',   featured: true  },
+  { id: 'botify',         name: 'Botify Network',  description: 'Network home',               category: 'organizations',  icon: 'assets/explore/botify.png',         accent: 'blue',   featured: false },
+  { id: 'primeHosting',   name: 'Prime Hosting',   description: 'Hosting and developer services', category: 'organizations', icon: 'assets/explore/prime-hosting.png', accent: 'violet', featured: false },
+  { id: 'gifDirectory',   name: 'GIF Directory',   description: 'Organize and discover GIFs', category: 'organizations',  icon: 'assets/explore/gif-directory.png',  accent: 'purple', featured: false },
+  { id: 'kickbot',        name: 'BotifyKickBot',   description: 'Moderation bot',             category: 'bots',           icon: 'assets/explore/kickbot.png',        accent: null,     featured: false },
+  { id: 'modbot',         name: 'BotifyModBot',    description: 'Community management bot',   category: 'bots',           icon: 'assets/explore/modbot.png',         accent: null,     featured: false },
+  { id: 'emojiGenerator', name: 'Emoji Generator', description: 'Create custom emoji',        category: 'creative-tools', icon: 'assets/explore/emojiGenerator.png', accent: null,     featured: false },
+  { id: 'makeItGif',      name: 'Make It GIF',     description: 'Create and convert GIFs',    category: 'creative-tools', icon: 'assets/explore/make-it-gif.png',    accent: null,     featured: false }
 ];
 // Waiting Room Attendant: a brand asset is staged at
 // assets/explore/waiting-room-attendant.png, but the app has NO canonical
@@ -393,7 +410,7 @@ if (typeof module !== 'undefined' && module.exports) {
     describeFrameServer, receiptStatusFor, describeUnrecognized,
     ZOOM_RECOVERY, zoomRecoveryTechDetails, zoomInstallerRefusal,
     WIZARD_GROUPS, WIZARD, wizardFixFoundTitle, wizardFixFoundSub, wizardBlockedSub,
-    EXPLORE_COPY, EXPLORE_VIEW, DISCLOSURE,
+    EXPLORE_COPY, EXPLORE_CATEGORIES, EXPLORE_VIEW, DISCLOSURE,
     FEEDBACK_FALLBACK, FEEDBACK_NETWORK, reportBuildFailure
   };
 }
