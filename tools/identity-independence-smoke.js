@@ -46,6 +46,13 @@ check(renderer.includes('renderDisclosure(document.getElementById(\'projectDiscl
 check(shell.includes("document.getElementById('projectDisclosure')"),
   'compact shell keeps the disclosure in the visible footer');
 check(readme.includes(LEGAL), 'README contains the complete independence statement');
+check(fs.existsSync(path.join(ROOT, 'docs', 'README.md')), 'docs index exists');
+check(fs.existsSync(path.join(ROOT, 'docs', 'security', 'threat-model.md')), 'threat model exists');
+check(fs.existsSync(path.join(ROOT, 'docs', 'security', 'helper-account.md')), 'helper-account note exists');
+check(fs.existsSync(path.join(ROOT, 'docs', 'history', 'release-migration-2026-08.md')),
+  'release-migration history doc remains');
+check(fs.readFileSync(path.join(ROOT, 'docs', 'README.md'), 'utf8').includes(LEGAL),
+  'docs index carries the complete independence statement');
 check(html.includes('id="aboutOverlay"') && renderer.includes('DISCLOSURE.LEGAL'),
   'About dialog carries the complete legal statement');
 

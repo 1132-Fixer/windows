@@ -49,7 +49,7 @@ manual reinstall is **not** an acceptable migration. See
 is published to this feed so those clients auto-transition to the current
 channel. The feed is retired only under the objective condition stated there.
 
-See [`development/updater-channel.md`](development/updater-channel.md).
+See [`../development/updater-channel.md`](../development/updater-channel.md).
 
 ## Updater
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — public documentation (issue #154)
+
+- Documentation is grouped as a product page (README), a docs index, user
+  guides, contributor guides, a security/trust set, and project history.
+  Historical files were moved, not deleted. SignPath is still not used.
+  Electron source files stay in their current layout; the auditor map is
+  [`docs/development/architecture.md`](docs/development/architecture.md).
+
 ### Changed
 
 - Initial screen is **Ready to fix Zoom** with **Fix now**. A successful

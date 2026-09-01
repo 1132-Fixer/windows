@@ -42,6 +42,19 @@ Error 1132 can stay after Zoom is reinstalled. It is often tied to a Windows use
 
 1132 Fixer resets a separate helper account named `user1`, then opens Zoom under that account.
 
+```text
+  You (your Windows account)
+           |
+           v
+     1132 Fixer
+           |
+           v
+  helper account (user1)
+           |
+           v
+  Zoom Workplace (already installed)
+```
+
 When you press **Fix now**, the app:
 
 1. Checks Windows, admin access, and the Zoom install.
@@ -50,6 +63,8 @@ When you press **Fix now**, the app:
 4. Opens and checks Zoom Workplace as `user1`.
 5. Creates or repairs the desktop shortcut.
 6. Shows a clear result when the work is done.
+
+Longer user and contributor guides: [docs/README.md](docs/README.md).
 
 ## Main features
 
@@ -115,28 +130,21 @@ Password: random ΓÇö a fresh one is generated on every fix run
 
 ## Quick help
 
+Common fixes are in [docs/user/troubleshooting.md](docs/user/troubleshooting.md).
+
 | Problem | Try this |
 | --- | --- |
-| The app says admin access is missing | Close it, then choose **Run as administrator**. |
+| The app says permission is missing | Close it, then approve the Windows prompt. |
 | Zoom is not found | Install Zoom Workplace with the machine-wide installer. |
-| The fix button stays disabled | Read the check rows and fix the item marked in red. |
-| Security software blocks the fix | Allow the app to create the local helper account and start Zoom. |
-| Camera or microphone is missing | Check Windows privacy settings, the hardware shutter, the camera driver, and any antivirus webcam shield. |
+| **Fix now** stays unavailable | Open **View details** and fix the marked item. |
+| Camera or microphone is missing | Set camera and microphone access for desktop apps while signed in as `user1`. |
 
-<details>
-<summary><strong>Camera and microphone details</strong></summary>
+## Docs
 
-Open Windows as `user1`, then go to:
-
-```text
-Settings ΓåÆ Privacy & security ΓåÆ Camera
-```
-
-Turn on **Camera access** and **Let desktop apps access your camera**. Check the matching microphone page too.
-
-If those controls are already on, check the laptop camera shutter, a camera function key, antivirus webcam protection, Device Manager for a driver warning, and any organization or MDM policy.
-
-</details>
+- Users: [how it works](docs/user/how-it-works.md) · [install](docs/user/installation.md) · [privacy](docs/user/privacy.md)
+- Contributors: [CONTRIBUTING.md](CONTRIBUTING.md) · [architecture](docs/development/architecture.md)
+- Security: [SECURITY.md](SECURITY.md) · [threat model](docs/security/threat-model.md)
+- Index: [docs/README.md](docs/README.md)
 
 ## Open source
 
@@ -171,7 +179,7 @@ npm install --package-lock-only
 
 A `v*` tag reachable from `main` runs `.github/workflows/release.yml`, which builds Setup and Portable artifacts, checksums, and `latest.yml` onto this repository's GitHub Releases.
 
-Secrets belong in GitHub Actions or the feedback service ΓÇö never in app source or a packaged config. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/BUILDING.md](docs/BUILDING.md).
+Secrets belong in GitHub Actions or the feedback service — never in app source or a packaged config. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/development/building.md](docs/development/building.md).
 
 ## License
 

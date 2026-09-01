@@ -67,7 +67,7 @@ check(b.win && b.win.verifyUpdateCodeSignature === false, 'verifyUpdateCodeSigna
 console.log('release-identity-smoke: legacy compatibility bridge is still wired');
 const smoke = fs.readFileSync(path.join(ROOT, 'tools', 'updater-channel-smoke.js'), 'utf8');
 check(smoke.includes(LEGACY_FEED_REPO), `updater-channel-smoke still references the legacy feed ${LEGACY_FEED_REPO}`);
-const migDoc = path.join(ROOT, 'docs', 'RELEASE-MIGRATION-2026-08.md');
+const migDoc = path.join(ROOT, 'docs', 'history', 'release-migration-2026-08.md');
 const mig = fs.existsSync(migDoc) ? fs.readFileSync(migDoc, 'utf8') : '';
 check(mig.includes(LEGACY_FEED_REPO) && /compatibility bridge/i.test(mig), 'migration doc documents the legacy compatibility bridge');
 check(!/migrate by manual reinstall|manually reinstall/i.test(mig) || /not an acceptable|no longer policy|not acceptable/i.test(mig), 'migration doc does not present manual reinstall as the migration strategy');

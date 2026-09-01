@@ -257,7 +257,7 @@ function assetPresent(release, name) {
 
   // Legacy compatibility bridge (channel 3). v5.5.1-and-earlier clients have
   // PrimeUpYourLife/1132-Fixer-Windows-Releases baked in and can reach nothing
-  // else. The bridge policy (docs/RELEASE-MIGRATION-2026-08.md) requires that
+  // else. The bridge policy (docs/history/release-migration-2026-08.md) requires that
   // feed keep SERVING so those clients auto-migrate — it must not be deleted,
   // emptied, or archived into unusability while a supported client still polls
   // it. This asserts the feed still answers with a release that carries the
@@ -274,7 +274,7 @@ function assetPresent(release, name) {
     check(assetPresent(oldRel, `1132-Fixer-Setup-${oldVer}.exe`), `legacy bridge latest release carries its Setup installer (1132-Fixer-Setup-${oldVer}.exe)`);
     // The pinned transition release must remain available AND byte-identical to
     // the canonical 1132-Fixer/windows v6.0.0 release. Presence is not the
-    // contract (docs/RELEASE-MIGRATION-2026-08.md): a <=5.5.1 client installs
+    // contract (docs/history/release-migration-2026-08.md): a <=5.5.1 client installs
     // whatever bytes sit behind these names, so a drifted Setup would ship a
     // different binary under the same version. Compare GitHub's per-asset
     // content digests (sha256) — cryptographic, and no large download needed.
@@ -341,7 +341,7 @@ function assetPresent(release, name) {
   // bridge <=5.5.1 clients take), so the tag is asserted "not ahead of source"
   // rather than "not equal to current". download_count is logged as telemetry
   // only — it is NOT a retirement gate (see the objective condition in
-  // docs/RELEASE-MIGRATION-2026-08.md). Never GET the latest.yml asset here: an
+  // docs/history/release-migration-2026-08.md). Never GET the latest.yml asset here: an
   // asset GET inflates that counter and CI runs this on every commit.
   console.log('updater-channel-smoke: legacy old channel telemetry (REST only, do not delete)');
   try {

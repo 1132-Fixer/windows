@@ -1,0 +1,53 @@
+# Trust-center security workflow for 1132 Fixer Windows.
+# Advisory and inventory checks. Not added to the required-status ruleset
+# by this change — ruleset edits are a separate governance action.
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 7 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  npm-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - name: npm audit (high)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+  license-and-binaries:
+    name: Licence and binary inventory
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: LICENSE is MIT
+        shell: bash
+        run: |
+          head -n 1 LICENSE | grep -q 'MIT License'
+          test ! -e assets/dpapi_hook.dll
+          test -f docs/security/BINARY-POLICY.md
+          test -f docs/security/threat-model.md
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+      - uses: github/codeql-action/analyze@v3

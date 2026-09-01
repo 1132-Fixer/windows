@@ -22,6 +22,34 @@ npm start
 
 `git clone` creates a `windows/` directory (the repository name), so `cd windows` is the correct next step. `npm start` launches the Electron app. Most engine tests do not require Zoom.
 
+## Finding work
+
+Open issues on this repository. Support questions use the Support issue form.
+Security reports must not be public issues — see [SECURITY.md](SECURITY.md).
+
+The app layout is documented in [docs/development/architecture.md](docs/development/architecture.md).
+Public docs live under [docs/README.md](docs/README.md).
+
+## What is testable without Zoom
+
+`npm test` and `node feedback-proxy/test.js` do not need a Zoom install.
+
+## What needs Windows
+
+Packaged builds, package inventory, and Authenticode checks.
+
+## What needs an isolated VM
+
+Deleting and recreating `user1`. Do not run that against a real everyday profile.
+
+## Branch naming and commits
+
+- Branch from `main`. Open the pull request against `main`.
+- One concern per branch. Names such as `fix/…`, `docs/…`, `chore/…` are fine.
+- Write commits in the present tense. Do not rewrite published history.
+- Do not bump `package.json` version, add a release tag, or edit the live
+  updater feed unless a maintainer is publishing a release.
+
 ## Pull requests
 
 1. Fork the repository (or branch from `main` if you have write access).
@@ -31,6 +59,35 @@ npm start
 5. Open the PR against `main` on `1132-Fixer/windows`.
 
 Please keep diffs small. Do not bundle a redesign, a release bump, and a dependency upgrade in the same PR.
+
+### Required tests
+
+Run `npm test` before you ask for review. If you change packaging, also build
+and run `node scripts/package-inventory.mjs --unpacked dist/win-unpacked` on
+Windows.
+
+### Security-sensitive changes
+
+Changes to account create/delete, credentials, elevation, the updater, or
+`build/package-allowlist.json` must say so on the pull request template
+**Safety impact** section. They need a real code-owner review.
+
+### What must not change casually
+
+- Product name **1132 Fixer**
+- Electron as the framework
+- `appId` `com.hightexas.1132fixer`
+- Header mark `assets/brand/app-mark.png`
+- Helper-shortcut artwork
+- Independence wording
+- Repository visibility
+- SignPath (not used; do not add it here)
+
+## Breaking changes
+
+A change that deletes `user1` more aggressively, moves the updater feed, or
+changes installer identity is a breaking change. Call it out. Do not ship it
+inside an unrelated docs PR.
 
 ## What belongs here
 
