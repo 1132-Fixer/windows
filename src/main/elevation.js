@@ -109,6 +109,7 @@ function runTimed(command, args, timeoutMs) {
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
     child.on('error', (err) => finish({ timedOut: false, code: -1, error: err.message }));
+    child.on('exit', (code) => finish({ timedOut: false, code, error: null }));
     child.on('close', (code) => finish({ timedOut: false, code, error: null }));
   });
 }
@@ -150,17 +151,44 @@ function createElevationController(deps = {}) {
   const relaunchMs = deps.relaunchMs || UAC_RELAUNCH_MS;
   let memo = null;
 
+  function probeWhoamiSync() {
+    const t0 = Date.now();
+    try {
+      const whoami = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe');
+      const r = spawnSync(whoami, ['/groups'], {
+        encoding: 'utf8',
+        timeout: Math.min(probeMs, 2500),
+        windowsHide: true,
+        env: process.env
+      });
+      const il = parseWhoamiIntegrity((r && r.stdout) || '');
+      if (il.ok) {
+        logStage('elevation.whoami', `sync elevated=${il.elevated} ${Date.now() - t0}ms`);
+        return { elevated: il.elevated, method: 'integrity-level', ms: Date.now() - t0, error: null };
+      }
+      return null;
+    } catch (err) {
+      logStage('elevation.whoami', `sync failed ${err && err.message}`);
+      return null;
+    }
+  }
+
   async function probeToken() {
     const t0 = Date.now();
     logStage('elevation.token', 'begin');
+    // whoami /groups reads the process token integrity SID and cannot hang
+    // on Add-Type. Packaged 6.3.0 stalled on Checking while PowerShell
+    // compiled the TOKEN_ELEVATION helper.
+    const fast = probeWhoamiSync();
+    if (fast) return fast;
     const ps = await runPsFile(TOKEN_PROBE_PS, probeMs, spawnImpl);
     const parsed = parseTokenProbe(ps.stdout);
     if (parsed.ok) {
       logStage('elevation.token', `ok elevated=${parsed.elevated} ${Date.now() - t0}ms`);
       return { elevated: parsed.elevated, method: 'token-elevation', ms: Date.now() - t0, error: null };
     }
-    logStage('elevation.whoami', 'token probe missed; reading integrity SID');
-    const who = await spawnImpl('whoami.exe', ['/groups'], probeMs);
+    const whoami = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe');
+    const who = await spawnImpl(whoami, ['/groups'], probeMs);
     const il = parseWhoamiIntegrity(who.stdout);
     if (il.ok) {
       logStage('elevation.whoami', `ok elevated=${il.elevated} ${Date.now() - t0}ms`);
@@ -173,10 +201,18 @@ function createElevationController(deps = {}) {
     return { elevated: false, method: 'failed', ms: Date.now() - t0, error: err };
   }
 
+  function snapshot() {
+    const fast = probeWhoamiSync();
+    if (fast) {
+      memo = Promise.resolve(fast);
+      return fast;
+    }
+    return { elevated: false, method: 'failed', ms: 0, error: 'whoami integrity SID unavailable' };
+  }
+
   function isElevated() {
     if (memo) return memo;
-    memo = probeToken();
-    return memo;
+    return Promise.resolve(snapshot());
   }
 
   function resetMemoForTests() {
@@ -210,6 +246,7 @@ function createElevationController(deps = {}) {
 
   return {
     isElevated,
+    snapshot,
     relaunchElevated,
     resetMemoForTests,
     retryFlag,

@@ -28,8 +28,6 @@
     "vk_swiftshader.dll",
     "vulkan-1.dll",
 
-    "resources/elevate.exe",
-
     "resources/grant-media-consent.ps1",
     "resources/zoom-firstrun-setup.ps1"
   ],

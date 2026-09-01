@@ -59,6 +59,10 @@ check(!main.includes("spawn('net.exe', ['session']"), 'main no longer uses net s
 
 console.log('elevation-startup-smoke: every preflight stage resolves, rejects, or times out');
 check(elev.ELEVATION_PROBE_MS > 0 && elev.STARTUP_DEADLINE_MS > 0, 'probe and startup have deadlines');
+check(fs.readFileSync(path.join(ROOT, 'src', 'main', 'elevation.js'), 'utf8').includes('function snapshot'),
+  'elevation controller has a synchronous snapshot');
+check(fs.readFileSync(path.join(ROOT, 'src', 'main', 'elevation.js'), 'utf8').includes('whoami.exe'),
+  'snapshot uses whoami integrity SID');
 check(renderer.includes('STARTUP_DEADLINE_MS'), 'renderer races startup against a deadline');
 check(main.includes("ipcMain.handle('startup-status'"), 'startup-status IPC exists');
 check(preload.includes("startupStatus: () => ipcRenderer.invoke('startup-status')"),
@@ -114,6 +118,8 @@ check(pkg.build.afterPack === './scripts/after-pack-verify-manifest.js', 'afterP
 check(afterPack.includes('assertRequireAdministrator'), 'afterPack fails the build if the manifest is missing');
 check(afterPack.includes('requestedExecutionLevel: \'requireAdministrator\'') || afterPack.includes('stampRequireAdministrator'),
   'afterPack stamps requireAdministrator before verify');
+check(afterPack.includes('CopyElevateHelper') && afterPack.includes('__uninstaller.exe'),
+  'afterPack strips elevate.exe and stamps the NSIS uninstaller');
 
 console.log('elevation-startup-smoke: parser unit tests');
 {

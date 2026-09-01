@@ -50,6 +50,21 @@ check(b.productName === FROZEN.productName, `productName is "${FROZEN.productNam
 check(b.nsis && b.nsis.artifactName === FROZEN.setupArtifact, `nsis installer artifactName is ${FROZEN.setupArtifact}`);
 check(b.nsis && b.nsis.uninstallDisplayName === FROZEN.productName, `nsis uninstallDisplayName is "${FROZEN.productName}"`);
 check(b.nsis && b.nsis.perMachine === true, 'nsis perMachine stays true (per-machine uninstall identity)');
+check(b.nsis && b.nsis.runAfterFinish === false, 'nsis runAfterFinish is false (Setup does not auto-launch)');
+check(!fs.existsSync(path.join(ROOT, 'build', 'installer.nsi')),
+  'no custom installer.nsi (electron-builder skips uninstaller generation when one is present)');
+{
+  const afterPack = fs.readFileSync(path.join(ROOT, 'scripts', 'after-pack-verify-manifest.js'), 'utf8');
+  check(afterPack.includes('CopyElevateHelper') && afterPack.includes('elevate.exe'),
+    'afterPack strips elevate.exe after NSIS copy');
+  check(afterPack.includes('__uninstaller.exe'),
+    'afterPack stamps the generated NSIS uninstaller requireAdministrator');
+  const nsh = fs.readFileSync(path.join(ROOT, 'build', 'installer.nsh'), 'utf8');
+  check(nsh.includes('Delete "$INSTDIR\\resources\\elevate.exe"'),
+    'customInstall still deletes elevate.exe if copy-strip misses');
+  const allow = fs.readFileSync(path.join(ROOT, 'build', 'package-allowlist.json'), 'utf8');
+  check(!allow.includes('elevate.exe'), 'package allowlist does not permit elevate.exe');
+}
 check(b.portable && b.portable.artifactName === FROZEN.portableArtifact, `portable artifactName is ${FROZEN.portableArtifact}`);
 check(b.win && b.win.signtoolOptions && b.win.signtoolOptions.publisherName === FROZEN.publisherName, `publisherName is "${FROZEN.publisherName}"`);
 

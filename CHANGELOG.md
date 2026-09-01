@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.3.1] - 2026-09-01
+
+### Fixed
+
+- Packaged app no longer stays on **Checking…**. Elevation is a synchronous `whoami` integrity-SID snapshot (no PowerShell `Add-Type`), and a missed startup IPC shows **Unable to complete** instead of spinning forever.
+- Per-machine uninstaller is stamped `requireAdministrator` instead of `asInvoker` + unsigned `elevate.exe` (Smart App Control was blocking that helper as “part of this app”). `elevate.exe` is stripped from the packed tree. The installer no longer auto-launches the app.
+
 ## [6.3.0] - 2026-09-01
 
 ### Fixed
@@ -920,6 +927,7 @@ The following manual cases must pass before tagging the release:
 - Direct publish of releases to the `1132-Fixer-Windows-Releases` repo
   for the auto-updater.
 
+[6.3.1]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.1
 [6.3.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.0
 [6.2.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.2.0
 [6.1.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.1.0
