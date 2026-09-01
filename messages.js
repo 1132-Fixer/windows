@@ -258,13 +258,17 @@ const WIZARD_GROUPS = CHECK_ORDER.reduce((groups, c) => {
 }, []);
 
 const WIZARD = {
-  READY_TITLE:    'Everything looks good',
-  READY_SUB:      '1132 Fixer found no problems.',
+  // Ready means the tool can run the repair. It is NOT a claim that Zoom
+  // error 1132 is absent, that the helper account works, or that Zoom is healthy.
+  READY_TITLE:    'Ready to fix Zoom',
+  READY_SUB:      'Start Zoom with a fresh setup.\nYour personal files won’t be changed.',
+  CHECKING_TITLE: 'Checking…',
+  CHECKING_SUB:   'Making sure everything is ready.',
   READY_WARN_TITLE: 'Ready, with warnings',
-  READY_WARN_SUB: 'The fix can run, but some checks reported warnings — open Advanced details to see them.',
+  READY_WARN_SUB: 'The fix can run, but some checks reported warnings — open View details to see them.',
   UNKNOWN_TITLE:  "Couldn't verify everything",
   UNKNOWN_SUB:    'Some checks did not report a result, so their state is unknown — not a pass. ' +
-                  'Select Check again; the per-check detail is under Advanced details.',
+                  'The fix can still run. Open View details for the per-check detail.',
   BLOCKED_TITLE:  'Action required',
   ADMIN_TITLE:    'Administrator access required',
   // Shown when the automatic elevation attempt did not go through (declined
@@ -276,14 +280,18 @@ const WIZARD = {
                   'running as Administrator. Nothing has been changed. Select "Continue as administrator" ' +
                   'to try again — or close the app, right-click its icon and choose "Run as administrator".',
   ADMIN_RESTARTING: 'Restarting with administrator access…',
-  FIXING_TITLE:   'Repairing Zoom',
-  FIXING_START:   'Starting…',
-  SUCCESS_TITLE:  'Zoom is ready',
-  SUCCESS_SUB:    'The helper account is set up and ready to use.',
+  FIXING_TITLE:   'Fixing Zoom',
+  FIXING_START:   'Getting things ready…',
+  SUCCESS_TITLE:  "You're all set",
+  SUCCESS_SUB:    'Zoom is ready to use.',
   PARTIAL_TITLE:  'Finished — some items need attention',
-  PARTIAL_SUB:    'The fix ran, but some steps could not be completed. Open Advanced details to see exactly what needs attention.',
-  WARNINGS_SUB:   'The fix finished with warnings. Open Advanced details to read them.',
-  FAIL_TITLE:     "Couldn't complete the repair",
+  PARTIAL_SUB:    'The fix ran, but some steps could not be completed. Open View details to see exactly what needs attention.',
+  WARNINGS_SUB:   'The fix finished with warnings. Open View details to read them.',
+  FAIL_TITLE:     "Couldn't complete the fix",
+  CONFIRM_TITLE:  'Before we start',
+  CONFIRM_BODY:   'This replaces the local user1 helper account and removes that account’s Zoom profile. Your main Windows account and personal Zoom data stay as they are. Windows may ask for administrator approval. Do not run this while signed in as user1.',
+  CONFIRM_CONTINUE: 'Continue',
+  CONFIRM_CANCEL: 'Go back',
   SHORTCUT_NOT_READY_TITLE: "Shortcut isn't ready yet",
   SHORTCUT_NOT_READY_SUB:   'Run the repair once before creating the Zoom Helper shortcut — it stores the sign-in the shortcut needs.',
   SHORTCUT_FAILED_TITLE:    "The shortcut couldn't be created",
@@ -358,8 +366,11 @@ const EXPLORE_VIEW = [
 // ============================================================
 const DISCLOSURE = {
   OS_LABEL: 'Open Source',
-  INDEPENDENCE: 'Independent project — not affiliated with Zoom.',
-  ARIA: 'Open Source. Independent project — not affiliated with Zoom.'
+  INDEPENDENCE: 'Independent project. Not affiliated with Zoom.',
+  LEGAL: 'Independent project. Not affiliated with, sponsored by, or endorsed by Zoom Communications, Inc.',
+  DESCRIPTION: '1132 Fixer is an independent open-source Windows profile-isolation utility that recreates a local helper account and starts an existing Zoom Workplace installation using that separate Windows profile.',
+  ZOOM_OBTAIN: 'Zoom Workplace must be installed separately. Obtain it from Zoom’s official Download Center. 1132 Fixer does not download, bundle, modify, or redistribute Zoom Workplace.',
+  ARIA: 'Open Source. Independent project. Not affiliated with Zoom.'
 };
 
 // Feedback submit fallbacks (renderer side; main.js maps HTTP statuses).
