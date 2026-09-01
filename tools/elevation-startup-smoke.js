@@ -112,6 +112,8 @@ check(pkg.build && pkg.build.win && pkg.build.win.requestedExecutionLevel === 'r
   'electron-builder requests requireAdministrator');
 check(pkg.build.afterPack === './scripts/after-pack-verify-manifest.js', 'afterPack verifies the exe manifest');
 check(afterPack.includes('assertRequireAdministrator'), 'afterPack fails the build if the manifest is missing');
+check(afterPack.includes('requestedExecutionLevel: \'requireAdministrator\'') || afterPack.includes('stampRequireAdministrator'),
+  'afterPack stamps requireAdministrator before verify');
 
 console.log('elevation-startup-smoke: parser unit tests');
 {
