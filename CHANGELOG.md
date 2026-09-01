@@ -28,39 +28,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.1.0] - 2026-08-23
 
-### Changed — shell redesign to the acceptance spec (directive 2026-08-23)
+### Changed — repair wizard shell redesign
 
-- **Compact wizard shell.** The oversized hero header is now a 72px bar
-  with a single centered product icon (the rounded-square people/arrow
-  mark — the gear emblem is secondary branding) and a right-aligned
-  status indicator; no product-name text in the header. The middle is a
-  containerless workspace (max 640px column, one shared state layout:
-  44px state icon → heading 24/30 → description → Advanced-details
-  disclosure → 480×48 primary → quiet secondary row). The footer is 52px
-  utility chrome — plain version text, link-weight Feedback & Report /
-  Explore, and a status-only ● Administrator indicator.
+- **Compact wizard shell.** The oversized hero header is replaced by a
+  64px bar with a single window-centered product mark (~44px, the
+  canonical 1132 Fixer **gear** from the owner-approved `16.png` master —
+  `assets/brand/app-mark.png`) and a right-aligned status indicator; no
+  duplicate product-name billboard. The middle is a containerless
+  workspace with one shared state layout (state icon → heading →
+  description → a single **View details** disclosure → ~448×48 primary
+  action → quiet secondary row).
+- **The five-step vertical stage rail is the single repair-progress
+  model.** During an automatic repair there is no giant disabled
+  "Repairing…" button, no second continuous repair progress bar, and no
+  redundant "Repairing" pill — the rail alone carries progress:
+  completed = success check, active = blue/current with a
+  consumer-language detail line nested beneath it, pending =
+  subdued/outlined, joined by thin connectors. (The separate app-updater
+  download bar is unrelated and still allowed — it represents a different
+  operation.) Primary repair copy is consumer language; the helper
+  account name and raw log stay behind **View details**.
+- **Wizard states:** *Checking* → **Ready to fix Zoom** (**Fix now**) →
+  *Fixing Zoom* → **You're all set** with **Open Zoom** and **Done**
+  (Open Zoom uses the same launcher artifact as the desktop shortcut via
+  the allowlisted `launch-zoom-helper` IPC). Failures offer **Try again**
+  and **View details**. Technical information stays behind **View details**,
+  never a *View receipt* label. When elevation is missing, **Continue as
+  administrator** is shown; after a declined prompt the retry is
+  **Restart as administrator**. Manual blockers read *Action required*
+  (amber); red is reserved for actual failures. The initial screen does
+  not say “Everything looks good” or “Open Zoom as user1”.
+- **Footer is quiet utility chrome:** plain version text, **Support**,
+  **Feedback**, and the exact independence line
+  `Independent project. Not affiliated with Zoom.` Compact repair chrome
+  does not put Explore or “Running as administrator” in the normal footer.
 - **Design tokens normalized** to the spec palette (SURFACE_1 `#172235`,
   SURFACE_2 `#1D2A3F`, borders `#2B3D57`/`#3B5578`, accent `#337FDB`,
   focus `#71AFFF`; the muddy purple `#2A2530` surface is gone), spacing
-  scale 4–64, radii 10/14/18 with pills reserved for status chips.
-- **Wizard states** now follow the spec: *Repairing Zoom* shows vertical
-  task rows + a thin progress bar (no console output); *Administrator
-  access required* has one **Continue as administrator** action;
-  *Fix complete* is a real terminal screen with **Open Zoom** (runs the
-  same launcher artifact as the desktop shortcut via a new allowlisted
-  `launch-zoom-helper` IPC), *View receipt* and *Support Report*;
-  failures offer *Try again / View details / Support Report*.
-- **Explore is a branded launcher**: 760px modal on the same navy system,
-  featured 1132 Fixer card, 2-column Botify Network grid of 72px
-  destination cards with normalized 40×40 logos
-  (`assets/explore/*.png`, generated from the operator's supplied
-  artwork), a generic web-glyph fallback for destinations without
-  supplied logos (Make It GIF, GIF Directory), quiet section labels, and
-  a 32×32 top-right dismiss. Destination display data is a single
-  catalog (`EXPLORE_VIEW`) pinned against the security key map by the
-  smoke tests. A Waiting Room Attendant logo is staged at
-  `assets/explore/waiting-room-attendant.png`, but no canonical WRA URL
-  exists in the app, so it is deliberately not a destination yet.
+  scale 4–64, radii 10/14/18, with pills reserved for status chips.
+
+### Changed — brand / product identity
+
+- The canonical 1132 Fixer product identity is the **gear**, regenerated
+  from the owner-approved `16.png` master (2026-08-23). It drives the
+  packaged EXE, window/taskbar/Start-menu icon, installer/uninstaller
+  icons, the in-app header mark, and the Explore 1132 Fixer card.
+  `icon.ico` is a 9-frame ICO (16/20/24/32/40/48/64/128/256).
+- The blue+silver **people/arrow** mark is **not** the product icon; it is
+  reserved for the Zoom helper-launch shortcut `Zoom — User1.lnk`
+  (`assets/1132-helper-shortcut.ico`), which represents launching Zoom as
+  the helper identity rather than launching the 1132 Fixer application.
+  The separate `Apply Zoom Settings.lnk` (a 1132 Fixer configuration
+  action) correctly uses the gear.
 
 ### Added — self-elevation
 
@@ -74,26 +93,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the flagged elevated relaunch retry briefly instead of dying in the
   teardown race with its exiting parent.
 
-### Added — Explore modal (footer)
+### Added — Explore launcher (footer)
 
-- The footer's **Visit Website** button is now **Explore**: a compact
-  grouped chooser (1132 / Botify Network / Other) with seven fixed
-  destinations — 1132 Fixer, Botify Network, BotifyKickBot, BotifyModBot,
-  Emoji Generator Bot, Make It GIF, GIF Directory — that open in the
-  system browser. Security: the renderer sends only a fixed destination
-  KEY over the new `open-explore-destination` channel (schema-validated);
-  the key→URL map is trusted main-process data, so the renderer can never
-  supply a URL — not even a different path on an approved host. The
-  external allowlist adds `botify-network.com` and `gif.directory`
-  (plus www, HTTPS only); the old `open-website` IPC is removed. The modal
-  is keyboard-accessible (focus trap, Escape/backdrop/Close dismissal,
-  focus returns to Explore).
-
-### Fixed — header brand centering
-
-- The header gear is now truly window-centered: the grid column holding
-  the brand was content-sized and start-packed, sitting left of center;
-  `justify-content: center` centers the column itself.
+- The footer's website button is now **Explore**: a branded modal on the
+  same navy system with a featured 1132 Fixer card and a Botify Network
+  grid of destination cards (normalized 40×40 logos, generic web-glyph
+  fallback for destinations without supplied artwork). Security: the
+  renderer sends only a fixed destination **key** over a schema-validated
+  channel; the key→URL map is trusted main-process data, so the renderer
+  can never supply a URL — not even a different path on an approved host.
+  The external allowlist adds `botify-network.com` and `gif.directory`
+  (HTTPS only); the old `open-website` IPC is removed. The modal is
+  keyboard-accessible (focus trap, Escape/backdrop/Close dismissal, focus
+  returns to Explore). A Waiting Room Attendant logo is staged but has no
+  destination — no canonical WRA URL exists in the app, so it is
+  deliberately not clickable.
 
 ### Fixed — desktop shortcut after a 5.x → 6.x upgrade
 
@@ -107,33 +121,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   legacy shape and expected helper user only), sealed with DPAPI
   CurrentUser, and the launcher is rewritten in the secret-free format —
   which also removes the plaintext password from disk. If nothing
-  migratable exists, the honest "press FIX NOW once" refusal remains.
+  migratable exists, the honest "press FIX NOW once" refusal remains. The
+  managed shortcut is `Zoom — User1.lnk` (legacy names cleaned; idempotent).
 
-### Changed — wizard UI (UX simplification directive 2026-08-23)
+### Known follow-ups
 
-- The center of the app is now a **state-driven wizard**: one pane at a
-  time (Checking your setup → result → Fixing your setup → outcome) inside
-  the same card, with subtle transitions. The full nine-row checklist, fix
-  receipt, and raw log moved into a collapsed **Advanced details** panel
-  that scrolls internally — the window itself never scrolls at the normal
-  size.
-- Header branding is genuinely window-centered (grid + absolutely
-  positioned status badge) and shows only the gear mark — the artwork
-  carries the "1132 FIXER" wordmark, so the duplicate text title is gone.
-- Honest, state-specific badge language: repairable now reads **Fix
-  available** (accent), manual blockers read **Action required** (amber),
-  and red is reserved for actual failures (**Something went wrong**).
-  "Action needed" is retired.
-- One dominant CTA per state: **Fix now** only when a fix is available,
-  **Create Zoom Helper Shortcut** as the next step after repair (or when
-  everything is already healthy but the shortcut is missing); Check
-  again / View details are quiet secondary chips.
-- Shortcut failure is no longer a red raw log line: a missing stored
-  sign-in renders as "Shortcut isn't ready yet — run the repair once",
-  with the technical detail kept in Advanced details.
-- App icon set (`icon.ico` 9 frames, `icon.png`, header logos) regenerated
-  from the operator's updated gear master (2026-08-23); helper-shortcut
-  people/arrow artwork unchanged.
+- Cancel-during-repair flow remains future engineering — issue #142.
 
 ## [6.0.0] - 2026-08-23
 
