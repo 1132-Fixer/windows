@@ -994,6 +994,7 @@
       transform: translate(-50%, -50%);
       width: 44px;
       height: 44px;
+      object-fit: contain;
     }
     .exit-badge { display: none; }
     /* Status is an INDICATOR, never a button: soft tint, no border, no
@@ -1179,6 +1180,24 @@
     .stage-sep { display: none; }
     .wiz-step-line { font-size: 13px; line-height: 18px; font-weight: 500; color: var(--muted); margin-top: var(--s-2); }
     .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .fix-confirm-overlay {
+      position: fixed; inset: 0; z-index: 10000;
+      display: grid; place-items: center; padding: 24px;
+      background: rgba(7, 12, 21, 0.72);
+      -webkit-app-region: no-drag;
+    }
+    .fix-confirm-overlay[hidden] { display: none !important; }
+    .fix-confirm-dialog {
+      width: min(420px, 100%);
+      padding: 24px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--r-lg);
+      background: var(--panel);
+      text-align: left;
+    }
+    .fix-confirm-dialog h2 { margin: 0; font-size: 18px; line-height: 24px; }
+    .fix-confirm-dialog p { margin: 10px 0 20px; color: var(--muted); font-size: 14px; line-height: 21px; }
+    .fix-confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
     .wizard .zoom-recovery { text-align: left; width: 100%; margin-top: var(--s-5); border-radius: var(--r-md); }
     /* Advanced details (§18): a 32px text disclosure between the state
        description and the primary action — never a large pill. */
@@ -1451,9 +1470,9 @@
 
       <!-- CHECKING — grouped summary of the environment scan. -->
       <div class="wiz-pane active" id="wizChecking" role="status">
-        <h2 class="wiz-title">Checking your setup…</h2>
+        <h2 class="wiz-title">Checking…</h2>
         <div class="wiz-checks" id="wizChecks" role="list" aria-label="Setup checks"></div>
-        <p class="wiz-hint">This usually takes a few seconds.</p>
+        <p class="wiz-hint">Making sure everything is ready.</p>
       </div>
 
       <!-- RESULT — ready / fix available / action required. -->
@@ -1513,7 +1532,7 @@
            progress model (no continuous repair progress bar); the raw
            log stays behind View details. -->
       <div class="wiz-pane" id="wizFixing">
-        <h2 class="wiz-title">Repairing Zoom</h2>
+        <h2 class="wiz-title">Fixing Zoom</h2>
         <p class="wiz-step-line" id="wizStepLine"></p>
         <!-- The five-step rail IS the progress indicator (no second bar, no
              CTA during automatic work). The active step carries one
@@ -1555,9 +1574,7 @@
       <div class="adv-panel hidden" id="advPanel">
         <div class="chk-list" id="checkList" role="list" aria-label="Environment checks" aria-busy="true"></div>
         <div class="receipt" id="receiptPanel" role="region" aria-label="Fix receipt"></div>
-        <div class="file-list" id="fileList" role="log" aria-live="polite" aria-label="Fix log output">
-          <div class="file-item loading">Loading...</div>
-        </div>
+        <div class="file-list" id="fileList" role="log" aria-live="polite" aria-label="Fix log output"></div>
       </div>
     </div>
 
@@ -1567,7 +1584,7 @@
       <div class="button-container">
         <button id="elevateBtn" class="btn btn-primary" hidden>Continue as administrator</button>
         <button id="fixBtn" class="btn btn-primary" hidden aria-label="Run the full fix now">Fix now</button>
-        <button id="launchBtn" class="btn btn-primary" hidden aria-label="Open Zoom as the user1 helper account">Open Zoom as user1</button>
+        <button id="launchBtn" class="btn btn-primary" hidden aria-label="Open Zoom">Open Zoom</button>
         <button id="shortcutBtn" class="btn btn-primary" hidden><img class="btn-icon" src="assets/1132-helper-shortcut.png" alt="" aria-hidden="true" width="24" height="24"><span id="shortcutBtnLabel">Create desktop shortcut</span></button>
       </div>
       <!-- Repair option (operator directive 2026-08-23): the desktop
@@ -1588,6 +1605,28 @@
       <p class="button-note" id="buttonNote" hidden></p>
     </div>
    </div>
+  </div>
+
+  <div class="fix-confirm-overlay" id="aboutOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
+    <div class="fix-confirm-dialog">
+      <h2 id="aboutTitle">About 1132 Fixer</h2>
+      <p id="aboutBody"></p>
+      <p id="aboutLegal"></p>
+      <div class="fix-confirm-actions">
+        <button type="button" class="btn btn-primary" id="aboutClose">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="fix-confirm-overlay" id="fixConfirmOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="fixConfirmTitle">
+    <div class="fix-confirm-dialog">
+      <h2 id="fixConfirmTitle">Before we start</h2>
+      <p id="fixConfirmBody">This replaces the local user1 helper account and removes that account’s Zoom profile. Your main Windows account and personal Zoom data stay as they are. Windows may ask for administrator approval. Do not run this while signed in as user1.</p>
+      <div class="fix-confirm-actions">
+        <button type="button" class="btn" id="fixConfirmCancel">Go back</button>
+        <button type="button" class="btn btn-primary" id="fixConfirmContinue">Continue</button>
+      </div>
+    </div>
   </div>
 
   <div class="footer">

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage, screen } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -518,11 +518,16 @@ ipcMain.handle('window-maximize', () => {
 });
 
 function createWindow() {
+  const workArea = screen.getPrimaryDisplay().workArea;
+  const minWidth = 720;
+  const minHeight = 560;
   mainWindow = new BrowserWindow({
-    width: 900,
-    height: 700,
-    minWidth: 720,
-    minHeight: 640,
+    x: workArea.x,
+    y: workArea.y,
+    width: Math.max(minWidth, workArea.width),
+    height: Math.max(minHeight, workArea.height),
+    minWidth,
+    minHeight,
     backgroundColor: '#0F1724',
     // NOTE: no alwaysOnTop. The old always-on-top + frameless window had no
     // drag region either, so it sat immovable above everything ΓÇö including
@@ -2216,7 +2221,7 @@ async function runFixFlow(event) {
   if (profileLaunch.ok) {
     send(`  ${profileLaunch.message}`, 'out');
   } else {
-    send(`  WARNING: Zoom did NOT land in ${profileSafety.canonicalProfilePath(FIX_USER)}.`, 'err');
+    send(`  ERROR: Zoom did NOT land in ${profileSafety.canonicalProfilePath(FIX_USER)}.`, 'err');
     send(`           Resolved: ${newUserProfile} (source: ${profile.source}).`, 'err');
     send('           Windows fell back to a TEMP/suffixed profile - the 1132', 'err');
     send('           identity may not be clean. Remediation: reboot once, then', 'err');
@@ -2226,6 +2231,10 @@ async function runFixFlow(event) {
       code: profileLaunch.code || 'temp_or_suffixed_profile',
       message: profileLaunch.message
     });
+    step('profile-setup', `Set up the ${FIX_USER} profile`, 'fail', profileLaunch.message);
+    send('Fix finished, but some outcomes need attention - see the summary below.', 'err');
+    const earlyVerdict = computeRunVerdict(steps, warnings, []);
+    return { success: true, partial: true, steps, warnings, receipt: null, verdict: earlyVerdict };
   }
 
   // Pre-seed ACLs on the freshly-created profile's registry hive files
@@ -3058,6 +3067,21 @@ ipcMain.handle('launch-zoom-helper', async () => {
   const scriptPath = LAUNCHER_SCRIPT_PATH();
   if (!fs.existsSync(scriptPath) || !fs.existsSync(CRED_BLOB_PATH())) {
     return { success: false, reason: 'no stored helper sign-in — run the fix first' };
+  }
+  // Completion already launched Zoom as user1. Do not start a second copy.
+  const already = await runPSCapture(`
+    $hit = $false
+    try {
+      $procs = Get-CimInstance Win32_Process -Filter "Name='Zoom.exe'" -EA SilentlyContinue
+      foreach ($p in $procs) {
+        $o = Invoke-CimMethod -InputObject $p -MethodName GetOwner -EA SilentlyContinue
+        if ($o -and ($o.User -ieq '${FIX_USER}')) { $hit = $true; break }
+      }
+    } catch {}
+    if ($hit) { Write-Output 'YES' } else { Write-Output 'NO' }
+  `, { timeoutMs: 15000 });
+  if ((already.stdout || '').includes('YES')) {
+    return { success: true, alreadyRunning: true };
   }
   try {
     const child = spawn('powershell.exe',

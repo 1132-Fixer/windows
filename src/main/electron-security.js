@@ -360,6 +360,7 @@ function installIpcAllowlist(ipcMain) {
   }
   if (ipcMain.__1132IpcAllowlistInstalled) return ipcMain;
   const origHandle = ipcMain.handle.bind(ipcMain);
+  const cancelBroker = require('./fix-cancel').createFixCancelBroker();
   ipcMain.handle = (channel, listener) => {
     if (!IPC_INVOKE_CHANNEL_SET.has(channel)) {
       throw new Error(`IPC channel not on allowlist: ${channel}`);
@@ -371,6 +372,15 @@ function installIpcAllowlist(ipcMain) {
       const checked = validateInvoke(channel, args);
       if (!checked.ok) {
         throw new Error(`IPC invoke rejected: ${channel}: ${checked.reason}`);
+      }
+      // No new IPC surface is added. While run-fix is active, the existing
+      // quit-app channel becomes a cooperative cancellation request for that
+      // same renderer. At every other time it retains its normal quit meaning.
+      if (channel === 'quit-app' && cancelBroker.isRunningFor(event)) {
+        return cancelBroker.requestCancel(event);
+      }
+      if (channel === 'run-fix') {
+        return cancelBroker.run(event, (wrappedEvent) => listener(wrappedEvent, ...checked.args));
       }
       return listener(event, ...checked.args);
     });
