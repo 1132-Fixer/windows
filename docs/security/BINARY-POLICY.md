@@ -63,31 +63,21 @@ the asar, and because the packaging allowlist has to permit them by exact path
 
 ### 1.4 Third-party native components
 
-One, and it was found by building the package inventory rather than by reading
-the source — which is the reason the inventory exists.
+**None in the shipping tree.** electron-builder still *copies*
+`resources/elevate.exe` into `win-unpacked` when `perMachine` is true
+(`packElevateHelper: false` is ignored). That helper is Johannes Passing's
+unsigned Elevate (`nsis-3.0.4.1`, SHA-256
+`9b1fbf0c11c520ae714af8aa9af12cfd48503eedecd7398d8992ee94d1b4dc37`, 107,520 B).
+Smart App Control blocks it as “part of this app”. First-party code does not
+call it.
 
-| Binary | `resources/elevate.exe` |
-| --- | --- |
-| SHA-256 | `9b1fbf0c11c520ae714af8aa9af12cfd48503eedecd7398d8992ee94d1b4dc37` |
-| Size | 107,520 B |
-| Version | `1, 0, 0, 2894` — "Elevate Application", company "Johannes Passing" |
-| Origin | electron-builder's NSIS resource bundle, cached locally as `nsis-3.0.4.1/elevate.exe` |
-| Licence | Elevate, by Johannes Passing — permissive; attribution belongs in `NOTICE.md` |
-| Why it ships | electron-builder still copies it into `win-unpacked` for `perMachine` NSIS. First-party code does not call it. `build/installer.nsi` sets the uninstaller to `RequestExecutionLevel admin` so uninstall UAC is Windows, not this helper. `customInstall` deletes it from `$INSTDIR\resources` after extract. |
-| Signed | **No** — `NotSigned`, like everything else this project ships today |
-| Owner | The `electron-builder` version in `devDependencies` |
-
-Two things follow that are worth stating rather than leaving implicit:
-
-- It is **not resolved through `package-lock.json`**. electron-builder downloads
-  its NSIS resource bundle at build time into a machine-level cache. A hosted
-  runner fetches it fresh on every release. That is a build-time supply-chain
-  dependency outside the lockfile, and the inventory check is currently the only
-  thing in this repository that would notice if the file changed.
-- Its hash is recorded above precisely so a change is visible. If a build
-  produces a different hash for `resources/elevate.exe`, treat it as a
-  supply-chain event and investigate before releasing — do not simply update the
-  number.
+`scripts/after-pack-verify-manifest.js` deletes it after the copy, before the
+NSIS 7z is built, and stamps the generated `__uninstaller.exe` to
+`requireAdministrator` so uninstall UAC is Windows, not that helper. Do **not**
+add a custom `build/installer.nsi`: electron-builder then skips uninstaller
+generation and makensis fails with a `File` usage error.
+`build/package-allowlist.json` must not list `resources/elevate.exe`. If a
+build leaves that file in `dist/win-unpacked`, inventory fails.
 
 No other third-party DLL, `.node` addon, driver, or bundled tool is packaged.
 Adding one requires a row in this section before it may ship, and

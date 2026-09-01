@@ -47,9 +47,8 @@
   DeleteRegKey HKCU "${UNINSTALL_REGISTRY_KEY}"
   DeleteRegKey HKCU "Software\1132Fixer"
 
-  ; electron-builder still copies unsigned elevate.exe into resources for
-  ; per-machine NSIS. The uninstaller is now requireAdministrator and must
-  ; not spawn that helper. Remove it from the installed tree.
+  ; Belt-and-suspenders: afterPack strips elevate.exe from win-unpacked
+  ; before the 7z is built. Delete it here if a future packer copies it again.
   Delete "$INSTDIR\resources\elevate.exe"
 
   ; NOTE: deliberately NO Exec of the app here. electron-updater's
