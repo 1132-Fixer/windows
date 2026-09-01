@@ -159,11 +159,12 @@ Prime Hosting hexagon keeps its points).
 | issue #185 attachment `ddbe632e…` (1254×1254) | `assets/explore/make-it-gif.png` | `1d962830…` |
 | issue #185 attachment `c09edba9…` (512×512) | `assets/explore/gif-directory.png` | `05c42c94…` |
 | issue #185 attachment `dfe552b5…` (1290×1500) | `assets/explore/prime-hosting.png` | `c7b6e8c7…` |
-| `assets/1132-fixer-logo-transparent.png` (440×440) | `assets/explore/fixer-hero.png` | `81ed40e9…` |
+| managed export `assets/logo-transparent.png` | Explore featured 1132 Fixer hero | listed in `.brand-assets.tsv` |
 
-`fixer-hero.png` exists because `assets/1132-fixer-logo-transparent.png` is on
-the `build.files` **exclude** list — referencing it directly would have shipped a
-hero with no logo.
+The Explore hero uses the managed full-logo export `assets/logo-transparent.png`.
+Do not introduce `assets/explore/fixer-hero.png` or any other derived copy.
+`assets/1132-fixer-logo-transparent.png` remains excluded from the package;
+the header product mark remains `assets/brand/app-mark.png`.
 
 No destination falls back to the generic globe in normal operation; the fallback
 is reserved for a genuinely missing or corrupt asset.
