@@ -327,10 +327,27 @@ function assetPresent(release, name) {
   if (brokerYml) {
     const brokerMeta = parseLatestYml(brokerYml);
     console.log(`  note broker version=${brokerMeta.version} path=${brokerMeta.path}`);
-    check(!!meta.version && brokerMeta.version === meta.version, `broker version ${brokerMeta.version || '(missing)'} matches current channel ${meta.version || '(missing)'}`);
-    check(!!meta.sha512 && brokerMeta.sha512 === meta.sha512, 'broker installer SHA-512 matches the current channel (same binary)');
-    check(!!meta.path && brokerMeta.path === meta.path, `broker path ${brokerMeta.path || '(missing)'} matches current channel ${meta.path || '(missing)'}`);
-    check(meta.size > 0 && brokerMeta.size === meta.size, `broker installer size matches the current channel (${brokerMeta.size || 0})`);
+    const parts = (v) => String(v || '0').split('.').map((n) => parseInt(n, 10) || 0);
+    const cmp = (a, b) => {
+      const aa = parts(a); const bb = parts(b);
+      const n = Math.max(aa.length, bb.length);
+      for (let i = 0; i < n; i++) {
+        const d = (aa[i] || 0) - (bb[i] || 0);
+        if (d) return d;
+      }
+      return 0;
+    };
+    check(!!brokerMeta.version && cmp(brokerMeta.version, meta.version) <= 0,
+      `broker version ${brokerMeta.version || '(missing)'} is not ahead of current channel ${meta.version || '(missing)'}`);
+    if (brokerMeta.version === meta.version) {
+      check(!!meta.sha512 && brokerMeta.sha512 === meta.sha512, 'broker installer SHA-512 matches the current channel (same binary)');
+      check(!!meta.path && brokerMeta.path === meta.path, `broker path ${brokerMeta.path || '(missing)'} matches current channel ${meta.path || '(missing)'}`);
+      check(meta.size > 0 && brokerMeta.size === meta.size, `broker installer size matches the current channel (${brokerMeta.size || 0})`);
+    } else {
+      console.log(`  note broker lags current channel (${brokerMeta.version} vs ${meta.version}); v5.6.0 clients still poll this feed`);
+      check(!!brokerMeta.path && /\.exe$/i.test(brokerMeta.path), 'lagging broker still names an installer');
+      check(!!brokerMeta.sha512, 'lagging broker still carries SHA-512');
+    }
   }
 
   // REST release object only — never an asset GET. See the header note: an

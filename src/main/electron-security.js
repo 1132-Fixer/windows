@@ -24,6 +24,7 @@ const IPC_INVOKE_CHANNELS = Object.freeze([
   'launch-zoom-helper',
   'shortcut-exists',
   'is-elevated',
+  'startup-status',
   'relaunch-elevated',
   'preflight',
   'preflight-scan',

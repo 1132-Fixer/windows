@@ -53,6 +53,11 @@ body.compact-shell-enabled > .header,
 body.compact-shell-enabled > .footer {
   display: none !important;
 }
+body.compact-shell-enabled #btnExplore,
+body.compact-shell-enabled #adminBadge,
+body.compact-shell-enabled #statusBadge {
+  display: none !important;
+}
 
 .compact-topbar {
   height: 64px;
@@ -795,21 +800,16 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     const exitKeepBtn = exitOverlay.querySelector('.compact-exit-keep');
     const exitConfirmBtn = exitOverlay.querySelector('.compact-exit-confirm');
 
-    // Minimal footer: independence disclosure, Explore, Support, Feedback,
-    // About. The app version node is moved, not copied.
+    // Production footer: version, Support, Feedback only. Explore and the
+    // independence line stay in the app (About / Explore modal) but are not
+    // landing-page chrome.
     const compactFooter = document.createElement('div');
     compactFooter.className = 'compact-footer';
     if (appVersion) compactFooter.appendChild(appVersion);
-    const projectDisclosure = document.getElementById('projectDisclosure');
-    if (projectDisclosure) compactFooter.appendChild(projectDisclosure);
     const footerMeta = document.createElement('div');
     footerMeta.className = 'compact-footer-meta';
     const exploreBtn = document.getElementById('btnExplore');
-    if (exploreBtn) {
-      exploreBtn.classList.remove('badge', 'site-badge');
-      exploreBtn.classList.add('compact-footer-explore');
-      footerMeta.appendChild(exploreBtn);
-    }
+    if (exploreBtn) exploreBtn.hidden = true;
     const footerSupport = document.createElement('button');
     footerSupport.type = 'button';
     footerSupport.className = 'compact-footer-support';
@@ -997,6 +997,8 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
       topbar.hidden = false;
       appMark.hidden = false;
       compactFooter.hidden = false;
+
+      compactStatus.hidden = !(state === 'fixing' || state === 'cancelling');
 
       if (state === 'checking') {
         setCompactStatus('', '');

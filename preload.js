@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   launchZoomHelper: () => ipcRenderer.invoke('launch-zoom-helper'),
   shortcutExists: () => ipcRenderer.invoke('shortcut-exists'),
   isElevated: () => ipcRenderer.invoke('is-elevated'),
+  startupStatus: () => ipcRenderer.invoke('startup-status'),
   relaunchElevated: () => ipcRenderer.invoke('relaunch-elevated'),
   preflight: () => ipcRenderer.invoke('preflight'),
   preflightScan: () => ipcRenderer.invoke('preflight-scan'),

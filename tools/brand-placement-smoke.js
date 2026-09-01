@@ -77,9 +77,10 @@ check(!/header[\s\S]{0,800}1132-helper-shortcut/.test(html),
   'index.html header block does not reference the helper icon');
 
 console.log('brand-placement-smoke: compact shell keeps the mark in the stable header');
-check(!/body\.compact-shell-enabled #btnExplore\s*\{[^}]*display:\s*none/.test(shell),
-  'compact shell does not hide the Explore control');
-check(shell.includes('compact-footer-explore'), 'Explore is a footer text control, not a header mark');
+check(/body\.compact-shell-enabled #btnExplore/.test(shell),
+  'compact shell hides Explore from production chrome');
+check(!shell.includes("footerMeta.appendChild(exploreBtn)"),
+  'Explore is not a compact-footer control');
 check(shell.includes("appMark.src = 'assets/brand/app-mark.png'"),
   'compact shell locks the header mark to app-mark.png');
 check(shell.includes('topbar.appendChild(appMark)'),

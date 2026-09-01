@@ -274,12 +274,16 @@ const WIZARD = {
   // Shown when the automatic elevation attempt did not go through (declined
   // Windows prompt, or the probe could not confirm rights). The button is
   // the retry; the manual right-click path stays as the fallback of record.
-  ADMIN_SUB:      '1132 Fixer needs administrator access to complete this repair. ' +
-                  'Nothing has been changed on this computer — Windows will ask for approval.',
+  ADMIN_SUB:      '1132 Fixer needs administrator access to create the fresh Windows setup used for Zoom.',
+  ADMIN_PRIMARY:  'Restart as administrator',
+  ADMIN_CLOSE:    'Close',
   ADMIN_DECLINED_SUB: 'Windows approval was declined or did not complete, so 1132 Fixer is still not ' +
-                  'running as Administrator. Nothing has been changed. Select "Continue as administrator" ' +
-                  'to try again — or close the app, right-click its icon and choose "Run as administrator".',
+                  'running as Administrator. Nothing has been changed. Select "Restart as administrator" ' +
+                  'to try again.',
   ADMIN_RESTARTING: 'Restarting with administrator access…',
+  UNABLE_TITLE:   'Unable to complete',
+  UNABLE_SUB:     'The startup check did not finish in time. Nothing has been changed on this computer.',
+  TRY_AGAIN:      'Try again',
   FIXING_TITLE:   'Fixing Zoom',
   FIXING_START:   'Getting things ready…',
   SUCCESS_TITLE:  "You're all set",

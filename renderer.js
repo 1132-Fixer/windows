@@ -18,6 +18,7 @@ const fixBtn          = document.getElementById('fixBtn');
 const launchBtn       = document.getElementById('launchBtn');
 const shortcutBtn     = document.getElementById('shortcutBtn');
 const rescanBtn       = document.getElementById('rescanBtn');
+const closeBtn        = document.getElementById('closeBtn');
 const detailsBtn      = document.getElementById('detailsBtn');
 const supportBtn      = document.getElementById('supportBtn');
 const buttonNote      = document.getElementById('buttonNote');
@@ -97,9 +98,10 @@ function showNoticePane(tone, title, sub) {
 function setActions({ fix = false, fixDisabled = false, fixQuiet = false, fixLabel = 'Fix now',
                       shortcut = false, shortcutQuiet = false, shortcutLabel = 'Create desktop shortcut',
                       shortcutOption = false, elevate = false, launch = false,
-                      rescan = false, details = false, support = false,
+                      rescan = false, rescanLabel = 'Check again', close = false, details = false, support = false,
                       note = '' } = {}) {
   elevateBtn.hidden = !elevate;
+  if (elevate) elevateBtn.textContent = WIZARD.ADMIN_PRIMARY;
   fixBtn.hidden = !fix;
   fixBtn.disabled = !!fixDisabled;
   fixBtn.classList.toggle('btn-primary', !fixQuiet);
@@ -116,6 +118,8 @@ function setActions({ fix = false, fixDisabled = false, fixQuiet = false, fixLab
   document.getElementById('shortcutBtnLabel').textContent = shortcutLabel;
   document.getElementById('shortcutOpt').hidden = !shortcutOption;
   rescanBtn.hidden = !rescan;
+  if (rescan) rescanBtn.textContent = rescanLabel;
+  if (closeBtn) closeBtn.hidden = !close;
   detailsBtn.hidden = !details;
   supportBtn.hidden = !support;
   buttonNote.textContent = note;
@@ -458,15 +462,13 @@ async function runEnvironmentScan(opts = {}) {
   if (scanInProgress || isRunning) return;
   scanInProgress = true;
   lastScanAt = Date.now();
-  setStatus('scanning', 'Checking…');
-  checkList.setAttribute('aria-busy', 'true');
   if (!quiet) {
+    setStatus('scanning', 'Checking…');
     renderWizChecks(null); // all groups pending
     setWizardPane('checking');
-    // Keep Fix now available so a slow check never traps the user. Clicking
-    // it queues the real repair (run-fix) to start after this scan returns.
-    setActions({ fix: true, details: true });
+    setActions({ details: true });
   }
+  checkList.setAttribute('aria-busy', 'true');
 
   // Show all rows immediately as pending so the panel never sits empty.
   checkList.innerHTML = '';
@@ -537,8 +539,9 @@ async function runEnvironmentScan(opts = {}) {
     setStatus('error', 'Something went wrong');
     updateFixDisabledNote(['Environment scan'], false);
     updateZoomRecovery(null, null); // scan state unknown — hide the card
-    showResultPane('err', 'The check could not finish', scanFailureMessage(err));
-    setActions({ rescan: true, details: true });
+    showNoticePane('err', WIZARD.UNABLE_TITLE, WIZARD.UNABLE_SUB);
+    addFileItem(scanFailureMessage(err), 'failed');
+    setActions({ rescan: true, rescanLabel: WIZARD.TRY_AGAIN, details: true });
   } finally {
     scanInProgress = false;
     checkList.setAttribute('aria-busy', 'false');
@@ -1277,7 +1280,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   fixBtn.addEventListener('click', onFixButtonClick);
   // Explicit manual rescan (§9) — same guarded entry point as the
   // focus-rescan; runEnvironmentScan() no-ops while a scan or fix runs.
-  rescanBtn.addEventListener('click', () => runEnvironmentScan());
+  rescanBtn.addEventListener('click', () => {
+    if (rescanBtn.textContent === WIZARD.TRY_AGAIN) runStartupSequence();
+    else runEnvironmentScan();
+  });
+  if (closeBtn) closeBtn.addEventListener('click', () => window.electronAPI.quitApp());
   // "View details" — the single diagnostics toggle (flips to Hide details).
   detailsBtn.addEventListener('click', () => setLogExpanded(advPanel.classList.contains('hidden')));
   shortcutBtn.addEventListener('click', async () => {
@@ -1342,57 +1349,75 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Initial state: checking pane + auto-run the environment checklist.
+  setLogExpanded(false);
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.defaultPrevented) return;
+    const overlayOpen = [...document.querySelectorAll('.fix-confirm-overlay, .fb-overlay.show, .compact-exit-overlay')]
+      .some((el) => el && !el.hidden && (el.classList.contains('show') || !el.hidden));
+    if (overlayOpen) return;
+    const primary = [elevateBtn, fixBtn, launchBtn].find((b) => b && !b.hidden && !b.disabled);
+    if (primary) {
+      event.preventDefault();
+      primary.click();
+    }
+  });
+  await runStartupSequence();
+});
+
+const STARTUP_DEADLINE_MS = 20000;
+
+function showAdminRequired() {
+  canRunFix = false;
+  checkList.innerHTML = '';
+  checkList.appendChild(renderCheckRow('admin', 'Administrator', 'blocked', WIZARD.ADMIN_SUB));
+  checkList.setAttribute('aria-busy', 'false');
+  setStatus('warn', 'Action required');
+  showResultPane('warn', WIZARD.ADMIN_TITLE, WIZARD.ADMIN_SUB);
+  setActions({ elevate: true, close: true, details: true });
+}
+
+function showUnableToComplete(stage) {
+  canRunFix = false;
+  addFileItem(`Startup stopped at ${stage || 'startup'}.`, 'failed');
+  setStatus('error', 'Unable to complete');
+  showNoticePane('err', WIZARD.UNABLE_TITLE, WIZARD.UNABLE_SUB);
+  setActions({ rescan: true, rescanLabel: WIZARD.TRY_AGAIN, close: true, details: true });
+}
+
+async function runStartupSequence() {
   setWizardPane('checking');
   renderWizChecks(null);
   setActions({});
-  setLogExpanded(false);
-
-  // Elevation gate. If the probe itself throws we do NOT fall through to a
-  // scan and we do NOT leave the page in its static "Ready" state: an
-  // unverified elevation is unknown, and unknown is not permission to run.
-  let elevated = null;
+  const startedAt = Date.now();
+  let status;
   try {
-    elevated = await window.electronAPI.isElevated();
+    status = await Promise.race([
+      window.electronAPI.startupStatus(),
+      new Promise((_, reject) => setTimeout(() => {
+        const err = new Error('timeout:startup-status');
+        err.stage = 'startup-status';
+        reject(err);
+      }, STARTUP_DEADLINE_MS))
+    ]);
   } catch (err) {
-    elevated = null;
-  }
-
-  if (elevated !== true) {
-    // Reaching this pane means the automatic self-elevation attempt at
-    // startup did not go through (Windows approval declined, or the probe
-    // could not confirm rights) — main.js relaunches elevated on its own
-    // before the window even shows. Say what is needed, and what declining
-    // costs — nothing is repaired, and the other checks did not run, so
-    // their state is unknown rather than passing. Rendering only the admin
-    // row used to make the other eight checks vanish, which reads as
-    // "nothing else to report".
-    checkList.innerHTML = '';
-    const adminMsg = elevated === false
-      ? WIZARD.ADMIN_SUB
-      : 'Could not confirm whether 1132 Fixer is running as Administrator, so it is treated as not ' +
-        'elevated. Nothing has been changed on this computer. ' + WIZARD.ADMIN_SUB;
-    let group = null;
-    for (const c of CHECK_ORDER) {
-      if (c.group !== group) { checkList.appendChild(renderGroupHeader(c.group)); group = c.group; }
-      checkList.appendChild(c.key === 'admin'
-        ? renderCheckRow('admin', c.label, 'blocked', adminMsg)
-        : renderCheckRow(c.key, c.label, 'unknown', NOT_ELEVATED_CARD_MESSAGE));
-    }
-    checkList.setAttribute('aria-busy', 'false');
-    updateFixDisabledNote(['Administrator'], false);
-    // Wizard: a genuine manual blocker — amber, with the retry as the one
-    // primary action (Windows shows its own approval prompt).
-    const groupStatuses = {};
-    for (const g of WIZARD_GROUPS) groupStatuses[g.group] = g.keys.includes('admin') ? 'blocked' : 'unknown';
-    renderWizChecks(groupStatuses);
-    setStatus('warn', 'Action required');
-    showResultPane('warn', WIZARD.ADMIN_TITLE, adminMsg);
-    setActions({ elevate: true, details: true });
+    showUnableToComplete((err && err.stage) || 'startup-status');
     return;
   }
-  runEnvironmentScan();
-});
+  addFileItem(`Startup ${status.state} in ${status.elapsedMs || (Date.now() - startedAt)}ms via ${status.elevationMethod || 'unknown'}.`, 'header');
+  if (status.state === 'need-elevation' || status.elevated !== true) {
+    showAdminRequired();
+    return;
+  }
+  if (status.runningAsTarget) {
+    showResultPane('warn', WIZARD.BLOCKED_TITLE, wizardBlockedSub(['Signed in as user1']));
+    setActions({ close: true, details: true });
+    return;
+  }
+  canRunFix = true;
+  showResultPane('ok', WIZARD.READY_TITLE, WIZARD.READY_SUB);
+  setActions({ fix: true, shortcutOption: true, details: true });
+  runEnvironmentScan({ quiet: true });
+}
 
 // "Continue as administrator" — asks main to relaunch elevated. Windows
 // shows its own approval prompt; on success main quits this instance, so
@@ -1410,8 +1435,9 @@ elevateBtn.addEventListener('click', async () => {
     return; // main.js quits this instance; the elevated one takes over
   }
   elevateBtn.disabled = false;
-  elevateBtn.textContent = 'Continue as administrator';
+  elevateBtn.textContent = WIZARD.ADMIN_PRIMARY;
   showResultPane('warn', WIZARD.ADMIN_TITLE, WIZARD.ADMIN_DECLINED_SUB);
+  setActions({ elevate: true, close: true, details: true });
 });
 
 // "Open Zoom" (§21) — runs the SAME launcher artifact the desktop
@@ -1444,25 +1470,10 @@ supportBtn.addEventListener('click', () => openSupportReport());
     el.textContent = 'v' + v;
     el.hidden = false;
   } catch (_) { /* stays hidden */ }
-  // The badge ships neutral ("Checking rights…") and is only promoted to the
-  // green Administrator state by a measured `true`. A throw leaves it saying
-  // the rights are unknown rather than silently asserting Administrator,
-  // which is what the old static markup plus an empty catch produced.
-  // Privilege status is quiet metadata: hidden until measured (the header
-  // badge is the ONE live indicator while checks run), then a plain
-  // dot + text — never a button, never a second live region.
   const ab = document.getElementById('adminBadge');
-  const paint = (text, tone) => {
-    ab.textContent = text;
-    ab.classList.toggle('admin-badge', tone === 'ok');
-    ab.style.color = tone === 'ok' ? '' : 'var(--danger)';
-    ab.hidden = false;
-  };
-  try {
-    const elevated = await window.electronAPI.isElevated();
-    paint(elevated === true ? 'Running as administrator' : 'Not running as administrator', elevated === true ? 'ok' : 'bad');
-  } catch (_) {
-    paint('Admin rights unknown', 'bad');
+  if (ab) {
+    ab.hidden = true;
+    ab.textContent = '';
   }
 })();
 

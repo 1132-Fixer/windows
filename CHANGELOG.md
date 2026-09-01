@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.3.0] - 2026-09-01
+
+### Fixed
+
+- Startup no longer stays on **Checking…** with **Admin rights unknown**. Elevation is read from the Windows process token (not `net session`), every startup stage times out, and a declined UAC prompt shows **Administrator access required** with **Restart as administrator**.
+- The first window is a compact centered size instead of filling the work area.
+- Camera Frame Server is advisory in details. It cannot block **Ready to fix Zoom** or be treated as proof that Zoom is healthy.
+
+### Changed
+
+- After the bounded startup checks, the landing screen is **Ready to fix Zoom** / **Fix now**.
+- Production footer is version, Support, and Feedback. Explore and privilege status are not landing chrome.
+
 ## [6.2.0] - 2026-09-01
 
 ### Fixed
@@ -907,6 +920,7 @@ The following manual cases must pass before tagging the release:
 - Direct publish of releases to the `1132-Fixer-Windows-Releases` repo
   for the auto-updater.
 
+[6.3.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.0
 [6.2.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.2.0
 [6.1.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.1.0
 [6.0.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.0.0
