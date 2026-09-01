@@ -29,7 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   goes somewhere.
 - **The independence line moved into the hero.** As a panel footer it read
   as a statement about every product listed, including ones this project
-  does not own and cannot speak for.
+  does not own and cannot speak for. Compact chrome keeps the exact short
+  disclosure in the main-window footer and exposes **Explore** as a quiet
+  text control next to Support — never as a pill, never beside **Fix now**,
+  and never hidden.
 - **Destinations are grouped by purpose** — Organizations & Services, Bots,
   Creative Tools. GIF Directory is an organization and discovery utility
   (`Organize and discover GIFs`), not miscellaneous content. The `Other`
