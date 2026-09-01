@@ -211,7 +211,10 @@ console.log('messages-smoke: wizard states (directive 2026-08-23)');
     'shortcut-not-ready copy points at the repair as the next step');
   check(/unknown/i.test(wiz.UNKNOWN_SUB) && /not a pass/i.test(wiz.UNKNOWN_SUB),
     'unknown state stays honest: unknown is not a pass');
-  check(/Advanced details/.test(wiz.PARTIAL_SUB), 'partial outcome points at Advanced details');
+  check(/View details/.test(wiz.PARTIAL_SUB), 'partial outcome points at View details');
+  check(wiz.READY_TITLE === 'Ready to fix Zoom', 'ready title is not a false all-good claim');
+  check(!/Everything looks good/.test(wiz.READY_TITLE + wiz.READY_SUB), 'ready copy never says everything looks good');
+  check(wiz.CONFIRM_TITLE === 'Before we start', 'destructive work has a confirmation title');
 
   // Self-elevation honesty: approval happens in the WINDOWS prompt, the
   // app never asks for a password, and a decline is reported as a decline.
@@ -224,16 +227,21 @@ console.log('messages-smoke: wizard states (directive 2026-08-23)');
 console.log('messages-smoke: project disclosure (addendum 2026-08-23)');
 {
   // Exact approved wording — byte-pinned, never reworded.
-  check(m.DISCLOSURE.INDEPENDENCE === 'Independent project — not affiliated with Zoom.',
+  check(m.DISCLOSURE.INDEPENDENCE === 'Independent project. Not affiliated with Zoom.',
     'independence disclosure is the exact approved wording');
+  check(m.DISCLOSURE.LEGAL === 'Independent project. Not affiliated with, sponsored by, or endorsed by Zoom Communications, Inc.',
+    'legal independence statement is the exact approved wording');
   check(m.DISCLOSURE.OS_LABEL === 'Open Source', 'open-source label is exact');
   check(m.DISCLOSURE.ARIA.includes(m.DISCLOSURE.INDEPENDENCE) && !m.DISCLOSURE.ARIA.includes('·'),
     'accessible name carries the disclosure without the separator glyph');
   // No unsupported endorsement language anywhere in the catalog.
   const catalogText = JSON.stringify(m);
-  for (const banned of ['Verified by Zoom', 'Zoom Certified', 'Zoom Partner', 'Official Zoom', 'endorsed by Zoom']) {
+  const catalogWithoutLegal = catalogText.split(m.DISCLOSURE.LEGAL).join('');
+  for (const banned of ['Verified by Zoom', 'Zoom Certified', 'Zoom Partner', 'Official Zoom']) {
     check(!catalogText.includes(banned), `catalog never says "${banned}"`);
   }
+  check(!catalogWithoutLegal.includes('endorsed by Zoom'),
+    'catalog never claims Zoom endorsement outside the independence disclaimer');
 }
 
 console.log('messages-smoke: catalog-wide bans');

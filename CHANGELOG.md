@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Initial screen is **Ready to fix Zoom** with **Fix now**. A successful
+  preflight no longer claims “Everything looks good” or offers
+  “Open Zoom as user1” as the primary action.
+- **Fix now** always starts the complete `run-fix` helper-account reset,
+  after a short confirmation. It never calls the launch-only handler.
+- Compact wizard copy, independence footer, and no-scroll details dialog.
+- Header product mark is the canonical 1132 Fixer **gear**
+  (`assets/brand/app-mark.png`), window-centered in the top bar. The
+  people/arrow artwork stays on the helper-account desktop shortcut only.
+
 ### Changed — Explore is a product directory (issue #185)
 
 - **1132 Fixer is the subject of the panel.** It stops being the first cell
@@ -56,6 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   updates the logo. It now uses `assets/logo-transparent.png`, which is
   listed in `.brand-assets.tsv`, and a guard pins that so a derived copy
   cannot be reintroduced.
+- Electron 44 no longer ships `libEGL.dll` or `libGLESv2.dll`. Those two
+  names were removed from `build/package-allowlist.json` so package
+  inventory matches the Electron 44 Windows runtime. Electron 44 itself
+  is unchanged.
 
 ## [6.1.0] - 2026-08-23
 

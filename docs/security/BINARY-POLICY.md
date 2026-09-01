@@ -16,8 +16,9 @@ statements in both directions:
 
 ## 1. Currently packaged binaries
 
-Verified 2026-08-14 against a local `npm run build:all` of `v5.6.0` and against
-the published release assets.
+Verified 2026-09-01 against Electron 44.0.0 (`dist/win-unpacked`). Electron 44
+no longer ships `libEGL.dll` or `libGLESv2.dll`; those names were removed from
+`build/package-allowlist.json` in the same change.
 
 ### 1.1 Electron runtime
 
@@ -25,7 +26,7 @@ the published release assets.
 | --- | --- | --- | --- |
 | `1132 Fixer.exe` | Electron official Windows x64 distribution, renamed by electron-builder | MIT (Electron), with Chromium components under their own terms | The application host |
 | `ffmpeg.dll` | Electron distribution | LGPL-2.1-or-later / Chromium terms | Chromium media |
-| `libEGL.dll`, `libGLESv2.dll`, `vk_swiftshader.dll`, `vulkan-1.dll`, `dxcompiler.dll`, `dxil.dll`, `d3dcompiler_47.dll` | Electron distribution | Chromium / ANGLE / SwiftShader / DirectX terms | Chromium graphics |
+| `vk_swiftshader.dll`, `vulkan-1.dll`, `dxcompiler.dll`, `dxil.dll`, `d3dcompiler_47.dll` | Electron distribution | Chromium / SwiftShader / DirectX terms | Chromium graphics |
 | `*.pak`, `icudtl.dat`, `*.bin`, `locales/*.pak` | Electron distribution | Chromium terms | Chromium resources and locales |
 | `LICENSES.chromium.html` | Electron distribution | n/a | Required attribution |
 

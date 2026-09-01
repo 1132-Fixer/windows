@@ -277,7 +277,7 @@ console.log('electron-security-smoke: Explore destinations (directive 2026-08-23
   check(indexSrc.includes('id="projectDisclosure"'), 'shell disclosure instance exists');
   check(rendererSrc.includes('renderDisclosure(document.getElementById(\'projectDisclosure\'))'),
     'the shell disclosure is filled from the DISCLOSURE catalog');
-  check(messages.DISCLOSURE.INDEPENDENCE === 'Independent project — not affiliated with Zoom.',
+  check(messages.DISCLOSURE.INDEPENDENCE === 'Independent project. Not affiliated with Zoom.',
     'shell ships the exact independence wording');
   for (const banned of ['Verified by Zoom', 'Zoom Certified', 'Zoom Partner', 'Official Zoom']) {
     check(!allUiSrc.includes(banned), `UI never says "${banned}"`);

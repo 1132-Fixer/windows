@@ -104,8 +104,12 @@ function setActions({ fix = false, fixDisabled = false, fixQuiet = false, fixLab
   fixBtn.disabled = !!fixDisabled;
   fixBtn.classList.toggle('btn-primary', !fixQuiet);
   fixBtn.classList.toggle('btn-quiet', !!fixQuiet);
-  if (!fixCountdownTimer) fixBtn.textContent = fixLabel;
+  if (fixBtn.textContent !== 'Starting after check…') fixBtn.textContent = fixLabel;
   launchBtn.hidden = !launch;
+  if (launch) {
+    launchBtn.textContent = 'Open Zoom';
+    launchBtn.setAttribute('aria-label', 'Open Zoom');
+  }
   shortcutBtn.hidden = !shortcut;
   shortcutBtn.classList.toggle('btn-primary', !shortcutQuiet);
   shortcutBtn.classList.toggle('btn-quiet', !!shortcutQuiet);
@@ -451,10 +455,7 @@ function renderCheckRow(key, label, status, message) {
 // screen does not churn every time the window regains focus.
 async function runEnvironmentScan(opts = {}) {
   const quiet = !!opts.quiet;
-  // fixCountdownTimer guard: a rescan during the 3s Fix-now countdown would
-  // disable the button (killing its advertised click-to-cancel) and could
-  // overlap the scan with the fix it is about to start.
-  if (scanInProgress || isRunning || fixCountdownTimer) return;
+  if (scanInProgress || isRunning) return;
   scanInProgress = true;
   lastScanAt = Date.now();
   setStatus('scanning', 'Checking…');
@@ -462,7 +463,9 @@ async function runEnvironmentScan(opts = {}) {
   if (!quiet) {
     renderWizChecks(null); // all groups pending
     setWizardPane('checking');
-    setActions({});
+    // Keep Fix now available so a slow check never traps the user. Clicking
+    // it queues the real repair (run-fix) to start after this scan returns.
+    setActions({ fix: true, details: true });
   }
 
   // Show all rows immediately as pending so the panel never sits empty.
@@ -553,35 +556,18 @@ async function presentScanResult({ statuses, repairableLabels, blockedLabels, qu
   if (statuses.indexOf('blocked') !== -1 || !canRunFix) {
     showResultPane('warn', WIZARD.BLOCKED_TITLE, wizardBlockedSub(blockedLabels));
     // The Zoom recovery card (when Zoom is the blocker) renders inside this
-    // pane with its own guided actions; Check again + details cover the rest.
+    // pane with its own guided actions; one clear next step, plus details.
     setActions({ rescan: true, details: true });
-  } else if (statuses.indexOf('unknown') !== -1) {
-    showResultPane('warn', WIZARD.UNKNOWN_TITLE, WIZARD.UNKNOWN_SUB);
-    setActions({ fix: canRunFix, fixQuiet: true, fixLabel: 'Run the fix anyway', rescan: true, details: true });
-  } else if (statuses.indexOf('repairable') !== -1) {
-    showResultPane('fix', wizardFixFoundTitle(repairableLabels.length), wizardFixFoundSub(repairableLabels));
-    // The desktop shortcut rides the repair transaction as a checked-by-
-    // default option (operator directive 2026-08-23).
-    setActions({ fix: true, shortcutOption: true, rescan: true, details: true });
-  } else if (statuses.indexOf('warning') !== -1) {
-    showResultPane('warn', WIZARD.READY_WARN_TITLE, WIZARD.READY_WARN_SUB);
-    setActions({ fix: canRunFix, fixQuiet: true, fixLabel: 'Run the fix anyway', rescan: true, details: true });
   } else {
-    // Healthy terminal state: launching as User1 is the point of the app,
-    // so it stays the primary action; the managed shortcut can always be
-    // recreated (users delete desktop icons).
+    // A clean preflight only means the repair can be attempted. It is not
+    // proof that error 1132 is absent. Always offer Fix now — never Open Zoom
+    // and never "Everything looks good" — until the repair has actually run.
     showResultPane('ok', WIZARD.READY_TITLE, WIZARD.READY_SUB);
-    let shortcutMissing = true;
-    try {
-      const st = await window.electronAPI.shortcutExists();
-      shortcutMissing = !(st && st.exists && st.valid);
-    } catch (_) { /* unknown -> offering recreate is harmless */ }
-    setActions({
-      launch: true,
-      shortcut: true, shortcutQuiet: true,
-      shortcutLabel: shortcutMissing ? 'Create desktop shortcut' : 'Recreate desktop shortcut',
-      rescan: true, details: true
-    });
+    setActions({ fix: true, shortcutOption: true, details: true });
+    if (pendingFixAfterScan) {
+      pendingFixAfterScan = false;
+      showFixConfirm();
+    }
   }
 }
 
@@ -717,7 +703,7 @@ zrDownloadBtn.addEventListener('click', async () => {
 function zrStartRecheck() {
   // Same guards as runEnvironmentScan — a no-op scan must never leave a
   // stale "Checking…" state on screen.
-  if (isRunning || scanInProgress || fixCountdownTimer) return;
+  if (isRunning || scanInProgress) return;
   zrRecheckPending = true;
   zrSetState(ZOOM_RECOVERY.STATES.checking);
   runEnvironmentScan();
@@ -892,45 +878,63 @@ function installFocusTrap(overlay) {
 }
 
 // ============================================================
-// FIX NOW — one click. A short countdown runs ON the button itself
-// (click again to cancel) as the only guard before the destructive
-// flow. No wizard, no native confirm, no shortcut prompt.
+// FIX NOW — confirmation, then the complete run-fix orchestrator.
+// Never routes to launch-zoom-helper. A successful preflight is not
+// a reason to skip the helper-account reset.
 // ============================================================
-const FIX_COUNTDOWN_SECONDS = 3;
-let fixCountdownTimer = null;
+let pendingFixAfterScan = false;
+const fixConfirmOverlay = document.getElementById('fixConfirmOverlay');
+const fixConfirmContinue = document.getElementById('fixConfirmContinue');
+const fixConfirmCancel = document.getElementById('fixConfirmCancel');
 
-function cancelFixCountdown() {
-  if (fixCountdownTimer) {
-    clearInterval(fixCountdownTimer);
-    fixCountdownTimer = null;
-    fixBtn.textContent = 'Fix now';
-    fixBtn.classList.remove('counting');
-  }
+function hideFixConfirm() {
+  if (!fixConfirmOverlay) return;
+  fixConfirmOverlay.hidden = true;
 }
 
-function startFixCountdown() {
-  let remaining = FIX_COUNTDOWN_SECONDS;
-  fixBtn.classList.add('counting');
-  fixBtn.textContent = `Starting in ${remaining}… Click to cancel`;
-  fixCountdownTimer = setInterval(() => {
-    remaining -= 1;
-    if (remaining <= 0) {
-      cancelFixCountdown();
-      runFix();
-    } else {
-      fixBtn.textContent = `Starting in ${remaining}… Click to cancel`;
+function showFixConfirm() {
+  if (!fixConfirmOverlay) {
+    runFix();
+    return;
+  }
+  const title = document.getElementById('fixConfirmTitle');
+  const body = document.getElementById('fixConfirmBody');
+  if (title) title.textContent = WIZARD.CONFIRM_TITLE;
+  if (body) body.textContent = WIZARD.CONFIRM_BODY;
+  if (fixConfirmContinue) fixConfirmContinue.textContent = WIZARD.CONFIRM_CONTINUE;
+  if (fixConfirmCancel) fixConfirmCancel.textContent = WIZARD.CONFIRM_CANCEL;
+  fixConfirmOverlay.hidden = false;
+  if (fixConfirmContinue) fixConfirmContinue.focus();
+}
+
+if (fixConfirmContinue) {
+  fixConfirmContinue.addEventListener('click', () => {
+    hideFixConfirm();
+    runFix();
+  });
+}
+if (fixConfirmCancel) {
+  fixConfirmCancel.addEventListener('click', hideFixConfirm);
+}
+if (fixConfirmOverlay) {
+  fixConfirmOverlay.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      hideFixConfirm();
+      if (fixBtn && !fixBtn.hidden) fixBtn.focus();
     }
-  }, 1000);
+  });
 }
 
 function onFixButtonClick() {
   if (isRunning) return;
-  if (fixCountdownTimer) {
-    cancelFixCountdown();
+  if (scanInProgress) {
+    pendingFixAfterScan = true;
+    fixBtn.textContent = 'Starting after check…';
     return;
   }
   if (!canRunFix) return;
-  startFixCountdown();
+  showFixConfirm();
 }
 
 // ============================================================
@@ -1045,7 +1049,7 @@ async function runFix() {
         launch: !shortcutFailed,
         shortcut: shortcutFailed || shortcutSkipped,
         shortcutQuiet: shortcutSkipped && !shortcutFailed,
-        rescan: true, details: true, support: true,
+        details: true,
         note: shortcutNote
       };
       if (partial) {
@@ -1549,6 +1553,30 @@ function renderDisclosure(el) {
 renderDisclosure(document.getElementById('projectDisclosure'));
 // The Explore panel no longer renders a global disclosure line — the
 // independence statement is part of the 1132 Fixer hero, built below.
+
+const aboutOverlay = document.getElementById('aboutOverlay');
+const aboutBody = document.getElementById('aboutBody');
+const aboutLegal = document.getElementById('aboutLegal');
+const aboutClose = document.getElementById('aboutClose');
+if (aboutBody) aboutBody.textContent = DISCLOSURE.DESCRIPTION;
+if (aboutLegal) aboutLegal.textContent = DISCLOSURE.LEGAL;
+function showAbout() {
+  if (!aboutOverlay) return;
+  aboutOverlay.hidden = false;
+  if (aboutClose) aboutClose.focus();
+}
+function hideAbout() {
+  if (aboutOverlay) aboutOverlay.hidden = true;
+}
+if (aboutClose) aboutClose.addEventListener('click', hideAbout);
+if (aboutOverlay) {
+  aboutOverlay.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      hideAbout();
+    }
+  });
+}
 
 // Build the launcher panel from the EXPLORE_VIEW catalog (messages.js) —
 // destinations are declared once, never hand-duplicated across markup.
