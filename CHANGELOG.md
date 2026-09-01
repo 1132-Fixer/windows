@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Electron 44 no longer ships `libEGL.dll` or `libGLESv2.dll`. Those two
+  names were removed from `build/package-allowlist.json` so package
+  inventory matches the Electron 44 Windows runtime. Electron 44 itself
+  is unchanged.
+
 ## [6.1.0] - 2026-08-23
 
 ### Changed — shell redesign to the acceptance spec (directive 2026-08-23)
