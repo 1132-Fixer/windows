@@ -1274,9 +1274,14 @@ ubLater.addEventListener('click', () => {
 // Bootstrap
 // ============================================================
 window.addEventListener('DOMContentLoaded', async () => {
-  document.getElementById('btnExit').addEventListener('click', () => window.electronAPI.quitApp());
-  document.getElementById('btnMinimize').addEventListener('click', () => window.electronAPI.minimizeWindow());
-  document.getElementById('btnMaximize').addEventListener('click', () => window.electronAPI.maximizeWindow());
+  const api = window.electronAPI;
+  if (!api || typeof api.startupStatus !== 'function') {
+    showUnableToComplete('preload');
+    return;
+  }
+  document.getElementById('btnExit').addEventListener('click', () => api.quitApp());
+  document.getElementById('btnMinimize').addEventListener('click', () => api.minimizeWindow());
+  document.getElementById('btnMaximize').addEventListener('click', () => api.maximizeWindow());
   fixBtn.addEventListener('click', onFixButtonClick);
   // Explicit manual rescan (§9) — same guarded entry point as the
   // focus-rescan; runEnvironmentScan() no-ops while a scan or fix runs.
@@ -1284,7 +1289,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (rescanBtn.textContent === WIZARD.TRY_AGAIN) runStartupSequence();
     else runEnvironmentScan();
   });
-  if (closeBtn) closeBtn.addEventListener('click', () => window.electronAPI.quitApp());
+  if (closeBtn) closeBtn.addEventListener('click', () => api.quitApp());
   // "View details" — the single diagnostics toggle (flips to Hide details).
   detailsBtn.addEventListener('click', () => setLogExpanded(advPanel.classList.contains('hidden')));
   shortcutBtn.addEventListener('click', async () => {
@@ -1316,7 +1321,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  window.electronAPI.onFixLog(({ line, kind }) => {
+  api.onFixLog(({ line, kind }) => {
     const cls = kind === 'err' ? 'failed'
       : kind === 'header'  ? 'header'
       : kind === 'success' ? 'success'
@@ -1324,12 +1329,12 @@ window.addEventListener('DOMContentLoaded', async () => {
     addFileItem(line, cls);
   });
 
-  window.electronAPI.onUpdateStatus(handleUpdateStatus);
+  api.onUpdateStatus(handleUpdateStatus);
 
   // Installer exited — run the promised read-only re-check automatically.
   // If a scan is already in flight, the pending flag makes ITS result use
   // the re-check state strings instead of starting a second scan.
-  window.electronAPI.onZoomInstallerDone((info) => {
+  api.onZoomInstallerDone((info) => {
     // Installer exited: the "Cancel setup" label and unchanged-computer note
     // are true again.
     zrSetInstalling(false);
@@ -1361,10 +1366,14 @@ window.addEventListener('DOMContentLoaded', async () => {
       primary.click();
     }
   });
-  await runStartupSequence();
+  try {
+    await runStartupSequence();
+  } catch (err) {
+    showUnableToComplete((err && err.stage) || 'startup');
+  }
 });
 
-const STARTUP_DEADLINE_MS = 20000;
+const STARTUP_DEADLINE_MS = 8000;
 
 function showAdminRequired() {
   canRunFix = false;

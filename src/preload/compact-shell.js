@@ -669,6 +669,7 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
 
   const start = () => {
+    try { console.log('[compact-shell] start readyState=' + document.readyState); } catch (_) {}
     const wizard = document.getElementById('wizardCard');
     const workspace = document.querySelector('.workspace');
     const appMark = document.querySelector('.app-mark');
@@ -687,9 +688,17 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     const appVersion = document.getElementById('appVersion');
     const feedbackBtn = document.getElementById('btnSupport');
 
-    // Fail open to the existing UI if the page structure ever changes.
     if (!wizard || !workspace || !appMark || !originalExitBtn || !statusBadge ||
-        !fixBtn || !launchBtn || !detailsBtn || !actionArea || !advRegion) return;
+        !fixBtn || !launchBtn || !detailsBtn || !actionArea || !advRegion) {
+      console.warn('[compact-shell] missing required nodes', {
+        wizard: !!wizard, workspace: !!workspace, appMark: !!appMark,
+        originalExitBtn: !!originalExitBtn, statusBadge: !!statusBadge,
+        fixBtn: !!fixBtn, launchBtn: !!launchBtn, detailsBtn: !!detailsBtn,
+        actionArea: !!actionArea, advRegion: !!advRegion
+      });
+      document.body.classList.add('compact-shell-enabled');
+      return;
+    }
 
     document.body.classList.add('compact-shell-enabled');
     detailsBtn.textContent = 'View details';

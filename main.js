@@ -3120,7 +3120,7 @@ ipcMain.handle('startup-status', async () => {
   elevation.logStage('startup-status', 'begin');
   let elev = { elevated: false, method: 'failed', error: 'not probed', ms: 0 };
   try {
-    elev = await elevCtl.isElevated();
+    elev = typeof elevCtl.snapshot === 'function' ? elevCtl.snapshot() : await elevCtl.isElevated();
   } catch (err) {
     elev = { elevated: false, method: 'failed', error: String(err && err.message || err), ms: Date.now() - t0 };
   }
