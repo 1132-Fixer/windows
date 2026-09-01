@@ -50,6 +50,12 @@ check(b.productName === FROZEN.productName, `productName is "${FROZEN.productNam
 check(b.nsis && b.nsis.artifactName === FROZEN.setupArtifact, `nsis installer artifactName is ${FROZEN.setupArtifact}`);
 check(b.nsis && b.nsis.uninstallDisplayName === FROZEN.productName, `nsis uninstallDisplayName is "${FROZEN.productName}"`);
 check(b.nsis && b.nsis.perMachine === true, 'nsis perMachine stays true (per-machine uninstall identity)');
+{
+  const nsi = fs.readFileSync(path.join(ROOT, 'build', 'installer.nsi'), 'utf8');
+  check(/RequestExecutionLevel admin/.test(nsi), 'NSIS template requests admin for per-machine');
+  check(!/BUILD_UNINSTALLER[\s\S]{0,80}RequestExecutionLevel user/.test(nsi),
+    'uninstaller is not asInvoker (would spawn unsigned elevate.exe)');
+}
 check(b.portable && b.portable.artifactName === FROZEN.portableArtifact, `portable artifactName is ${FROZEN.portableArtifact}`);
 check(b.win && b.win.signtoolOptions && b.win.signtoolOptions.publisherName === FROZEN.publisherName, `publisherName is "${FROZEN.publisherName}"`);
 

@@ -73,7 +73,7 @@ the source — which is the reason the inventory exists.
 | Version | `1, 0, 0, 2894` — "Elevate Application", company "Johannes Passing" |
 | Origin | electron-builder's NSIS resource bundle, cached locally as `nsis-3.0.4.1/elevate.exe` |
 | Licence | Elevate, by Johannes Passing — permissive; attribution belongs in `NOTICE.md` |
-| Why it ships | electron-builder adds it for the `perMachine` NSIS installer's UAC elevation path. It is not referenced by any first-party code. |
+| Why it ships | electron-builder still copies it into `win-unpacked` for `perMachine` NSIS. First-party code does not call it. `build/installer.nsi` sets the uninstaller to `RequestExecutionLevel admin` so uninstall UAC is Windows, not this helper. `customInstall` deletes it from `$INSTDIR\resources` after extract. |
 | Signed | **No** — `NotSigned`, like everything else this project ships today |
 | Owner | The `electron-builder` version in `devDependencies` |
 

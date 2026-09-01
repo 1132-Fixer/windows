@@ -47,6 +47,11 @@
   DeleteRegKey HKCU "${UNINSTALL_REGISTRY_KEY}"
   DeleteRegKey HKCU "Software\1132Fixer"
 
+  ; electron-builder still copies unsigned elevate.exe into resources for
+  ; per-machine NSIS. The uninstaller is now requireAdministrator and must
+  ; not spawn that helper. Remove it from the installed tree.
+  Delete "$INSTDIR\resources\elevate.exe"
+
   ; NOTE: deliberately NO Exec of the app here. electron-updater's
   ; quitAndInstall(_, isForceRunAfter=true) already relaunches after a silent
   ; update; the old extra Exec raced it and produced two elevated instances.
