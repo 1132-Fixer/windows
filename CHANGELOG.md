@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Support-service snapshot rebuilds take a per-scope advisory lock so two
+  concurrent first-ratings cannot undercount the public aggregate or skip
+  history prune (`REVIEW#11` / `rating_snapshots are pruned per scope`).
+
 ### Changed — public documentation (issue #154)
 
 - Documentation is grouped as a product page (README), a docs index, user

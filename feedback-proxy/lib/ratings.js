@@ -59,6 +59,12 @@ async function aggregate(client, product) {
 
 /** Insert one snapshot row (overall when product is null). Caller's tx. */
 async function insertSnapshot(client, product) {
+  // Per-principal locks do not serialize two first-ratings. Without a
+  // per-scope snapshot lock, concurrent rebuilds can each aggregate a
+  // stale count and a racing prune can leave more than three history rows.
+  // READ COMMITTED: the waiter re-aggregates after the winner commits.
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',
+    ['rating_snapshot:' + WINDOW_DAYS + ':' + (product || 'overall')]);
   const agg = await aggregate(client, product);
   const state = agg.count >= MIN_PUBLIC_SAMPLE ? 'VERIFIED' : 'NOT_ENOUGH_RATINGS';
   const { rows } = await client.query(

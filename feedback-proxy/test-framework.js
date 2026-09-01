@@ -775,8 +775,8 @@ check('REVIEW#10: a FAILED interaction retried with the same id re-arms and appl
 });
 
 check('REVIEW#11: concurrent rating submits build a complete snapshot (no undercount)', async () => {
-  // Two installs rate at the same moment; the advisory lock serializes the
-  // snapshot rebuilds so the stored aggregate includes both rows.
+  // Two installs rate at the same moment; the per-scope snapshot lock
+  // serializes rebuilds so the stored aggregate includes both rows.
   const p1 = (await req('POST', '/v1/principals',
     { product: 'WINDOWS', appVersion: '5.5.1' }, { 'x-forwarded-for': '10.2.0.1' })).json;
   const p2 = (await req('POST', '/v1/principals',
