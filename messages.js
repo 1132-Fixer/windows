@@ -293,7 +293,7 @@ const WIZARD = {
   WARNINGS_SUB:   'The fix finished with warnings. Open View details to read them.',
   FAIL_TITLE:     "Couldn't complete the fix",
   CONFIRM_TITLE:  'Before we start',
-  CONFIRM_BODY:   'This replaces the local user1 helper account and removes that account’s Zoom profile. Your main Windows account and personal Zoom data stay as they are. Windows may ask for administrator approval. Do not run this while signed in as user1.',
+  CONFIRM_BODY:   '1132 Fixer will replace its helper account and helper profile. Your signed-in Windows account and personal files will not be changed. Zoom will open in the fresh helper environment. You can cancel only at safe checkpoints.',
   CONFIRM_CONTINUE: 'Continue',
   CONFIRM_CANCEL: 'Go back',
   SHORTCUT_NOT_READY_TITLE: "Shortcut isn't ready yet",

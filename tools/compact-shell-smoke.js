@@ -37,6 +37,9 @@ check(shell.includes("document.getElementById('btnExplore')"), 'Explore node is 
 check(/body\.compact-shell-enabled #btnExplore/.test(shell) && /display:\s*none/.test(shell),
   'Explore is hidden from compact production chrome');
 check(!shell.includes("footerMeta.appendChild(exploreBtn)"), 'Explore is not placed in the compact footer');
+check(shell.includes("document.getElementById('projectDisclosure')") &&
+  shell.includes('compactFooter.appendChild(disclosure)'),
+  'exact independence disclosure is in the compact footer');
 check(!shell.includes("actionArea.appendChild(exploreBtn)"), 'Explore is not placed in the Fix now action area');
 check(!shell.includes("setCompactStatus('✓', 'Ready')"), 'ready state does not add a duplicate Ready pill');
 check(!/Everything looks good/.test(shell), 'shell never claims everything looks good');

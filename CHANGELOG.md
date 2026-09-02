@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - UAC relaunch no longer writes a temp `.ps1`. Smart App Control treats unknown script files as “part of this app”. The host exe is still unsigned, so SAC in enforcement still refuses to open it until a Trusted Root Program signature exists (publisher High Texas).
 
+### Changed
+
+- **Fix now** confirmation states that the helper account and helper profile are replaced, personal files are unchanged, Zoom opens in the fresh helper environment, and cancellation is only at safe checkpoints.
+- Compact footer shows the exact independence line `Independent project. Not affiliated with Zoom.` with version, Support, and Feedback. Explore stays hidden from landing chrome.
+
 ## [6.3.1] - 2026-09-01
 
 ### Fixed

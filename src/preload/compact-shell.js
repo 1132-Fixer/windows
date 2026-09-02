@@ -533,9 +533,8 @@ body[data-compact-state="cancelled"] .action-area {
 }
 .compact-footer button:hover { color: var(--compact-text) !important; background: rgba(168,181,199,0.07) !important; }
 
-/* Hide dashboard-oriented extras from the primary flow. Explore stays a
-   quiet footer text control so the product directory remains reachable
-   without competing with Fix now. */
+/* Hide dashboard-oriented extras from the primary flow. Explore is not
+   production landing chrome. */
 body.compact-shell-enabled #adminBadge {
   display: none !important;
 }
@@ -809,12 +808,13 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     const exitKeepBtn = exitOverlay.querySelector('.compact-exit-keep');
     const exitConfirmBtn = exitOverlay.querySelector('.compact-exit-confirm');
 
-    // Production footer: version, Support, Feedback only. Explore and the
-    // independence line stay in the app (About / Explore modal) but are not
-    // landing-page chrome.
+    // Production footer: version, independence disclosure, Support, Feedback.
+    // Explore is not landing chrome.
     const compactFooter = document.createElement('div');
     compactFooter.className = 'compact-footer';
     if (appVersion) compactFooter.appendChild(appVersion);
+    const disclosure = document.getElementById('projectDisclosure');
+    if (disclosure) compactFooter.appendChild(disclosure);
     const footerMeta = document.createElement('div');
     footerMeta.className = 'compact-footer-meta';
     const exploreBtn = document.getElementById('btnExplore');
