@@ -19,18 +19,21 @@ const COMPACT_CSS = String.raw`
    1132 Fixer compact shell
    Presentation-only override. Existing renderer IDs remain canonical.
    ================================================================ */
+/* Aliases onto the single :root token block in index.html. No hex here:
+   a colour change is made once, in index.html, and the shell follows. */
 :root {
-  --compact-bg: #0f1724;
-  --compact-surface: #172235;
-  --compact-border: #2b3d57;
-  --compact-text: #f5f7fb;
-  --compact-muted: #a8b5c7;
-  --compact-dim: #7f8da1;
-  --compact-accent: #337fdb;
-  --compact-accent-hover: #3b8ae8;
-  --compact-success: #2bc66d;
-  --compact-warning: #f3b84a;
-  --compact-danger: #f05d67;
+  --compact-bg: var(--bg);
+  --compact-surface: var(--panel);
+  --compact-surface-2: var(--panel-2);
+  --compact-border: var(--border);
+  --compact-text: var(--text);
+  --compact-muted: var(--muted);
+  --compact-dim: var(--dim);
+  --compact-accent: var(--accent);
+  --compact-accent-hover: var(--accent-2);
+  --compact-success: var(--success);
+  --compact-warning: var(--warning);
+  --compact-danger: var(--danger);
 }
 
 html, body {
@@ -419,7 +422,7 @@ body[data-compact-state="checking"] .compact-run-actions { display: none; }
   font-weight: 650;
   cursor: pointer;
 }
-.compact-run-actions .compact-cancel:hover { background: #1d2a3f; }
+.compact-run-actions .compact-cancel:hover { background: var(--compact-surface-2); }
 body[data-compact-state="ready"] .compact-cancel,
 body[data-compact-state="ready"] .compact-done,
 body[data-compact-state="blocked"] .compact-cancel,

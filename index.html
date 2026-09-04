@@ -7,53 +7,61 @@
   <style>
     [hidden] { display: none !important; }
     /* ============================================================
-       DESIGN TOKENS
-       STYLEGUIDE.md source of truth for color, spacing, radius, type.
+       DESIGN TOKENS — the single :root authority for colour, spacing,
+       radius and type. Values follow the operator acceptance spec of
+       2026-08-23 (§4–§9): exact navy tokens, three elevation layers
+       (app bg / surface / modal), no purple drift, restrained radii —
+       PILL is reserved for status chips. The recorded divergence from the
+       pinned design-system tokens is in DESIGN-SYNC.md. The compact shell
+       (src/preload/compact-shell.js) reads these and defines no hex of
+       its own.
        ============================================================ */
     :root {
       /* Surfaces */
-      --bg:            #18233A;
-      --bg-top:        #17243A;
-      --bg-bottom:     #203857;
-      --panel:         #1E2B46;
-      --panel-2:       #243453;
-      --panel-3:       rgba(15, 23, 39, 0.82);
-      --border:        rgba(255, 255, 255, 0.08);
-      --border-strong: rgba(58, 130, 247, 0.40);
+      --bg: #0F1724;              /* COLOR.APP_BG */
+      --bg-top: #0F1724;
+      --bg-bottom: #0F1724;
+      --panel: #172235;           /* COLOR.SURFACE_1 */
+      --panel-2: #1D2A3F;         /* COLOR.SURFACE_2 */
+      --panel-3: #1D2A3F;         /* (purple #2A2530 removed — one theme) */
+      --surface-hover: #243550;   /* COLOR.SURFACE_HOVER */
+      --surface-pressed: #293D5B; /* COLOR.SURFACE_PRESSED */
+      --border: #2B3D57;          /* COLOR.BORDER_SUBTLE */
+      --border-strong: #3B5578;   /* COLOR.BORDER_STRONG */
 
       /* Text */
-      --text:    #F4F7FB;
-      --muted:   #C6D0E1;
-      --dim:     #9CA8BD;
-      --disabled:#7E8597;
+      --text: #F5F7FB;
+      --muted: #A8B5C7;           /* COLOR.TEXT_SECONDARY */
+      --dim: #7F8DA1;             /* COLOR.TEXT_MUTED */
+      --disabled: #7F8DA1;
 
-      /* Status palette */
-      --success:    #39D353;
-      --success-bg: rgba(57, 211, 83, 0.12);
-      --success-bd: rgba(57, 211, 83, 0.32);
+      /* Interactive */
+      --accent: #337FDB;
+      --accent-2: #3B8AE8;        /* COLOR.ACCENT_HOVER */
+      --accent-pressed: #286BC2;
+      --accent-bg: rgba(51, 127, 219, 0.12);
+      --accent-bd: rgba(51, 127, 219, 0.40);
+      --focus: #71AFFF;
 
-      --warning:    #F2C94C;
-      --warning-bg: rgba(242, 201, 76, 0.12);
-      --warning-bd: rgba(242, 201, 76, 0.32);
-
-      --danger:     #F85149;
-      --danger-bg:  rgba(248, 81, 73, 0.14);
-      --danger-bd:  rgba(248, 81, 73, 0.32);
-
-      --accent:     #3A82F7;
-      --accent-2:   #4B93FF;
-      --accent-bg:  rgba(58, 130, 247, 0.12);
-      --accent-bd:  rgba(58, 130, 247, 0.40);
-
-      --info:       #8FC2FF;
-      --info-bg:    rgba(143, 194, 255, 0.10);
-      --info-bd:    rgba(143, 194, 255, 0.28);
+      /* Status palette — tints derive from the status colour beside them */
+      --success: #2BC66D;
+      --success-bg: rgba(43, 198, 109, 0.12);
+      --success-bd: rgba(43, 198, 109, 0.32);
+      --warning: #F3B84A;
+      --warning-bg: rgba(243, 184, 74, 0.12);
+      --warning-bd: rgba(243, 184, 74, 0.32);
+      --danger: #F05D67;
+      --danger-bg: rgba(240, 93, 103, 0.14);
+      --danger-bd: rgba(240, 93, 103, 0.32);
+      --info: #337FDB;
+      --info-bg: rgba(51, 127, 219, 0.10);
+      --info-bd: rgba(51, 127, 219, 0.28);
 
       /* Radii */
-      --r-sm:   8px;
-      --r-md:   12px;
-      --r-lg:   12px;
-      --r-pill: 999px;
+      --r-sm: 10px;               /* RADIUS.CONTROL */
+      --r-md: 14px;               /* RADIUS.CARD */
+      --r-lg: 18px;               /* RADIUS.MODAL */
+      --r-pill: 999px;            /* status chips only */
 
       /* Shadows */
       --shadow-sm: 0 6px 14px rgba(8, 12, 24, 0.12);
@@ -61,17 +69,17 @@
       --shadow-lg: 0 14px 28px rgba(8, 12, 24, 0.16);
 
       /* Spacing scale */
-      --s-1:  4px;
-      --s-2:  8px;
+      --s-1: 4px;
+      --s-2: 8px;
       --s-3: 12px;
       --s-4: 16px;
       --s-5: 20px;
-      --s-6: 32px;
-      --s-7: 40px;
-      --s-8: 48px;
+      --s-6: 24px;
+      --s-7: 32px;
+      --s-8: 40px;
 
-      /* Focus ring — visible against any surface */
-      --focus-ring: 0 0 0 2px rgba(24, 35, 58, 0.92), 0 0 0 4px var(--accent);
+      /* Focus ring — 2px ring on a 2px gap, visible against any surface */
+      --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -897,46 +905,7 @@
       letter-spacing: 0.2px;
     }
 
-    /* Design-system alignment (acceptance spec 2026-08-23 §4–§9): exact
-       navy tokens, three elevation layers (app bg / surface / modal), no
-       purple drift, restrained radii — PILL is reserved for status chips. */
-    :root {
-      --bg: #0F1724;              /* COLOR.APP_BG */
-      --bg-top: #0F1724;
-      --bg-bottom: #0F1724;
-      --panel: #172235;           /* COLOR.SURFACE_1 */
-      --panel-2: #1D2A3F;         /* COLOR.SURFACE_2 */
-      --panel-3: #1D2A3F;         /* (purple #2A2530 removed — one theme) */
-      --surface-hover: #243550;   /* COLOR.SURFACE_HOVER */
-      --surface-pressed: #293D5B; /* COLOR.SURFACE_PRESSED */
-      --border: #2B3D57;          /* COLOR.BORDER_SUBTLE */
-      --border-strong: #3B5578;   /* COLOR.BORDER_STRONG */
-      --text: #F5F7FB;
-      --muted: #A8B5C7;           /* COLOR.TEXT_SECONDARY */
-      --dim: #7F8DA1;             /* COLOR.TEXT_MUTED */
-      --disabled: #7F8DA1;
-      --accent: #337FDB;
-      --accent-2: #3B8AE8;        /* COLOR.ACCENT_HOVER */
-      --accent-pressed: #286BC2;
-      --focus: #71AFFF;
-      --success: #2BC66D;
-      --warning: #F3B84A;
-      --danger: #F05D67;
-      --info: #337FDB;
-      --r-sm: 10px;               /* RADIUS.CONTROL */
-      --r-md: 14px;               /* RADIUS.CARD */
-      --r-lg: 18px;               /* RADIUS.MODAL */
-      --r-pill: 999px;            /* status chips only */
-      --s-1: 4px;
-      --s-2: 8px;
-      --s-3: 12px;
-      --s-4: 16px;
-      --s-5: 20px;
-      --s-6: 24px;
-      --s-7: 32px;
-      --s-8: 40px;
-      --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
-    }
+    /* Compact panel chrome (acceptance spec 2026-08-23). Tokens above. */
     body { background: var(--bg); font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif; }
     body::before { display: none; }
     .titlebar {
