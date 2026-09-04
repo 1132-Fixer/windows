@@ -1,14 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
-const { installCompactShell } = require('./src/preload/compact-shell');
 
-// Install the presentation shell before renderer.js registers its own state
-// listeners. The renderer remains the source of repair/preflight truth; this
-// layer only rearranges/restyles the established DOM and requests cooperative
-// cancellation through the existing quit-app IPC when a fix is active.
-installCompactShell({
-  requestCancel: () => ipcRenderer.invoke('quit-app'),
-  requestQuit: () => ipcRenderer.invoke('quit-app')
-});
+// This preload runs sandboxed (src/main/electron-security.js): `require` here
+// resolves only Electron's shim modules, never a file in this repository.
+// The compact presentation shell therefore loads as a page script from
+// index.html (src/preload/compact-shell.js, before renderer.js). Requiring
+// it from here threw "module not found" and aborted the whole preload, so
+// no window.electronAPI existed and every packaged 6.2.0–6.3.1 start ended
+// on "Unable to complete".
 
 // Channels here must stay in lockstep with IPC_INVOKE_CHANNELS /
 // IPC_SEND_CHANNELS in src/main/electron-security.js. Main will not

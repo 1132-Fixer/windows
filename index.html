@@ -2065,6 +2065,9 @@
   <script src="messages.js"></script>
   <script src="run-verdict.js"></script>
   <script src="ui-state.js"></script>
+  <!-- Presentation shell: a page script (the sandboxed preload cannot require
+       it). Loaded before renderer.js so its DOMContentLoaded work runs first. -->
+  <script src="src/preload/compact-shell.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

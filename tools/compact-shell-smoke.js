@@ -63,12 +63,24 @@ check(!shell.includes("cancelBtn.addEventListener('click', () => exitBtn.click()
 check(shell.includes('Cancel fix and exit') && shell.includes('Keep running'), 'Exit-during-fix confirmation is present');
 check(shell.includes('Finishing the current step safely…'), 'cancelling state explains safe-boundary behavior');
 check(shell.includes('Fix cancelled') && shell.includes('Nothing else will be changed.'), 'cancelled terminal state is conclusive');
-check(preload.includes("requestCancel: () => ipcRenderer.invoke('quit-app')"), 'preload routes cancellation through the brokered IPC');
+check(/requestCancel: \(\) => \(api\(\) && api\(\)\.quitApp \? api\(\)\.quitApp\(\)/.test(shell) && preload.includes("quitApp: () => ipcRenderer.invoke('quit-app')"),
+  'shell routes cancellation through the brokered quit-app IPC exposed by preload');
 check(preload.includes("dataset.fixOutcome = 'running'"), 'preload exposes run outcome to the presentation shell');
 
 console.log('compact-shell-smoke: presentation remains version-agnostic');
 check(!/v5\.5\.1/.test(shell + preload), 'example version is not hardcoded');
 check(shell.includes("document.getElementById('appVersion')"), 'real app version node is reused');
+
+console.log('compact-shell-smoke: loads as a page script, never through the sandboxed preload');
+{
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const shellTag = html.indexOf('<script src="src/preload/compact-shell.js"></script>');
+  const rendererTag = html.indexOf('<script src="renderer.js"></script>');
+  check(shellTag > 0, 'index.html loads src/preload/compact-shell.js');
+  check(shellTag > 0 && rendererTag > shellTag, 'compact shell script precedes renderer.js');
+  check(!/require\(['"]\.\/src\/preload\/compact-shell['"]\)/.test(preload), 'preload.js does not require the compact shell');
+  check(/typeof module !== 'undefined'/.test(shell) && /installCompactShell\(\{/.test(shell), 'shell self-installs in the page and exports under Node');
+}
 
 if (failures) {
   console.error(`compact-shell-smoke: ${failures} failure(s)`);

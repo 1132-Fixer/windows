@@ -1117,7 +1117,24 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
   }
 }
 
-module.exports = {
-  installCompactShell,
-  compactStageView
-};
+// Two hosts:
+//  - Node (tests): export the API.
+//  - The renderer page: index.html loads this file as a classic script
+//    before renderer.js, so it installs itself here. It must NOT be
+//    required from preload.js — a sandboxed preload can only require the
+//    Electron shim modules, and `require('./src/preload/compact-shell')`
+//    threw "module not found", which aborted the whole preload and left the
+//    page without window.electronAPI (the packaged 6.2.0–6.3.1 startup
+//    failure, caught by tools/packaged-acceptance.js).
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    installCompactShell,
+    compactStageView
+  };
+} else if (typeof window !== 'undefined') {
+  const api = () => window.electronAPI;
+  installCompactShell({
+    requestCancel: () => (api() && api().quitApp ? api().quitApp() : Promise.resolve(null)),
+    requestQuit: () => (api() && api().quitApp ? api().quitApp() : Promise.resolve(null))
+  });
+}
