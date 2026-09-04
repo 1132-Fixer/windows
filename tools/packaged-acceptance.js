@@ -340,7 +340,8 @@ function finish() {
   const lines = ['# Packaged acceptance', '', `Executable: \`${report.exe}\``, `Run: ${report.startedAt} → ${report.finishedAt}`, '',
     `Passed ${counts.passed} · Failed ${counts.failed} · Not run ${counts['not-run']}`, '',
     '| Case | Result | Detail | Evidence |', '|---|---|---|---|'];
-  for (const c of report.cases) lines.push(`| ${c.id} | ${c.status} | ${String(c.detail).replace(/\|/g, '\\|')} | ${c.screenshot ? c.screenshot : ''} |`);
+  const cell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  for (const c of report.cases) lines.push(`| ${c.id} | ${c.status} | ${cell(c.detail)} | ${c.screenshot ? c.screenshot : ''} |`);
   fs.writeFileSync(path.join(OUT, 'report.md'), lines.join('\n') + '\n');
   console.log(`packaged-acceptance: passed=${counts.passed} failed=${counts.failed} not-run=${counts['not-run']} → ${OUT}`);
   process.exit(counts.failed ? 1 : 0);

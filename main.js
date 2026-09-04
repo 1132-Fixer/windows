@@ -2299,11 +2299,19 @@ async function runFixFlow(event) {
 
       const iconForShortcut = getIconPath();
       const esc = s => String(s).replace(/'/g, "''");
+      // firstRunDst is built from the helper profile path plus a fixed file
+      // name. A double quote or line break can never be part of a Windows
+      // path, so the value is validated rather than escaped: the shortcut's
+      // argument string is a PowerShell single-quoted literal that must
+      // carry the path inside literal double quotes unchanged.
+      if (/["\r\n]/.test(firstRunDst)) {
+        throw new Error('first-run script path contains characters that cannot be placed in a shortcut argument');
+      }
       const shortcutPs = `
         $ws = New-Object -ComObject WScript.Shell
         $lnk = $ws.CreateShortcut('${esc(shortcutPath)}')
         $lnk.TargetPath = 'powershell.exe'
-        $lnk.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "${firstRunDst.replace(/"/g, '\\"')}"'
+        $lnk.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "${firstRunDst}"'
         $lnk.WorkingDirectory = '${esc(path.join(newUserProfile, 'Documents'))}'
         $lnk.IconLocation = '${esc(iconForShortcut)},0'
         $lnk.Description = 'Apply standard Zoom UI settings - run after signing into Zoom'
