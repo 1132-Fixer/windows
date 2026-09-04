@@ -76,29 +76,24 @@ check(/\.app-mark\s*\{[\s\S]*?left:\s*50%;[\s\S]*?transform:\s*translate\(-50%,\
 check(!/header[\s\S]{0,800}1132-helper-shortcut/.test(html),
   'index.html header block does not reference the helper icon');
 
-console.log('brand-placement-smoke: compact shell keeps the mark in the stable header');
-check(/body\.compact-shell-enabled #btnExplore/.test(shell),
-  'compact shell hides Explore from production chrome');
-check(!shell.includes("footerMeta.appendChild(exploreBtn)"),
-  'Explore is not a compact-footer control');
+console.log('brand-placement-smoke: the mark lives in the static app header');
+check(!shell.includes('btnExplore') && !html.includes('class="footer"'),
+  'Explore is not footer chrome (it lives only in the About dialog)');
+const explorePos = html.indexOf('id="btnExplore"');
+check(explorePos > html.indexOf('id="aboutOverlay"') && explorePos < html.indexOf('id="fixConfirmOverlay"'),
+  'Explore control is inside the About dialog');
 check(shell.includes("appMark.src = 'assets/brand/app-mark.png'"),
   'compact shell locks the header mark to app-mark.png');
-check(shell.includes('topbar.appendChild(appMark)'),
-  'compact shell places the mark inside compact-topbar');
-check(!shell.includes('compact-brand-slot'),
-  'compact shell does not move the mark into a state-owned brand slot');
-check(shell.includes('left: 50%') && shell.includes('transform: translate(-50%, -50%)'),
-  'compact header mark is horizontally window-centered');
-check(/\.compact-topbar \.app-mark \{[\s\S]*?width: 44px;[\s\S]*?height: 44px;[\s\S]*?object-fit: contain;/.test(shell),
-  'compact header mark is 44px with object-fit contain');
-check(shell.includes('appMark.hidden = false'),
-  'compact shell never hides the product mark by state');
-check(!/data-compact-state="success"[\s\S]{0,80}app-mark/.test(shell),
-  'success state does not restyle or hide the product mark');
-for (const state of ['checking', 'ready', 'fixing', 'cancelling', 'success', 'error', 'cancelled', 'blocked']) {
-  check(!new RegExp('data-compact-state="' + state + '"[^}]*\\.app-mark[^}]*display:\\s*none').test(shell),
-    `state ${state} does not hide .app-mark`);
-}
+check(/<header class="app-header"[\s\S]*?<img class="app-mark" src="assets\/brand\/app-mark\.png" alt="1132 Fixer">[\s\S]*?<\/header>/.test(html),
+  'index.html places the mark inside the static app header');
+check(!shell.includes('compact-brand-slot') && !shell.includes('topbar'),
+  'compact shell builds no header and moves the mark nowhere');
+check(/\.app-mark\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?left:\s*50%;[\s\S]*?transform:\s*translate\(-50%,\s*-50%\);/.test(html),
+  'header mark is horizontally window-centered against the full width');
+check(!/app-mark[^}]*display:\s*none/.test(shell) && !/data-compact-state="[a-z]+"[^}]*\.app-mark/.test(shell),
+  'no state restyles or hides the product mark');
+check(/grid-template-columns:\s*1fr auto 1fr/.test(html),
+  'header sides are symmetric so Back and Exit cannot shift the mark');
 
 console.log('brand-placement-smoke: helper icon stays on the helper shortcut');
 check(html.includes(`src="${HELPER_PNG}"`) && html.includes('id="shortcutBtn"'),
@@ -145,8 +140,8 @@ check(!/\bzoom[-_.]?(logo|icon|mark)\b/i.test(html + shell),
 console.log('brand-placement-smoke: exactly one header product mark in compact shell');
 check((html.match(/class="app-mark"/g) || []).length === 1,
   'index.html defines a single .app-mark element');
-check((shell.match(/topbar\.appendChild\(appMark\)/g) || []).length === 1,
-  'compact shell appends that single mark to the topbar once');
+check((html.match(/<img class="app-mark"/g) || []).length === 1 && !shell.includes('appendChild(appMark)'),
+  'the single mark is static markup; the shell never appends a second one');
 
 if (failures) {
   console.error(`brand-placement-smoke: ${failures} failure(s)`);

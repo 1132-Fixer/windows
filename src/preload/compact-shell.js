@@ -1,602 +1,100 @@
 'use strict';
 
 /**
- * Compact four-state presentation shell for 1132 Fixer.
+ * Compact presentation shell for 1132 Fixer.
  *
- * This module deliberately does not own repair/preflight state. The existing
+ * This module deliberately does not own repair/preflight state. The
  * renderer remains the source of truth and continues to drive the same DOM
- * nodes and IPC calls. We only reshape those nodes into the compact consumer
- * flow requested for the Windows app:
+ * nodes and IPC calls. The shell:
  *
- *   Checking -> Ready -> Fixing/Cancelling -> Complete
+ *   - derives the compact state (checking → ready/blocked → fixing/
+ *     cancelling → success/error/notice/cancelled) from what the renderer
+ *     painted and publishes it on <body data-compact-state>;
+ *   - applies the per-state copy for the consumer flow;
+ *   - owns the two controls the renderer's outcome table does not know:
+ *     cooperative Cancel fix and the exit confirmation while a fix runs;
+ *   - applies the screen action gate (screen-actions.js) after every
+ *     renderer change, so a control from another screen is never visible.
  *
- * Diagnostics, recovery guidance, feedback, updater notices, and error paths
- * remain available; they are simply subordinate to the main flow.
+ * The header, footer and action area are static markup in index.html; the
+ * shell moves no nodes and hides nothing with CSS that the gate should
+ * own. Details is a renderer-owned view (renderer.js openDetails) and only
+ * reports itself here through <body data-view="details">.
  */
 
 const COMPACT_CSS = String.raw`
 /* ================================================================
-   1132 Fixer compact shell
-   Presentation-only override. Existing renderer IDs remain canonical.
+   1132 Fixer compact shell — state-specific presentation only.
+   Every colour is a :root token from index.html; no hex here.
    ================================================================ */
-/* Aliases onto the single :root token block in index.html. No hex here:
-   a colour change is made once, in index.html, and the shell follows. */
-:root {
-  --compact-bg: var(--bg);
-  --compact-surface: var(--panel);
-  --compact-surface-2: var(--panel-2);
-  --compact-border: var(--border);
-  --compact-text: var(--text);
-  --compact-muted: var(--muted);
-  --compact-dim: var(--dim);
-  --compact-accent: var(--accent);
-  --compact-accent-hover: var(--accent-2);
-  --compact-success: var(--success);
-  --compact-warning: var(--warning);
-  --compact-danger: var(--danger);
-}
 
-html, body {
-  width: 100%;
-  height: 100%;
-  background: var(--compact-bg) !important;
-}
-
-body.compact-shell-enabled {
-  min-width: 0;
-  min-height: 0;
-  color: var(--compact-text);
-  overflow: hidden;
-}
-
-/* Retire the dashboard-like chrome. The compact top row is the stable
-   outer shell: window-centered product mark, status, and Exit. */
-body.compact-shell-enabled > .titlebar,
-body.compact-shell-enabled > .header,
-body.compact-shell-enabled > .footer {
-  display: none !important;
-}
-body.compact-shell-enabled #btnExplore,
-body.compact-shell-enabled #adminBadge,
-body.compact-shell-enabled #statusBadge {
-  display: none !important;
-}
-
-.compact-topbar {
-  height: 64px;
-  flex: 0 0 64px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 0 24px;
-  border-bottom: 1px solid transparent;
-  -webkit-app-region: drag;
-  position: relative;
-  z-index: 20;
-}
-
-.compact-topbar[hidden] { display: none !important; }
-
-/* Canonical product mark: assets/brand/app-mark.png. Centered on the
-   full window width so status/Exit never shift it. Same size and
-   coordinates in every wizard state. */
-.compact-topbar .app-mark {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 44px;
-  height: 44px;
-  object-fit: contain;
-  pointer-events: none;
-  display: block;
-}
-
-.compact-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 32px;
-  font-size: 12px;
-  line-height: 16px;
-  font-weight: 650;
-  color: var(--compact-muted);
-  letter-spacing: 0.01em;
-}
-
-.compact-status-icon {
-  width: 16px;
-  text-align: center;
-  color: var(--compact-muted);
-  font-size: 13px;
-  line-height: 16px;
-}
-
-body[data-compact-state="ready"] .compact-status-icon { color: var(--compact-success); }
-body[data-compact-state="fixing"] .compact-status-icon,
-body[data-compact-state="cancelling"] .compact-status-icon { color: var(--compact-accent); }
-body[data-compact-state="blocked"] .compact-status-icon,
-body[data-compact-state="notice"] .compact-status-icon { color: var(--compact-warning); }
-body[data-compact-state="error"] .compact-status-icon { color: var(--compact-danger); }
-body[data-compact-state="cancelled"] .compact-status-icon { color: var(--compact-muted); }
-
-.compact-topbar .compact-exit {
-  width: auto !important;
-  height: 36px !important;
-  min-width: 48px;
-  padding: 0 8px !important;
-  border: 0 !important;
-  border-radius: 8px !important;
-  background: transparent !important;
-  color: var(--compact-muted) !important;
-  font: inherit;
-  font-size: 12px !important;
-  font-weight: 600 !important;
-  cursor: pointer;
-  -webkit-app-region: no-drag;
-}
-.compact-topbar .compact-exit:hover {
-  background: rgba(168,181,199,0.08) !important;
-  color: var(--compact-text) !important;
-}
-
-/* Keep update information functional without letting it become a second
-   dashboard. It only appears when the updater explicitly makes it visible. */
-body.compact-shell-enabled > .update-banner {
-  position: absolute;
-  top: 64px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(560px, calc(100% - 48px));
-  margin: 0 !important;
-  padding: 10px 12px !important;
-  border-radius: 10px !important;
-  z-index: 100;
-  box-shadow: 0 12px 28px rgba(0,0,0,0.2);
-}
-
-body.compact-shell-enabled > .main {
-  flex: 1 1 auto;
-  min-height: 0;
-  width: 100%;
-  padding: 0 24px 18px !important;
-  gap: 0 !important;
-  overflow: hidden !important;
-  display: flex !important;
-  justify-content: center;
-}
-
-body[data-compact-state="checking"] > .main,
-body[data-compact-state="success"] > .main {
-  padding-top: 20px !important;
-}
-
-body.compact-shell-enabled .workspace {
-  width: min(560px, 100%);
-  min-width: 0;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0 !important;
-  overflow: hidden;
-}
-
-body.compact-shell-enabled .wizard {
-  flex: 0 0 auto !important;
-  width: 100% !important;
-  max-width: 520px;
-  min-height: 0 !important;
-  padding: 0 !important;
-  margin: 0 !important;
-  background: transparent !important;
-  border: 0 !important;
-  box-shadow: none !important;
-}
-
-body.compact-shell-enabled .wiz-pane {
-  width: 100%;
-  min-height: 0 !important;
-  padding: 0 !important;
-  align-items: center !important;
-  justify-content: flex-start !important;
-  text-align: center !important;
-}
-
-body.compact-shell-enabled .wiz-title {
-  margin: 0;
-  color: var(--compact-text);
-  font-size: 24px !important;
-  line-height: 31px !important;
-  font-weight: 650 !important;
-  letter-spacing: -0.015em;
-}
-
-body.compact-shell-enabled .wiz-sub {
-  margin-top: 12px !important;
-  max-width: 410px;
-  color: var(--compact-muted) !important;
-  font-size: 14px !important;
-  line-height: 21px !important;
-  white-space: pre-line;
-}
-
-/* CHECKING ------------------------------------------------------- */
-body.compact-shell-enabled #wizChecking .wiz-checks,
-body.compact-shell-enabled #wizChecking .wiz-hint {
-  display: none !important;
-}
-
+/* CHECKING: title, one line, spinner. The grouped check rows stay in the
+   DOM for assistive technology (the pane is a status region) but the
+   consumer view is the sentence plus spinner. */
+body.compact-shell-enabled #wizChecking .wiz-checks { display: none; }
 .compact-check-sub {
-  margin: 12px 0 0;
-  color: var(--compact-muted);
+  margin: var(--s-2) 0 0;
+  color: var(--muted);
   font-size: 14px;
-  line-height: 21px;
+  line-height: 20px;
   text-align: center;
 }
-
 .compact-spinner {
   width: 28px;
   height: 28px;
-  margin-top: 30px;
-  border: 2px solid rgba(168,181,199,0.28);
-  border-top-color: var(--compact-accent);
+  margin-top: var(--s-6);
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: compact-spin 900ms linear infinite;
 }
 @keyframes compact-spin { to { transform: rotate(360deg); } }
 
-/* RESULT / READY ------------------------------------------------- */
-body[data-compact-state="ready"] #wizResultGlyph {
-  display: none !important;
-}
+/* READY: no glyph above the title; the copy carries the state. */
+body[data-compact-state="ready"] #wizResultGlyph,
 body[data-compact-state="ready"] #zoomRecovery,
-body[data-compact-state="ready"] #fixDisabledNote {
-  display: none !important;
-}
+body[data-compact-state="ready"] #fixDisabledNote { display: none; }
 
-/* The option reads as a quiet one-line choice instead of a settings card. */
-body[data-compact-state="ready"] #shortcutOpt {
-  margin-top: 2px;
-  padding: 0 !important;
-  min-height: 32px;
-  align-items: center;
-  gap: 8px !important;
-  color: var(--compact-muted);
-}
-body[data-compact-state="ready"] #shortcutOpt input {
-  width: 14px !important;
-  height: 14px !important;
-  margin: 0 !important;
-}
-body[data-compact-state="ready"] #shortcutOpt .shortcut-opt-title {
-  font-size: 13px !important;
-  line-height: 18px !important;
-  font-weight: 550 !important;
-  color: var(--compact-muted) !important;
-}
-body[data-compact-state="ready"] #shortcutOpt .shortcut-opt-sub {
-  display: none !important;
-}
-
-/* FIXING --------------------------------------------------------- */
-/* The renderer's five-stage tracker IS the progress display: it is driven
-   by the real orchestrator (prep → helper environment → camera/mic →
-   launch → verification), each row done ✓ / active / pending with a
-   connector. No decorative bar. */
-body.compact-shell-enabled #wizFixing > .wiz-step-line,
-body.compact-shell-enabled #wizFixing > .wiz-hint {
-  display: none !important;
-}
+/* FIXING: the renderer's five-stage tracker IS the progress display; it
+   is driven by the real orchestrator. One detail line and a "Step n of 5"
+   progressbar sit under it. */
+body.compact-shell-enabled #wizFixing > .wiz-step-line { display: none; }
 body.compact-shell-enabled #wizFixing .stage-tracker {
-  width: min(420px, 100%);
-  margin: 16px auto 0;
+  width: min(360px, 100%);
+  margin: var(--s-4) auto 0;
   text-align: left;
 }
-
 .compact-fix-detail {
-  margin-top: 12px;
-  min-height: 21px;
-  color: var(--compact-muted);
+  margin-top: var(--s-3);
+  min-height: 20px;
+  color: var(--muted);
   font-size: 14px;
-  line-height: 21px;
+  line-height: 20px;
 }
 .compact-step-line {
-  margin-top: 16px;
-  color: var(--compact-muted);
+  margin-top: var(--s-2);
+  color: var(--muted);
   font-size: 13px;
   line-height: 18px;
   font-weight: 600;
 }
 
-/* SUCCESS -------------------------------------------------------- */
-body[data-compact-state="success"] #wizNoticeGlyph {
-  display: block !important;
-  width: auto !important;
-  height: auto !important;
-  margin: 0 0 18px !important;
-  color: var(--compact-success) !important;
-}
-body[data-compact-state="success"] #wizNoticeGlyph svg {
-  width: 34px !important;
-  height: 34px !important;
-}
-
-/* ACTIONS -------------------------------------------------------- */
-body.compact-shell-enabled .action-area {
-  flex: 0 0 auto !important;
-  width: 100% !important;
-  max-width: 520px;
-  margin: 26px 0 0 !important;
-  padding: 0 !important;
-  gap: 10px !important;
-}
-
-body.compact-shell-enabled .action-area .button-container {
-  width: 100%;
-}
-
-body.compact-shell-enabled .action-area .btn,
-body.compact-shell-enabled .action-area .btn-primary {
-  width: min(300px, 100%) !important;
-  flex: 0 1 300px !important;
-  min-height: 46px !important;
-  padding: 11px 18px !important;
-  border-radius: 10px !important;
-  border: 1px solid var(--compact-border) !important;
-  background: var(--compact-surface) !important;
-  color: var(--compact-text) !important;
-  font-size: 14px !important;
-  line-height: 20px !important;
-  font-weight: 650 !important;
-  box-shadow: none !important;
-  transform: none !important;
-}
-body.compact-shell-enabled .action-area .btn-primary,
-body.compact-shell-enabled #fixBtn:not(.btn-quiet),
-body.compact-shell-enabled #launchBtn {
-  background: var(--compact-accent) !important;
-  border-color: var(--compact-accent) !important;
-  color: #fff !important;
-}
-body.compact-shell-enabled .action-area .btn-primary:hover:not(:disabled),
-body.compact-shell-enabled #fixBtn:not(.btn-quiet):hover:not(:disabled),
-body.compact-shell-enabled #launchBtn:hover:not(:disabled) {
-  background: var(--compact-accent-hover) !important;
-  border-color: var(--compact-accent-hover) !important;
-}
-/* Keyboard focus: the shared --focus-ring (2px ring on a 2px gap). The
-   box-shadow:none above resets the legacy glow; this must win for
-   :focus-visible so Fix now / Open Zoom show a ring like every other control. */
-body.compact-shell-enabled .action-area .btn:focus-visible,
-body.compact-shell-enabled .action-area .btn-primary:focus-visible,
-body.compact-shell-enabled #fixBtn:focus-visible,
-body.compact-shell-enabled #launchBtn:focus-visible,
-body.compact-shell-enabled .compact-footer button:focus-visible,
-body.compact-shell-enabled .compact-exit:focus-visible {
-  outline: none !important;
-  box-shadow: var(--focus-ring) !important;
-}
-
-body.compact-shell-enabled .secondary-row {
-  margin-top: 0 !important;
-  gap: 18px !important;
-}
-body.compact-shell-enabled .btn-quiet,
-.compact-text-action {
-  min-height: 34px !important;
-  padding: 5px 8px !important;
-  border: 0 !important;
-  border-radius: 8px !important;
-  background: transparent !important;
-  color: var(--compact-muted) !important;
-  font: inherit;
-  font-size: 13px !important;
-  line-height: 18px !important;
-  font-weight: 600 !important;
-  cursor: pointer;
-}
-body.compact-shell-enabled .btn-quiet:hover:not(:disabled),
-.compact-text-action:hover:not(:disabled) {
-  background: rgba(168,181,199,0.07) !important;
-  color: var(--compact-text) !important;
-}
-
-.compact-run-actions {
-  width: 100%;
-  max-width: 520px;
-  display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  margin-top: 26px;
-}
-body[data-compact-state="checking"] .compact-run-actions { display: none; }
-.compact-run-actions .compact-cancel {
-  min-width: 180px;
-  min-height: 44px;
-  padding: 10px 18px;
-  border-radius: 10px;
-  border: 1px solid var(--compact-border);
-  background: var(--compact-surface);
-  color: var(--compact-text);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 650;
-  cursor: pointer;
-}
-.compact-run-actions .compact-cancel:hover { background: var(--compact-surface-2); }
-body[data-compact-state="ready"] .compact-cancel,
-body[data-compact-state="ready"] .compact-done,
-body[data-compact-state="blocked"] .compact-cancel,
-body[data-compact-state="blocked"] .compact-done,
-body[data-compact-state="notice"] .compact-cancel,
-body[data-compact-state="notice"] .compact-done,
-body[data-compact-state="error"] .compact-cancel,
-body[data-compact-state="error"] .compact-done,
-body[data-compact-state="cancelled"] .compact-cancel,
-body[data-compact-state="cancelled"] .compact-done,
-body[data-compact-state="success"] .compact-cancel { display: none; }
-body[data-compact-state="fixing"] .compact-done,
-body[data-compact-state="cancelling"] .compact-done { display: none; }
-body[data-compact-state="cancelling"] .compact-cancel {
-  opacity: 0.72;
-  cursor: default;
-}
-.compact-run-actions .compact-done {
-  min-height: 34px;
-}
-
-/* Details open as a dialog so they cannot grow the wizard or add nested
-   page scroll. The landing page stays a single no-scroll column. */
-body.compact-shell-enabled .adv-region {
-  flex: 0 0 auto !important;
-  width: 100% !important;
-  max-width: 520px;
-  margin: 0 !important;
-  gap: 0 !important;
-  overflow: visible;
-  min-height: 0;
-}
-body.compact-shell-enabled .adv-region .log-actions { margin: 0 !important; }
-body.compact-shell-enabled .adv-panel.hidden { display: none !important; }
-body.compact-shell-enabled .adv-panel:not(.hidden) {
-  position: fixed !important;
-  inset: 64px 24px 72px !important;
-  z-index: 80;
-  max-height: none !important;
-  width: auto !important;
-  padding: 16px !important;
-  overflow-y: auto !important;
-  border: 1px solid var(--compact-border);
-  border-radius: 14px;
-  background: var(--compact-surface);
-  box-shadow: 0 18px 52px rgba(0,0,0,0.32);
-}
-body.compact-shell-enabled .wiz-pane.active {
-  max-height: none !important;
-  overflow: hidden !important;
-}
-body.compact-shell-enabled .workspace {
-  padding-bottom: 0 !important;
-  justify-content: center;
-}
-.compact-status:empty,
-.compact-status:has(.compact-status-text:empty) { display: none; }
-
-/* The compact shell owns the visible View details control location. */
-body[data-compact-state="fixing"] .action-area,
-body[data-compact-state="cancelling"] .action-area,
-body[data-compact-state="success"] .action-area,
-body[data-compact-state="cancelled"] .action-area {
-  margin-top: 24px !important;
-}
-
-/* Footer appears only on the ready/result screen. */
-/* One quiet row: version · full independence line · Support/Feedback/About.
-   The "Open Source" label is hidden here (it stays in About) so the
-   disclosure fits untruncated at 520 px; a second row would fall below the
-   fixed-height window. */
-.compact-footer {
-  flex: 0 0 48px;
-  width: min(560px, 100%);
-  min-height: 48px;
-  margin-top: auto;
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 0 2px;
-  color: var(--compact-dim);
-  font-size: 12px;
-}
-.compact-footer[hidden] { display: none !important; }
-.compact-footer-meta {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-  flex-wrap: nowrap;
-  gap: 4px;
-}
-.compact-footer .badge,
-.compact-footer button {
-  min-height: 32px !important;
-  padding: 5px 6px !important;
-  border: 0 !important;
-  border-radius: 8px !important;
-  background: transparent !important;
-  color: var(--compact-dim) !important;
-  font: inherit;
-  font-size: 12px !important;
-  line-height: 16px !important;
-  font-weight: 600 !important;
-  cursor: pointer;
-}
-.compact-footer #appVersion {
-  display: inline-flex;
-  align-items: center;
-  min-height: 32px;
-  padding: 5px 0 !important;
-  color: var(--compact-dim) !important;
-  background: transparent !important;
-  border: 0 !important;
-}
-.compact-footer button:hover { color: var(--compact-text) !important; background: rgba(168,181,199,0.07) !important; }
-
-/* Hide dashboard-oriented extras from the primary flow. Explore is not
-   production landing chrome. */
-body.compact-shell-enabled #adminBadge {
-  display: none !important;
-}
-body.compact-shell-enabled #projectDisclosure {
-  display: flex !important;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  margin: 0 auto;
-  min-width: max-content;
-  flex: 0 0 auto;
-  overflow: visible;
-  color: var(--compact-dim);
-  font-size: 12px;
-  line-height: 16px;
-  font-weight: 500;
-  pointer-events: none;
-}
-body.compact-shell-enabled #projectDisclosure span {
-  min-width: 0;
-  overflow: visible;
-  text-overflow: clip;
-  white-space: nowrap;
-}
-body.compact-shell-enabled #projectDisclosure .os-icon,
-body.compact-shell-enabled #projectDisclosure .os-label,
-body.compact-shell-enabled #projectDisclosure .os-sep {
-  display: none !important;
-}
-body.compact-shell-enabled #projectDisclosure .os-icon {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
-}
-
-/* Blocked/recovery and error states remain truthful rather than being forced
-   into the happy-path mockup. Tighten them to the same centered shell. */
-body[data-compact-state="blocked"] #wizResultGlyph,
+/* SUCCESS / notices keep the renderer glyph, tightened. */
+body[data-compact-state="success"] #wizNoticeGlyph,
 body[data-compact-state="notice"] #wizNoticeGlyph,
-body[data-compact-state="error"] #wizNoticeGlyph {
-  margin-bottom: 14px !important;
-}
+body[data-compact-state="error"] #wizNoticeGlyph,
+body[data-compact-state="cancelled"] #wizNoticeGlyph,
+body[data-compact-state="blocked"] #wizResultGlyph { margin-bottom: var(--s-3); }
+body[data-compact-state="success"] #wizNoticeGlyph { color: var(--success); }
+
+/* BLOCKED: the Zoom recovery card is the one genuinely long surface; it
+   scrolls inside the pane rather than growing the window. */
 body[data-compact-state="blocked"] .zoom-recovery {
   max-height: 260px;
   overflow-y: auto;
-  margin-top: 18px !important;
+  margin-top: var(--s-4);
 }
-
-
+body[data-compact-state="cancelling"] #cancelFixBtn { opacity: 0.72; }
 
 /* Exit while a fix is running is an explicit choice, never an implicit abort. */
 .compact-exit-overlay {
@@ -605,68 +103,41 @@ body[data-compact-state="blocked"] .zoom-recovery {
   z-index: 10000;
   display: grid;
   place-items: center;
-  padding: 24px;
-  background: rgba(7, 12, 21, 0.72);
-  backdrop-filter: blur(4px);
+  padding: var(--s-6);
+  background: rgba(15, 23, 36, 0.72);
   -webkit-app-region: no-drag;
 }
-.compact-exit-overlay[hidden] { display: none !important; }
+.compact-exit-overlay[hidden] { display: none; }
 .compact-exit-dialog {
   width: min(390px, 100%);
-  padding: 24px;
-  border: 1px solid var(--compact-border);
-  border-radius: 14px;
-  background: var(--compact-surface);
-  box-shadow: 0 18px 52px rgba(0,0,0,0.32);
+  padding: var(--s-6);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-lg);
   text-align: left;
 }
-.compact-exit-dialog h2 {
-  margin: 0;
-  font-size: 18px;
-  line-height: 24px;
-  font-weight: 650;
-}
-.compact-exit-dialog p {
-  margin: 8px 0 20px;
-  color: var(--compact-muted);
-  font-size: 13px;
-  line-height: 19px;
-}
-.compact-exit-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
+.compact-exit-dialog h2 { margin: 0; font-size: 18px; line-height: 24px; font-weight: 700; }
+.compact-exit-dialog p { margin: var(--s-2) 0 var(--s-5); color: var(--muted); font-size: 13px; line-height: 18px; }
+.compact-exit-dialog-actions { display: flex; justify-content: flex-end; gap: var(--s-2); }
 .compact-exit-dialog button {
   min-height: 40px;
-  padding: 9px 14px;
-  border-radius: 9px;
-  border: 1px solid var(--compact-border);
+  padding: 0 var(--s-4);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
   background: transparent;
-  color: var(--compact-text);
+  color: var(--text);
   font: inherit;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
   cursor: pointer;
 }
-.compact-exit-dialog .compact-exit-confirm {
-  background: var(--compact-danger);
-  border-color: var(--compact-danger);
-  color: #fff;
-}
-
-@media (max-width: 720px), (max-height: 650px) {
-  .compact-topbar { height: 64px; flex-basis: 64px; padding: 0 18px; }
-  .compact-topbar .app-mark { width: 44px; height: 44px; }
-  body.compact-shell-enabled > .main { padding-left: 18px !important; padding-right: 18px !important; }
-  body.compact-shell-enabled .wiz-title { font-size: 22px !important; line-height: 28px !important; }
-  body.compact-shell-enabled .action-area, .compact-run-actions { margin-top: 20px !important; }
-  .compact-footer { min-height: 42px; flex-basis: 42px; }
-  body.compact-shell-enabled .adv-panel { max-height: 150px !important; }
-}
+.compact-exit-dialog button:hover { background: var(--panel-2); }
+.compact-exit-dialog button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.compact-exit-dialog .compact-exit-confirm { background: var(--danger); border-color: var(--danger); color: #fff; }
 
 @media (prefers-reduced-motion: reduce) {
-  .compact-spinner { animation: none; border-top-color: rgba(168,181,199,0.28); }
+  .compact-spinner { animation: none; border-top-color: var(--border-strong); }
 }
 `;
 
@@ -685,75 +156,50 @@ function compactStageView(stage) {
   return FIX_STAGE_VIEW[stage] || FIX_STAGE_VIEW.prep;
 }
 
-function installCompactShell({ requestCancel, requestQuit } = {}) {
+function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  const applyGate = typeof gate === 'function'
+    ? gate
+    : (typeof applyScreenControls === 'function' ? applyScreenControls : () => []);
 
   const start = () => {
     try { console.log('[compact-shell] start readyState=' + document.readyState); } catch (_) {}
     const wizard = document.getElementById('wizardCard');
-    const workspace = document.querySelector('.workspace');
     const appMark = document.querySelector('.app-mark');
-    const originalExitBtn = document.getElementById('btnExit');
+    const exitBtn = document.getElementById('btnExit');
     const statusBadge = document.getElementById('statusBadge');
     const fixBtn = document.getElementById('fixBtn');
     const launchBtn = document.getElementById('launchBtn');
     const shortcutBtn = document.getElementById('shortcutBtn');
     const shortcutOpt = document.getElementById('shortcutOpt');
-    const shortcutOptTitle = shortcutOpt && shortcutOpt.querySelector('.shortcut-opt-title');
     const rescanBtn = document.getElementById('rescanBtn');
     const detailsBtn = document.getElementById('detailsBtn');
     const supportBtn = document.getElementById('supportBtn');
+    const cancelBtn = document.getElementById('cancelFixBtn');
+    const doneBtn = document.getElementById('doneBtn');
     const actionArea = document.querySelector('.action-area');
-    const advRegion = document.querySelector('.adv-region');
-    const appVersion = document.getElementById('appVersion');
-    const feedbackBtn = document.getElementById('btnSupport');
 
-    if (!wizard || !workspace || !appMark || !originalExitBtn || !statusBadge ||
-        !fixBtn || !launchBtn || !detailsBtn || !actionArea || !advRegion) {
+    if (!wizard || !appMark || !exitBtn || !statusBadge || !fixBtn || !launchBtn ||
+        !detailsBtn || !actionArea || !cancelBtn || !doneBtn) {
       console.warn('[compact-shell] missing required nodes', {
-        wizard: !!wizard, workspace: !!workspace, appMark: !!appMark,
-        originalExitBtn: !!originalExitBtn, statusBadge: !!statusBadge,
+        wizard: !!wizard, appMark: !!appMark, exitBtn: !!exitBtn, statusBadge: !!statusBadge,
         fixBtn: !!fixBtn, launchBtn: !!launchBtn, detailsBtn: !!detailsBtn,
-        actionArea: !!actionArea, advRegion: !!advRegion
+        actionArea: !!actionArea, cancelBtn: !!cancelBtn, doneBtn: !!doneBtn
       });
       document.body.classList.add('compact-shell-enabled');
       return;
     }
 
     document.body.classList.add('compact-shell-enabled');
-    detailsBtn.textContent = 'View details';
-    if (shortcutOptTitle) shortcutOptTitle.textContent = 'Create desktop shortcut';
+    appMark.src = 'assets/brand/app-mark.png';
+    appMark.alt = '1132 Fixer';
 
     const style = document.createElement('style');
     style.id = 'compactShellStyles';
     style.textContent = COMPACT_CSS;
     document.head.appendChild(style);
 
-    // Stable header: window-centered canonical gear, status + Exit on the right.
-    const topbar = document.createElement('div');
-    topbar.className = 'compact-topbar';
-    topbar.setAttribute('aria-label', '1132 Fixer');
-    const compactStatus = document.createElement('div');
-    compactStatus.className = 'compact-status';
-    compactStatus.setAttribute('role', 'status');
-    compactStatus.setAttribute('aria-live', 'polite');
-    compactStatus.innerHTML = '<span class="compact-status-icon" aria-hidden="true"></span><span class="compact-status-text"></span>';
-    topbar.appendChild(compactStatus);
-    appMark.src = 'assets/brand/app-mark.png';
-    appMark.alt = '1132 Fixer';
-    appMark.width = 44;
-    appMark.height = 44;
-    topbar.appendChild(appMark);
-    const compactExitBtn = document.createElement('button');
-    compactExitBtn.type = 'button';
-    compactExitBtn.className = 'compact-exit';
-    compactExitBtn.textContent = 'Exit';
-    compactExitBtn.setAttribute('aria-label', 'Exit 1132 Fixer');
-    topbar.appendChild(compactExitBtn);
-    document.body.insertBefore(topbar, document.querySelector('.update-banner') || document.body.firstChild);
-
-    // Checking copy + spinner. Existing grouped checks still populate in the
-    // hidden diagnostics source and are available from View details later.
+    // Checking copy + spinner.
     const checking = document.getElementById('wizChecking');
     const checkingTitle = checking && checking.querySelector('.wiz-title');
     const checkingSub = document.createElement('p');
@@ -767,15 +213,13 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
       checking.appendChild(spinner);
     }
 
-    // Four-step progress presentation. The existing 5-stage rail remains the
-    // source of truth; receipt is folded into step 4 for the consumer view.
+    // Fixing progress: "Step n of 5" is the accessible progress value
+    // (role=progressbar, integer steps, announced politely as the
+    // orchestrator advances). The visible rows live in #stageTracker.
     const fixing = document.getElementById('wizFixing');
     const fixingTitle = fixing && fixing.querySelector('.wiz-title');
     const fixDetail = document.createElement('p');
     fixDetail.className = 'compact-fix-detail';
-    // "Step n of 5" is the accessible progress value: role=progressbar with
-    // integer steps, announced politely as the orchestrator advances. The
-    // visible rows live in #stageTracker (renderer-owned).
     const stepLine = document.createElement('p');
     stepLine.className = 'compact-step-line';
     stepLine.setAttribute('role', 'progressbar');
@@ -786,27 +230,6 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
       fixing.appendChild(fixDetail);
       fixing.appendChild(stepLine);
     }
-
-    // Running/success actions that are intentionally not part of the old
-    // setActions() state table. Cancel is cooperative: preload routes the
-    // request through the fix-cancellation broker and the repair stops only
-    // at a known-safe workflow boundary. Done is a normal application exit.
-    const runActions = document.createElement('div');
-    runActions.className = 'compact-run-actions';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'compact-cancel';
-    cancelBtn.textContent = 'Cancel fix';
-    cancelBtn.title = 'Stop after the current safe step.';
-    const doneBtn = document.createElement('button');
-    doneBtn.type = 'button';
-    doneBtn.className = 'compact-text-action compact-done';
-    doneBtn.textContent = 'Done';
-    runActions.append(cancelBtn, doneBtn, detailsBtn);
-    // Put the primary action area before the quiet state actions/details so
-    // the visual order is Fix/Open -> Done/Cancel -> View details.
-    workspace.insertBefore(actionArea, advRegion);
-    workspace.insertBefore(runActions, advRegion);
 
     const exitOverlay = document.createElement('div');
     exitOverlay.className = 'compact-exit-overlay';
@@ -827,46 +250,6 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     const exitKeepBtn = exitOverlay.querySelector('.compact-exit-keep');
     const exitConfirmBtn = exitOverlay.querySelector('.compact-exit-confirm');
 
-    // Production footer: version, independence disclosure, Support, Feedback.
-    // Explore is not landing chrome.
-    const compactFooter = document.createElement('div');
-    compactFooter.className = 'compact-footer';
-    if (appVersion) compactFooter.appendChild(appVersion);
-    const disclosure = document.getElementById('projectDisclosure');
-    if (disclosure) compactFooter.appendChild(disclosure);
-    const footerMeta = document.createElement('div');
-    footerMeta.className = 'compact-footer-meta';
-    const exploreBtn = document.getElementById('btnExplore');
-    if (exploreBtn) exploreBtn.hidden = true;
-    const footerSupport = document.createElement('button');
-    footerSupport.type = 'button';
-    footerSupport.className = 'compact-footer-support';
-    footerSupport.textContent = 'Support';
-    footerSupport.addEventListener('click', () => {
-      if (supportBtn) supportBtn.click();
-    });
-    footerMeta.appendChild(footerSupport);
-    if (feedbackBtn) {
-      feedbackBtn.textContent = 'Feedback';
-      footerMeta.appendChild(feedbackBtn);
-    }
-    const aboutBtn = document.createElement('button');
-    aboutBtn.type = 'button';
-    aboutBtn.className = 'compact-footer-about';
-    aboutBtn.textContent = 'About';
-    aboutBtn.setAttribute('aria-label', 'About 1132 Fixer');
-    aboutBtn.addEventListener('click', () => {
-      const about = document.getElementById('aboutOverlay');
-      if (about) {
-        about.hidden = false;
-        const close = document.getElementById('aboutClose');
-        if (close) close.focus();
-      }
-    });
-    footerMeta.appendChild(aboutBtn);
-    compactFooter.appendChild(footerMeta);
-    workspace.appendChild(compactFooter);
-
     const panes = {
       checking: document.getElementById('wizChecking'),
       result: document.getElementById('wizResult'),
@@ -878,11 +261,19 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     const noticeTitle = document.getElementById('wizNoticeTitle');
     const noticeSub = document.getElementById('wizNoticeSub');
     const zoomRecovery = document.getElementById('zoomRecovery');
-    const secondaryRow = document.querySelector('.secondary-row');
     let cancelRequested = false;
     let exitAfterCancel = false;
     let quitAfterCancelScheduled = false;
 
+    function resetCancelButton() {
+      cancelRequested = false;
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = 'Cancel fix';
+    }
+
+    // Cancel is cooperative: preload routes the request through the
+    // fix-cancellation broker and the repair stops only at a known-safe
+    // workflow boundary.
     async function askForCancellation({ exitWhenDone = false } = {}) {
       if (cancelRequested) return;
       cancelRequested = true;
@@ -891,31 +282,25 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
       cancelBtn.textContent = 'Cancelling…';
       scheduleSync();
       if (typeof requestCancel !== 'function') {
-        cancelRequested = false;
-        cancelBtn.disabled = false;
-        cancelBtn.textContent = 'Cancel fix';
+        resetCancelButton();
         scheduleSync();
         return;
       }
       try {
         const result = await requestCancel();
         if (!result || result.cancelRequested !== true) {
-          cancelRequested = false;
-          cancelBtn.disabled = false;
-          cancelBtn.textContent = 'Cancel fix';
+          resetCancelButton();
           scheduleSync();
         }
       } catch (_) {
-        cancelRequested = false;
-        cancelBtn.disabled = false;
-        cancelBtn.textContent = 'Cancel fix';
+        resetCancelButton();
         scheduleSync();
       }
     }
 
     cancelBtn.addEventListener('click', () => askForCancellation());
     doneBtn.addEventListener('click', () => { if (typeof requestQuit === 'function') requestQuit(); });
-    compactExitBtn.addEventListener('click', () => {
+    exitBtn.addEventListener('click', () => {
       const state = document.body.dataset.compactState || '';
       if (state === 'fixing' || state === 'cancelling') {
         exitOverlay.hidden = false;
@@ -926,7 +311,7 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     });
     exitKeepBtn.addEventListener('click', () => {
       exitOverlay.hidden = true;
-      compactExitBtn.focus();
+      exitBtn.focus();
     });
     exitConfirmBtn.addEventListener('click', () => {
       exitOverlay.hidden = true;
@@ -936,7 +321,7 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
       if (event.key === 'Escape') {
         event.preventDefault();
         exitOverlay.hidden = true;
-        compactExitBtn.focus();
+        exitBtn.focus();
       }
     });
 
@@ -945,13 +330,6 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
         if (el && el.classList.contains('active')) return name;
       }
       return 'checking';
-    }
-
-    function setCompactStatus(icon, text) {
-      const iconEl = compactStatus.querySelector('.compact-status-icon');
-      const textEl = compactStatus.querySelector('.compact-status-text');
-      if (iconEl.textContent !== icon) iconEl.textContent = icon;
-      if (textEl.textContent !== text) textEl.textContent = text;
     }
 
     function setElementHidden(el, hidden) {
@@ -993,53 +371,45 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
       });
     }
 
-    function sync() {
+    function deriveState() {
       const pane = activePane();
       const tone = sourceTone();
       const fixVisible = !fixBtn.hidden;
-      const launchVisible = !launchBtn.hidden;
       const elevateVisible = !!document.getElementById('elevateBtn') && !document.getElementById('elevateBtn').hidden;
       const recoveryVisible = !!zoomRecovery && !zoomRecovery.hidden;
-
-      // A result is "ready" only when the canonical renderer exposed a valid
-      // fix/launch path. A blocked result stays blocked; we never manufacture
+      // A result is "ready" only when the renderer exposed a valid fix path.
+      // A blocked result stays blocked; the shell never manufactures
       // permission to run a repair.
       const resultCanProceed = pane === 'result' && !elevateVisible && !recoveryVisible && fixVisible;
       const fixOutcome = document.documentElement.dataset.fixOutcome || '';
       const success = pane === 'notice' && tone === 'done';
       const error = pane === 'notice' && tone === 'error';
+      if (fixOutcome === 'cancelled') return 'cancelled';
+      if (pane === 'fixing' && cancelRequested) return 'cancelling';
+      if (pane === 'result') return resultCanProceed ? 'ready' : 'blocked';
+      if (pane === 'notice') return error ? 'error' : (success ? 'success' : 'notice');
+      return pane;
+    }
 
-      let state = pane;
-      if (fixOutcome === 'cancelled') state = 'cancelled';
-      else if (pane === 'fixing' && cancelRequested) state = 'cancelling';
-      else if (pane === 'result') state = resultCanProceed ? 'ready' : 'blocked';
-      else if (pane === 'notice') state = error ? 'error' : (success ? 'success' : 'notice');
+    function sync() {
+      const state = deriveState();
       document.body.dataset.compactState = state;
+      const view = document.body.dataset.view || '';
 
       if (checkingTitle) checkingTitle.textContent = 'Checking…';
       if (fixingTitle) fixingTitle.textContent = 'Fixing Zoom';
 
-      // Default visibility before per-state overrides. The product mark
-      // stays in the stable header in every state.
-      topbar.hidden = false;
-      appMark.hidden = false;
-      compactFooter.hidden = false;
-
-      compactStatus.hidden = !(state === 'fixing' || state === 'cancelling');
-
-      if (state === 'checking') {
-        setCompactStatus('', '');
-        return;
-      }
+      // Shell-owned controls: Cancel only while work runs, Done only on a
+      // completed repair. Everything else is the renderer's outcome table.
+      setElementHidden(cancelBtn, !(state === 'fixing' || state === 'cancelling'));
+      setElementHidden(doneBtn, state !== 'success');
 
       if (state === 'ready') {
-        setCompactStatus('', '');
         if (resultTitle) resultTitle.textContent = 'Ready to fix Zoom';
         if (resultSub) {
           resultSub.textContent = 'Start Zoom with a fresh setup.\nYour personal files won’t be changed.';
           resultSub.hidden = false;
         }
-
         setElementHidden(fixBtn, false);
         if (fixBtn.textContent !== 'Starting after check…') fixBtn.textContent = 'Fix now';
         setElementHidden(launchBtn, true);
@@ -1047,30 +417,20 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
         setElementHidden(shortcutOpt, false);
         setElementHidden(rescanBtn, true);
         setElementHidden(detailsBtn, false);
-        return;
-      }
-
-      if (state === 'fixing' || state === 'cancelling') {
+      } else if (state === 'fixing' || state === 'cancelling') {
         if (state === 'cancelling') {
-          setCompactStatus('●', 'Cancelling');
           if (fixingTitle) fixingTitle.textContent = 'Cancelling…';
           fixDetail.textContent = 'Finishing the current step safely…';
           cancelBtn.disabled = true;
           cancelBtn.textContent = 'Cancelling…';
         } else {
-          setCompactStatus('●', 'Fixing');
-          if (fixingTitle) fixingTitle.textContent = 'Fixing Zoom';
           cancelBtn.disabled = false;
           cancelBtn.textContent = 'Cancel fix';
           updateFixingProgress();
         }
-        // Keep the single diagnostics escape hatch available during work.
+        // Keep the single details disclosure available during work.
         setElementHidden(detailsBtn, false);
-        return;
-      }
-
-      if (state === 'cancelled') {
-        setCompactStatus('○', 'Cancelled');
+      } else if (state === 'cancelled') {
         if (noticeTitle) noticeTitle.textContent = 'Fix cancelled';
         if (noticeSub) {
           noticeSub.textContent = 'Nothing else will be changed.';
@@ -1082,18 +442,12 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
         setElementHidden(detailsBtn, false);
         setElementHidden(supportBtn, true);
         if (!fixBtn.hidden) fixBtn.textContent = 'Try again';
-        cancelRequested = false;
-        cancelBtn.disabled = false;
-        cancelBtn.textContent = 'Cancel fix';
+        resetCancelButton();
         if (exitAfterCancel && !quitAfterCancelScheduled && typeof requestQuit === 'function') {
           quitAfterCancelScheduled = true;
           window.setTimeout(() => requestQuit(), 0);
         }
-        return;
-      }
-
-      if (state === 'success') {
-        setCompactStatus('', '');
+      } else if (state === 'success') {
         if (noticeTitle) noticeTitle.textContent = "You're all set";
         if (noticeSub) {
           noticeSub.textContent = document.documentElement.dataset.fixOutcome === 'cancel-too-late'
@@ -1101,23 +455,18 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
             : 'Zoom is ready to use.';
           noticeSub.hidden = false;
         }
-        cancelRequested = false;
-        cancelBtn.disabled = false;
-        cancelBtn.textContent = 'Cancel fix';
+        resetCancelButton();
         setElementHidden(launchBtn, false);
         launchBtn.textContent = 'Open Zoom';
-        setElementHidden(shortcutBtn, true);
         setElementHidden(rescanBtn, true);
         setElementHidden(detailsBtn, false);
         setElementHidden(supportBtn, true);
-        return;
       }
+      // blocked / error / notice keep the renderer's copy and actions.
 
-      // Blocked, warning, and failure states retain their canonical copy and
-      // actions; only the surrounding chrome is simplified.
-      if (state === 'error') setCompactStatus('!', 'Needs attention');
-      else if (state === 'blocked') setCompactStatus('!', 'Action needed');
-      else setCompactStatus('!', 'Needs attention');
+      // The gate: whatever the renderer or this shell painted, only the
+      // controls this screen allows stay visible.
+      applyGate(state, document, view);
     }
 
     const observer = new MutationObserver(scheduleSync);
@@ -1125,6 +474,7 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     observer.observe(actionArea, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden', 'disabled'] });
     observer.observe(statusBadge, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden', 'data-tone'] });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-fix-outcome'] });
+    observer.observe(document.body, { attributes: true, attributeFilter: ['data-view'] });
 
     // Renderer initialization runs in its own DOMContentLoaded listener after
     // this preload listener. Reconcile once more on the next task after it has

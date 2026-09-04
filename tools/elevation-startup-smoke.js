@@ -118,8 +118,8 @@ check(main.includes('function compactWindowBounds'), 'window uses compact center
 check(!main.includes('Math.max(minWidth, workArea.width)'), 'window does not start at work-area width');
 check(renderer.includes("event.key !== 'Enter'") && renderer.includes('primary.click()'),
   'Enter activates the visible primary action');
-check(shell.includes('overflow: hidden') && shell.includes('overflow: hidden !important'),
-  'compact root does not add a wizard scrollbar');
+check(/body \{[^}]*overflow: hidden/.test(html) && /\.workspace \{[^}]*overflow: hidden/.test(html) && !/\.wiz-pane\.active \{[^}]*overflow-y:\s*auto[^}]*\}[\s\S]*APP SHELL/.test(html.slice(html.indexOf('APP SHELL'))),
+  'app root and workspace do not add a wizard scrollbar');
 
 console.log('elevation-startup-smoke: packaged manifest verification is in the build');
 check(pkg.build && pkg.build.win && pkg.build.win.requestedExecutionLevel === 'requireAdministrator',

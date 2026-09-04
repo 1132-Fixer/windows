@@ -34,6 +34,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
+const screenActions = require(path.join(ROOT, 'screen-actions.js'));
 const args = process.argv.slice(2);
 const argOf = (flag, dflt) => {
   const i = args.indexOf(flag);
@@ -125,7 +126,7 @@ async function layoutFacts(page) {
         if (overflow.length >= 5) break;
       }
     }
-    const footer = document.querySelector('.compact-footer');
+    const footer = document.querySelector('.app-footer');
     const disclosure = document.getElementById('projectDisclosure');
     const explore = document.getElementById('btnExplore');
     const version = document.getElementById('appVersion');
@@ -139,9 +140,11 @@ async function layoutFacts(page) {
       disclosureInFooter: !!(footer && disclosure && footer.contains(disclosure)),
       disclosureClipped: !!(disclosure && ([...disclosure.querySelectorAll('span')].some((s) => s.scrollWidth > s.clientWidth + 1) ||
         (() => { const r = disclosure.getBoundingClientRect(); return r.bottom > vh + 1 || r.top < 0 || r.right > vw + 1; })())),
-      exploreVisible: !!(explore && !explore.hidden && getComputedStyle(explore).display !== 'none'),
+      // Rendered, not merely un-hidden: Explore lives inside the closed About
+      // dialog, so its own attributes say nothing about what is on screen.
+      exploreVisible: !!(explore && !explore.hidden && getComputedStyle(explore).display !== 'none' && explore.getBoundingClientRect().height > 0),
       versionText: version ? version.textContent.trim() : null,
-      title: (document.querySelector('.wizard-pane.active h2, .wizard-pane.active h1, [data-compact-title]') || {}).textContent || null
+      title: (document.querySelector('.wiz-pane.active h2, .wiz-pane.active h1, [data-compact-title]') || {}).textContent || null
     };
   });
 }
@@ -160,11 +163,14 @@ async function keyboardFacts(page) {
     for (const el of els) {
       el.focus();
       const cs = getComputedStyle(el);
-      const ring = (cs.outlineStyle && cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0) ||
-        (cs.boxShadow && cs.boxShadow !== 'none');
       const name = (el.getAttribute('aria-label') || el.textContent || el.value || '').replace(/\s+/g, ' ').trim().slice(0, 40);
-      // A checkbox's target is its label (WCAG 2.5.8 measures the whole target).
+      // A checkbox's target is its label (WCAG 2.5.8 measures the whole
+      // target), and the label is also where its focus ring is drawn
+      // (:focus-within), so the ring is looked for on the target too.
       const target = (el.type === 'checkbox' || el.type === 'radio') && el.closest('label') ? el.closest('label') : el;
+      const tcs = getComputedStyle(target);
+      const ring = (cs.outlineStyle && cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0) ||
+        (cs.boxShadow && cs.boxShadow !== 'none') || (tcs.boxShadow && tcs.boxShadow !== 'none');
       const r = target.getBoundingClientRect();
       rows.push({ tag: el.tagName.toLowerCase(), id: el.id || null, name, focusVisible: !!ring, w: Math.round(r.width), h: Math.round(r.height) });
     }
@@ -208,17 +214,86 @@ async function runLanding(scale, tag) {
     (disclosureOk ? passed : failed)(`${tag}.footer-disclosure`, `footer: ${facts.footerText}${facts.disclosureClipped ? ' (disclosure clipped)' : ''}`);
     (!facts.exploreVisible ? passed : failed)(`${tag}.explore-hidden`, facts.exploreVisible ? 'Explore visible in landing chrome' : 'Explore absent from landing chrome');
     (facts.versionText && /\d+\.\d+\.\d+/.test(facts.versionText) ? passed : failed)(`${tag}.version-shown`, `version: ${facts.versionText}`);
+    // Keyboard modality first: Chromium shows :focus-visible on script focus
+    // only after keyboard input, exactly like a keyboard user arriving.
+    await page.keyboard.press('Tab');
     const kb = await keyboardFacts(page);
     const noRing = kb.filter((k) => !k.focusVisible);
     const small = kb.filter((k) => k.w < 24 || k.h < 24);
     (noRing.length === 0 ? passed : failed)(`${tag}.focus-visible`, noRing.length ? `no visible focus on: ${noRing.map((k) => k.id || k.name).join(', ')}` : `${kb.length} focusable controls, all with a visible focus ring`, { controls: kb });
     (small.length === 0 ? passed : failed)(`${tag}.target-size`, small.length ? `targets under 24px: ${small.map((k) => `${k.id || k.name} ${k.w}x${k.h}`).join(', ')}` : 'all targets ≥ 24px');
+    // Screen action map: only the controls this state allows are visible.
+    const leak = await page.evaluate(({ allowed, managed }) => {
+      const visible = (el) => el && !el.hidden && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().height > 0;
+      return managed.filter((id) => visible(document.getElementById(id)) && allowed.indexOf(id) === -1);
+    }, { allowed: screenActions.allowedControls(state), managed: screenActions.MANAGED_CONTROLS });
+    (leak.length === 0 ? passed : failed)(`${tag}.controls-belong-to-state`, leak.length ? `controls from another screen visible on ${state}: ${leak.join(', ')}` : `only ${state} controls are visible`);
+    await runDetailsRoundTrip(page, tag, state);
     return { app, page, state };
   } catch (err) {
     failed(`${tag}.launch`, `could not drive the packaged app: ${err && err.message}`);
     if (app) await app.close().catch(() => {});
     return null;
   }
+}
+
+// View details opens the in-place Details view (Back in the header, plain
+// English, nothing scrolls) and Back restores the exact prior screen with
+// focus on View details.
+async function runDetailsRoundTrip(page, tag, state) {
+  const hasDetails = await page.evaluate(() => { const b = document.getElementById('detailsBtn'); return !!b && !b.hidden && getComputedStyle(b).display !== 'none'; });
+  if (!hasDetails) { notRun(`${tag}.details-round-trip`, `View details is not offered on "${state}"`); return; }
+  const checkboxBefore = await page.evaluate(() => { const c = document.getElementById('shortcutOptInput'); return c ? c.checked : null; });
+  await page.click('#detailsBtn');
+  await sleep(300);
+  const open = await page.evaluate(() => {
+    const visible = (el) => el && !el.hidden && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().height > 0;
+    const de = document.documentElement;
+    const nested = [...document.querySelectorAll('body *')].filter((el) => visible(el) && /(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1).map((el) => el.id || el.className);
+    const text = (document.getElementById('detailsView') || {}).innerText || '';
+    return {
+      view: document.body.dataset.view || '',
+      back: visible(document.getElementById('backBtn')),
+      fixVisible: visible(document.getElementById('fixBtn')),
+      launchVisible: visible(document.getElementById('launchBtn')),
+      exploreVisible: visible(document.getElementById('btnExplore')),
+      focused: document.activeElement && document.activeElement.id,
+      docScroll: de.scrollHeight > de.clientHeight + 1 || de.scrollWidth > de.clientWidth + 1,
+      nested,
+      technical: /HKLM|HKCU|HKU\b|NTUSER|\breg\.exe|\bsc\.exe|Start-Process|\buser1\b|[A-Z]:\\/.test(text),
+      rows: document.querySelectorAll('#detailsOverview .details-row').length,
+      text: text.replace(/\s+/g, ' ').slice(0, 160)
+    };
+  });
+  const detailsShot = await shot(page, `${tag}-03-details`);
+  (open.view === 'details' && open.back ? passed : failed)(`${tag}.details-opens-in-place`, `view=${open.view} back=${open.back} focus=#${open.focused}`, { screenshot: detailsShot });
+  (open.focused === 'backBtn' ? passed : failed)(`${tag}.details-focus-starts-on-back`, `focus on #${open.focused}`);
+  (!open.fixVisible && !open.launchVisible && !open.exploreVisible ? passed : failed)(`${tag}.details-no-foreign-controls`, `Fix now=${open.fixVisible} Open Zoom=${open.launchVisible} Explore=${open.exploreVisible}`);
+  (!open.docScroll && open.nested.length === 0 ? passed : failed)(`${tag}.details-no-scrollbars`, open.nested.length ? `nested scroll on ${open.nested.join(', ')}` : 'no document or nested scrollbar');
+  (!open.technical ? passed : failed)(`${tag}.details-plain-english`, open.technical ? `technical text on the Details surface: ${open.text}` : `plain English: ${open.text}`);
+  (open.rows >= 5 ? passed : failed)(`${tag}.details-categories`, `${open.rows} category rows`);
+  if (open.rows) {
+    await page.click('#detailsOverview .details-row');
+    await sleep(200);
+    const cat = await page.evaluate(() => ({ focused: document.activeElement && document.activeElement.id, title: (document.getElementById('detailsCategoryTitle') || {}).textContent, checks: document.querySelectorAll('#detailsChecks .details-check').length, doubled: /Checking…[\s\S]*Checking/.test((document.getElementById('detailsView') || {}).innerText || '') }));
+    const catShot = await shot(page, `${tag}-04-details-category`);
+    (cat.checks > 0 && cat.focused === 'detailsOverviewBtn' && !cat.doubled ? passed : failed)(`${tag}.details-category-opens`, `${cat.title}: ${cat.checks} checks, focus on #${cat.focused}`, { screenshot: catShot });
+    await page.click('#detailsOverviewBtn');
+    await sleep(150);
+  }
+  await page.click('#backBtn');
+  await sleep(300);
+  const after = await page.evaluate(() => ({
+    view: document.body.dataset.view || '',
+    state: document.body.dataset.compactState || '',
+    focused: document.activeElement && document.activeElement.id,
+    checkbox: (document.getElementById('shortcutOptInput') || {}).checked,
+    back: (() => { const b = document.getElementById('backBtn'); return !!b && !b.hidden && getComputedStyle(b).display !== 'none'; })()
+  }));
+  const backShot = await shot(page, `${tag}-05-back`);
+  (after.view === '' && after.state === state && !after.back ? passed : failed)(`${tag}.details-back-restores-state`, `state=${after.state} (was ${state}) back hidden=${!after.back}`, { screenshot: backShot });
+  (after.focused === 'detailsBtn' ? passed : failed)(`${tag}.details-back-returns-focus`, `focus on #${after.focused}`);
+  (after.checkbox === checkboxBefore ? passed : failed)(`${tag}.details-back-preserves-option`, `shortcut option ${checkboxBefore} -> ${after.checkbox}`);
 }
 
 async function runSecondInstance(page) {
@@ -248,7 +323,10 @@ async function runFixJourney(page) {
     await shot(page, '03-details-' + state);
     return;
   }
-  // Enter on the landing surface activates the primary action (Fix now).
+  // Enter on the landing surface, with no control focused, activates the
+  // primary action (Fix now). (With View details focused — where the Details
+  // round trip left it — Enter would open Details, as it should.)
+  await page.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur());
   await page.keyboard.press('Enter');
   const overlayShown = await page.waitForSelector('#fixConfirmOverlay:not([hidden])', { timeout: 5000 }).then(() => true).catch(() => false);
   (overlayShown ? passed : failed)('fix.confirm-opens-on-enter', overlayShown ? 'confirmation dialog opened from the keyboard' : 'confirmation did not open');
@@ -300,7 +378,7 @@ async function runFixJourney(page) {
   passed('fix.reaches-terminal-state', `state=${done.state} after ${done.ms} ms`, { screenshot: endShot });
   const endFacts = await page.evaluate(() => {
     const launch = document.getElementById('launchBtn');
-    const title = document.querySelector('.wizard-pane.active h2, .wizard-pane.active h1');
+    const title = document.querySelector('.wiz-pane.active h2, .wiz-pane.active h1');
     // Only a still-looping animation counts; a finished one-shot transition
     // still reports animationPlayState "running".
     const spinning = [...document.querySelectorAll('*')].filter((el) => {
@@ -315,12 +393,9 @@ async function runFixJourney(page) {
     (!endFacts.openZoomVisible ? passed : failed)('fix.no-open-zoom-without-success', `state=${done.state}; Open Zoom visible=${endFacts.openZoomVisible}; title=${endFacts.title}`);
   }
   (!endFacts.spinning ? passed : failed)('fix.no-animation-after-end', endFacts.spinning ? `looping animation still running on: ${endFacts.spinning}` : 'no looping animation');
-  const details = await page.click('#detailsBtn').then(() => true).catch(() => false);
-  await sleep(300);
-  const detailsShot = await shot(page, '06-details');
-  (details ? passed : notRun)('fix.view-details', details ? 'View details opened' : 'View details not available', { screenshot: detailsShot });
-  const rawPs = await page.evaluate(() => /\$_\.|Write-Output|Start-Process|At line:\d+ char:\d+/.test(document.querySelector('.wizard-pane.active') ? document.querySelector('.wizard-pane.active').innerText : ''));
+  const rawPs = await page.evaluate(() => /\$_\.|Write-Output|Start-Process|At line:\d+ char:\d+/.test(document.querySelector('.wiz-pane.active') ? document.querySelector('.wiz-pane.active').innerText : ''));
   (!rawPs ? passed : failed)('fix.no-raw-powershell-on-primary-surface', rawPs ? 'PowerShell text visible on the primary surface' : 'primary surface is plain English');
+  await runDetailsRoundTrip(page, 'fix-end', done.state);
 }
 
 function readEnableLua() {

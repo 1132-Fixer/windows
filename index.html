@@ -112,29 +112,6 @@
     }
 
     /* ============================================================
-       HEADER
-       ============================================================ */
-    .header {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 24px 28px 0;
-      position: relative;
-      z-index: 1;
-      /* The whole header doubles as the window drag region — the frameless
-         window was previously impossible to move at all. Interactive
-         children opt out below. */
-      -webkit-app-region: drag;
-    }
-    .header-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      width: 100%;
-      margin-bottom: var(--s-5);
-    }
-
-    /* ============================================================
        MAIN PANE
        ============================================================ */
     .main {
@@ -202,75 +179,7 @@
       transition: width 0.4s ease;
     }
 
-    /* ============================================================
-       ENVIRONMENT CHECKLIST — full per-check detail, rendered inside
-       the Advanced-details panel.
-       ============================================================ */
-    .chk-list {
-      display: flex;
-      flex-direction: column;
-      gap: var(--s-3);
-      flex-shrink: 0;
-    }
-    .chk-row {
-      display: flex;
-      align-items: center;
-      gap: var(--s-3);
-      padding: 16px 20px;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--border-strong);
-      border-radius: var(--r-sm);
-      font-size: 14px;
-    }
-    .chk-row[data-status="ready"]      { border-left-color: var(--success); }
-    .chk-row[data-status="repairable"] { border-left-color: var(--accent); }
-    .chk-row[data-status="warning"]    { border-left-color: var(--warning); }
-    .chk-row[data-status="blocked"]    { border-left-color: var(--danger); }
-    .chk-row[data-status="pending"]    { border-left-color: var(--border-strong); opacity: 0.65; }
-    /* A state this version does not recognise, or a check the scan never
-       reported. Presented as a warning, never as ready. */
-    .chk-row[data-status="unknown"]    { border-left-color: var(--warning); }
-    .chk-icon { width: 18px; height: 18px; flex-shrink: 0; color: var(--dim); }
-    .chk-label { font-weight: 600; color: var(--text); min-width: 160px; }
-    /* min-width:0 lets the flex item shrink below its longest token;
-       overflow-wrap breaks unbroken tokens (registry paths like
-       HKLM\...\AppPrivacy have no natural break points) instead of
-       pushing the row wider than the window at 720px / 200% text. */
-    .chk-msg { color: var(--muted); flex: 1; line-height: 1.4; min-width: 0; overflow-wrap: anywhere; }
-    .chk-badge {
-      font-size: 11px;
-      font-weight: 600;
-      padding: 4px 10px;
-      border-radius: var(--r-pill);
-      letter-spacing: 0.2px;
-      border: 1px solid transparent;
-      flex-shrink: 0;
-    }
-    .chk-row[data-status="ready"]      .chk-icon { color: var(--success); }
-    .chk-row[data-status="repairable"] .chk-icon { color: var(--accent); }
-    .chk-row[data-status="warning"]    .chk-icon { color: var(--warning); }
-    .chk-row[data-status="blocked"]    .chk-icon { color: var(--danger); }
-    .chk-row[data-status="pending"]    .chk-icon { color: var(--disabled); }
-    .chk-row[data-status="unknown"]    .chk-icon { color: var(--warning); }
-    .chk-row[data-status="ready"]      .chk-badge { color: var(--success); background: var(--success-bg); border-color: var(--success-bd); }
-    .chk-row[data-status="repairable"] .chk-badge { color: var(--accent); background: var(--accent-bg); border-color: var(--accent-bd); }
-    .chk-row[data-status="warning"]    .chk-badge { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-bd); }
-    .chk-row[data-status="blocked"]    .chk-badge { color: var(--danger); background: var(--danger-bg); border-color: var(--danger-bd); }
-    .chk-row[data-status="pending"]    .chk-badge { color: var(--muted); background: var(--panel-3); border-color: var(--border); }
-    .chk-row[data-status="unknown"]    .chk-badge { color: var(--warning); background: var(--warning-bg); border-color: var(--warning-bd); }
-    /* §9 Doctor grouping — small dim label rows between checklist sections.
-       Visual-only (aria-hidden): each row's own label + badge stays the
-       screen-reader story, so the list keeps valid listitem-only children. */
-    .chk-group {
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.8px;
-      text-transform: uppercase;
-      color: var(--dim);
-      padding: var(--s-3) 0 var(--s-1);
-    }
-    /* "Fix now is disabled by: …" line under the checklist (#66). */
+    /* "Fix now is disabled by: …" line under the result copy (#66). */
     .fix-disabled-note {
       margin-top: 8px;
       font-size: 13px;
@@ -408,141 +317,7 @@
       background: var(--border-strong);
       flex-shrink: 0;
     }
-    /* ============================================================
-       LOG / FIX RECEIPT REGION
-       Default expanded for preflight + done state; auto-collapse during
-       running so user reads stage tracker, not raw log.
-       ============================================================ */
-    .log-region {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
-    .log-toggle {
-      display: none;
-      align-items: center;
-      gap: var(--s-2);
-      padding: 8px var(--s-3);
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: var(--r-sm);
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      letter-spacing: 0.5px;
-      transition: all 0.2s;
-      width: fit-content;
-    }
-    .log-toggle.visible { display: inline-flex; }
-    .log-toggle:hover { color: var(--text); border-color: var(--border-strong); }
-    /* Row of small chip controls above the log (toggle + failure-only copy).
-       Layout only — both buttons reuse the .log-toggle chip style. */
-    .log-actions { display: flex; align-items: center; gap: var(--s-2); }
-    .log-toggle .chev {
-      transition: transform 0.2s;
-      display: inline-block;
-    }
-    .log-toggle.expanded .chev { transform: rotate(90deg); }
-
-    .file-list {
-      flex: 1;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: var(--r-md);
-      padding: var(--s-3) var(--s-4);
-      overflow-y: auto;
-      font-family: 'Cascadia Mono', 'Cascadia Code', 'Consolas', 'Courier New', monospace;
-      font-size: 12px;
-      color: var(--muted);
-      margin-top: var(--s-2);
-      box-shadow: var(--shadow-sm);
-    }
-    .file-list.hidden { display: none; }
-    .file-list::-webkit-scrollbar { width: 8px; }
-    .file-list::-webkit-scrollbar-track { background: transparent; }
-    .file-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
-    .file-list::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
-
-    .file-item {
-      padding: 8px 12px;
-      margin-bottom: 8px;
-      background: var(--panel-2);
-      border: 1px solid rgba(255,255,255,0.06);
-      border-radius: var(--r-sm);
-    }
-    .file-item:last-child { margin-bottom: 0; }
-    .file-item.header { color: var(--accent); font-weight: 600; }
-    .file-item.error,
-    .file-item.failed { color: var(--danger); }
-    .file-item.success { color: var(--success); }
-    .file-item.empty-line {
-      padding: 2px 0;
-      margin-bottom: 0;
-      background: transparent;
-      border: none;
-    }
-    .file-item.loading { color: var(--accent); text-align: center; padding: 20px; font-size: 13px; animation: pulse 1.5s ease-in-out infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-
-    /* ============================================================
-       FIX RECEIPT — styled cards on done state
-       ============================================================ */
-    .receipt {
-      display: none;
-      flex-direction: column;
-      gap: var(--s-2);
-      padding: var(--s-4);
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: var(--r-md);
-      box-shadow: var(--shadow-sm);
-    }
-    .receipt.visible { display: flex; }
-    .receipt-title {
-      font-size: 18px;
-      font-weight: 600;
-      letter-spacing: 0.2px;
-      color: var(--text);
-      margin-bottom: 4px;
-    }
-    .receipt-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: var(--s-2);
-    }
-    .receipt-item {
-      display: flex;
-      align-items: flex-start;
-      gap: var(--s-2);
-      padding: 8px var(--s-3);
-      background: var(--panel-2);
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--border-strong);
-      border-radius: var(--r-sm);
-      font-size: 14px;
-      line-height: 1.4;
-    }
-    .receipt-item[data-status="ok"]       { border-left-color: var(--success); }
-    .receipt-item[data-status="warn"]     { border-left-color: var(--warning); }
-    .receipt-item[data-status="fail"]     { border-left-color: var(--danger); }
-    .receipt-item[data-status="info"]     { border-left-color: var(--info); }
-    .receipt-icon { width: 16px; height: 16px; flex-shrink: 0; margin-top: 2px; }
-    .receipt-item[data-status="ok"]       .receipt-icon { color: var(--success); }
-    .receipt-item[data-status="warn"]     .receipt-icon { color: var(--warning); }
-    .receipt-item[data-status="fail"]     .receipt-icon { color: var(--danger); }
-    .receipt-item[data-status="info"]     .receipt-icon { color: var(--info); }
-    .receipt-label { font-weight: 600; color: var(--text); display: block; margin-bottom: 2px; }
-    .receipt-value { color: var(--muted); font-size: 12px; }
-    .receipt-foot {
-      font-size: 12px;
-      color: var(--dim);
-      padding: var(--s-2) 0 0;
-      border-top: 1px dashed var(--border);
-      margin-top: var(--s-2);
-      line-height: 1.5;
-    }
 
     /* ============================================================
        BUTTONS
@@ -598,106 +373,6 @@
       transform: translateY(-1px);
     }
     .btn-primary:active:not(:disabled) { transform: translateY(0); }
-    /* Cancelable pre-fix countdown state — same button, one click total. */
-    .btn-primary.counting {
-      background: var(--accent-2);
-      animation: pulse 1s ease-in-out infinite;
-    }
-
-    /* ============================================================
-       STATUS BADGE
-       ============================================================ */
-    .status-badge {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      color: var(--success);
-      font-size: 14px;
-      font-weight: 600;
-      letter-spacing: 0.2px;
-      border: 1px solid var(--success-bd);
-      background: var(--success-bg);
-      padding: 10px 16px;
-      border-radius: var(--r-pill);
-    }
-    .status-icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 16px;
-      height: 16px;
-      font-size: 14px;
-      line-height: 1;
-    }
-
-    .status-badge.scanning { color: var(--accent); border-color: var(--accent-bd); background: var(--accent-bg); }
-    .status-badge.done { color: var(--success); border-color: var(--success-bd); background: var(--success-bg); }
-    .status-badge.warn { color: var(--warning); border-color: var(--warning-bd); background: var(--warning-bg); }
-    .status-badge.error { color: var(--danger); border-color: var(--danger-bd); background: var(--danger-bg); }
-
-    /* Exit badge */
-    .exit-badge {
-      color: var(--muted);
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: 0.2px;
-      border: 1px solid var(--border);
-      background: var(--panel);
-      padding: 10px 18px;
-      border-radius: var(--r-sm);
-      cursor: pointer;
-      transition: all 0.25s ease;
-      -webkit-app-region: no-drag;
-    }
-    .exit-badge:hover { background: var(--panel-2); border-color: var(--danger-bd); color: var(--text); transform: translateY(-1px); }
-
-    /* ============================================================
-       FOOTER
-       ============================================================ */
-    .footer { position: relative; z-index: 1; }
-    .hazard-bar {
-      width: 100%;
-      height: 1px;
-      background: var(--border);
-      opacity: 1;
-    }
-    .footer-content {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 16px 28px 24px;
-      gap: var(--s-2);
-      flex-wrap: wrap;
-    }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      min-height: 44px; /* STYLEGUIDE minimum target size */
-      font-size: 12px;
-      font-weight: 600;
-      letter-spacing: 0.2px;
-      padding: 8px 14px;
-      border-radius: var(--r-pill);
-      cursor: pointer;
-      transition: all 0.25s ease;
-      -webkit-app-region: no-drag;
-      border: 1px solid var(--border);
-      background: var(--panel);
-      color: var(--muted);
-    }
-    .badge:hover { transform: translateY(-1px); color: var(--text); }
-    .admin-badge { color: var(--success); border-color: var(--success-bd); background: var(--success-bg); }
-    .version-badge { cursor: default; }
-    .version-badge:hover { transform: none; color: var(--muted); }
-    .feedback-badge { color: var(--accent); border-color: var(--accent-bd); background: var(--accent-bg); }
-    .site-badge { color: var(--info); border-color: var(--info-bd); background: var(--info-bg); }
-
-    .footer-meta {
-      display: flex;
-      gap: var(--s-2);
-      flex-wrap: wrap;
-      align-items: center;
-    }
 
     /* ============================================================
        MODALS — feedback + support report
@@ -908,111 +583,10 @@
     /* Compact panel chrome (acceptance spec 2026-08-23). Tokens above. */
     body { background: var(--bg); font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif; }
     body::before { display: none; }
-    .titlebar {
-      height: 32px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex: 0 0 32px;
-      padding-left: var(--s-4);
-      color: var(--muted);
-      font-size: 12px;
-      -webkit-app-region: drag;
-    }
-    .titlebar-name { display: flex; align-items: center; gap: var(--s-2); }
-    .titlebar-name img { width: 16px; height: 16px; object-fit: contain; }
-    .window-controls { display: flex; height: 100%; -webkit-app-region: no-drag; }
-    .window-control {
-      width: 46px;
-      height: 32px;
-      display: grid;
-      place-items: center;
-      color: var(--text);
-      background: transparent;
-      border: 0;
-      cursor: pointer;
-      font: inherit;
-      transition: background 150ms ease-out;
-    }
-    .window-control:hover { background: rgba(154, 165, 180, 0.16); }
-    .window-control.close:hover { background: var(--danger); }
-    .window-control svg { width: 10px; height: 10px; stroke: currentColor; }
-    /* ---- Compact product header (addendum 2026-08-23): ONE centered
-       product icon + right-aligned status. The icon is absolutely
-       centered against the FULL window width — the badge has zero
-       influence on its position. The left side is intentionally empty;
-       no product-name or subtitle text lives in the header. ---- */
-    .header { align-items: stretch; padding: 0; }
-    .header-top {
-      position: relative;
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      margin: 0;
-      padding: 0 var(--s-6);
-      height: 64px;
-      background: transparent;
-      border: 0;
-      border-bottom: 1px solid var(--border);
-      border-radius: 0;
-    }
-    @media (max-width: 800px) { .header-top { padding: 0 var(--s-4); } }
-    .app-mark {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      width: 44px;
-      height: 44px;
-      object-fit: contain;
-    }
-    .exit-badge { display: none; }
-    /* Status is an INDICATOR, never a button: soft tint, no border, no
-       hover affordance. Tone classes keep their colors. */
-    .status-badge { margin-left: 0; font-size: 12px; padding: 4px 10px; }
-    .status-badge[hidden] { display: none; }
-    .status-badge, .status-badge.scanning, .status-badge.done,
-    .status-badge.warn, .status-badge.error, .status-badge.action { border-color: transparent; }
-    .chk-list { gap: 0; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--s-2) var(--s-4); }
-    .chk-row { padding: var(--s-3) 0; background: transparent; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
-    .chk-row:last-child { border-bottom: 0; }
-    .chk-row[data-status] { border-left: 0; }
-    .chk-label { min-width: 156px; font-size: 13px; line-height: 18px; }
-    .chk-msg { font-size: 14px; line-height: 20px; }
-    .chk-badge { font-size: 12px; line-height: 16px; padding: var(--s-1) var(--s-2); border: 0; }
     .button-container { justify-content: center; margin: 0; gap: var(--s-3); }
     .btn { min-height: 44px; padding: var(--s-3) var(--s-4); border-radius: var(--r-sm); transition: background 150ms ease-out, border-color 150ms ease-out; }
     .btn:hover:not(:disabled), .btn-primary:hover:not(:disabled) { transform: none; }
     .button-note { text-align: center; font-size: 12px; line-height: 16px; font-weight: 400; }
-    .receipt, .file-list { box-shadow: none; border-radius: var(--r-md); }
-    .file-list { font-family: 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; line-height: 20px; }
-    .file-item { padding: 0; margin: 0; background: transparent; border: 0; border-radius: 0; }
-    /* ---- Quiet utility footer: chrome, not a second toolbar. Plain
-       version text, link-weight controls, and a status-only Admin
-       indicator (paint() may set inline colors; the !important rules keep
-       it from ever reading as a button). ---- */
-    .footer-content { padding: 0 var(--s-6); min-height: 52px; align-items: center; flex-wrap: nowrap; }
-    .badge { min-height: 32px; border-radius: var(--r-sm); font-weight: 600; }
-    .badge:hover { transform: none; }
-    .feedback-badge, .site-badge {
-      background: transparent;
-      border-color: transparent;
-      color: var(--muted);
-    }
-    .feedback-badge:hover, .site-badge:hover { color: var(--text); background: rgba(154, 165, 180, 0.10); }
-    .version-badge { background: transparent; border-color: transparent; color: var(--dim); padding-left: 0; }
-    #adminBadge {
-      cursor: default;
-      background: transparent !important;
-      border-color: transparent !important;
-      padding-right: 0;
-    }
-    #adminBadge:hover { transform: none; }
-    #adminBadge::before { content: '●'; margin-right: 6px; font-size: 9px; vertical-align: 1px; }
-    /* Elevation is system metadata, not a success celebration: neutral
-       muted text; only NOT-elevated earns attention color. Green stays
-       reserved for completed repairs. */
-    #adminBadge.admin-badge { color: var(--dim); background: transparent; border-color: transparent; font-weight: 500; }
     .fb-overlay { background: rgba(15,23,36,0.72); backdrop-filter: none; }
     .fb-card { background: var(--panel-3); border-radius: var(--r-lg); box-shadow: none; }
     .fb-title { font-size: 20px; line-height: 26px; font-weight: 700; text-align: left; }
@@ -1025,8 +599,6 @@
        row) hosts every state; only the content changes. Collapsed
        states never scroll; only the expanded diagnostics panel may.
        ============================================================ */
-    .status-badge.action { color: var(--accent); background: rgba(51, 127, 219, 0.12); }
-    .status-badge { min-height: 30px; }
     .main { padding: var(--s-4) var(--s-6); gap: 0; overflow: hidden; }
     .workspace {
       flex: 1 1 auto;
@@ -1038,18 +610,15 @@
       flex-direction: column;
       align-items: center;
       overflow: hidden;
-      /* Optical center sits slightly ABOVE the mathematical center
-         (design review P0-3, raised further per baseline sign-off). */
-      padding-bottom: 80px;
     }
     .wizard {
       width: 100%;
       display: flex;
       flex-direction: column;
       align-items: center;
-      margin-top: auto; /* pairs with .action-area margin-bottom:auto to center the group */
       min-height: 0;
     }
+    .wizard[hidden] { display: none; }
     .wiz-pane {
       display: none;
       flex-direction: column;
@@ -1169,133 +738,11 @@
     .fix-confirm-dialog p { margin: 10px 0 20px; color: var(--muted); font-size: 14px; line-height: 21px; }
     .fix-confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
     .wizard .zoom-recovery { text-align: left; width: 100%; margin-top: var(--s-5); border-radius: var(--r-md); }
-    /* Advanced details (§18): a 32px text disclosure between the state
-       description and the primary action — never a large pill. */
-    .adv-region {
-      width: 100%;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: var(--s-2);
-      min-height: 0;
-      margin-top: var(--s-5);
-    }
-    .log-actions { justify-content: center; }
-    .log-toggle {
-      display: none;
-      background: transparent;
-      border: 0;
-      min-height: 32px;
-      padding: 4px 10px;
-      border-radius: var(--r-sm);
-      color: var(--dim);
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: 0;
-    }
-    .log-toggle.visible { display: inline-flex; }
-    .log-toggle:hover { color: var(--text); background: rgba(168, 181, 199, 0.08); border: 0; }
-    .adv-panel {
-      width: 100%;
-      flex: 0 1 auto;
-      min-height: 0;
-      max-height: 30vh;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: var(--s-3);
-      padding-right: 4px;
-      text-align: left;
-    }
-    .adv-panel.hidden { display: none; }
-    .adv-panel::-webkit-scrollbar { width: 8px; }
-    .adv-panel::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
-    .adv-panel .chk-row { padding: var(--s-2) 0; }
-    .adv-panel .file-list { flex: none; max-height: 180px; margin-top: 0; }
-    /* Action area (§17): one dominant 448×48 primary; secondary actions
-       are a quiet text row beneath it. */
-    .action-area {
-      width: 100%;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: var(--s-3);
-      margin-top: var(--s-5);
-      margin-bottom: auto;
-      padding-bottom: var(--s-4);
-    }
-    .action-area .button-container { width: 100%; justify-content: center; margin: 0; }
-    .action-area .btn-primary { flex: 0 1 448px; min-height: 48px; }
+    /* Action area, repair option, secondary row, footer and the Details
+       view are defined in the APP SHELL section at the end of this
+       stylesheet (ready-screen composition, 2026-09-04). */
     .action-area .btn[hidden] { display: none; }
-    /* Repair option checkbox — part of the transaction, quiet by design. */
-    .shortcut-opt {
-      display: flex;
-      align-items: flex-start;
-      gap: var(--s-3);
-      cursor: pointer;
-      text-align: left;
-      padding: var(--s-1) var(--s-2);
-      border-radius: var(--r-sm);
-    }
     .shortcut-opt[hidden] { display: none; }
-    .shortcut-opt:hover { background: rgba(168, 181, 199, 0.06); }
-    .shortcut-opt input { margin-top: 1px; accent-color: var(--accent); width: 20px; height: 20px; }
-    .shortcut-opt { min-height: 32px; }
-    .shortcut-opt-copy { display: flex; flex-direction: column; gap: 0; }
-    .shortcut-opt-title { font-size: 13px; line-height: 18px; font-weight: 600; color: var(--muted); }
-    .shortcut-opt-sub { font-size: 12px; line-height: 16px; color: var(--dim); }
-    .secondary-row { display: flex; align-items: center; justify-content: center; gap: var(--s-8); flex-wrap: wrap; }
-    .btn-quiet {
-      background: transparent;
-      border: 0;
-      min-height: 36px;
-      padding: 6px 12px;
-      border-radius: var(--r-sm);
-      color: var(--muted);
-      font-size: 13px;
-      font-weight: 600;
-    }
-    .btn-quiet:hover:not(:disabled) { color: var(--text); background: rgba(168, 181, 199, 0.08); border: 0; }
-    .action-area .button-note { text-align: center; }
-    /* Project disclosure — one quiet trust line, integrated into the
-       single footer (design review item 12): badge + "Open Source" + the
-       exact independence wording. No pill, no card, no warning colors;
-       wraps cleanly, never truncates. */
-    .project-disclosure {
-      flex: 1 1 auto;
-      min-width: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-wrap: wrap;
-      column-gap: 6px;
-      padding: 0 var(--s-3);
-      margin: 0;
-      font-size: 12px;
-      line-height: 16px;
-      text-align: center;
-      color: var(--dim);
-      position: relative;
-      z-index: 1;
-    }
-    .project-disclosure { opacity: 0.85; }
-    .project-disclosure .os-icon { width: 16px; height: 16px; flex-shrink: 0; }
-    .project-disclosure .os-label { font-weight: 600; color: var(--dim); }
-    .project-disclosure .os-sep { color: var(--dim); }
-    .project-disclosure .os-independence { font-weight: 400; color: var(--dim); }
-    .explore-disclosure { flex: 0 0 auto; min-height: 24px; margin-top: var(--s-4); padding: 0; font-size: 11px; }
-    /* Utility footer (§23): 52px, hairline on top only. */
-    .footer .hazard-bar { background: var(--border); }
-    .footer-content { min-height: 52px; max-height: 56px; padding: 0 var(--s-6); }
-    .footer-content .badge { font-size: 12px; padding: 6px 12px; }
-    .footer-meta { gap: var(--s-1); flex-wrap: nowrap; }
-    /* Narrow widths: tighten before ever wrapping (spec §42). */
-    @media (max-width: 840px) {
-      .footer-content { padding: 0 var(--s-4); }
-      .footer-content .badge { padding: 6px 8px; }
-      .project-disclosure { font-size: 11px; column-gap: 4px; padding: 0 var(--s-2); }
-      .project-disclosure .os-icon { width: 14px; height: 14px; }
-    }
     /* ============================================================
        EXPLORE LAUNCHER (§24–§36, redesign 2026-08-25) — a product
        directory, not a link list.
@@ -1658,9 +1105,318 @@
       .explore-card .fb-title { font-size: 23px; line-height: 29px; }
     }
 
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    /* ============================================================
+       APP SHELL — ready-screen composition (2026-09-04).
+       Header (56) · centered main · footer (48). Every value is a :root
+       token; spacing steps 4/8/12/16/24/32 only. One content column,
+       capped at 420px, vertically centered with a slight optical lift.
+       Nothing on the primary surfaces scrolls.
+       ============================================================ */
+    body { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+    /* ---- header --------------------------------------------------- */
+    .app-header {
+      position: relative;
+      flex: 0 0 56px;
+      height: 56px;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      padding: 0 var(--s-4);
+      border-bottom: 1px solid var(--border);
+      -webkit-app-region: drag;
+      z-index: 20;
     }
+    .app-header-side { display: flex; align-items: center; min-width: 0; }
+    .app-header-left { justify-content: flex-start; }
+    .app-header-right { justify-content: flex-end; }
+    /* Canonical product mark, centered against the full window width so a
+       Back or Exit control can never move it. Same box in every state. */
+    .app-mark {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 44px;
+      height: 44px;
+      object-fit: contain;
+      pointer-events: none;
+    }
+    .header-action {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--s-1);
+      min-height: 32px;
+      padding: 0 var(--s-2);
+      border: 1px solid transparent;
+      border-radius: var(--r-sm);
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 13px;
+      line-height: 18px;
+      font-weight: 600;
+      cursor: pointer;
+      -webkit-app-region: no-drag;
+      transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
+    }
+    .header-action svg { width: 16px; height: 16px; flex: 0 0 16px; }
+    .header-action[hidden] { display: none; }
+    .header-action:hover { color: var(--text); background: rgba(168, 181, 199, 0.08); }
+    .header-action:active { background: var(--surface-pressed); color: var(--text); }
+    .header-action:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    #backBtn { padding-left: var(--s-1); }
+
+    /* ---- main ----------------------------------------------------- */
+    .main {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      justify-content: center;
+      padding: var(--s-4) var(--s-6);
+      gap: 0;
+      overflow: hidden;
+      -webkit-app-region: no-drag;
+    }
+    .workspace {
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+      max-width: 420px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      /* Optical center: the group sits slightly above the mathematical
+         center of the space between header and footer. */
+      padding-bottom: var(--s-6);
+    }
+    .wizard { flex: 0 0 auto; }
+    .wiz-pane.active { max-height: none; overflow: visible; }
+    .wiz-title { font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: -0.01em; }
+    .wiz-sub { margin-top: var(--s-2); max-width: 360px; white-space: pre-line; }
+    .wiz-hint { display: none; }
+
+    /* ---- action area ---------------------------------------------- */
+    .action-area {
+      flex: 0 0 auto;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: var(--s-3);
+      margin-top: var(--s-6);
+    }
+    .action-area[hidden] { display: none; }
+    .action-area .button-container { width: 100%; justify-content: center; gap: var(--s-3); margin: 0; }
+    .action-area .btn-primary {
+      flex: 0 1 240px;
+      min-width: 200px;
+      max-width: 100%;
+      min-height: 44px;
+      padding: var(--s-3) var(--s-6);
+      font-size: 14px;
+      line-height: 20px;
+      font-weight: 600;
+    }
+    .btn-primary:active:not(:disabled) { background: var(--accent-pressed); border-color: var(--accent-pressed); }
+    .btn-primary:disabled { opacity: 0.5; }
+    /* The .btn / .btn-primary box-shadow resets above must not beat the
+       shared focus ring. */
+    .btn:focus-visible, .btn-primary:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .btn-secondary {
+      min-height: 40px;
+      padding: 0 var(--s-4);
+      font-size: 13px;
+      line-height: 18px;
+      font-weight: 600;
+    }
+    .btn-secondary:active:not(:disabled) { background: var(--surface-pressed); }
+    .btn-secondary[hidden] { display: none; }
+    /* Repair option: one line, checkbox and label on the same baseline,
+       the whole label is the click target. Body-weight text so it reads
+       at 100–150% scaling. */
+    .shortcut-opt {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--s-2);
+      min-height: 32px;
+      padding: var(--s-1) var(--s-2);
+      border-radius: var(--r-sm);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 150ms ease-out;
+    }
+    .shortcut-opt:hover { background: rgba(168, 181, 199, 0.06); }
+    .shortcut-opt:focus-within { box-shadow: var(--focus-ring); }
+    .shortcut-opt input {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      flex: 0 0 18px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .shortcut-opt input:focus-visible { outline: none; box-shadow: none; }
+    .shortcut-opt-title { font-size: 14px; line-height: 20px; font-weight: 500; color: var(--text); }
+    .secondary-row { display: flex; align-items: center; justify-content: center; gap: var(--s-2); flex-wrap: wrap; }
+    .btn-quiet {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--s-1);
+      min-height: 32px;
+      padding: var(--s-1) var(--s-3);
+      border: 1px solid transparent;
+      border-radius: var(--r-sm);
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 13px;
+      line-height: 18px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
+    }
+    .btn-quiet[hidden] { display: none; }
+    .btn-quiet:hover:not(:disabled) { color: var(--text); background: rgba(168, 181, 199, 0.08); border-color: var(--border); }
+    .btn-quiet:active:not(:disabled) { background: var(--surface-pressed); color: var(--text); }
+    .btn-quiet:disabled { opacity: 0.5; cursor: default; }
+    .btn-quiet:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .btn-disclosure svg { width: 16px; height: 16px; flex: 0 0 16px; transition: transform 150ms ease-out; }
+    .btn-disclosure[aria-expanded="true"] svg { transform: rotate(90deg); }
+    .action-area .button-note { text-align: center; color: var(--muted); }
+
+    /* ---- footer --------------------------------------------------- */
+    .app-footer {
+      flex: 0 0 auto;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--s-3);
+      padding: var(--s-1) var(--s-4);
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 16px;
+      -webkit-app-region: no-drag;
+    }
+    /* The version and the independence line read as one group; the line
+       wraps only when the window is narrower than the default. */
+    .app-footer-left { display: flex; align-items: center; gap: var(--s-2); flex: 1 1 auto; min-width: 0; }
+    .app-footer-right { display: flex; align-items: center; gap: 0; flex: 0 0 auto; }
+    .app-version { flex: 0 0 auto; font-weight: 600; color: var(--muted); }
+    .app-version[hidden] { display: none; }
+    .project-disclosure { margin: 0; min-width: 0; color: var(--muted); }
+    .project-disclosure .os-icon, .project-disclosure .os-label, .project-disclosure .os-sep { display: none; }
+    .footer-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 0 var(--s-2);
+      border: 1px solid transparent;
+      border-radius: var(--r-sm);
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 12px;
+      line-height: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 150ms ease-out, color 150ms ease-out;
+    }
+    .footer-link:hover { color: var(--text); background: rgba(168, 181, 199, 0.08); }
+    .footer-link:active { background: var(--surface-pressed); color: var(--text); }
+    .footer-link:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    @media (max-width: 479px) {
+      .app-footer { gap: var(--s-2); }
+      .footer-link { padding: 0 6px; }
+      .main { padding-left: var(--s-4); padding-right: var(--s-4); }
+    }
+
+    /* ---- Details view --------------------------------------------- */
+    .details-view {
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: var(--s-4);
+      text-align: left;
+      animation: wiz-in 200ms ease-out;
+    }
+    .details-view[hidden] { display: none; }
+    .details-title { font-size: 20px; line-height: 26px; font-weight: 700; color: var(--text); }
+    .details-intro { margin-top: var(--s-1); font-size: 13px; line-height: 18px; color: var(--muted); }
+    .details-summary {
+      display: flex;
+      align-items: center;
+      gap: var(--s-3);
+      padding: var(--s-3) var(--s-4);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--r-md);
+    }
+    .details-summary-icon { display: inline-flex; width: 20px; height: 20px; flex: 0 0 20px; }
+    .details-summary-icon svg { width: 20px; height: 20px; }
+    .details-summary-copy { display: flex; flex-direction: column; min-width: 0; }
+    .details-summary-headline { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--text); }
+    .details-summary-counts { font-size: 12px; line-height: 16px; color: var(--muted); }
+    .details-overview { display: flex; flex-direction: column; gap: var(--s-1); }
+    .details-overview[hidden] { display: none; }
+    .details-row {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr) auto 16px;
+      align-items: center;
+      gap: var(--s-3);
+      min-height: 40px;
+      padding: var(--s-2) var(--s-3);
+      border: 1px solid transparent;
+      border-radius: var(--r-sm);
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      transition: background 150ms ease-out, border-color 150ms ease-out;
+    }
+    .details-row:hover { background: rgba(168, 181, 199, 0.07); border-color: var(--border); }
+    .details-row:active { background: var(--surface-pressed); }
+    .details-row:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .details-row-name { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+    .details-row-status { font-size: 13px; line-height: 18px; color: var(--muted); white-space: nowrap; }
+    .details-row-chevron { width: 16px; height: 16px; color: var(--dim); }
+    .details-icon { display: inline-flex; width: 20px; height: 20px; flex: 0 0 20px; }
+    .details-icon svg { width: 20px; height: 20px; }
+    [data-tone="ready"] > .details-icon, [data-tone="ready"] > .details-summary-icon { color: var(--success); }
+    [data-tone="attention"] > .details-icon, [data-tone="attention"] > .details-summary-icon { color: var(--warning); }
+    [data-tone="unverified"] > .details-icon, [data-tone="unverified"] > .details-summary-icon { color: var(--muted); }
+    [data-tone="checking"] > .details-icon, [data-tone="checking"] > .details-summary-icon { color: var(--dim); }
+    .details-category { display: flex; flex-direction: column; gap: var(--s-3); }
+    .details-category[hidden] { display: none; }
+    .details-overview-btn { align-self: flex-start; margin-left: calc(-1 * var(--s-3)); }
+    .details-category-title { font-size: 16px; line-height: 22px; font-weight: 600; color: var(--text); }
+    .details-checks { display: flex; flex-direction: column; gap: var(--s-1); }
+    .details-check {
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr) auto;
+      align-items: center;
+      column-gap: var(--s-3);
+      row-gap: 2px;
+      padding: var(--s-2) var(--s-3);
+      border-radius: var(--r-sm);
+    }
+    .details-check + .details-check { border-top: 1px solid var(--border); border-radius: 0; }
+    .details-check-name { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--text); }
+    .details-check-word { font-size: 13px; line-height: 18px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+    .details-check[data-tone="ready"] .details-check-word { color: var(--success); }
+    .details-check[data-tone="attention"] .details-check-word { color: var(--warning); }
+    .details-check-explain { grid-column: 2 / -1; font-size: 13px; line-height: 18px; color: var(--muted); }
+    .details-check-explain:empty { display: none; }
+
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
     }
@@ -1668,33 +1424,35 @@
   </style>
 </head>
 <body>
-  <div class="titlebar" aria-label="Window controls">
-    <span class="titlebar-name"><img src="assets/brand/app-mark.png" alt="">1132 Fixer</span>
-    <div class="window-controls">
-      <button class="window-control" id="btnMinimize" aria-label="Minimize window"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1 5.5h8"/></svg></button>
-      <button class="window-control" id="btnMaximize" aria-label="Maximize window"><svg viewBox="0 0 10 10" fill="none" aria-hidden="true"><rect x="1.5" y="1.5" width="7" height="7"/></svg></button>
-      <button class="window-control close" id="btnExit" aria-label="Close window"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="m1 1 8 8M9 1 1 9"/></svg></button>
+  <!-- ============================================================
+       APP HEADER — one fixed 56px row in every state: Back (Details view
+       only) on the left, the product mark centered against the full
+       window width, Exit on the right. The mark is absolutely centered so
+       neither side control can move it. The whole row is the window drag
+       region; the buttons opt out.
+       ============================================================ -->
+  <header class="app-header" aria-label="1132 Fixer">
+    <div class="app-header-side app-header-left">
+      <button class="header-action" id="backBtn" type="button" hidden aria-label="Back to the previous screen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        <span>Back</span>
+      </button>
     </div>
-  </div>
-  <div class="header">
-    <div class="header-top">
-      <!-- Centered product icon — the ONLY in-app branding in the header
-           (addendum 2026-08-23): centered against the full window width
-           via absolute positioning, so the status badge can never push it
-           off center. No product-name or subtitle text; the icon carries
-           the accessible name. -->
-      <img class="app-mark" src="assets/brand/app-mark.png" alt="1132 Fixer">
-      <!-- Ships in the SCANNING state, not a green tick. Nothing has been
-           checked at first paint, and this markup is also what stays on
-           screen if the elevation probe or the scan never returns — a
-           static "✓ Ready" there was an unknown state rendered as a
-           settled, passing one. -->
-      <div class="status-badge scanning" id="statusBadge" role="status" aria-live="polite" data-tone="scanning">
-        <span class="status-icon" id="statusBadgeIcon" aria-hidden="true">↻</span>
+    <!-- The ONLY in-app branding: the canonical product mark, no
+         product-name or subtitle text; the alt text carries the name. -->
+    <img class="app-mark" src="assets/brand/app-mark.png" alt="1132 Fixer">
+    <div class="app-header-side app-header-right">
+      <!-- Live status for assistive technology. Ships in the SCANNING
+           state, never a settled green tick: nothing has been checked at
+           first paint. Visually hidden — the wizard body is the one
+           visible status voice. -->
+      <div class="visually-hidden status-badge scanning" id="statusBadge" role="status" aria-live="polite" data-tone="scanning">
+        <span id="statusBadgeIcon" aria-hidden="true">↻</span>
         <span id="statusBadgeText">Checking</span>
       </div>
+      <button class="header-action" id="btnExit" type="button" aria-label="Exit 1132 Fixer">Exit</button>
     </div>
-  </div>
+  </header>
 
   <!-- Update banner — hidden unless the auto-updater has news. -->
   <div class="update-banner" id="updateBanner" role="status" aria-live="polite">
@@ -1808,54 +1566,95 @@
       </div>
     </section>
 
-    <!-- View details (§18) — a subtle text disclosure between the
-         state description and the primary action. Expanded content
-         (checklist, receipt, log) scrolls internally; the window never
-         does. -->
-    <div class="adv-region">
-      <div class="log-actions">
-        <!-- Failure-only: copies the sanitized support report — or,
-             if that fails, the visible log lines — to the clipboard. The
-             panel itself is toggled by the single "View details" control
-             in the secondary action row. -->
-        <button class="log-toggle" id="copyErrBtn" type="button" aria-label="Copy the error details to the clipboard">Copy error details</button>
-      </div>
-      <div class="adv-panel hidden" id="advPanel">
-        <div class="chk-list" id="checkList" role="list" aria-label="Environment checks" aria-busy="true"></div>
-        <div class="receipt" id="receiptPanel" role="region" aria-label="Fix receipt"></div>
-        <div class="file-list" id="fileList" role="log" aria-live="polite" aria-label="Fix log output"></div>
-      </div>
-    </div>
-
-    <!-- Action area (§17) — one dominant primary per state; secondary
-         actions are a quiet text row beneath it. -->
+    <!-- Action area — one dominant primary per state, the repair option
+         directly under it, then one quiet secondary row. Which of these
+         may be visible on which screen is the allowlist in
+         screen-actions.js; the renderer's setActions() picks within it. -->
     <div class="action-area">
       <div class="button-container">
         <button id="elevateBtn" class="btn btn-primary" hidden>Restart as administrator</button>
-        <button id="fixBtn" class="btn btn-primary" hidden aria-label="Run the full fix now">Fix now</button>
+        <!-- No aria-label: the visible text is the accessible name, so
+             "Try again" is announced as "Try again". -->
+        <button id="fixBtn" class="btn btn-primary" hidden>Fix now</button>
         <button id="launchBtn" class="btn btn-primary" hidden aria-label="Open Zoom">Open Zoom</button>
         <button id="shortcutBtn" class="btn btn-primary" hidden><img class="btn-icon" src="assets/1132-helper-shortcut.png" alt="" aria-hidden="true" width="24" height="24"><span id="shortcutBtnLabel">Create desktop shortcut</span></button>
       </div>
-      <!-- Repair option: the desktop
-           shortcut is part of the repair transaction — checked by default,
-           idempotent (replaces the managed shortcut, never duplicates). -->
+      <!-- Repair option: the desktop shortcut is part of the repair
+           transaction — checked by default, idempotent (replaces the
+           managed shortcut, never duplicates). -->
       <label class="shortcut-opt" id="shortcutOpt" hidden>
         <input type="checkbox" id="shortcutOptInput" checked>
-        <span class="shortcut-opt-copy">
-          <span class="shortcut-opt-title">Create desktop shortcut</span>
-          <span class="shortcut-opt-sub">Launch Zoom as User1</span>
-        </span>
+        <span class="shortcut-opt-title">Create desktop shortcut</span>
       </label>
       <div class="secondary-row">
+        <button id="cancelFixBtn" class="btn btn-secondary" type="button" hidden title="Stop after the current safe step.">Cancel fix</button>
         <button id="rescanBtn" class="btn-quiet" type="button" hidden>Check again</button>
         <button id="closeBtn" class="btn-quiet" type="button" hidden>Close</button>
-        <button id="detailsBtn" class="btn-quiet" type="button" hidden aria-controls="advPanel" aria-expanded="false">View details</button>
+        <button id="doneBtn" class="btn-quiet" type="button" hidden>Done</button>
         <button id="supportBtn" class="btn-quiet" type="button" hidden>Support Report</button>
+        <!-- Failure-only: copies the sanitized support report — or, if that
+             fails, the log lines — to the clipboard. -->
+        <button id="copyErrBtn" class="btn-quiet" type="button" hidden aria-label="Copy the error details to the clipboard">Copy error details</button>
+        <!-- Tertiary disclosure: opens the Details view in place. -->
+        <button id="detailsBtn" class="btn-quiet btn-disclosure" type="button" hidden aria-controls="detailsView" aria-expanded="false">
+          <span>View details</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
       </div>
       <p class="button-note" id="buttonNote" hidden></p>
     </div>
+
+    <!-- ============================================================
+         DETAILS VIEW — replaces the wizard + action area in place while
+         open (the state underneath is untouched, so Back restores it
+         exactly). Overview: one row per category; a category opens in
+         the same region. Nothing here scrolls; content is sized to fit
+         the minimum window at 150% scaling.
+         ============================================================ -->
+    <section class="details-view" id="detailsView" hidden aria-labelledby="detailsTitle">
+      <div class="details-head">
+        <h2 class="details-title" id="detailsTitle">Details</h2>
+        <p class="details-intro" id="detailsIntro">What 1132 Fixer checked on this PC before fixing Zoom.</p>
+      </div>
+      <div class="details-summary" id="detailsSummary" role="status" aria-live="polite">
+        <span class="details-summary-icon" id="detailsSummaryIcon" aria-hidden="true"></span>
+        <span class="details-summary-copy">
+          <span class="details-summary-headline" id="detailsSummaryHeadline"></span>
+          <span class="details-summary-counts" id="detailsSummaryCounts"></span>
+        </span>
+      </div>
+      <div class="details-overview" id="detailsOverview" role="list" aria-label="Check categories"></div>
+      <div class="details-category" id="detailsCategory" hidden>
+        <button class="btn-quiet btn-disclosure details-overview-btn" id="detailsOverviewBtn" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+          <span>Back to details</span>
+        </button>
+        <h3 class="details-category-title" id="detailsCategoryTitle"></h3>
+        <div class="details-checks" id="detailsChecks" role="list" aria-labelledby="detailsCategoryTitle"></div>
+      </div>
+    </section>
    </div>
   </div>
+
+  <!-- ============================================================
+       APP FOOTER — one 48px row in every state. Version and the exact
+       independence line together on the left; Support, Feedback and
+       About grouped on the right. Never a primary action, never Explore.
+       ============================================================ -->
+  <footer class="app-footer" aria-label="About this app">
+    <div class="app-footer-left">
+      <!-- Hidden until the real value arrives: no "v—" placeholder. -->
+      <span class="app-version" id="appVersion" hidden></span>
+      <!-- The exact independence disclosure; text injected from the
+           messages.js DISCLOSURE catalog. Informational, never a CTA. -->
+      <p class="project-disclosure" id="projectDisclosure" role="note"></p>
+    </div>
+    <div class="app-footer-right">
+      <button class="footer-link" id="footerSupportBtn" type="button">Support</button>
+      <button class="footer-link" id="btnSupport" type="button" aria-label="Submit feedback or a support report">Feedback</button>
+      <button class="footer-link" id="aboutBtn" type="button" aria-label="About 1132 Fixer">About</button>
+    </div>
+  </footer>
 
   <div class="fix-confirm-overlay" id="aboutOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
     <div class="fix-confirm-dialog">
@@ -1863,6 +1662,10 @@
       <p id="aboutBody"></p>
       <p id="aboutLegal"></p>
       <div class="fix-confirm-actions">
+        <!-- Explore lives here, and only here: a destination chooser for
+             the project's other sites (issue #185). It is not landing
+             chrome and appears in no wizard state. -->
+        <button type="button" class="btn" id="btnExplore" aria-label="Explore — choose a website to open in your browser">Explore</button>
         <button type="button" class="btn btn-primary" id="aboutClose">Close</button>
       </div>
     </div>
@@ -1875,26 +1678,6 @@
       <div class="fix-confirm-actions">
         <button type="button" class="btn" id="fixConfirmCancel">Go back</button>
         <button type="button" class="btn btn-primary" id="fixConfirmContinue">Continue</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="footer">
-    <div class="hazard-bar" aria-hidden="true"></div>
-    <div class="footer-content">
-      <!-- Hidden until real values arrive: a "v—" placeholder and a live
-           "Checking rights…" line would compete with the header status. -->
-      <span class="badge version-badge" id="appVersion" hidden></span>
-      <!-- Persistent trust line (addendum 2026-08-23), integrated into the
-           single footer: open-source badge + the exact independence
-           disclosure. Informational, never a CTA; text injected from the
-           messages.js DISCLOSURE catalog. -->
-      <p class="project-disclosure" id="projectDisclosure" role="note"></p>
-      <div class="footer-meta">
-        <button class="badge feedback-badge" id="btnSupport" aria-label="Submit feedback or a support report">Feedback</button>
-        <button class="badge site-badge" id="btnExplore" hidden aria-label="Explore — choose a website to open in your browser">Explore</button>
-        <!-- Privilege status is not shown in the production footer. -->
-        <span class="badge" id="adminBadge" role="status" hidden></span>
       </div>
     </div>
   </div>
@@ -2066,6 +1849,11 @@
   <script src="messages.js"></script>
   <script src="run-verdict.js"></script>
   <script src="ui-state.js"></script>
+  <!-- Screen action map (which controls each screen may show) and the
+       plain-English Details model. Both are DOM-free and require()-able
+       from tools/. -->
+  <script src="screen-actions.js"></script>
+  <script src="details-view.js"></script>
   <!-- Presentation shell: a page script (the sandboxed preload cannot require
        it). Loaded before renderer.js so its DOMContentLoaded work runs first. -->
   <script src="src/preload/compact-shell.js"></script>

@@ -55,8 +55,20 @@ this file.
   after verified success, never `Everything looks good.`, never raw
   PowerShell or stack traces on the primary surface (details go behind
   **View details**). Footer shows only version, the exact line
-  `Independent project. Not affiliated with Zoom.`, Support and Feedback;
-  Explore is not landing chrome.
+  `Independent project. Not affiliated with Zoom.`, Support, Feedback and
+  About; Explore is reachable only from the About dialog and is never
+  landing chrome.
+- Screen composition: static 56px header (Back on the Details view only,
+  centered product mark, Exit), one centered column capped at 420px, static
+  48px footer. Which controls a screen may show is the allowlist in
+  `screen-actions.js`; the compact shell applies it after every renderer
+  change, so no control is ever hidden with CSS and none leaks between
+  states. **View details** opens the in-place Details view (renderer
+  `openDetails`) whose content comes from `details-view.js`: plain English
+  only, four status words (Checking · Ready · Needs attention · Unable to
+  verify), categories opened one at a time, nothing that scrolls. Back and
+  Escape restore the exact prior screen. See `DESIGN-SYNC.md` § "Ready
+  screen and Details view".
 
 ## Build, test, release
 
@@ -71,6 +83,12 @@ node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out
 
 - `npm test` must pass from the exact final commit. Add a regression test for
   every fixed defect.
+- `node tools/ready-screen-capture.js --out <dir>` renders the real page files
+  in headless Chromium (global `playwright`) and asserts, per state and
+  viewport, the visible-control allowlist, no scrollbars, focus rings, the
+  Details round trip and plain English. Attach its captures to any PR that
+  touches a user-facing surface; the packaged acceptance driver repeats the
+  Details round trip on the shipped binary.
 - The packaged acceptance driver needs an elevated Windows session **without**
   Smart App Control enforcement (SAC blocks the unsigned host binary before
   Electron starts). CI runs it on the `windows-latest` runner and uploads the
@@ -100,6 +118,135 @@ node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out
   blocked and report the evidence. Do not call the work complete.
 - "Works on my machine" is not proof; a clean-`main` reproduction means
   "repository defect confirmed", not "out of scope".
+
+## Durable standing rule — complete blocker repair, repository quality, architecture optimization
+
+Operator directive 2026-09-04. Permanent. Applies to every assigned
+repository, pull request, issue, deployment, service, migration, redesign
+and continuation lane. `CLAUDE.md` resolves to this file; there is no
+competing copy.
+
+1. **No "pre-existing" exception.** A failure is not dismissible because it
+   existed before the current change. Never justify completion with
+   "pre-existing failure", "unrelated to this PR", "already broken on main",
+   "outside the touched files", "not introduced by this branch", "legacy
+   behavior" or "someone can fix it later". If a discovered problem blocks
+   tests, builds, deployment, runtime health, security, accessibility,
+   design quality, maintainability, migration or acceptance, investigate and
+   address it as part of the active completion program. A blocker may remain
+   unresolved only when it needs unavailable authorization, credentials,
+   protected infrastructure access, an external vendor correction, or an
+   independently owned change that must not be overwritten; then prove it
+   with current evidence, create or update a durable tracking issue, record
+   owner, dependency, impact, evidence and exact acceptance criteria, link it
+   to the PR, project item and checkpoint, keep the parent work marked
+   blocked or incomplete, and never report the program as fully complete.
+2. **Fix the system, not only the symptom.** Determine the root cause;
+   inspect adjacent code paths, shared contracts, callers, tests,
+   configuration and deployment topology; correct duplicated, contradictory,
+   fragile or misleading behavior; add regression tests and meaningful
+   negative controls; verify failure paths as well as success paths; remove
+   obsolete fallbacks, dead code, abandoned flags, stale terminology,
+   placeholders and misleading documentation when safe; preserve backward
+   compatibility only when intentionally supported. No uncontrolled rewrite:
+   refactor deliberately, preserve working behavior, keep changes reviewable.
+3. **Mandatory repository scrub** before declaring a repository or lane
+   complete: open PRs and unresolved review threads; open issues, project
+   items and linked blockers; non-default branches and abandoned work;
+   failing, skipped, disabled, flaky or startup-failed CI; dependency,
+   security, accessibility and configuration warnings; dead files, duplicate
+   implementations, stale documentation and obsolete terminology; repository
+   settings, default branch, ownership, governance pointers and branch
+   protections; build, test, packaging, release, deployment, rollback and
+   operational documentation. Preserve valuable work from non-head branches
+   before closing or deleting them. Merge completed work into `main` through
+   the required review and CI process. Never delete branches, issues,
+   services, repositories, databases or environments without verified
+   preservation and dependency checks.
+4. **Code-quality and performance standard.** Messy code in the assigned
+   scope must be improved when it creates meaningful risk, duplication,
+   confusion, performance loss or unnecessary operating cost: clear module
+   and service ownership; reusable shared contracts instead of duplicated
+   logic; predictable error handling and fail-closed behavior; typed and
+   validated data boundaries; efficient database access and indexing;
+   bounded retries, timeouts, concurrency and background work; caching with
+   expiry, invalidation, purge and retention rules; removal of redundant
+   requests and repeated computation; lazy loading, code splitting, asset and
+   bundle control where applicable; useful structured logs without secrets;
+   idempotent migrations, jobs, deployments and recovery; resource limits,
+   graceful degradation, rollback safety and health checks. Performance
+   claims require measurements or reproducible evidence.
+5. **Cost-effective topology and architecture.** Review every affected
+   program as a complete operating system: canonical repositories and
+   retirement targets; Railway projects, environments, services, workers,
+   databases and Redis instances; domains, Cloudflare routes, webhooks,
+   scheduled jobs, queues and external integrations; service-to-service
+   calls and shared infrastructure; production and staging ownership;
+   deployment sources and exact commit SHAs; duplicate, crashed, idle,
+   orphaned or obsolete resources. One source of truth per responsibility;
+   consolidate duplicates safely; prefer shared infrastructure when isolation
+   is not required; preserve tenant, environment, identity and authorization
+   boundaries; avoid unnecessary always-on workers, polling, databases and
+   cross-service calls; use teardown, scaling, caching, batching and
+   retention; minimize cost without weakening reliability, security,
+   observability or recovery; document ownership, dependencies, data flow,
+   rollback and retirement sequencing; complete migrations before disabling
+   or deleting legacy resources; never substitute a local process for
+   required Railway production or staging proof. Architecture changes carry a
+   before-and-after topology assessment, expected cost or resource impact,
+   migration plan, rollback plan and verified runtime evidence.
+6. **Design and experience framework.** For any user-facing surface use the
+   approved Design Sync, design system, tokens, components, assets and
+   documented visual standards. Audit end to end: information architecture
+   and navigation; layout density, spacing, alignment and hierarchy;
+   typography, contrast, color consistency and readable sizing; responsive
+   behavior without horizontal scrolling; keyboard, screen-reader, focus,
+   reduced-motion and accessibility behavior; loading, empty, success,
+   warning, disabled and failure states; menus, dialogs, wizards,
+   confirmations and interactive controls; plain-English labels; consistent
+   premium quality across related pages; removal of dead controls, duplicate
+   headings, placeholder content and misleading actions; performance impact
+   of images, effects, animation and third-party assets. Every visible
+   control performs its real function. A redesigned screen is incomplete
+   until visually reviewed at all supported viewport sizes and scaling levels
+   and its workflow is tested end to end.
+7. **README and repository-design compliance.** Read all applicable
+   repository instructions before editing; comply with `README.md`,
+   `AGENTS.md`, `CLAUDE.md`, Design Sync and design-system references,
+   governance files, architecture records, contribution instructions, code
+   ownership, testing and release requirements, and operational runbooks.
+   Update documentation whenever behavior, topology, ownership, setup,
+   architecture, UI, deployment or operating procedures change. The README
+   must accurately explain the product, architecture, setup, workflows,
+   testing, deployment, troubleshooting, security expectations and status —
+   no stale screenshots, retired names, incorrect commands, dead links or
+   references to deleted services.
+8. **Verification and merge gate.** Work is complete only when all
+   applicable evidence is green on the exact final commit: formatting,
+   linting, type checking and static analysis; unit, integration, contract,
+   accessibility, visual and end-to-end tests; production build and
+   packaging; migration and rollback validation; security and secret scans;
+   required governance checks; resolved review threads; executable exact-head
+   CI; merge into `main`; deployment from the verified merge SHA;
+   pre- and post-deployment log review; public health, route, workflow and
+   data readback checks; confirmation that production runs the intended
+   commit. Never bypass, disable, weaken, quarantine or rewrite a required
+   gate to obtain green. A zero-job CI startup failure is not a passing
+   check; a successful deployment is not proof of correct behavior; a local
+   test result is not a substitute for exact-head CI or live verification.
+9. **Completion reporting** distinguishes: completed and verified; fixed but
+   awaiting merge; merged but awaiting deployment; deployed and
+   live-verified; blocked with verified external dependency; remaining
+   tracked work — with exact repository, branch, PR, issue, project item,
+   commit SHA, deployment, test totals, runtime evidence and remaining
+   blockers. Never claim "done", "complete", "production-ready" or "fully
+   resolved" while any gate, blocker, migration step, review thread,
+   deployment check or acceptance criterion is outstanding.
+
+Own the complete result: follow discovered defects through code, design,
+data, infrastructure, documentation, deployment and production verification
+until the program is genuinely complete — or transparently blocked with
+durable evidence and an actionable resolution path.
 
 ## Branch and PR workflow
 

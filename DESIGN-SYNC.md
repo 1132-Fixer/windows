@@ -230,3 +230,129 @@ Rules that follow from this:
   are derived from the current status colours, not from an earlier palette.
 - Every focusable control shows the `--focus-ring`; `tools/packaged-acceptance.js`
   checks this on the packaged build for every visible control.
+
+---
+
+## Ready screen and Details view (2026-09-04)
+
+Pinned design source: `design-system` @ `7f3ddaf402f1456b10911264886719de62776b83`
+(`docs/08-components.md`, `04-spacing.md`, `05-layout.md`, `09-accessibility.md`,
+`07-motion.md`). Tokens are the `:root` block in `index.html` (recorded
+divergence above; issue #196 tracks the source-first reconciliation).
+
+### Screen structure
+
+```text
+┌ header 56px ── [Back]        ( mark )              [Exit] ─┐
+│                                                            │
+│  main — one column, max 420px, optically centered          │
+│      Ready to fix Zoom                 24/32/700           │
+│      Start Zoom with a fresh setup.    14/20 text-secondary│
+│      Your personal files won’t be changed.                 │
+│      [ Fix now ]                       240×44 primary       │
+│      [x] Create desktop shortcut       18px box, 14/20 text │
+│      View details ›                    tertiary, 32px       │
+│                                                            │
+└ footer 48px ── v6.3.2  Independent project. …   Support Feedback About ┘
+```
+
+- Header: `grid-template-columns: 1fr auto 1fr`, the product mark absolutely
+  centered against the full width, so Back (Details view only) and Exit never
+  move it. Header actions are quiet text (13/600 `--muted`, 32px min height,
+  hover fill, pressed `--surface-pressed`, `--focus-ring`).
+- Main: `.main` flex → `.workspace` column (`max-width: 420px`,
+  `justify-content: center`, `padding-bottom: --s-6` for the optical lift).
+  Title → sub `--s-2`; sub → action area `--s-6`; action area gap `--s-3`.
+- Primary `Fix now`: `flex: 0 1 240px`, `min-height: 44px`, `--r-sm`;
+  hover `--accent-2`, pressed `--accent-pressed`, disabled 50 %, ring
+  `--focus-ring` (explicit `.btn-primary:focus-visible` — the box-shadow reset
+  used to beat it).
+- Repair option: `inline-flex`, 18px checkbox with `accent-color: --accent`,
+  label 14/20/500 `--text`; the whole label is the target; `:focus-within`
+  shows the ring.
+- Tertiary `View details`: `.btn-quiet.btn-disclosure` — 13/600 `--muted`,
+  32px, 1px transparent border; hover fill + `--border`; pressed
+  `--surface-pressed`; Lucide `chevron-right` 16px that rotates 90° while
+  `aria-expanded="true"`. Never a filled button, never a bare link.
+- Footer: `min-height: 48px`, `border-top: 1px solid --border`, padding
+  `--s-1 --s-4`. Left group (`--s-2` gap): version 12/600 `--muted` + the exact
+  independence line 12/16 `--muted` (contrast raised from `--dim`). Right group:
+  Support · Feedback · About as `.footer-link` (12/600, 32px, hover fill,
+  pressed, ring). The line stays on one row at 520px and may wrap to two rows
+  only below 480px; it never clips.
+- Spacing uses only 4/8/12/16/24/32 (`--s-1…--s-4`, `--s-6`, `--s-7`); `20`
+  and `40` remain defined for the Explore and feedback surfaces.
+- Motion: `wiz-in` 200ms on pane and Details entry, 150ms hover/press
+  transitions, chevron rotate 150ms; all collapse under
+  `prefers-reduced-motion`.
+
+### Action map — one allowlist per screen (`screen-actions.js`)
+
+| Screen | Visible controls (besides Exit and the footer) |
+|---|---|
+| Checking | — |
+| Ready | Fix now · Create desktop shortcut · View details |
+| Blocked / action required | Restart as administrator or the Zoom recovery card · Check again · Close · View details |
+| Fixing / Cancelling | Cancel fix · View details |
+| Cancelled | Try again · View details |
+| Complete | Open Zoom · (Create desktop shortcut only if that step did not complete) · Done · View details |
+| Unable | Try again · Support Report · Copy error details · Close · View details |
+| Details overlay (any state) | Back (header) · category rows · Back to details |
+
+Root cause of the mixed-control defect this replaces: two owners painted the
+same buttons — the renderer's per-outcome `setActions()` and the compact
+shell, which reparented View details beside Cancel/Done, rebuilt the footer
+from moved nodes, hid Explore with `display:none !important`, and showed its
+own Cancel/Done through per-state CSS. The shell now derives the state and
+calls `applyScreenControls(state, document, view)`: everything not on the
+screen's list is hidden; nothing is ever revealed by the gate. Header, footer
+and action area are static markup. Explore is a control of the About dialog
+only. `tools/screen-actions-smoke.js` pins the map; `tools/ready-screen-capture.js`
+and `tools/packaged-acceptance.js` assert the rendered result.
+
+### Details view
+
+- Opens in place (`renderer.js` `openDetails`): `#wizardCard` and
+  `.action-area` get `hidden`, `#detailsView` shows, `body[data-view="details"]`,
+  Back appears in the header, focus lands on Back. The state underneath is
+  untouched, so Back and Escape restore it exactly (readiness result,
+  checkbox, repair outcome) and focus returns to View details.
+- Layout: heading 20/26/700 (`heading`), one-sentence intro 13/18, a summary
+  strip (`--panel`, `--border`, `--r-md`: tone icon + headline 14/600 + count
+  12/16), then one 40px row per category (icon · name 14/600 · summary 13
+  `--muted` · chevron). Rows have no borders; hover fill, pressed, ring.
+  Design-system checklist rows go two-column only above the 720px minimum
+  window, so at 520px the overview is a single column by that rule.
+- Category view replaces the overview in the same region: `Back to details`
+  (tertiary, focus lands here), category name 16/22/600, then one row per
+  check (icon · plain label 14/600 · status word 13/600 · explanation 13/18
+  `--muted` on the next line, only when not Ready). Rows separated by a single
+  `--border` line, no nested containers.
+- Status vocabulary is exactly four words, mapped in `details-view.js`:
+  pending → **Checking**, ready → **Ready**, repairable and blocked → **Needs
+  attention**, warning and unknown → **Unable to verify**. A key the scan did
+  not report is Unable to verify, never Ready. Icons: Lucide `check-circle`
+  (`--success`), `alert-circle` (`--warning`), `help-circle` (`--muted`),
+  `circle` (`--dim`); the word beside the icon carries the meaning.
+- Plain English: every check has a user-facing label and description
+  (Administrator access, Zoom installation, Helper account, Helper profile,
+  Windows sign-in service, Camera permission, Microphone permission, Windows
+  profile settings, Camera service). No registry hive, account name, path,
+  command or policy key can reach the surface (`isPlainEnglish` guard,
+  `tools/details-view-smoke.js`).
+- After a run, **Repair results** (Camera permission, Microphone permission,
+  Windows profile settings, Camera service) appears as one more category
+  from the orchestrator receipt.
+- Nothing scrolls: the overview (headline + 5–6 rows) and every category
+  (≤ 4 checks) fit 440×520 at 150 % scaling; that is asserted, not assumed.
+
+### Verification
+
+| Command | Result |
+|---|---|
+| `npm test` | exit 0 (adds `screen-actions-smoke`, `details-view-smoke`) |
+| `node tools/ready-screen-capture.js --out …` | exit 0 — 6 viewports × Ready/Details/5 categories/Back/Escape/Enter, plus Checking, Fixing (+Details, Exit confirm), Complete (+Repair results), Unable (+retry to Complete), Blocked (+App category), About → Explore |
+| `tools/packaged-acceptance.js` (CI, shipped binary) | per landing scale: `controls-belong-to-state`, `details-opens-in-place`, `details-focus-starts-on-back`, `details-no-foreign-controls`, `details-no-scrollbars`, `details-plain-english`, `details-categories`, `details-category-opens`, `details-back-restores-state`, `details-back-returns-focus`, `details-back-preserves-option` |
+
+Captures: `harness render — real page code and assets, mocked electronAPI`;
+the packaged `.exe` is Windows-only verification on the CI runner.
