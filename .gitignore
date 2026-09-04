@@ -25,6 +25,10 @@ node_modules/
 dist/
 *.exe
 
+# Packaged acceptance evidence (tools/packaged-acceptance.js) — uploaded as a
+# CI artifact, never committed.
+acceptance-evidence/
+
 # OS / Editor
 nul
 Thumbs.db

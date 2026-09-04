@@ -42,6 +42,41 @@ jobs:
       - name: Build NSIS installer
         run: npm run build:installer
 
+      # Packaged-build acceptance. The runner is an elevated Windows session
+      # without Smart App Control, so the unsigned host binary can start here
+      # (it cannot on a SAC-enforcing operator machine). Zoom Workplace is
+      # installed first so Fix now can drive the real repair orchestrator;
+      # if that download fails the driver still runs and reports the fix
+      # journey as not-run rather than passed. See tools/packaged-acceptance.js.
+      - name: Install Zoom Workplace for the acceptance run
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $msi = Join-Path $env:RUNNER_TEMP 'ZoomInstallerFull.msi'
+          Invoke-WebRequest -Uri 'https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64' -OutFile $msi -TimeoutSec 300
+          $p = Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -Wait -PassThru
+          Write-Host "msiexec exit $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+          Get-ChildItem 'C:\Program Files\Zoom\bin\Zoom.exe' -ErrorAction SilentlyContinue | Select-Object FullName, Length
+
+      # --test-copy: GitHub-hosted runners have UAC disabled, and with UAC off
+      # Windows will not CreateProcess a requireAdministrator image from the
+      # Chromium sandbox's restricted token (renderer/GPU launch fails,
+      # SBOX_ERROR_CREATE_PROCESS = 18). The driver therefore stamps a
+      # throwaway copy asInvoker and drives that; dist/win-unpacked and the
+      # installers are untouched and the report records which binary ran.
+      - name: Packaged acceptance (launch, states, keyboard, scaling, Fix now)
+        run: node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out acceptance-evidence --test-copy
+
+      - name: Upload packaged acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: packaged-acceptance
+          path: acceptance-evidence/
+          retention-days: 30
+
       # package.json "files" is a broad glob with a deny list, so what ships
       # depends on what is in the working tree at build time. This enumerates
       # the real payload and fails on an unexpected executable, script, key,

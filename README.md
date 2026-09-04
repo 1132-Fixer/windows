@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/social-preview.png" alt="1132 Fixer for Windows ΓÇö one-click fix for Zoom Error 1132" width="960">
+  <img src="assets/social-preview.png" alt="1132 Fixer for Windows — one-click fix for Zoom Error 1132" width="960">
 </p>
 
 <h1 align="center">1132 Fixer for Windows</h1>
@@ -88,7 +88,7 @@ The app manages this local account:
 
 ```text
 Username: user1
-Password: random ΓÇö a fresh one is generated on every fix run
+Password: random — a fresh one is generated on every fix run
 ```
 
 - You never need the password. The desktop shortcut signs in for you: the fix stores the password encrypted with Windows DPAPI in `%APPDATA%\1132 Fixer\helper-credential.bin`, next to the shortcut launcher (`launch-zoom-as-user1.ps1`). Only your own Windows account can decrypt it. No plain-text password is written to disk. Shortcuts from older versions keep working and are upgraded on the next fix run.
@@ -138,6 +138,12 @@ Common fixes are in [docs/user/troubleshooting.md](docs/user/troubleshooting.md)
 | Zoom is not found | Install Zoom Workplace with the machine-wide installer. |
 | **Fix now** stays unavailable | Open **View details** and fix the marked item. |
 | Camera or microphone is missing | Set camera and microphone access for desktop apps while signed in as `user1`. |
+| SmartScreen warns, or Smart App Control blocks the app | Releases are unsigned. SmartScreen lets you continue; Smart App Control does not, and has no per-app exception. Do not turn it off for this. See [troubleshooting](docs/user/troubleshooting.md) and [code signing](docs/security/code-signing.md). |
+
+## Known limitations
+
+- **Unsigned releases.** No code-signing certificate is configured. Windows SmartScreen shows a warning on first run, and Windows 11 PCs with Smart App Control in enforcement will not open the app at all. See [docs/security/code-signing.md](docs/security/code-signing.md).
+- **One helper account.** The fix always rebuilds the `user1` helper account; it does not manage other accounts.
 
 ## Docs
 
@@ -176,6 +182,8 @@ Version bump:
 node scripts/bump-version.js patch
 npm install --package-lock-only
 ```
+
+`npm test` runs every `tools/*-smoke.js` check with Node alone. CI additionally builds the installer on a Windows runner and runs `tools/packaged-acceptance.js` against the packaged executable: it launches the real app, proves it leaves **Checking** within the deadline, checks the footer, focus rings, target sizes and scrollbars at 100 %, 125 % and 150 % scaling, exercises the second-instance guard and the **Fix now** journey, and uploads screenshots and a report as the `packaged-acceptance` artifact. That driver needs an elevated Windows session without Smart App Control enforcement.
 
 A `v*` tag reachable from `main` runs `.github/workflows/release.yml`, which builds Setup and Portable artifacts, checksums, and `latest.yml` onto this repository's GitHub Releases.
 

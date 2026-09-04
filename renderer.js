@@ -176,7 +176,7 @@ function setStatus(tone, text) {
 
 const STAGE_ORDER = ['prep', 'verify', 'consent', 'launch', 'receipt'];
 const STAGE_LABEL = {
-  prep: 'Preparing the repair', verify: 'Repairing helper account',
+  prep: 'Preparing the repair', verify: 'Setting up the fresh Zoom environment',
   consent: 'Camera & microphone access', launch: 'Launch Zoom', receipt: 'Verify repair'
 };
 // Consumer-language detail for the ACTIVE step (design critique 2026-08-23:
@@ -184,7 +184,7 @@ const STAGE_LABEL = {
 // stays behind View details).
 const STAGE_DETAIL = {
   prep: 'Getting things ready…',
-  verify: 'Setting up the helper account…',
+  verify: 'Setting up the fresh Zoom environment…',
   consent: 'Configuring camera & microphone access…',
   launch: 'Starting Zoom…',
   receipt: 'Checking the repair…'
@@ -1435,14 +1435,25 @@ elevateBtn.addEventListener('click', async () => {
   elevateBtn.disabled = true;
   elevateBtn.textContent = 'Waiting for Windows approval…';
   let started = false;
+  let outcome = 'failed';
   try {
     const r = await window.electronAPI.relaunchElevated();
     started = !!(r && r.started);
+    if (r && typeof r.outcome === 'string') outcome = r.outcome;
   } catch (_) { /* treated as declined */ }
   if (started) {
     elevateBtn.textContent = WIZARD.ADMIN_RESTARTING;
     return; // main.js quits this instance; the elevated one takes over
   }
+  // Plain-English reason under View details. No PowerShell text.
+  const reasons = {
+    declined: 'Windows approval was cancelled or refused.',
+    timeout: 'Windows approval was not answered in time.',
+    'launch-error': 'Windows PowerShell could not be started to request approval.',
+    failed: 'Windows did not confirm that the restart began.',
+    'already-elevated': 'The app is already running as administrator.'
+  };
+  addFileItem(`Restart as administrator: ${reasons[outcome] || reasons.failed}`, 'failed');
   elevateBtn.disabled = false;
   elevateBtn.textContent = WIZARD.ADMIN_PRIMARY;
   showResultPane('warn', WIZARD.ADMIN_TITLE, WIZARD.ADMIN_DECLINED_SUB);

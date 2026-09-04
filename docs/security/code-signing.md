@@ -250,3 +250,32 @@ conditions, all of which are enforced by
 
 An honest unsigned release is acceptable. A release that implies a trust
 property it does not have is not.
+
+## 11. Smart App Control
+
+Smart App Control (Windows 11, `VerifiedAndReputablePolicyState = 1`) blocks
+the unsigned host executable before Electron starts. Measured on this product
+(2026-09-03/04): Code Integrity events 3033 and 3077, policy
+`{0283ac0f-fff1-49ae-ada1-8a933130cad6}`, `explorer.exe` / `svchost.exe`
+loading `1132 Fixer.exe`, "did not meet the Enterprise signing level
+requirements". The same block applies to the unsigned Electron binary under
+`node_modules/electron/dist`, so neither the packaged app nor `npm run dev`
+can start on a SAC-enforcing machine.
+
+What is and is not true about this:
+
+- There is no per-app exception. Microsoft's documented unblock is an
+  Authenticode signature chaining to a CA in the Microsoft Trusted Root
+  Program, under the expected publisher (High Texas). Self-signed
+  certificates on the operator's machine are not in that program and do not
+  satisfy SAC; do not install one as a root.
+- The temp-script change in 6.3.2 (UAC relaunch through `powershell.exe
+  -Command`, no `%TEMP%\*.ps1`) removes one further thing SAC would classify
+  as "part of this app". It does **not** make the unsigned host open under
+  SAC enforcement, and no release note may say that it does.
+- Testing and evidence therefore run on hosts without SAC enforcement: the
+  `windows-latest` GitHub runner (`tools/packaged-acceptance.js` in CI) and
+  PCs where SAC is off or in evaluation mode. A SAC-enforcing operator PC
+  is a **blocked** test host, reported as such, never as a pass.
+- Do not instruct users to disable Smart App Control. Turning it off is a
+  one-way choice on that PC until Windows is reinstalled.

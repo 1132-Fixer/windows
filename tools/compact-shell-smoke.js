@@ -22,7 +22,7 @@ for (const text of [
   'Your personal files won’t be changed.',
   'Fixing Zoom',
   'Getting things ready…',
-  'Step ${view.step} of 4',
+  'Step ${view.step} of ${FIX_STAGE_COUNT}',
   "You're all set",
   'Zoom is ready to use.',
   'Open Zoom',
@@ -37,6 +37,9 @@ check(shell.includes("document.getElementById('btnExplore')"), 'Explore node is 
 check(/body\.compact-shell-enabled #btnExplore/.test(shell) && /display:\s*none/.test(shell),
   'Explore is hidden from compact production chrome');
 check(!shell.includes("footerMeta.appendChild(exploreBtn)"), 'Explore is not placed in the compact footer');
+check(shell.includes("document.getElementById('projectDisclosure')") &&
+  shell.includes('compactFooter.appendChild(disclosure)'),
+  'exact independence disclosure is in the compact footer');
 check(!shell.includes("actionArea.appendChild(exploreBtn)"), 'Explore is not placed in the Fix now action area');
 check(!shell.includes("setCompactStatus('✓', 'Ready')"), 'ready state does not add a duplicate Ready pill');
 check(!/Everything looks good/.test(shell), 'shell never claims everything looks good');
@@ -50,7 +53,9 @@ check(compactStageView('prep').step === 1, 'prep -> step 1');
 check(compactStageView('verify').step === 2, 'verify -> step 2');
 check(compactStageView('consent').step === 3, 'consent -> step 3');
 check(compactStageView('launch').step === 4, 'launch -> step 4');
-check(compactStageView('receipt').step === 4, 'receipt folds into step 4');
+check(compactStageView('receipt').step === 5, 'receipt (verification) is its own step 5');
+check(!shell.includes('compact-progress-fill') && !/progressFill\.style\.width/.test(shell), 'no decorative progress bar; the stage tracker is the progress display');
+check(!/#wizFixing \.stage-tracker[^{]*\{[^}]*display:\s*none/.test(shell), 'compact shell shows the five-stage tracker while fixing');
 
 console.log('compact-shell-smoke: cancellation is real, not Exit masquerading as Cancel');
 check(shell.includes('requestCancel'), 'shell requests cooperative cancellation');
@@ -58,12 +63,24 @@ check(!shell.includes("cancelBtn.addEventListener('click', () => exitBtn.click()
 check(shell.includes('Cancel fix and exit') && shell.includes('Keep running'), 'Exit-during-fix confirmation is present');
 check(shell.includes('Finishing the current step safely…'), 'cancelling state explains safe-boundary behavior');
 check(shell.includes('Fix cancelled') && shell.includes('Nothing else will be changed.'), 'cancelled terminal state is conclusive');
-check(preload.includes("requestCancel: () => ipcRenderer.invoke('quit-app')"), 'preload routes cancellation through the brokered IPC');
+check(/requestCancel: \(\) => \(api\(\) && api\(\)\.quitApp \? api\(\)\.quitApp\(\)/.test(shell) && preload.includes("quitApp: () => ipcRenderer.invoke('quit-app')"),
+  'shell routes cancellation through the brokered quit-app IPC exposed by preload');
 check(preload.includes("dataset.fixOutcome = 'running'"), 'preload exposes run outcome to the presentation shell');
 
 console.log('compact-shell-smoke: presentation remains version-agnostic');
 check(!/v5\.5\.1/.test(shell + preload), 'example version is not hardcoded');
 check(shell.includes("document.getElementById('appVersion')"), 'real app version node is reused');
+
+console.log('compact-shell-smoke: loads as a page script, never through the sandboxed preload');
+{
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const shellTag = html.indexOf('<script src="src/preload/compact-shell.js"></script>');
+  const rendererTag = html.indexOf('<script src="renderer.js"></script>');
+  check(shellTag > 0, 'index.html loads src/preload/compact-shell.js');
+  check(shellTag > 0 && rendererTag > shellTag, 'compact shell script precedes renderer.js');
+  check(!/require\(['"]\.\/src\/preload\/compact-shell['"]\)/.test(preload), 'preload.js does not require the compact shell');
+  check(/typeof module !== 'undefined'/.test(shell) && /installCompactShell\(\{/.test(shell), 'shell self-installs in the page and exports under Node');
+}
 
 if (failures) {
   console.error(`compact-shell-smoke: ${failures} failure(s)`);

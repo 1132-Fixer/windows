@@ -190,3 +190,43 @@ Acceptance captures: `artifacts/explore/` (worktree) and
 (worktree and packaged), with only `window.electronAPI` mocked. The packaged
 Electron binary is a Windows executable and cannot be launched on the Linux
 build host, so running the shipped `.exe` remains Windows-only verification.
+
+---
+
+## Compact repair panel — token reconciliation (2026-09-04)
+
+Pinned design source: `design-system` @ `7f3ddaf402f1456b10911264886719de62776b83`.
+Its `docs/platforms/windows.md` states "No shipped Windows UI exists yet — this
+page defines the target spec, derived from the macOS reference". The shipped
+Windows panel (6.2.0 onward) follows the **operator acceptance spec of
+2026-08-23 (§4–§9)**, whose values are the single `:root` block in
+`index.html`. Where the two disagree, the acceptance spec governs the app and
+the design-system repository is the one that is stale. This table is the
+recorded divergence; the design-system update is tracked separately (issue
+linked from the PR that added this section) and the pin is not advanced until
+that source PR is reviewed.
+
+| Role | design-system token | Shipped app token | Status |
+|---|---|---|---|
+| App background | `background` `#0F1724` | `--bg` `#0F1724` | match |
+| Surface | `surface` `#202B3D` | `--panel` `#172235`, `--panel-2` `#1D2A3F` | divergent (two elevation tiers) |
+| Modal surface | `surface-modal` `#2A2530` (warm plum) | `--panel-3` `#1D2A3F` | divergent — one navy theme, no purple drift (spec §4) |
+| Primary / accent | `primary` `#2E78D6` | `--accent` `#337FDB`, hover `#3B8AE8`, pressed `#286BC2` | divergent |
+| Focus ring | 2px `primary`, offset 2px | `--focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus)` (`#71AFFF`) | equivalent (2px ring on 2px gap) |
+| Success / warning / error | `#3CCF6E` / `#FFB547` / `#EF5350` | `#2BC66D` / `#F3B84A` / `#F05D67` | divergent (same hue family) |
+| Text primary / secondary | `#F5F7FA` / `#9AA5B4` | `#F5F7FB` / `#A8B5C7` | near-identical / divergent |
+| Border | `#33415A` | `#2B3D57` subtle, `#3B5578` strong | divergent |
+| Radii | sm 10 / md 16 / lg 24 / xl 28 | control 10 / card 14 / modal 18 / pill 999 | divergent (restrained radii, spec §7) |
+| Spacing | 4 8 12 16 24 32 48 64 | 4 8 12 16 20 24 32 40 | `20` and `40` are not on the design-system scale |
+| Typography | Segoe UI Variable stack, 14/400 body | same stack; body 14 | match |
+| Motion | 150–250 ms, reduced-motion honoured | transitions ≤ 250 ms, `prefers-reduced-motion` in `index.html` and the compact shell | match |
+
+Rules that follow from this:
+
+- One token authority: `index.html` has exactly one `:root` block. The compact
+  shell (`src/preload/compact-shell.js`) reads `var(--…)` from it and defines
+  no hex of its own.
+- Status tints (`--success-bg`, `--warning-bg`, `--danger-bg`, `--accent-bg`)
+  are derived from the current status colours, not from an earlier palette.
+- Every focusable control shows the `--focus-ring`; `tools/packaged-acceptance.js`
+  checks this on the packaged build for every visible control.

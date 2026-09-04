@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.3.2] - 2026-09-04
+
+Verified on the packaged build by `tools/packaged-acceptance.js` on the Windows CI runner (43 cases passed: launch, leaves Checking within 15 s, no scrollbars at 100/125/150 % scaling, footer, focus rings, target sizes, second-instance guard, confirmation dialog, real **Fix now** run to a truthful end state, View details). Releases remain unsigned; Smart App Control in enforcement still blocks the app (see `docs/security/code-signing.md` §11).
+
+### Fixed
+
+- **Every packaged start since 6.2.0 ended on “Unable to complete” (or stayed on Checking…).** The renderer runs sandboxed, and a sandboxed preload can only `require` Electron’s own modules; `preload.js` required the compact presentation shell from the repository, which threw `module not found`, aborted the whole preload, and left the page without `window.electronAPI`. The shell now loads as a page script from `index.html`; `preload.js` requires only `electron`, and a test fails the build if a repository `require` ever returns there. Found by the new packaged acceptance run on the Windows runner, whose first screenshot showed exactly this screen.
+- Startup could stay on **Checking…** forever. The 6.3.0 elevation probe compiled a .NET helper inside PowerShell (`Add-Type`) and, in the packaged app, sometimes never returned. The probe now reads the token integrity level with `whoami /groups` first (synchronous, 2.5 s bound), falls back to the PowerShell token query only when that gives nothing, and every child process in the elevation path settles exactly once with a named outcome (`started`, `declined`, `timeout`, `launch-error`, `failed`). Nothing in startup can wait without a deadline.
+- Asking Windows for administrator approval always reported “declined”. The relaunch used `Start-Process -LiteralPath`, which Windows PowerShell 5.1 rejects (`-LiteralPath` is not a `Start-Process` parameter). It is `-FilePath` again, and a test now runs the real System32 PowerShell to prove it.
+- A relaunch that Windows had approved could still be reported as failed: the result was read on the child’s `exit` event, before its output had drained. Output is now read through `close`, with a short grace period so an inherited handle cannot hold startup open.
+- The relaunch result is a whole-line sentinel, so unrelated PowerShell text can never be mistaken for a successful start.
+- `%SystemRoot%` is validated (absolute, exists) with a `C:\Windows` fallback before PowerShell or `whoami` is resolved; a missing Windows directory is a reported launch error, not a crash.
+- `net user` (helper-account check) and the shortcut creator now have timeouts and kill their process tree on expiry.
+- UAC relaunch no longer writes a temp `.ps1`. Smart App Control treats unknown script files as “part of this app”. The host exe is still unsigned, so SAC in enforcement still refuses to open it until a Trusted Root Program signature exists (publisher High Texas). This release does not change that.
+- Garbled em dashes (`ΓÇö`) in dialogs and the README are real em dashes again.
+
+### Changed
+
+- **Fix now** confirmation states that the helper account and helper profile are replaced, personal files are unchanged, Zoom opens in the fresh helper environment, and cancellation is only at safe checkpoints.
+- Compact footer shows the exact independence line `Independent project. Not affiliated with Zoom.` with version, Support, and Feedback. Explore stays hidden from landing chrome.
+- “Restart as administrator” explains under View details why a restart did not happen (cancelled, not answered in time, PowerShell unavailable), in plain English.
+
+### Added
+
+- `tools/elevation-controller-smoke.js`: every elevation and relaunch outcome under fake and real child runners, quoting of paths with spaces, apostrophes, quotes and non-ASCII text, and the no-temp-file guarantee.
+- `tools/packaged-acceptance.js` and a CI step that launches the packaged executable on the Windows runner, proves it leaves Checking within the deadline, checks footer, focus rings, target sizes and scrollbars at 100/125/150 % scaling, exercises the second-instance guard and the Fix now journey, and uploads screenshots and a report as the `packaged-acceptance` artifact.
+
 ## [6.3.1] - 2026-09-01
 
 ### Fixed

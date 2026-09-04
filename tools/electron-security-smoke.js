@@ -405,6 +405,14 @@ console.log('electron-security-smoke: path validation and PS quoting');
   const allowed = await es.openExternalSafe(async (u) => { opened = u; }, 'https://1132-fixer.xyz/');
   check(allowed.success === true && opened === 'https://1132-fixer.xyz/', 'openExternalSafe allows catalog URL');
 
+  // A sandboxed preload can require only Electron's shim modules. A local
+  // require throws "module not found" at load time, which aborts the whole
+  // preload and leaves the page without window.electronAPI (packaged
+  // 6.2.0–6.3.1 started on "Unable to complete" for exactly this reason).
+  const localRequires = (preloadSrc.match(/require\((['"])(\.{1,2}\/|[A-Za-z]:\\)[^'"]*\1\)/g) || []);
+  check(localRequires.length === 0, `sandboxed preload requires no repository module (${localRequires.join(', ') || 'none'})`);
+  check(/require\(['"]electron['"]\)/.test(preloadSrc), 'preload requires only electron');
+
   if (failures) {
     console.error(`\nelectron-security-smoke: ${failures} FAIL`);
     process.exit(1);

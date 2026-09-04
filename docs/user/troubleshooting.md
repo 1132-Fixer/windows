@@ -10,6 +10,7 @@
 | The app says the helper profile is temporary | Run **Fix now** again. Do not use Zoom from a TEMP profile. |
 | You are signed in as `user1` | Sign out of that account first. 1132 Fixer cannot run while the helper account is the active Windows session. |
 | SmartScreen warns | Current releases are unsigned. See [code signing](../security/code-signing.md). |
+| Windows says Smart App Control blocked the app | Smart App Control only opens apps with a trusted publisher signature. Current releases are unsigned, so it blocks 1132 Fixer, and it does not offer a per-app exception. Do not turn Smart App Control off for this. Use a PC where it is off or in evaluation mode, or wait for a signed release. Details: [code signing](../security/code-signing.md#11-smart-app-control). |
 
 ## Camera and microphone as user1
 
