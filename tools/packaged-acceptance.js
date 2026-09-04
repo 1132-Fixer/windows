@@ -126,7 +126,7 @@ async function layoutFacts(page) {
         if (overflow.length >= 5) break;
       }
     }
-    const footer = document.querySelector('.compact-footer');
+    const footer = document.querySelector('.app-footer');
     const disclosure = document.getElementById('projectDisclosure');
     const explore = document.getElementById('btnExplore');
     const version = document.getElementById('appVersion');
@@ -140,7 +140,9 @@ async function layoutFacts(page) {
       disclosureInFooter: !!(footer && disclosure && footer.contains(disclosure)),
       disclosureClipped: !!(disclosure && ([...disclosure.querySelectorAll('span')].some((s) => s.scrollWidth > s.clientWidth + 1) ||
         (() => { const r = disclosure.getBoundingClientRect(); return r.bottom > vh + 1 || r.top < 0 || r.right > vw + 1; })())),
-      exploreVisible: !!(explore && !explore.hidden && getComputedStyle(explore).display !== 'none'),
+      // Rendered, not merely un-hidden: Explore lives inside the closed About
+      // dialog, so its own attributes say nothing about what is on screen.
+      exploreVisible: !!(explore && !explore.hidden && getComputedStyle(explore).display !== 'none' && explore.getBoundingClientRect().height > 0),
       versionText: version ? version.textContent.trim() : null,
       title: (document.querySelector('.wiz-pane.active h2, .wiz-pane.active h1, [data-compact-title]') || {}).textContent || null
     };
@@ -161,11 +163,14 @@ async function keyboardFacts(page) {
     for (const el of els) {
       el.focus();
       const cs = getComputedStyle(el);
-      const ring = (cs.outlineStyle && cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0) ||
-        (cs.boxShadow && cs.boxShadow !== 'none');
       const name = (el.getAttribute('aria-label') || el.textContent || el.value || '').replace(/\s+/g, ' ').trim().slice(0, 40);
-      // A checkbox's target is its label (WCAG 2.5.8 measures the whole target).
+      // A checkbox's target is its label (WCAG 2.5.8 measures the whole
+      // target), and the label is also where its focus ring is drawn
+      // (:focus-within), so the ring is looked for on the target too.
       const target = (el.type === 'checkbox' || el.type === 'radio') && el.closest('label') ? el.closest('label') : el;
+      const tcs = getComputedStyle(target);
+      const ring = (cs.outlineStyle && cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0) ||
+        (cs.boxShadow && cs.boxShadow !== 'none') || (tcs.boxShadow && tcs.boxShadow !== 'none');
       const r = target.getBoundingClientRect();
       rows.push({ tag: el.tagName.toLowerCase(), id: el.id || null, name, focusVisible: !!ring, w: Math.round(r.width), h: Math.round(r.height) });
     }
@@ -318,7 +323,10 @@ async function runFixJourney(page) {
     await shot(page, '03-details-' + state);
     return;
   }
-  // Enter on the landing surface activates the primary action (Fix now).
+  // Enter on the landing surface, with no control focused, activates the
+  // primary action (Fix now). (With View details focused — where the Details
+  // round trip left it — Enter would open Details, as it should.)
+  await page.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur());
   await page.keyboard.press('Enter');
   const overlayShown = await page.waitForSelector('#fixConfirmOverlay:not([hidden])', { timeout: 5000 }).then(() => true).catch(() => false);
   (overlayShown ? passed : failed)('fix.confirm-opens-on-enter', overlayShown ? 'confirmation dialog opened from the keyboard' : 'confirmation did not open');
