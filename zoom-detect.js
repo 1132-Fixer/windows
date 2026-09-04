@@ -1,5 +1,5 @@
-// Pure helpers for machine-wide Zoom install detection (triage cluster
-// W1-DETECT). main.js owns the filesystem/registry probing; this module owns
+// Pure helpers for machine-wide Zoom install detection.
+// main.js owns the filesystem/registry probing; this module owns
 // the parsing, path-safety validation, and user-facing copy so the shipped
 // logic is unit-testable (tools/zoom-detection-smoke.js) — Electron requires
 // in main.js make it impossible to import main.js directly under plain node.

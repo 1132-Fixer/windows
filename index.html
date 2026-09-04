@@ -281,7 +281,7 @@
 
     /* ============================================================
        ZOOM RECOVERY CARD — guided recovery when the machine-wide Zoom
-       requirement is blocked (operator directive 2026-08-09). Existing
+       requirement is blocked. Existing
        tokens only; blocked state = icon + "Action required" label +
        colored edge, never color alone. All text wraps (200% scaling).
        ============================================================ */
@@ -1731,11 +1731,11 @@
         <p class="wiz-sub" id="wizResultSub"></p>
 
         <!-- ============================================================
-             Zoom Workplace guided recovery card (operator directive
-             2026-08-09). Rendered inside the result pane while the
-             machine-wide Zoom requirement is BLOCKED. All copy is injected
-             from the messages.js ZOOM_RECOVERY catalog at bootstrap so the
-             DOM ships the byte-verbatim directive strings the smoke pins.
+             Zoom Workplace guided recovery card. Rendered inside the
+             result pane while the machine-wide Zoom requirement is
+             BLOCKED. All copy is injected from the messages.js
+             ZOOM_RECOVERY catalog at bootstrap so the DOM ships the
+             byte-verbatim strings the smoke test pins.
              "Next disabled until the requirement passes" = the existing
              canRunFix gate on the Fix now button (unchanged).
              ============================================================ -->
@@ -1814,7 +1814,7 @@
          does. -->
     <div class="adv-region">
       <div class="log-actions">
-        <!-- Failure-only (W8-UX): copies the sanitized support report — or,
+        <!-- Failure-only: copies the sanitized support report — or,
              if that fails, the visible log lines — to the clipboard. The
              panel itself is toggled by the single "View details" control
              in the secondary action row. -->
@@ -1836,7 +1836,7 @@
         <button id="launchBtn" class="btn btn-primary" hidden aria-label="Open Zoom">Open Zoom</button>
         <button id="shortcutBtn" class="btn btn-primary" hidden><img class="btn-icon" src="assets/1132-helper-shortcut.png" alt="" aria-hidden="true" width="24" height="24"><span id="shortcutBtnLabel">Create desktop shortcut</span></button>
       </div>
-      <!-- Repair option (operator directive 2026-08-23): the desktop
+      <!-- Repair option: the desktop
            shortcut is part of the repair transaction — checked by default,
            idempotent (replaces the managed shortcut, never duplicates). -->
       <label class="shortcut-opt" id="shortcutOpt" hidden>

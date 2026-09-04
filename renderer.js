@@ -394,7 +394,7 @@ const fixDisabledNote = document.getElementById('fixDisabledNote');
 // listing both the card label and the blocker message would say the same
 // thing twice. Everything NOT in this set (running_as_target, missing_tool,
 // tool-probe failure) has no card of its own and is named by its message
-// (already user-facing copy) so the disabled note never goes silent (F-W22).
+// (already user-facing copy) so the disabled note never goes silent.
 const CARD_COVERED_BLOCKER_CODES = new Set([
   'not_elevated', 'zoom_not_found', 'seclogon_disabled', 'seclogon_start_failed'
 ]);
@@ -509,7 +509,7 @@ async function runEnvironmentScan(opts = {}) {
       .map(c => cards[c.key])
       .filter(card => card && normalizeCheckStatus(card.status) === 'blocked')
       .map(card => card.label);
-    // Blockers without a checklist card (F-W22) — name them by message.
+    // Blockers without a checklist card — name them by message.
     const nonCardBlockers = ((result && Array.isArray(result.blockers)) ? result.blockers : [])
       .filter(b => b && !CARD_COVERED_BLOCKER_CODES.has(b.code))
       .map(b => b.message || b.code);
@@ -589,16 +589,16 @@ window.addEventListener('focus', () => {
 });
 
 // ============================================================
-// Zoom Workplace guided recovery card (operator directive 2026-08-09).
+// Zoom Workplace guided recovery card.
 //
-// Wizard mapping (the app has no wizard): the directive's "blocked screen"
+// Wizard mapping (the app has no wizard): the specified "blocked screen"
 // is the Zoom checklist card zone — this card renders below the checklist
 // while the machine-wide Zoom requirement is BLOCKED. "Next disabled until
 // the requirement passes" = the existing canRunFix gate on Fix now (kept,
 // untouched). "Cancel setup" = the cancel row's copy + the existing Exit
 // affordance (quitApp) — closing changes nothing on the computer.
 //
-// Truthfulness (operator amendment): detection is read-only; nothing on the
+// Truthfulness: detection is read-only; nothing on the
 // computer changes unless the user launches an installer they chose and
 // approved in the Windows prompt. The only automatic behavior described —
 // re-check when the installer finishes — is exactly what the
@@ -1099,7 +1099,7 @@ async function runFix() {
 // (loaded before this script; require()-able by tools/messages-smoke.js).
 
 // ============================================================
-// Copy error details (W8-UX) — failure-only chip next to the log toggle.
+// Copy error details — failure-only chip next to the log toggle.
 // Reuses the support-report IPC so the copied text is the SANITIZED bundle
 // (SIDs, username, home path, hostname redacted). If the report cannot be
 // built, falls back to the raw visible log lines — text already on screen.

@@ -42,8 +42,8 @@ master ever changes; the assertions are the contract, not the file size.
   which is expected for a badge that small and does not cost identity.
 - Suite: 11 PASS / 0 FAIL.
 
-## Still owed (physical display, G-17 session)
+## Still owed (needs a physical display)
 
 Taskbar and desktop appearance of the created shortcut, and a live launch
 through the helper account. Those need a real displayed Windows session and
-are reported as DISPLAYED_VALIDATION_PENDING rather than claimed here.
+are reported as validation pending rather than claimed here.
