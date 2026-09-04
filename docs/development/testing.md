@@ -10,7 +10,28 @@ node feedback-proxy/test.js
 
 `npm test` is the unit and integration smoke chain in `package.json`. It covers
 copy, identity, independence wording, brand placement, Fix-now routing,
-cancellation, profile safety, Electron isolation, and the updater channel.
+cancellation, profile safety, Electron isolation, the updater channel, the
+screen action map (`tools/screen-actions-smoke.js`) and the plain-English
+Details model (`tools/details-view-smoke.js`).
+
+## Rendered screens (headless Chromium)
+
+```bash
+npm install -g playwright   # once; downloads Chromium
+node tools/ready-screen-capture.js --out artifacts/ready-screen
+```
+
+Renders the real `index.html`, `renderer.js` and shell with a mocked
+`window.electronAPI`, drives Checking, Ready, Fixing, Complete, Unable and
+Blocked through the real renderer paths at 520×600 (100/125/150 %), 520×560
+and 440×520, and asserts per screen: only the allowed controls are visible,
+Explore is never visible, no document or nested scrollbar, nothing outside
+the viewport, footer not overlapped, focus rings and 24px targets, the
+Details round trip (open, category, Back to details, Back, Escape) with the
+checkbox preserved and focus returned, and no technical text on the Details
+surface. Label every capture "harness render — real page code and assets,
+mocked electronAPI"; the packaged binary is proven by
+`tools/packaged-acceptance.js` on CI.
 
 ## What does not need Zoom
 

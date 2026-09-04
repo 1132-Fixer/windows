@@ -38,7 +38,8 @@ function requirePlaywright() {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']
     }).trim();
     if (root) candidates.push(path.join(root, 'playwright'));
-  } catch { /* npm not on PATH */ }
+  } catch { /* npm not on PATH, or a .cmd shim this Node refuses to spawn */ }
+  if (process.env.APPDATA) candidates.push(path.join(process.env.APPDATA, 'npm', 'node_modules', 'playwright'));
   const tried = [];
   for (const c of candidates) {
     try { return require(c); } catch (e) { tried.push(`${c} (${e.code || e.message})`); }
@@ -103,6 +104,8 @@ const OPENED = [];   // destination ids the mocked IPC was asked to open
     });
 
     await page.goto(pathToFileURL(path.join(ROOT, 'index.html')).href);
+    // Explore is reached from the About dialog (footer → About → Explore).
+    await page.click('#aboutBtn');
     await page.click('#btnExplore');
     await page.waitForSelector('#exploreOverlay.show .explore-hero', { timeout: 5000 });
     await page.waitForTimeout(250);   // let lazy images settle
@@ -284,6 +287,7 @@ const OPENED = [];   // destination ids the mocked IPC was asked to open
     window.electronAPI = new Proxy({}, { get: () => async () => ({ success: true }) });
   });
   await page.goto(pathToFileURL(path.join(ROOT, 'index.html')).href);
+  await page.click('#aboutBtn');
   await page.click('#btnExplore');
   await page.waitForSelector('#exploreOverlay.show .explore-hero');
   await page.focus('.explore-visit');

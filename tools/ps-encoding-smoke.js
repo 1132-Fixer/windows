@@ -44,7 +44,11 @@ function runPS(scriptContent, withPreamble) {
   try {
     const r = spawnSync('powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp],
-      { windowsHide: true, timeout: 30000 });
+      // cwd is pinned to the temp dir: an unavailable inherited working
+      // directory (a dropped network or cloud-drive mount) made spawnSync
+      // return status null and this suite fail for a reason unrelated to
+      // PowerShell encoding.
+      { windowsHide: true, timeout: 30000, cwd: os.tmpdir() });
     // Decode exactly the way main.js runProcess does: Buffer#toString() = UTF-8.
     return {
       code: r.status,

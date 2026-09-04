@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Ready screen composition and the Details view
+
+- **Ready screen** is one centered group: `Ready to fix Zoom`, the two-line explanation, a 240px **Fix now** (the only filled button), the **Create desktop shortcut** checkbox directly beneath it (18px box, body-weight white label, whole label clickable), and **View details** as a tertiary disclosure with a chevron. Content column is capped at 420px; the group sits at the optical center of the space between a fixed 56px header (Back · centered product mark · Exit) and a fixed 48px footer (version + `Independent project. Not affiliated with Zoom.` on the left; Support · Feedback · About grouped on the right). The layout is a header/main/footer flex column — no absolute positioning beyond the centered mark — and fits 520×600, 520×560 and the 440×520 minimum at 100/125/150 % scaling with no scrollbar, overlap or clipped text.
+- **View details** now opens a Details view in place of the wizard instead of a bordered, internally scrolling panel. A visible **Back** control (left arrow + "Back") sits in the header; Escape also returns. Back restores the exact prior screen: readiness result, checkbox state and any repair outcome are untouched, and focus returns to **View details**. The overview shows one readiness headline with a pass count and one row per category (App, Zoom, Helper account, Privacy policies, Camera service, plus Repair results after a run); a category opens in the same region with **Back to details**. Every check carries a plain-English label and one of four status words — Checking, Ready, Needs attention, Unable to verify — with a short explanation only when something needs attention. No registry paths, account names, service internals, commands or policy keys appear on that surface (`details-view.js`, guarded by `tools/details-view-smoke.js`). Nothing in the Details view scrolls.
+- **Explore** is offered only inside the About dialog (About → Explore). It was a hidden footer control since 6.3.0 — present in the landing markup, hidden by CSS and an attribute — and is no longer part of any wizard state.
+- The screen-reader status line (`#statusBadge`) is visually hidden in every tone; the wizard body is the visible status voice.
+
+### Fixed
+
+- **Mixed controls between states.** Two layers owned the same buttons: the renderer's per-outcome `setActions()` table and the compact shell, which reparented View details next to Cancel/Done, moved footer nodes into a shell-built footer, hid Explore with `display:none !important`, and toggled its own Cancel/Done per state with CSS only. A stale flag or a reused slot could show a control from another screen. `screen-actions.js` now holds one explicit allowlist per screen (Checking, Ready, Blocked, Fixing, Cancelling, Cancelled, Complete, Unable, Notice, plus the Details overlay); the shell applies it after every renderer change, hiding anything the screen does not allow and never revealing. Header, footer and action area are static markup; the shell moves no nodes. `tools/screen-actions-smoke.js` asserts the map (Open Zoom only after success, Cancel fix only while running, Copy error details only on Unable, Back only on Details, Explore on no screen) and `tools/ready-screen-capture.js` proves the rendered result per state and viewport.
+- Pressing Escape anywhere threw a `ReferenceError` (the handler called a countdown canceller that no longer existed) before it could close a dialog; the dead call is removed.
+- **Fix now** lost its keyboard focus ring: the `.btn-primary` box-shadow reset out-ranked the shared `:focus-visible` rule.
+- The **Try again** button was announced as "Run the full fix now"; the visible label is now the accessible name.
+- Enter no longer triggers **Fix now** while the Details view is open or while focus is on another control.
+- `tools/packaged-acceptance.js` read the active pane title with a class name that does not exist (`.wizard-pane`); it now reads `.wiz-pane`, puts the page in keyboard modality before measuring focus rings, checks that only the state's controls are visible, and drives the Details round trip (open, category, Back to details, Back) on the shipped binary.
+- `tools/ps-encoding-smoke.js` pins the PowerShell working directory to the temp folder so an unavailable inherited directory cannot fail the encoding checks.
+
+### Removed
+
+- Dead markup and styles: the hidden legacy title bar with Minimize/Maximize/Close, the legacy header and footer, the checklist/receipt/log panel (`#advPanel`, `#checkList`, `#receiptPanel`, `#fileList`) and its rAF-batched DOM log writer (the log buffer that feeds the support report is unchanged), the `.btn-primary.counting` countdown style, and the compact shell's `!important` overrides.
+
 ## [6.3.2] - 2026-09-04
 
 Verified on the packaged build by `tools/packaged-acceptance.js` on the Windows CI runner (43 cases passed: launch, leaves Checking within 15 s, no scrollbars at 100/125/150 % scaling, footer, focus rings, target sizes, second-instance guard, confirmation dialog, real **Fix now** run to a truthful end state, View details). Releases remain unsigned; Smart App Control in enforcement still blocks the app (see `docs/security/code-signing.md` §11).

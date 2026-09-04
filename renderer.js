@@ -6,13 +6,13 @@
 //   result   -> ready / fix available / action required
 //   fixing   -> 5-stage tracker + latest action line
 //   notice   -> success / warnings / failure / shortcut states
-// The full checklist, fix receipt and raw log live in the collapsed
-// Advanced-details region; the primary flow never shows raw output.
-// FIX NOW keeps its brief cancelable countdown; the repair, updater
-// and shortcut logic are unchanged underneath.
+// Per-check results and the fix receipt are shown in the Details view
+// (plain English, details-view.js); the raw log is kept in memory for
+// the support report and never rendered. FIX NOW confirms once, then
+// runs the orchestrator; the repair, updater and shortcut logic are
+// unchanged underneath.
 // ============================================================
 
-const fileList        = document.getElementById('fileList');
 const elevateBtn      = document.getElementById('elevateBtn');
 const fixBtn          = document.getElementById('fixBtn');
 const launchBtn       = document.getElementById('launchBtn');
@@ -22,23 +22,23 @@ const closeBtn        = document.getElementById('closeBtn');
 const detailsBtn      = document.getElementById('detailsBtn');
 const supportBtn      = document.getElementById('supportBtn');
 const buttonNote      = document.getElementById('buttonNote');
-const checkList       = document.getElementById('checkList');
 const stageTracker    = document.getElementById('stageTracker');
-const receiptPanel    = document.getElementById('receiptPanel');
 const copyErrBtn      = document.getElementById('copyErrBtn');
-const advPanel        = document.getElementById('advPanel');
 const wizChecks       = document.getElementById('wizChecks');
 const wizFixAction    = document.getElementById('wizFixAction');
 
 let isRunning = false;
 let lastReceipt = null;
+// Plain-English receipt rows for the Details view (details-view.js
+// receiptItemView), rebuilt from every completed run.
+let lastReceiptItems = null;
 let lastStageLabel = '';
+// The last scan's per-check status, keyed by CHECK_ORDER key. This is the
+// data behind the Details view; a key the scan did not report is absent
+// and renders as "Unable to verify" — never as Ready.
+let lastScan = { statusByKey: {} };
 const logBuffer = [];
 const LOG_BUFFER_MAX = 400;
-// Hard cap on log DOM nodes. Long robocopy/PowerShell output used to grow
-// the DOM without bound — thousands of nodes plus a forced reflow per line
-// was a real source of the "app freezes" reports.
-const LOG_DOM_MAX = 400;
 
 // ============================================================
 // Wizard panes / action area
@@ -99,7 +99,7 @@ function setActions({ fix = false, fixDisabled = false, fixQuiet = false, fixLab
                       shortcut = false, shortcutQuiet = false, shortcutLabel = 'Create desktop shortcut',
                       shortcutOption = false, elevate = false, launch = false,
                       rescan = false, rescanLabel = 'Check again', close = false, details = false, support = false,
-                      note = '' } = {}) {
+                      copyErr = false, note = '' } = {}) {
   elevateBtn.hidden = !elevate;
   if (elevate) elevateBtn.textContent = WIZARD.ADMIN_PRIMARY;
   fixBtn.hidden = !fix;
@@ -122,6 +122,7 @@ function setActions({ fix = false, fixDisabled = false, fixQuiet = false, fixLab
   if (closeBtn) closeBtn.hidden = !close;
   detailsBtn.hidden = !details;
   supportBtn.hidden = !support;
+  copyErrBtn.hidden = !copyErr;
   buttonNote.textContent = note;
   buttonNote.hidden = !note;
   // The "Fix now is disabled by:" note exists to explain a VISIBLE disabled
@@ -168,7 +169,9 @@ function worstStatus(statuses) {
 function setStatus(tone, text) {
   const badge = document.getElementById('statusBadge');
   badge.hidden = false; // re-shown after the repairing state hid it
-  badge.className = 'status-badge' + (tone ? ' ' + tone : '');
+  // Assistive-technology live region only: it stays visually hidden in
+  // every tone (the wizard body is the visible status voice).
+  badge.className = 'visually-hidden status-badge' + (tone ? ' ' + tone : '');
   badge.setAttribute('data-tone', tone || 'unknown');
   document.getElementById('statusBadgeIcon').textContent = summaryIcon(tone);
   document.getElementById('statusBadgeText').textContent = text;
@@ -273,47 +276,17 @@ function finalizeStages(outcome) {
 }
 
 // ============================================================
-// Log region — ring buffer for the Support Report + rAF-batched DOM
-// writes. Lines arrive from main in bursts (robocopy, icacls, PS);
-// appending + scrolling per line forced a reflow each time. Batching
-// into one frame keeps the renderer responsive during the fix.
+// Log — a ring buffer for the Support Report and Copy error details.
+// Lines arrive from main in bursts (robocopy, icacls, PS).
 // ============================================================
-const pendingLogItems = [];
-let logFlushScheduled = false;
-
 function clearFileList() {
-  pendingLogItems.length = 0;
-  fileList.innerHTML = '';
   logBuffer.length = 0;
 }
 
-function flushLogItems() {
-  logFlushScheduled = false;
-  if (!pendingLogItems.length) return;
-  const frag = document.createDocumentFragment();
-  for (const item of pendingLogItems.splice(0)) {
-    const div = document.createElement('div');
-    div.className = `file-item ${item.className}`;
-    div.textContent = item.text;
-    frag.appendChild(div);
-  }
-  fileList.appendChild(frag);
-  while (fileList.children.length > LOG_DOM_MAX) {
-    fileList.removeChild(fileList.firstChild);
-  }
-  fileList.scrollTop = fileList.scrollHeight;
-}
-
-function queueLogItem(text, className) {
-  pendingLogItems.push({ text, className });
-  if (!logFlushScheduled) {
-    logFlushScheduled = true;
-    requestAnimationFrame(flushLogItems);
-  }
-}
-
+// Nothing here touches the DOM: raw output is never rendered on a primary
+// surface. The buffer feeds the Support Report and Copy error details.
 function addFileItem(text, className = '') {
-  queueLogItem(text, className);
+  void className;
   logBuffer.push(text);
   if (logBuffer.length > LOG_BUFFER_MAX) logBuffer.shift();
 
@@ -328,7 +301,7 @@ function addFileItem(text, className = '') {
 }
 
 function addEmptyLine() {
-  queueLogItem(' ', 'empty-line');
+  addFileItem(' ');
 }
 
 // Advanced details — one collapsed chip; the panel (checklist + receipt +
@@ -337,11 +310,171 @@ function addEmptyLine() {
 // secondary action row is the single toggle for the diagnostics panel
 // (checklist + receipt + log); it flips to "Hide details" while open.
 // The panel scrolls internally so the window never does.
-function setLogExpanded(expanded) {
-  advPanel.classList.toggle('hidden', !expanded);
-  detailsBtn.textContent = expanded ? 'Hide details' : 'View details';
-  detailsBtn.setAttribute('aria-expanded', String(expanded));
-  detailsBtn.setAttribute('aria-controls', 'advPanel');
+// ============================================================
+// Details view — opens in place over any state. The wizard and the
+// action area are hidden as containers; every control keeps its own
+// flags, so Back restores the previous screen exactly (readiness
+// result, checkbox, completed checks). Content comes from
+// details-view.js: plain English only, four status words, nothing that
+// scrolls. Categories open one at a time in the same region.
+// ============================================================
+const detailsView         = document.getElementById('detailsView');
+const detailsSummaryEl    = document.getElementById('detailsSummary');
+const detailsSummaryIcon  = document.getElementById('detailsSummaryIcon');
+const detailsSummaryHead  = document.getElementById('detailsSummaryHeadline');
+const detailsSummaryCount = document.getElementById('detailsSummaryCounts');
+const detailsOverview     = document.getElementById('detailsOverview');
+const detailsCategoryEl   = document.getElementById('detailsCategory');
+const detailsOverviewBtn  = document.getElementById('detailsOverviewBtn');
+const detailsCategoryTitle = document.getElementById('detailsCategoryTitle');
+const detailsChecks       = document.getElementById('detailsChecks');
+const backBtn             = document.getElementById('backBtn');
+const wizardCard          = document.getElementById('wizardCard');
+const actionArea          = document.querySelector('.action-area');
+let detailsOpenCategoryId = null;
+
+// Lucide-style status marks (2px stroke, 24 grid). Colour comes from the
+// row's data-tone; the status word beside it carries the meaning.
+const DETAILS_ICON_SVG = {
+  ready:      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>`,
+  attention:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
+  unverified: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
+  checking:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/></svg>`
+};
+const DETAILS_CHEVRON_SVG = `<svg class="details-row-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>`;
+
+function detailsIcon(tone, klass) {
+  return `<span class="${klass}">${DETAILS_ICON_SVG[tone] || DETAILS_ICON_SVG.unverified}</span>`;
+}
+
+// Last-line guard: the model is written in plain English, and this keeps
+// a raw scan message from ever reaching the screen by accident.
+function plain(text) {
+  return isPlainEnglish(text) ? String(text || '') : '';
+}
+
+function buildDetailsCategories() {
+  const model = buildDetailsModel(lastScan.statusByKey, CHECK_ORDER);
+  const categories = model.categories.slice();
+  if (Array.isArray(lastReceiptItems) && lastReceiptItems.length) {
+    const checks = lastReceiptItems;
+    const tones = checks.map(c => c.tone);
+    const tone = tones.indexOf('attention') !== -1 ? 'attention' : tones.indexOf('unverified') !== -1 ? 'unverified' : 'ready';
+    const passed = checks.filter(c => c.tone === 'ready').length;
+    const attention = checks.filter(c => c.tone === 'attention').length;
+    const unverified = checks.filter(c => c.tone === 'unverified').length;
+    categories.push({
+      group: 'Repair results', id: 'repair-results', label: 'Repair results', checks, tone,
+      word: tone === 'ready' ? 'Ready' : tone === 'attention' ? 'Needs attention' : 'Unable to verify',
+      passed, total: checks.length,
+      summary: attention ? `${attention} ${attention === 1 ? 'item needs' : 'items need'} attention`
+        : unverified ? `${unverified} ${unverified === 1 ? 'check' : 'checks'} could not be verified`
+        : `${passed} of ${checks.length} ${checks.length === 1 ? 'check' : 'checks'} passed`
+    });
+  }
+  return { model, categories };
+}
+
+function renderDetailsOverview() {
+  const { model, categories } = buildDetailsCategories();
+  detailsSummaryEl.setAttribute('data-tone', model.overall.tone);
+  detailsSummaryIcon.innerHTML = DETAILS_ICON_SVG[model.overall.tone] || DETAILS_ICON_SVG.unverified;
+  detailsSummaryHead.textContent = plain(model.overall.headline);
+  detailsSummaryCount.textContent = plain(model.overall.counts);
+  detailsOverview.innerHTML = '';
+  for (const cat of categories) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'details-row';
+    row.setAttribute('role', 'listitem');
+    row.setAttribute('data-tone', cat.tone);
+    row.setAttribute('data-category', cat.id);
+    row.setAttribute('aria-label', `${cat.label}: ${cat.summary}. Open ${cat.label}`);
+    row.innerHTML = `${detailsIcon(cat.tone, 'details-icon')}
+      <span class="details-row-name">${escapeHtml(cat.label)}</span>
+      <span class="details-row-status">${escapeHtml(plain(cat.summary))}</span>
+      ${DETAILS_CHEVRON_SVG}`;
+    row.addEventListener('click', () => showDetailsCategory(cat.id));
+    detailsOverview.appendChild(row);
+  }
+  return categories;
+}
+
+function showDetailsOverview({ focus = true } = {}) {
+  const wasOpen = detailsOpenCategoryId;
+  detailsOpenCategoryId = null;
+  renderDetailsOverview();
+  detailsCategoryEl.hidden = true;
+  detailsSummaryEl.hidden = false;
+  detailsOverview.hidden = false;
+  if (!focus) return;
+  const target = wasOpen ? detailsOverview.querySelector(`[data-category="${wasOpen}"]`) : null;
+  if (target) target.focus();
+  else if (backBtn) backBtn.focus();
+}
+
+function showDetailsCategory(id, { focus = true } = {}) {
+  const { categories } = buildDetailsCategories();
+  const cat = categories.find(c => c.id === id);
+  if (!cat) { showDetailsOverview({ focus }); return; }
+  detailsOpenCategoryId = id;
+  detailsCategoryTitle.textContent = cat.label;
+  detailsChecks.innerHTML = '';
+  for (const c of cat.checks) {
+    const row = document.createElement('div');
+    row.className = 'details-check';
+    row.setAttribute('role', 'listitem');
+    row.setAttribute('data-tone', c.tone);
+    row.setAttribute('data-key', c.key);
+    const explain = plain(c.explain);
+    row.setAttribute('aria-label', `${c.label}: ${c.word}.${explain ? ' ' + explain : ''}`);
+    row.innerHTML = `${detailsIcon(c.tone, 'details-icon')}
+      <span class="details-check-name">${escapeHtml(c.label)}</span>
+      <span class="details-check-word">${escapeHtml(c.word)}</span>
+      <span class="details-check-explain">${escapeHtml(explain)}</span>`;
+    detailsChecks.appendChild(row);
+  }
+  detailsSummaryEl.hidden = true;
+  detailsOverview.hidden = true;
+  detailsCategoryEl.hidden = false;
+  detailsOverviewBtn.hidden = false;
+  if (focus) detailsOverviewBtn.focus();
+}
+
+function detailsOpen() {
+  return document.body.dataset.view === 'details';
+}
+
+function openDetails() {
+  if (detailsOpen()) return;
+  document.body.dataset.view = 'details';
+  wizardCard.hidden = true;
+  actionArea.hidden = true;
+  detailsView.hidden = false;
+  backBtn.hidden = false;
+  detailsBtn.setAttribute('aria-expanded', 'true');
+  showDetailsOverview({ focus: false });
+  backBtn.focus();
+}
+
+function closeDetails() {
+  if (!detailsOpen()) return;
+  delete document.body.dataset.view;
+  detailsView.hidden = true;
+  backBtn.hidden = true;
+  wizardCard.hidden = false;
+  actionArea.hidden = false;
+  detailsOpenCategoryId = null;
+  detailsBtn.setAttribute('aria-expanded', 'false');
+  if (!detailsBtn.hidden) detailsBtn.focus();
+}
+
+// Re-paint an open Details view when the data behind it changes (a quiet
+// re-scan, or a fix finishing while the user is reading).
+function refreshDetailsIfOpen() {
+  if (!detailsOpen()) return;
+  if (detailsOpenCategoryId) showDetailsCategory(detailsOpenCategoryId, { focus: false });
+  else showDetailsOverview({ focus: false });
 }
 
 // ============================================================
@@ -422,38 +555,6 @@ function updateFixDisabledNote(blockedLabels, canRunFix) {
   fixBtn.setAttribute('aria-describedby', 'fixDisabledNote');
 }
 
-// §9 group label row — visual-only (aria-hidden) so the role="list"
-// container keeps listitem-only children for screen readers.
-function renderGroupHeader(name) {
-  const el = document.createElement('div');
-  el.className = 'chk-group';
-  el.setAttribute('aria-hidden', 'true');
-  el.textContent = name;
-  return el;
-}
-
-function renderCheckRow(key, label, status, message) {
-  // Normalise first: data-status, icon and badge word must all describe the
-  // SAME state. The badge word used to be `STATUS_BADGE[status] || ''`, so an
-  // unrecognised status produced a tick with an EMPTY badge — state conveyed
-  // by colour alone, and the wrong colour at that.
-  const state = normalizeCheckStatus(status);
-  const badge = badgeForCheckStatus(state);
-  const row = document.createElement('div');
-  row.className = 'chk-row';
-  row.setAttribute('data-status', state);
-  row.setAttribute('data-key', key);
-  row.setAttribute('role', 'listitem');
-  // Accessible name carries label + state + detail in text, so the row does
-  // not depend on the icon colour to be understood.
-  row.setAttribute('aria-label', `${label}: ${badge}. ${message || ''}`.trim());
-  row.innerHTML = `${iconForStatus(state, 'chk-icon')}
-    <span class="chk-label">${escapeHtml(label)}</span>
-    <span class="chk-msg">${escapeHtml(message)}</span>
-    <span class="chk-badge">${escapeHtml(badge)}</span>`;
-  return row;
-}
-
 // quiet: refresh the data + badges WITHOUT flipping the wizard back to the
 // "Checking your setup…" pane — used by the throttled focus-rescan so the
 // screen does not churn every time the window regains focus.
@@ -466,38 +567,31 @@ async function runEnvironmentScan(opts = {}) {
     setStatus('scanning', 'Checking…');
     renderWizChecks(null); // all groups pending
     setWizardPane('checking');
-    setActions({ details: true });
-  }
-  checkList.setAttribute('aria-busy', 'true');
-
-  // Show all rows immediately as pending so the panel never sits empty.
-  checkList.innerHTML = '';
-  let pendingGroup = null;
-  for (const c of CHECK_ORDER) {
-    if (c.group !== pendingGroup) { checkList.appendChild(renderGroupHeader(c.group)); pendingGroup = c.group; }
-    checkList.appendChild(renderCheckRow(c.key, c.label, 'pending', 'Checking…'));
+    setActions({});
+    // Every check reads as Checking until the scan reports it.
+    const pendingByKey = {};
+    for (const c of CHECK_ORDER) pendingByKey[c.key] = 'pending';
+    lastScan = { statusByKey: pendingByKey };
+    refreshDetailsIfOpen();
   }
 
   try {
     const result = await window.electronAPI.preflightScan();
     const cards = (result && result.cards && typeof result.cards === 'object') ? result.cards : {};
-    checkList.innerHTML = '';
-    let lastGroup = null;
-    // Every CHECK_ORDER row is rendered, every time. A card the scan did not
-    // return is rendered UNKNOWN — it used to be `continue`, which silently
+    // Every CHECK_ORDER row is recorded, every time. A card the scan did not
+    // return is recorded UNKNOWN — it used to be `continue`, which silently
     // shortened the list, so a check that never ran was indistinguishable
-    // from a check that passed (nothing on screen said it was missing).
+    // from a check that passed.
     const renderedStatuses = [];
     const statusByKey = {};
     for (const c of CHECK_ORDER) {
       const card = cards[c.key];
-      if (c.group !== lastGroup) { checkList.appendChild(renderGroupHeader(c.group)); lastGroup = c.group; }
       const status  = card ? normalizeCheckStatus(card.status) : 'unknown';
-      const message = card ? (card.message || '') : MISSING_CARD_MESSAGE;
       renderedStatuses.push(status);
       statusByKey[c.key] = status;
-      checkList.appendChild(renderCheckRow(c.key, (card && card.label) || c.label, status, message));
     }
+    lastScan = { statusByKey };
+    refreshDetailsIfOpen();
     canRunFix = !!(result && result.canRunFix);
     // Summary is computed from what is ACTUALLY on screen, never from the
     // roll-up label alone. `overall === 'repairable'` (what a detected TEMP
@@ -533,8 +627,9 @@ async function runEnvironmentScan(opts = {}) {
       quiet
     });
   } catch (err) {
-    checkList.innerHTML = '';
-    checkList.appendChild(renderCheckRow('scan', 'Environment scan', 'blocked', scanFailureMessage(err)));
+    // The scan itself failed: every check is unverified, not failed.
+    lastScan = { statusByKey: {} };
+    refreshDetailsIfOpen();
     canRunFix = false;
     setStatus('error', 'Something went wrong');
     updateFixDisabledNote(['Environment scan'], false);
@@ -544,7 +639,6 @@ async function runEnvironmentScan(opts = {}) {
     setActions({ rescan: true, rescanLabel: WIZARD.TRY_AGAIN, details: true });
   } finally {
     scanInProgress = false;
-    checkList.setAttribute('aria-busy', 'false');
   }
 }
 
@@ -756,69 +850,46 @@ zrCancelBtn.addEventListener('click', () => window.electronAPI.quitApp());
 // ============================================================
 // Fix Receipt — styled cards
 // ============================================================
+// Builds the "Repair results" rows for the Details view. Nothing is
+// rendered here; the view reads lastReceiptItems when it opens.
 function renderFixReceipt(receipt, warnings) {
+  void warnings;
   if (!receipt) {
     // A run that reports success but returns no receipt has proven none of
-    // the four things the receipt exists to prove. Hiding the panel made
-    // that absence invisible under a "FIX COMPLETE" headline — the missing
-    // evidence read as "nothing to report".
+    // the four things the receipt exists to prove. Every item reads as
+    // "Unable to verify" — the missing evidence must never read as
+    // "nothing to report".
     lastReceipt = null;
-    receiptPanel.innerHTML = `
-      <div class="receipt-title">FIX RECEIPT — NOT AVAILABLE</div>
-      <div class="receipt-foot">${escapeHtml(RECEIPT_MISSING_MESSAGE)}</div>`;
-    receiptPanel.classList.add('visible');
+    lastReceiptItems = ['camera', 'microphone', 'hku', 'frameServer']
+      .map(key => receiptItemView(key, 'warn', 'The fix did not report a result for this item. Run the fix again, or send a support report.'));
+    refreshDetailsIfOpen();
     return;
   }
   lastReceipt = receipt;
-  const cam = receiptStatusView(receipt.camera);
-  const mic = receiptStatusView(receipt.microphone);
+  const cam = receiptStatusFor(receipt.camera);
+  const mic = receiptStatusFor(receipt.microphone);
   const hku = describeHku(receipt.hkuPath);
   const fs  = describeFrameServer(receipt.frameServer);
-
-  const items = [
-    receiptCardHtml('Camera (desktop apps)',     cam.text, cam.status, cam.iconSvg),
-    receiptCardHtml('Microphone (desktop apps)', mic.text, mic.status, mic.iconSvg),
-    receiptCardHtml('User registry hive',        hku.txt,  hku.icon,   iconForReceipt(hku.icon)),
-    receiptCardHtml('Camera Frame Server',       fs.txt,   fs.icon,    iconForReceipt(fs.icon)),
+  // 'info' on the profile-settings item means the permissions were written
+  // (live session or a temporary load) — a completed step, not an unknown.
+  const hkuStatus = hku.icon === 'info' ? 'ok' : hku.icon;
+  lastReceiptItems = [
+    receiptItemView('camera',      cam.status, receiptPlainText(cam.status, 'camera')),
+    receiptItemView('microphone',  mic.status, receiptPlainText(mic.status, 'microphone')),
+    receiptItemView('hku',         hkuStatus,  hkuStatus === 'ok' ? '' : 'The permission settings for the helper account could not be fully applied. Run the fix again if Zoom cannot use the camera or microphone.'),
+    receiptItemView('frameServer', fs.icon,    fs.icon === 'ok' ? ''
+      : fs.icon === 'fail' ? 'The camera service is not available on this PC, so cameras may not work in Zoom.'
+      : 'The camera service could not be confirmed. Cameras may not work in Zoom.')
   ];
-
-  const warnCount = Array.isArray(warnings) ? warnings.length : 0;
-  const titleSuffix = warnCount ? ` <span style="color: var(--warning); font-weight: 700;">(${warnCount} warning${warnCount > 1 ? 's' : ''})</span>` : '';
-
-  receiptPanel.innerHTML = `
-    <div class="receipt-title">FIX RECEIPT${titleSuffix}</div>
-    <div class="receipt-grid">${items.join('')}</div>
-    <div class="receipt-foot">
-      Hardware privacy shutters, function-key camera disables, camera-driver failures, and third-party antivirus
-      webcam shields operate below the OS layer and are not controlled by this fix.
-    </div>`;
-  receiptPanel.classList.add('visible');
+  refreshDetailsIfOpen();
 }
 
-function receiptCardHtml(label, value, status, iconSvg) {
-  return `<div class="receipt-item" data-status="${status}">
-    ${iconSvg}
-    <div>
-      <span class="receipt-label">${escapeHtml(label)}</span>
-      <span class="receipt-value">${escapeHtml(value)}</span>
-    </div>
-  </div>`;
-}
-
-function iconForReceipt(s) {
-  switch (s) {
-    case 'ok':   return `<svg class="receipt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`;
-    case 'warn': return `<svg class="receipt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>`;
-    case 'fail': return `<svg class="receipt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
-    default:     return `<svg class="receipt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16" x2="12" y2="16"/></svg>`;
-  }
-}
-
-// Thin view adapter over the messages.js catalog: adds the icon SVG, which
-// stays renderer-side so the catalog remains DOM-free and testable in Node.
-function receiptStatusView(status) {
-  const m = receiptStatusFor(status);
-  return { text: m.text, status: m.status, iconSvg: iconForReceipt(m.status) };
+// Plain-English explanation for a camera/microphone receipt outcome. The
+// catalog text (messages.js) is written for the support report.
+function receiptPlainText(status, device) {
+  if (status === 'ok') return '';
+  if (status === 'fail') return `A Windows policy blocks ${device} access. If this PC is managed by an organization, ask them to allow it.`;
+  return `The ${device} permission could not be confirmed. Check it in Windows Settings under Privacy if Zoom cannot use the ${device}.`;
 }
 
 function escapeHtml(s) {
@@ -962,10 +1033,9 @@ async function runFix() {
   setWizardPane('fixing');
   resetStages();
   advanceStageTo('prep');
-  receiptPanel.classList.remove('visible');
-  copyErrBtn.classList.remove('visible'); // failure-only; re-shown on FIX FAILED
+  lastReceiptItems = null;
+  refreshDetailsIfOpen();
   clearFileList();
-  setLogExpanded(false);
   addFileItem('STARTING FIX...', 'header');
   addEmptyLine();
 
@@ -1075,8 +1145,7 @@ async function runFix() {
       finalizeStages('fail');
       setStatus('error', 'Something went wrong');
       showNoticePane('err', WIZARD.FAIL_TITLE, friendlyError(res.error));
-      setActions({ fix: true, fixLabel: 'Try again', details: true, support: true });
-      copyErrBtn.classList.add('visible');
+      setActions({ fix: true, fixLabel: 'Try again', details: true, support: true, copyErr: true });
     }
   } catch (err) {
     // The fix IPC (or a renderer helper it calls) threw. Surface it instead
@@ -1086,8 +1155,7 @@ async function runFix() {
     finalizeStages('fail');
     setStatus('error', 'Something went wrong');
     showNoticePane('err', WIZARD.FAIL_TITLE, unexpectedFixFailure(err));
-    setActions({ fix: true, fixLabel: 'Try again', details: true, support: true });
-    copyErrBtn.classList.add('visible');
+    setActions({ fix: true, fixLabel: 'Try again', details: true, support: true, copyErr: true });
   } finally {
     // Always release the run lock — the outcome branches above own the
     // action-area state.
@@ -1279,9 +1347,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     showUnableToComplete('preload');
     return;
   }
-  document.getElementById('btnExit').addEventListener('click', () => api.quitApp());
-  document.getElementById('btnMinimize').addEventListener('click', () => api.minimizeWindow());
-  document.getElementById('btnMaximize').addEventListener('click', () => api.maximizeWindow());
+  // Exit is owned by the compact shell (it confirms while a fix runs).
   fixBtn.addEventListener('click', onFixButtonClick);
   // Explicit manual rescan (§9) — same guarded entry point as the
   // focus-rescan; runEnvironmentScan() no-ops while a scan or fix runs.
@@ -1290,8 +1356,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     else runEnvironmentScan();
   });
   if (closeBtn) closeBtn.addEventListener('click', () => api.quitApp());
-  // "View details" — the single diagnostics toggle (flips to Hide details).
-  detailsBtn.addEventListener('click', () => setLogExpanded(advPanel.classList.contains('hidden')));
+  // "View details" opens the Details view in place; Back (header) and
+  // Escape return to the exact prior screen.
+  detailsBtn.addEventListener('click', openDetails);
+  backBtn.addEventListener('click', closeDetails);
+  detailsOverviewBtn.addEventListener('click', () => showDetailsOverview());
+  document.getElementById('footerSupportBtn').addEventListener('click', () => openSupportReport());
+  document.getElementById('aboutBtn').addEventListener('click', showAbout);
   shortcutBtn.addEventListener('click', async () => {
     // Direct create — no confirmation round-trip. The raw result logs to
     // Advanced details; the wizard shows the friendly outcome.
@@ -1354,9 +1425,14 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  setLogExpanded(false);
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' || event.defaultPrevented) return;
+    // Enter activates the primary only on the screen that shows it: never
+    // from the Details view, never while a dialog is open, and never when
+    // focus is already on a control (that control handles its own Enter).
+    if (detailsOpen()) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.tagName !== 'INPUT' && active !== fixBtn && active !== launchBtn && active !== elevateBtn) return;
     const overlayOpen = [...document.querySelectorAll('.fix-confirm-overlay, .fb-overlay.show, .compact-exit-overlay')]
       .some((el) => el && !el.hidden && (el.classList.contains('show') || !el.hidden));
     if (overlayOpen) return;
@@ -1377,9 +1453,10 @@ const STARTUP_DEADLINE_MS = 8000;
 
 function showAdminRequired() {
   canRunFix = false;
-  checkList.innerHTML = '';
-  checkList.appendChild(renderCheckRow('admin', 'Administrator', 'blocked', WIZARD.ADMIN_SUB));
-  checkList.setAttribute('aria-busy', 'false');
+  // Only the administrator check has a result; everything else is
+  // unverified until the app runs elevated.
+  lastScan = { statusByKey: { admin: 'blocked' } };
+  refreshDetailsIfOpen();
   setStatus('warn', 'Action required');
   showResultPane('warn', WIZARD.ADMIN_TITLE, WIZARD.ADMIN_SUB);
   setActions({ elevate: true, close: true, details: true });
@@ -1708,9 +1785,13 @@ function buildExplore() {
 }
 buildExplore();
 
+// Explore is reached from the About dialog only. About steps aside while
+// the chooser is open and returns, with focus on the Explore control,
+// when it closes.
 function openExplore() {
   exploreStatus.textContent = '';
   exploreStatus.className = 'fb-status';
+  hideAbout();
   exploreOverlay.classList.add('show');
   // installFocusTrap moves focus in and restores it to the opener
   // (the Explore button) on release.
@@ -1718,7 +1799,10 @@ function openExplore() {
 }
 function closeExplore() {
   exploreOverlay.classList.remove('show');
+  if (aboutOverlay) aboutOverlay.hidden = false;
   if (releaseExploreTrap) { releaseExploreTrap(); releaseExploreTrap = null; }
+  const explore = document.getElementById('btnExplore');
+  if (explore) explore.focus();
 }
 
 async function openExploreDestination(key) {
@@ -2112,13 +2196,17 @@ supportCopyBtn.addEventListener('click', async () => {
   }
 });
 
-// Esc closes any open modal; also cancels a pending FIX countdown.
+// Esc closes any open modal. With no modal open, Esc is the keyboard way
+// back from the Details view. (This handler used to call a countdown
+// canceller that no longer existed, so every Escape threw before reaching
+// the overlay checks.)
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    cancelFixCountdown();
     // Close only the topmost overlay — the report preview can now sit on top
     // of the feedback modal, and closing both would wipe the user's draft.
     if      (supportOverlay.classList.contains('show'))                    closeSupportReport();
     else if (document.getElementById('fbOverlay').classList.contains('show')) closeFeedback();
+    else if (exploreOverlay.classList.contains('show') || !aboutOverlay.hidden || !fixConfirmOverlay.hidden) { /* those dialogs handle their own Escape */ }
+    else if (detailsOpen()) { e.preventDefault(); closeDetails(); }
   }
 });

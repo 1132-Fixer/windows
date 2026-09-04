@@ -183,7 +183,7 @@ node scripts/bump-version.js patch
 npm install --package-lock-only
 ```
 
-`npm test` runs every `tools/*-smoke.js` check with Node alone. CI additionally builds the installer on a Windows runner and runs `tools/packaged-acceptance.js` against the packaged executable: it launches the real app, proves it leaves **Checking** within the deadline, checks the footer, focus rings, target sizes and scrollbars at 100 %, 125 % and 150 % scaling, exercises the second-instance guard and the **Fix now** journey, and uploads screenshots and a report as the `packaged-acceptance` artifact. That driver needs an elevated Windows session without Smart App Control enforcement.
+`npm test` runs every `tools/*-smoke.js` check with Node alone. CI additionally builds the installer on a Windows runner and runs `tools/packaged-acceptance.js` against the packaged executable: it launches the real app, proves it leaves **Checking** within the deadline, checks the footer, focus rings, target sizes and scrollbars at 100 %, 125 % and 150 % scaling, confirms only that state's controls are visible, walks **View details** → category → **Back**, exercises the second-instance guard and the **Fix now** journey, and uploads screenshots and a report as the `packaged-acceptance` artifact. That driver needs an elevated Windows session without Smart App Control enforcement.
 
 A `v*` tag reachable from `main` runs `.github/workflows/release.yml`, which builds Setup and Portable artifacts, checksums, and `latest.yml` onto this repository's GitHub Releases.
 
