@@ -35,12 +35,16 @@ check(main.includes('if (!elevated)') && main.includes('relaunchElevated()'),
   check(/Start-Process[\s\S]*-Verb RunAs/.test(elevSrc), 'relaunch uses Windows runas');
   check(elevSrc.includes("-Command") && elevSrc.includes('WindowsPowerShell'),
     'relaunch uses System32 PowerShell -Command');
-  check(!elevSrc.includes('fixer-elev-') && !elevSrc.includes('-File'),
+  check(!elevSrc.includes('fixer-elev-') && !/['"]-File['"]/.test(elevSrc) && !/writeFileSync|os\.tmpdir/.test(elevSrc),
     'relaunch does not write a temp .ps1 (SAC blocks unknown scripts)');
+  check(/Start-Process -FilePath '/.test(elevSrc) && !/Start-Process[^\n]*-LiteralPath/.test(elevSrc),
+    'Start-Process uses -FilePath (Windows PowerShell 5.1 has no -LiteralPath on Start-Process)');
+  check(elevSrc.includes("child.on('close'") && elevSrc.includes('EXIT_CLOSE_GRACE_MS'),
+    'child output is read through close, with a grace period for inherited handles');
 }
 
 console.log('elevation-startup-smoke: already-elevated does not relaunch');
-check(main.includes('if (await isElevatedSync()) return false'),
+check(/if \(await isElevatedSync\(\)\) \{[^\n]*return false;/.test(main),
   'relaunchElevated no-ops when already elevated');
 check(main.includes('process.argv.includes(ELEVATE_RETRY_FLAG)'),
   'retry flag prevents a relaunch loop');

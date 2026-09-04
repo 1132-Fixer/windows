@@ -29,7 +29,7 @@ autoUpdater.disableDifferentialDownload = true;
 // Updater state machine.
 //
 // Old behavior force-called quitAndInstall() 2 seconds after the download
-// finished ΓÇö even while the destructive fix flow was mid-run, and with no
+// finished — even while the destructive fix flow was mid-run, and with no
 // UI at all. To the user that read as "the app randomly closed / froze /
 // the update never finished". New rules:
 //   - Everything is surfaced to the renderer via 'update-status' events.
@@ -49,7 +49,7 @@ function sendUpdateStatus(payload) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-status', payload);
     }
-  } catch (_) { /* renderer gone ΓÇö nothing to notify */ }
+  } catch (_) { /* renderer gone — nothing to notify */ }
 }
 
 function cancelUpdateRestartCountdown() {
@@ -92,7 +92,7 @@ autoUpdater.on('update-downloaded', (info) => {
   updateVersion = (info && info.version) || updateVersion;
   console.log(`${UPDATER} update-downloaded version=${updateVersion}`);
   if (fixInProgress || fixHasRun) {
-    // Never yank the app out from under a running or just-finished fix ΓÇö
+    // Never yank the app out from under a running or just-finished fix —
     // that was the #1 "update didn't complete / app died mid-fix" report.
     sendUpdateStatus({ state: 'deferred', version: updateVersion });
   } else {
@@ -125,7 +125,7 @@ ipcMain.handle('defer-update', () => {
 // Portable-build update notice.
 //
 // electron-updater cannot update the portable target, so portable users
-// were silently pinned to whatever version they downloaded ΓÇö forever.
+// were silently pinned to whatever version they downloaded — forever.
 // Instead: fetch latest.yml from the release feed (same feed the NSIS
 // updater uses), compare versions, and surface a "download it" banner.
 // URLs mirror build.publish in package.json: the feed is this repository's
@@ -216,12 +216,12 @@ ipcMain.handle('open-explore-destination', async (_event, key) => {
 });
 
 const FIX_USER = 'user1';
-// There is NO static password (W5-SECURITY-DESIGN Option A ΓÇö SEC-A6, #33/#76).
+// There is NO static password (W5-SECURITY-DESIGN Option A — SEC-A6, #33/#76).
 // Every fix run mints a fresh CSPRNG password (helper-credential.js) at
 // STEP 4; the delete->recreate model means the run that mints it also writes
 // every consumer (launch, relaunch, DPAPI-sealed shortcut blob), so no
 // old-password knowledge is ever needed and nothing plaintext hits disk.
-// Default machine-wide install candidates only ΓÇö the actual install is
+// Default machine-wide install candidates only — the actual install is
 // resolved by resolveZoomInstall() (W1-DETECT: 32-bit MSI, custom install
 // dirs, and per-user installs all exist in the field).
 const ZOOM_PATH = 'C:\\Program Files\\Zoom\\bin\\Zoom.exe';
@@ -238,7 +238,7 @@ const ZOOM_X86_PATH = 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe';
 // The fix launches Zoom under the user1 helper account, so ONLY machine-wide
 // installs are launchable. A per-user install (%APPDATA%\Zoom of the CURRENT
 // user) is probed purely so preflight can explain the situation instead of a
-// generic "not found" ΓÇö it is never accepted as the launch path.
+// generic "not found" — it is never accepted as the launch path.
 // Pure parsing/validation/copy lives in zoom-detect.js.
 // ============================================================
 // Resolved once per preflight scan and reused by the fix run and shortcut
@@ -254,8 +254,8 @@ async function resolveZoomInstall() {
     : null;
 
   // Every resolved path is later interpolated into single-quoted PowerShell
-  // (Zoom launch + helper-shortcut launcher), so validate here ΓÇö the single
-  // choke point ΓÇö and treat an unsafe path as not found.
+  // (Zoom launch + helper-shortcut launcher), so validate here — the single
+  // choke point — and treat an unsafe path as not found.
   const found = (p, dir, source) => {
     if (!zoomDetect.isSafeZoomPath(p)) {
       console.warn(`[zoom-detect] rejected unsafe Zoom path (${source}): ${p}`);
@@ -298,7 +298,7 @@ async function resolveZoomInstall() {
       }
     }
   } else {
-    console.warn(`[zoom-detect] registry probe ${probe.timedOut ? 'timed out' : `failed (exit ${probe.code})`} ΓÇö treating as no registry hit`);
+    console.warn(`[zoom-detect] registry probe ${probe.timedOut ? 'timed out' : `failed (exit ${probe.code})`} — treating as no registry hit`);
   }
 
   return { path: null, dir: null, source: null, perUserPath };
@@ -307,7 +307,7 @@ async function resolveZoomInstall() {
 // ============================================================
 // Zoom Workplace guided recovery card (operator directive 2026-08-09).
 // Three IPCs, all renderer-argument-free by design:
-//   zoom-open-download    opens EXACTLY the official admin download URL ΓÇö
+//   zoom-open-download    opens EXACTLY the official admin download URL —
 //                         the allowlisted catalog constant. The handler
 //                         ignores IPC arguments entirely, so the renderer
 //                         can never steer openExternal anywhere else.
@@ -319,7 +319,7 @@ async function resolveZoomInstall() {
 //                         check = explained refusal naming that check;
 //                         nothing is ever executed on failure.
 //   zoom-run-installer    launches msiexec /i on the path the validation
-//                         call just approved (main-process state ΓÇö never a
+//                         call just approved (main-process state — never a
 //                         renderer-supplied path). Normal UAC flow; no
 //                         credentials requested or stored. Installer exit
 //                         fires 'zoom-installer-done' so the renderer runs
@@ -328,7 +328,7 @@ async function resolveZoomInstall() {
 
 // The exact bytes the validation chain approved: { path, sha256 }. The launch
 // step re-hashes and refuses if the file changed on disk after it was checked
-// ΓÇö a swap in a user-writable download folder would otherwise reach msiexec
+// — a swap in a user-writable download folder would otherwise reach msiexec
 // with this app's elevation (a check-to-use race).
 let pendingInstaller = null;
 
@@ -351,7 +351,7 @@ ipcMain.handle('zoom-open-download', async () => {
     );
     return { success: opened.success === true };
   } catch (_) {
-    // Offline / no browser handler ΓÇö renderer shows the Offline state.
+    // Offline / no browser handler — renderer shows the Offline state.
     return { success: false };
   }
 });
@@ -402,7 +402,7 @@ ipcMain.handle('zoom-choose-installer', async () => {
   const psPath = quoted.literal.slice(1, -1);
 
   // (ii) Authenticode: Status must be Valid AND the signer CN must exactly
-  // match one of the two accepted Zoom publisher names ΓÇö no substrings.
+  // match one of the two accepted Zoom publisher names — no substrings.
   const sigProbe = await runPSCapture(`
     $sig = Get-AuthenticodeSignature -LiteralPath '${psPath}'
     Write-Output ('SIG_STATUS=' + [string]$sig.Status)
@@ -422,7 +422,7 @@ ipcMain.handle('zoom-choose-installer', async () => {
   }
 
   // (iii) Architecture: MSI Summary-Information Template (property 7) vs
-  // the OS architecture. PROCESSOR_ARCHITEW6432 first ΓÇö under WOW/emulation
+  // the OS architecture. PROCESSOR_ARCHITEW6432 first — under WOW/emulation
   // it carries the REAL OS architecture (incl. ARM64) while
   // PROCESSOR_ARCHITECTURE reports the emulated one.
   const archProbe = await runPSCapture(`
@@ -448,7 +448,7 @@ ipcMain.handle('zoom-choose-installer', async () => {
   }
 
   // Pin the exact bytes that just passed every check. The launch step
-  // re-hashes and refuses if they change ΓÇö nothing runs on a mismatch.
+  // re-hashes and refuses if they change — nothing runs on a mismatch.
   let sha256;
   try {
     sha256 = await sha256File(file);
@@ -460,7 +460,7 @@ ipcMain.handle('zoom-choose-installer', async () => {
 });
 
 ipcMain.handle('zoom-run-installer', async () => {
-  // Runs ONLY the descriptor the validation call just approved ΓÇö never an IPC
+  // Runs ONLY the descriptor the validation call just approved — never an IPC
   // argument. One shot: the pending descriptor is consumed immediately.
   const pending = pendingInstaller;
   pendingInstaller = null;
@@ -507,7 +507,7 @@ const REQUIRED_TOOLS = [
   'powershell.exe', 'taskkill.exe', 'robocopy.exe',
   'icacls.exe', 'takeown.exe', 'net.exe', 'reg.exe'
 ];
-// Tools we'd like but can survive without ΓÇö surfaced as warnings.
+// Tools we'd like but can survive without — surfaced as warnings.
 const OPTIONAL_TOOLS = ['quser.exe', 'logoff.exe'];
 
 let mainWindow;
@@ -541,7 +541,7 @@ function createWindow() {
     minHeight,
     backgroundColor: '#0F1724',
     // NOTE: no alwaysOnTop. The old always-on-top + frameless window had no
-    // drag region either, so it sat immovable above everything ΓÇö including
+    // drag region either, so it sat immovable above everything — including
     // the Zoom window this app launches. That's most of the "frozen/glitchy"
     // feedback. The header is now a real drag region (see index.html).
     frame: false,
@@ -566,7 +566,7 @@ function createWindow() {
       title: '1132 Fixer',
       message: 'The 1132 Fixer window is not responding.',
       detail: fixInProgress
-        ? 'A fix is still running in the background ΓÇö give it a moment before restarting. It is safe to run the fix again after a restart.'
+        ? 'A fix is still running in the background — give it a moment before restarting. It is safe to run the fix again after a restart.'
         : 'You can keep waiting or restart the app.',
       buttons: ['Keep waiting', 'Restart 1132 Fixer'],
       defaultId: 0,
@@ -632,8 +632,14 @@ singleInstanceReady.then(got => {
 // app never sees, asks for, or stores a password.
 // ============================================================
 
+// Last relaunch outcome, reported to the renderer so "View details" can say
+// whether Windows approval was cancelled, timed out, or never asked
+// (PowerShell missing). One of: started | declined | timeout |
+// launch-error | failed | already-elevated | null.
+let lastRelaunchOutcome = null;
+
 async function relaunchElevated() {
-  if (await isElevatedSync()) return false;
+  if (await isElevatedSync()) { lastRelaunchOutcome = 'already-elevated'; return false; }
   const exe = process.execPath;
   app.releaseSingleInstanceLock();
   let started = false;
@@ -645,8 +651,11 @@ async function relaunchElevated() {
       argv: process.argv
     });
     started = !!r.started;
-  } catch (_) {
+    lastRelaunchOutcome = r.outcome || (started ? 'started' : 'failed');
+  } catch (err) {
     started = false;
+    lastRelaunchOutcome = 'failed';
+    console.warn(`[startup] elevation.relaunch threw: ${(err && err.message) || err}`);
   }
   if (!started) app.requestSingleInstanceLock();
   return started;
@@ -673,7 +682,7 @@ app.whenReady().then(async () => {
 
   // Auto-update only makes sense for the packaged NSIS install. The portable
   // exe has no installer to hand off to (electron-updater cannot update
-  // portable targets) ΓÇö it gets a manual-download notice instead ΓÇö and dev
+  // portable targets) — it gets a manual-download notice instead — and dev
   // runs have no app-update.yml, which used to produce a red-herring updater
   // error on every launch.
   const isPortable = !!process.env.PORTABLE_EXECUTABLE_DIR;
@@ -716,7 +725,7 @@ app.on('before-quit', () => {
 });
 
 // ============================================================
-// Fatal-path handling ΓÇö the app must never die silently.
+// Fatal-path handling — the app must never die silently.
 // Three uncovered paths before this existed: a main-process throw
 // (window never appears, no message), a dead renderer (blank window),
 // and a hung renderer (frozen window). Each now says what happened
@@ -745,19 +754,19 @@ function killActiveChildren() {
 
 process.on('uncaughtException', (err) => {
   console.error('FATAL uncaughtException:', (err && err.stack) || err);
-  killActiveChildren(); // before the blocking dialog ΓÇö never leave a writer running
+  killActiveChildren(); // before the blocking dialog — never leave a writer running
   if (!fatalDialogShown) {
     fatalDialogShown = true;
     try {
       dialog.showErrorBox(
         '1132 Fixer hit a problem it could not recover from',
         'The app has to close. If a fix was running, run it again after ' +
-        'restarting ΓÇö the fix is safe to repeat and repairs partial runs.\n\n' +
+        'restarting — the fix is safe to repeat and repairs partial runs.\n\n' +
         'Start 1132 Fixer again. If this keeps happening, report it at\n' +
         'https://github.com/1132-Fixer/windows/issues\n\n' +
         `Detail for support: ${(err && err.message) || err}`
       );
-    } catch (_) { /* dialog itself failed ΓÇö the console line above remains */ }
+    } catch (_) { /* dialog itself failed — the console line above remains */ }
   }
   app.exit(1);
 });
@@ -768,9 +777,9 @@ app.on('render-process-gone', (_event, _webContents, details) => {
   if (fatalDialogShown) return;
   fatalDialogShown = true;
   const hadFix = fixInProgress;
-  killActiveChildren(); // before the blocking dialog ΓÇö never leave a writer running
+  killActiveChildren(); // before the blocking dialog — never leave a writer running
   const fixNote = hadFix
-    ? '\n\nA fix was running ΓÇö it has been stopped. Run it again after restarting; the fix is safe to repeat and repairs partial runs.'
+    ? '\n\nA fix was running — it has been stopped. Run it again after restarting; the fix is safe to repeat and repairs partial runs.'
     : '';
   const choice = dialog.showMessageBoxSync({
     type: 'error',
@@ -862,11 +871,11 @@ function runProcess(exe, args, onLine, opts = {}) {
     if (timeoutMs > 0) {
       killTimer = setTimeout(() => {
         timedOut = true;
-        onLine(`  TIMEOUT after ${Math.round(timeoutMs / 1000)}s ΓÇö killing ${exe}`, 'err');
+        onLine(`  TIMEOUT after ${Math.round(timeoutMs / 1000)}s — killing ${exe}`, 'err');
         // Kill the TREE, not just the direct child (W4-HANG): the profile
         // traversal steps run takeown/icacls via Start-Process inside
         // powershell.exe, and killing only PS orphans a recursive tool
-        // mid-cycle ΓÇö it keeps grinding (and holding profile handles)
+        // mid-cycle — it keeps grinding (and holding profile handles)
         // invisibly. Same idiom as killActiveChildren.
         try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }); } catch (_) {}
         try { child.kill('SIGKILL'); } catch (_) {}
@@ -925,7 +934,7 @@ async function runPSScript(scriptContent, onLine, opts = {}) {
 // (CreateProcessWithLogonW) makes the launched Zoom inherit the parent
 // PowerShell's std handles. The old stdio:'ignore' variant existed because
 // with plain runPSScript pipes, Zoom held our stderr pipe open after PS
-// exited, so the 'close' event never fired and run-fix froze at Step 5 ΓÇö
+// exited, so the 'close' event never fired and run-fix froze at Step 5 —
 // but 'ignore' also threw away the launcher's "Launch failed: <exception>"
 // line, leaving launch_failed diagnoses to a guess-list (#54 #58 #64 #66
 // #70 #72). This variant keeps BOTH properties:
@@ -938,8 +947,8 @@ async function runPSScript(scriptContent, onLine, opts = {}) {
 //   - the launcher's own output (written before PS exits) is captured and
 //     returned, so the exact Start-Process exception reaches the log.
 // The 30s guard kills only powershell.exe (never the credential-launched
-// Zoom ΓÇö child.kill targets the PS pid alone). Callers still verify launch
-// success out-of-band by polling Win32_Process ΓÇö capture is evidence, the
+// Zoom — child.kill targets the PS pid alone). Callers still verify launch
+// success out-of-band by polling Win32_Process — capture is evidence, the
 // poll stays the authority.
 async function runPSScriptLaunchCapture(scriptContent) {
   const tmp = path.join(os.tmpdir(),
@@ -996,13 +1005,23 @@ function isElevatedSync() {
   return elevCtl.isElevated().then((r) => r.elevated === true).catch(() => false);
 }
 
+// Bounded: `net user` can stall behind a slow Workstation/NetLogon lookup.
+// On timeout the account is reported as absent, which only makes the fix
+// take its create path — safe, because creation is idempotent.
+const USER_EXISTS_TIMEOUT_MS = 15000;
 function userExists(username) {
   return new Promise(resolve => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
     const child = spawn('net.exe', ['user', username], { windowsHide: true });
+    const timer = setTimeout(() => {
+      try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
+      done(false);
+    }, USER_EXISTS_TIMEOUT_MS);
     child.stdout.on('data', () => {});
     child.stderr.on('data', () => {});
-    child.on('error', () => resolve(false));
-    child.on('close', code => resolve(code === 0));
+    child.on('error', () => done(false));
+    child.on('close', code => done(code === 0));
   });
 }
 
@@ -1015,7 +1034,7 @@ async function preflightCheck() {
   const warnings = [];
   const info = {};
 
-  // Kick off the PowerShell tool probe FIRST ΓÇö it dominates preflight
+  // Kick off the PowerShell tool probe FIRST — it dominates preflight
   // wall-clock (~1-2s PS startup) and is independent of every other check,
   // so the elevation probe and sync fs checks run under it for free.
   const allTools = [...REQUIRED_TOOLS, ...OPTIONAL_TOOLS];
@@ -1052,7 +1071,7 @@ async function preflightCheck() {
   if (interactiveUser === FIX_USER.toLowerCase()) {
     blockers.push({
       code: 'running_as_target',
-      message: `You are signed in as '${FIX_USER}' ΓÇö the fix rebuilds this very account. Sign out, sign in as a different administrator account, then run 1132 Fixer again.`
+      message: `You are signed in as '${FIX_USER}' — the fix rebuilds this very account. Sign out, sign in as a different administrator account, then run 1132 Fixer again.`
     });
   }
 
@@ -1066,7 +1085,7 @@ async function preflightCheck() {
     });
   }
 
-  // Zoom executable ΓÇö machine-wide only. resolveZoomInstall() also spots a
+  // Zoom executable — machine-wide only. resolveZoomInstall() also spots a
   // per-user install so the blocker explains it instead of a bare "not found".
   zoomInstall = await resolveZoomInstall();
   info.zoomInstall = zoomInstall;
@@ -1090,8 +1109,8 @@ async function preflightCheck() {
     blockers.push({
       code: probe.timedOut ? 'tool_probe_timeout' : 'tool_probe_failed',
       message: probe.timedOut
-        ? 'PowerShell probe timed out after 20s ΓÇö Windows tool inventory unavailable. Antivirus or Defender may be blocking powershell.exe. Add 1132 Fixer to your antivirus exclusions (or pause its script shield), then reopen the app to re-check.'
-        : 'PowerShell probe failed ΓÇö could not verify Windows tools. Treating powershell.exe as unavailable. Restart the app once; if this repeats, check that Windows PowerShell is installed and not blocked by AppLocker or antivirus, then re-check.'
+        ? 'PowerShell probe timed out after 20s — Windows tool inventory unavailable. Antivirus or Defender may be blocking powershell.exe. Add 1132 Fixer to your antivirus exclusions (or pause its script shield), then reopen the app to re-check.'
+        : 'PowerShell probe failed — could not verify Windows tools. Treating powershell.exe as unavailable. Restart the app once; if this repeats, check that Windows PowerShell is installed and not blocked by AppLocker or antivirus, then re-check.'
     });
     presence = {};
     for (const t of REQUIRED_TOOLS) presence[t] = false;
@@ -1107,7 +1126,7 @@ async function preflightCheck() {
     if (!presence[t]) {
       blockers.push({
         code: 'missing_tool',
-        message: `Required Windows tool not on PATH: ${t}. It ships with Windows ΓÇö an aggressive cleanup tool or a broken PATH removed it. Restore ${t} (or repair PATH under System Properties > Environment Variables), then reopen the app to re-check.`
+        message: `Required Windows tool not on PATH: ${t}. It ships with Windows — an aggressive cleanup tool or a broken PATH removed it. Restore ${t} (or repair PATH under System Properties > Environment Variables), then reopen the app to re-check.`
       });
     }
   }
@@ -1117,7 +1136,7 @@ async function preflightCheck() {
   //
   // seclogon is a HARD GATE with self-heal (W3-LAUNCH). Field reports
   // (#54 #58 #64 #66 #70 #72) show Stopped/Manual passing preflight and the
-  // fix then finishing with a silent no-op launch ΓÇö "Windows auto-starts it
+  // fix then finishing with a silent no-op launch — "Windows auto-starts it
   // on demand" is not reliable evidence. Green now requires the service
   // actually Running: a Stopped-but-startable service gets ONE bounded start
   // attempt right here, and a failed attempt is a blocker, not a warning.
@@ -1262,11 +1281,11 @@ async function resolveSID(username) {
 // ============================================================
 // Check whether user is in local Administrators (S-1-5-32-544) by SID.
 // Falls back to `net localgroup` parsing. Returns { inGroup, method, raw }.
-// user1 must NOT be a member (SEC-A6) ΓÇö the fix flow uses this to detect
+// user1 must NOT be a member (SEC-A6) — the fix flow uses this to detect
 // a legacy admin user1 and to confirm the membership removal took.
 // ============================================================
 async function verifyAdminMembership(username) {
-  // SID translation happens INSIDE the same PS process ΓÇö a separate
+  // SID translation happens INSIDE the same PS process — a separate
   // resolveSID() round trip costs a full powershell.exe startup.
   const r = await runPSCapture(`
     $user = '${username}'
@@ -1413,13 +1432,13 @@ function Unload-UserHive {
     }
 }
 # W4-HANG guard: default profiles hide XP-compat junctions BELOW the top
-# level too ΓÇö Documents\\My Music, and AppData\\Local\\Application Data which
+# level too — Documents\\My Music, and AppData\\Local\\Application Data which
 # points back at AppData\\Local (a real cycle). takeown /R, icacls /T and
 # attrib /S all follow junctions, so recursing them across such a subtree
-# loops until the step watchdog kills it ΓÇö the "My Music cycling over and
+# loops until the step watchdog kills it — the "My Music cycling over and
 # over" mid-fix hang (#31 #46 #67). This walk descends WITHOUT entering
 # reparse points, deletes each reparse point it finds (the junction entry
-# only ΓÇö never its target), and reports whether the subtree ended
+# only — never its target), and reports whether the subtree ended
 # junction-free. Only a junction-free subtree is safe for the recursive
 # tools; otherwise the caller skips them and the junction-safe rd /s /q
 # retry still runs.
@@ -1432,7 +1451,7 @@ function Remove-NestedReparsePoints {
         $dir = $stack.Pop()
         $kids = $null
         try { $kids = @(Get-ChildItem -LiteralPath $dir -Force -EA Stop) } catch {
-            # Enumeration denied: open up THIS directory only (no /R, no /T ΓÇö
+            # Enumeration denied: open up THIS directory only (no /R, no /T —
             # nothing recursive that could chase a junction), then retry once.
             Start-Process takeown.exe -ArgumentList @('/F',$dir,'/A','/D','Y') -Wait -WindowStyle Hidden | Out-Null
             Start-Process icacls.exe -ArgumentList @($dir,'/grant','*S-1-5-32-544:F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
@@ -1471,7 +1490,7 @@ function Remove-ProfileFolder {
     Write-Host "  Deleting: $Path"
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
-    # Unload the user's NTUSER.DAT hive first ΓÇö otherwise the file is open
+    # Unload the user's NTUSER.DAT hive first — otherwise the file is open
     # and rd /s /q will leave it behind, even with full admin ownership.
     Unload-UserHive -Sid $Sid
 
@@ -1482,7 +1501,7 @@ function Remove-ProfileFolder {
     # removes junction reparse points themselves rather than recursing into
     # them. Running takeown /R or icacls /T from the profile root FIRST
     # makes both tools chase those junctions back into AppData and stall
-    # for many minutes ΓÇö that was the "hung on delete user1" symptom.
+    # for many minutes — that was the "hung on delete user1" symptom.
     $cmdExe = Join-Path $env:SystemRoot 'System32\\cmd.exe'
     $rdArgs = '/c rd /s /q "' + $Path + '"'
     Write-Host "    Pass 1: rd /s /q ..."
@@ -1494,7 +1513,7 @@ function Remove-ProfileFolder {
         return
     }
 
-    # PASS 2: targeted ownership + ACL grant ΓÇö non-recursive on the root,
+    # PASS 2: targeted ownership + ACL grant — non-recursive on the root,
     # then walk top-level children explicitly while SKIPPING reparse
     # points. This fixes ACL/ownership on real residue without chasing
     # junctions.
@@ -1521,7 +1540,7 @@ function Remove-ProfileFolder {
         Write-Host ("    fix ACL + attrib: " + $k.Name)
         try {
             if ($k.PSIsContainer) {
-                # takeown /R, icacls /T and attrib /S follow junctions ΓÇö only
+                # takeown /R, icacls /T and attrib /S follow junctions — only
                 # run them once the subtree is confirmed junction-free
                 # (W4-HANG); otherwise leave the child to the rd retry.
                 if (Remove-NestedReparsePoints -Root $k.FullName) {
@@ -1594,7 +1613,7 @@ async function runFixFlow(event) {
   });
   const noop = () => {};
   const warnings = [];
-  // Per-step outcome ledger (additive ΓÇö success/warnings/blockers/receipt all
+  // Per-step outcome ledger (additive — success/warnings/blockers/receipt all
   // keep their existing shapes). A 'fail' outcome marks a step whose result
   // invalidates the fix's purpose; computeRunVerdict turns any of those into
   // partial:true and the NEEDS ATTENTION headline instead of a silent green.
@@ -1632,7 +1651,7 @@ async function runFixFlow(event) {
   send(`  Zoom present: ${pre.info.zoomPath || '(no machine-wide install)'} -> ${pre.info.zoomPath && fs.existsSync(pre.info.zoomPath) ? 'YES' : 'NO'}`, 'out');
   send(`  Firstrun script: ${pre.info.firstRunScript} -> ${fs.existsSync(pre.info.firstRunScript) ? 'YES' : 'NO'}`, 'out');
   send(`  Interactive user: ${pre.info.interactiveUser}`, 'out');
-  send(`  Secondary Logon: ${pre.info.seclogon.status}/${pre.info.seclogon.startType}${pre.info.seclogon.selfHeal === 'started' ? ' (was stopped ΓÇö started it for you)' : ''}`, 'out');
+  send(`  Secondary Logon: ${pre.info.seclogon.status}/${pre.info.seclogon.startType}${pre.info.seclogon.selfHeal === 'started' ? ' (was stopped — started it for you)' : ''}`, 'out');
   for (const w of pre.warnings) {
     warnings.push(w);
     send(`  WARN [${w.code}]: ${w.message}`, 'err');
@@ -1702,9 +1721,9 @@ async function runFixFlow(event) {
     warnings.push({ code: 'kill_residual', message: `Some ${FIX_USER} processes were still alive after 6s of kill attempts.` });
   }
   if (drain.timedOut) {
-    // Previously a timed-out drain probe read as "all clear" ΓÇö fail-loud now.
+    // Previously a timed-out drain probe read as "all clear" — fail-loud now.
     send(`  WARNING: could not confirm all ${FIX_USER} processes exited (check timed out).`, 'err');
-    warnings.push({ code: 'kill_check_timeout', message: `Could not confirm every ${FIX_USER} process exited ΓÇö the check timed out after 20s.` });
+    warnings.push({ code: 'kill_check_timeout', message: `Could not confirm every ${FIX_USER} process exited — the check timed out after 20s.` });
   }
   const step1Issues = [];
   if (realNotes.length) step1Issues.push('session logoff issues');
@@ -1745,18 +1764,18 @@ async function runFixFlow(event) {
     send(`  Resolved SID: ${preDeleteSid || '(none)'}`, 'out');
   }
 
-  // SECURITY (SEC-A6): the helper account is no longer an administrator ΓÇö
+  // SECURITY (SEC-A6): the helper account is no longer an administrator —
   // every privileged repair step runs under this app's own elevated token,
   // and user1 only runs Zoom. A user1 left in Administrators by an older
-  // version gets the membership removed here, BEFORE the deleteΓåÆrecreate,
+  // version gets the membership removed here, BEFORE the delete→recreate,
   // so even a failed delete leaves no admin rights behind. Removal is
   // SID-first with a net-localgroup fallback (same technique the old
-  // add-path used); a failed removal warns ΓÇö never fails the run ΓÇö because
+  // add-path used); a failed removal warns — never fails the run — because
   // the recreate in STEP 4 builds a standard account either way.
   if (accountExisted) {
     const legacyAdmin = await verifyAdminMembership(FIX_USER);
     if (legacyAdmin.inGroup) {
-      send(`  '${FIX_USER}' is in the Administrators group ΓÇö removing rights it no longer needs...`, 'out');
+      send(`  '${FIX_USER}' is in the Administrators group — removing rights it no longer needs...`, 'out');
       await runPSScript(`
         try { Remove-LocalGroupMember -SID 'S-1-5-32-544' -Member '${FIX_USER}' -EA Stop; Write-Host '  Remove-LocalGroupMember OK.' }
         catch {
@@ -1774,7 +1793,7 @@ async function runFixFlow(event) {
         send(`  WARNING: could not remove '${FIX_USER}' from the Administrators group.`, 'err');
         send('  The account is deleted and rebuilt as a standard user below either way.', 'err');
         step('remove-admin-rights', `Remove administrator rights from ${FIX_USER}`, 'warn',
-          `'${FIX_USER}' was still visible in the Administrators group after the removal attempt ΓÇö the rebuilt account is created without admin rights regardless`);
+          `'${FIX_USER}' was still visible in the Administrators group after the removal attempt — the rebuilt account is created without admin rights regardless`);
       }
     }
   }
@@ -1877,8 +1896,8 @@ async function runFixFlow(event) {
     if (clearOutcome === 'ok' && (clearTimedOut || suffixSweep.code !== 0 || plSweep.code !== 0)) {
       clearOutcome = 'warn';
       clearDetail += clearTimedOut
-        ? ' ΓÇö but the cleanup step timed out before it could re-check, so a leftover may remain'
-        : ' ΓÇö but the cleanup script did not exit cleanly';
+        ? ' — but the cleanup step timed out before it could re-check, so a leftover may remain'
+        : ' — but the cleanup script did not exit cleanly';
     }
     if (clearOutcome === 'fail') {
       send(`  WARNING: old profile data only partially removed (${clearDetail}).`, 'err');
@@ -1903,7 +1922,7 @@ async function runFixFlow(event) {
   send('[3b/8] Flushing User Profile Service hive cache...', 'header');
   const flush = await runPSScript(`
     # PROFSVC_REFRESH is a structured success marker (P1-B): OK is emitted
-    # only when a refresh path VERIFIABLY succeeded ΓÇö Restart-Service without
+    # only when a refresh path VERIFIABLY succeeded — Restart-Service without
     # throwing, the sc.exe fallback observed back to Running, or the service
     # was not running (no retained hive handles to drop). Exit code alone
     # cannot carry this: the catches below deliberately keep the script alive.
@@ -1956,7 +1975,7 @@ async function runFixFlow(event) {
       : flush.code !== 0                ? `did not finish cleanly (exit ${flush.code})`
       : flushMarker === 'FAILED'        ? 'could not restart the service'
       :                                   'did not confirm success';
-    const detail = `The Windows profile service refresh ${why}. Windows may give ${FIX_USER} a temporary profile ΓÇö if Error 1132 comes back, reboot once and run the fix again.`;
+    const detail = `The Windows profile service refresh ${why}. Windows may give ${FIX_USER} a temporary profile — if Error 1132 comes back, reboot once and run the fix again.`;
     send(`  WARNING: ${detail}`, 'err');
     step('profsvc-flush', 'Refresh Windows profile service', profsvcNeeded ? 'fail' : 'warn', detail);
     if (!profsvcNeeded) {
@@ -1967,7 +1986,7 @@ async function runFixFlow(event) {
   }
 
   // ============================================================
-  // STEP 4: Recreate the account as a STANDARD user ΓÇö no
+  // STEP 4: Recreate the account as a STANDARD user — no
   //         Administrators membership (SEC-A6). Every privileged
   //         repair step runs under this app's own elevated token;
   //         user1 only runs Zoom, which needs no admin. Zoom updates
@@ -1997,7 +2016,7 @@ async function runFixFlow(event) {
   }
   // Invalidate-at-rotation: the OLD password just died with the recreate, so
   // any blob/launcher from a previous run is unusable from this instant.
-  // Delete both NOW ΓÇö if this run exits before the seal block republishes
+  // Delete both NOW — if this run exits before the seal block republishes
   // them (launch failure, DPAPI failure, launcher-write failure), what
   // remains is clean ABSENCE, which shortcut-exists / create-shortcut
   // already report honestly ("press FIX NOW"), instead of a stale pair the
@@ -2014,7 +2033,7 @@ async function runFixFlow(event) {
       });
     }
   }
-  send(`  Account '${FIX_USER}' created as a standard user (no administrator rights ΓÇö it only runs Zoom).`, 'out');
+  send(`  Account '${FIX_USER}' created as a standard user (no administrator rights — it only runs Zoom).`, 'out');
   step('create-account', `Create fresh ${FIX_USER} account`, 'ok', '');
 
   // ============================================================
@@ -2022,7 +2041,7 @@ async function runFixFlow(event) {
   // ============================================================
   send(`[5/8] Launching Zoom as '${FIX_USER}'...`, 'header');
   // Re-check zoom in case it disappeared between preflight and now
-  // (re-resolve ΓÇö an uninstall/reinstall may also have MOVED it).
+  // (re-resolve — an uninstall/reinstall may also have MOVED it).
   let zi = zoomInstall;
   if (!zi || !zi.path || !fs.existsSync(zi.path)) {
     zi = zoomInstall = await resolveZoomInstall();
@@ -2032,7 +2051,7 @@ async function runFixFlow(event) {
     return { success: false, error: 'zoom_not_found', warnings };
   }
   // fixPass is interpolated into a single-quoted PS string inside a tmp
-  // script file (runPSScriptLaunchCapture) ΓÇö never onto a command line where
+  // script file (runPSScriptLaunchCapture) — never onto a command line where
   // Win32_Process could enumerate it. The tmp file is unlinked after the run;
   // its seconds-long lifetime is the accepted residual (see PR notes).
   const launchPs = `
@@ -2049,7 +2068,7 @@ async function runFixFlow(event) {
   send(`  Dispatching Zoom launch (detached) ...`, 'out');
   const launch = await runPSScriptLaunchCapture(launchPs);
   // The launcher writes '  Zoom launched as user1.' on success or
-  // '  Launch failed: <exception>' before exit 1 ΓÇö captured now (W3-LAUNCH),
+  // '  Launch failed: <exception>' before exit 1 — captured now (W3-LAUNCH),
   // so the exact Start-Process error reaches the log instead of a guess-list.
   const launchFailLine = (launch.stdout || '').split(/\r?\n/)
     .map(s => s.trim()).find(l => l.startsWith('Launch failed: ')) || '';
@@ -2059,9 +2078,9 @@ async function runFixFlow(event) {
 
   // Verify Zoom is actually running as user1. With stdio:'ignore' on the
   // launcher we have no other signal. Use Win32_Process via Get-CimInstance
-  // + Invoke-CimMethod GetOwner (CimInstance has NO GetOwner method itself ΓÇö
+  // + Invoke-CimMethod GetOwner (CimInstance has NO GetOwner method itself —
   // earlier code used $_.GetOwner() which always threw and forced a false
-  // negative). Poll up to ~10s INSIDE one PS process ΓÇö the old spawn-per-tick
+  // negative). Poll up to ~10s INSIDE one PS process — the old spawn-per-tick
   // loop paid a powershell.exe startup for each of up to 12 checks, and the
   // 400ms internal tick also spots Zoom sooner.
   const zpoll = await runPSCapture(`
@@ -2098,10 +2117,10 @@ async function runFixFlow(event) {
 
   // ============================================================
   // Seal this run's password for the desktop shortcut (W5 Option A).
-  // DPAPI scope justification ΓÇö CurrentUser, NOT LocalMachine: the shortcut
+  // DPAPI scope justification — CurrentUser, NOT LocalMachine: the shortcut
   // runs in the PRIMARY user's non-elevated session, and this elevated
   // process is the SAME account. CurrentUser blobs are keyed to the user
-  // profile's DPAPI master keys, which elevation does not change ΓÇö so
+  // profile's DPAPI master keys, which elevation does not change — so
   // seal-elevated / unseal-non-elevated works, and NO other local account
   // can decrypt the blob. LocalMachine would be decryptable by any local
   // user and would need hand-rolled ACLs to compensate.
@@ -2109,7 +2128,7 @@ async function runFixFlow(event) {
   // legacy plaintext launchers are migrated in place with zero handshake
   // and rotation needs no staleness detection.
   // Soft-fail (#76): if Protect fails (Windows Data Protection disabled or
-  // blocked), the fix itself is NOT failed ΓÇö Zoom already launched with the
+  // blocked), the fix itself is NOT failed — Zoom already launched with the
   // in-memory credential and STEP 8 relaunch still works. We skip the
   // blob+launcher write and warn that the one-click shortcut is
   // unavailable. NEVER fall back to a static or logged password, NEVER
@@ -2162,10 +2181,10 @@ async function runFixFlow(event) {
     try { fs.rmSync(blobTmp, { force: true }); } catch (_) { /* best-effort sweep */ }
     const sealFailLine = (seal.stdout || '').split(/\r?\n/)
       .map(s => s.trim()).find(l => l.startsWith('SEALFAIL: ')) || '';
-    send('  WARNING: could not store the helper sign-in encrypted ΓÇö the one-click desktop shortcut will not work until a fix run can store it.', 'err');
+    send('  WARNING: could not store the helper sign-in encrypted — the one-click desktop shortcut will not work until a fix run can store it.', 'err');
     warnings.push({
       code: 'dpapi_seal_failed',
-      message: 'One-click desktop shortcut unavailable because Windows Data Protection is disabled or blocked on this PC ΓÇö the helper sign-in could not be stored encrypted. The fix still worked; run FIX NOW again when you want Zoom relaunched.'
+      message: 'One-click desktop shortcut unavailable because Windows Data Protection is disabled or blocked on this PC — the helper sign-in could not be stored encrypted. The fix still worked; run FIX NOW again when you want Zoom relaunched.'
         + (sealFailLine ? ` Detail for support: ${sealFailLine.slice(10)}` : '')
     });
   }
@@ -2187,7 +2206,7 @@ async function runFixFlow(event) {
       message: `user1 profile did not appear within 30s. Registry keys checked: ${profile.checkedKeys.join('; ') || '(none)'}. Folders checked: ${profile.checkedPaths.join('; ') || '(none)'}.`
     });
     // Everything the fix exists to deliver per-user (consent, dark mode,
-    // helper script) was skipped ΓÇö that is a partial outcome, not a green run.
+    // helper script) was skipped — that is a partial outcome, not a green run.
     step('profile-setup', `Set up the ${FIX_USER} profile`, 'fail',
       `The ${FIX_USER} profile did not appear within 30 seconds, so Zoom settings, camera/microphone consent, and the helper script were skipped. Sign into Zoom once as ${FIX_USER}, then run the fix again.`);
     send('Fix finished, but some outcomes need attention - see the summary below.', 'err');
@@ -2387,7 +2406,7 @@ async function runFixFlow(event) {
             consentResult.hku_unload_failed = t.slice(18);
             warnings.push({ code: 'consent_hku_unload_failed', message: `HKU\\${userSID} hive could not be unloaded after consent write: ${t.slice(18)}. NTUSER.DAT may stay locked until reboot.` });
           } else if (t === 'HKU_NOT_LOADED') {
-            // Legacy marker ΓÇö only push warning if no specific HKU_LOAD_FAILED already emitted.
+            // Legacy marker — only push warning if no specific HKU_LOAD_FAILED already emitted.
             if (!consentResult.hku_load_failed) {
               warnings.push({ code: 'consent_hku_not_loaded', message: `HKU\\${userSID} hive was not loaded and could not be loaded for per-user consent. Per-user camera/mic consent skipped at main step; first-run will retry.` });
             }
@@ -2398,7 +2417,7 @@ async function runFixFlow(event) {
             warnings.push({ code: 'frameserver_disabled', message: 'Windows Camera Frame Server service is Disabled and could not be re-enabled. Cameras will not enumerate for any desktop app until FrameServer is set to Manual or Automatic.' });
           } else if (t === 'FRAMESERVER_MISSING') {
             consentResult.frameserver_missing = true;
-            warnings.push({ code: 'frameserver_missing', message: 'FrameServer service not present on this Windows build (unusual on Win10/11) ΓÇö cameras may not enumerate.' });
+            warnings.push({ code: 'frameserver_missing', message: 'FrameServer service not present on this Windows build (unusual on Win10/11) — cameras may not enumerate.' });
           } else if (t.startsWith('ERROR=')) {
             warnings.push({ code: 'consent_script_error', message: t.slice(6) });
           } else if (t.startsWith('HKLM_WRITE_FAIL=')) {
@@ -2414,7 +2433,7 @@ async function runFixFlow(event) {
       if (consent.code !== 0) {
         warnings.push({ code: 'consent_exit_nonzero', message: `grant-media-consent.ps1 exited with code ${consent.code}.` });
       }
-      // Policy is authoritative ΓÇö if GPO denies, registry-level claim of
+      // Policy is authoritative — if GPO denies, registry-level claim of
       // "fixed" is misleading. Treat policy-denied as NOT-OK, separate
       // status from registry-not-verified.
       const camPolicyBlock = consentResult.gpo_deny_camera;
@@ -2432,7 +2451,7 @@ async function runFixFlow(event) {
       if (camStatus === 'UNVERIFIED') warnings.push({ code: 'camera_consent_unverified', message: 'Camera consent write did not verify. user1 may need to enable Camera access manually in Settings > Privacy & security > Camera, OR the FrameServer service may be Disabled.' });
       if (micStatus === 'UNVERIFIED') warnings.push({ code: 'mic_consent_unverified',    message: 'Microphone consent write did not verify. user1 may need to enable Microphone access manually in Settings > Privacy & security > Microphone.' });
       // Per-user write confirmations (the script's own post-write readback of
-      // the HKU values) ΓÇö carried for the verification pass: when the hive is
+      // the HKU values) — carried for the verification pass: when the hive is
       // unloaded at verify time these are the only per-user evidence (P1-A).
       var consentUserWrite = { cam: consentResult.cam_user === true, mic: consentResult.mic_user === true };
       // Stash receipt fields on the response so renderer can show a clean
@@ -2478,7 +2497,7 @@ async function runFixFlow(event) {
   send('  Force-closing Zoom (full process tree)...', 'out');
   // One PS pass replaces 7 serial taskkill spawns + a CIM sweep + a fixed
   // sleep(4s). Kill by image name OR install path, then poll until the whole
-  // tree is confirmed gone ΓÇö positive exit confirmation means file handles
+  // tree is confirmed gone — positive exit confirmation means file handles
   // (Zoom.us.ini) are released, typically within ~1s instead of always 4s.
   const zoomClose = await runPSCapture(`
     $u = '${FIX_USER}'
@@ -2504,10 +2523,10 @@ async function runFixFlow(event) {
   if ((zoomClose.stdout || '').includes('CLEAR')) {
     send('  Zoom closed.', 'out');
   } else {
-    // Previously "Zoom closed." printed unconditionally ΓÇö the ini write below
+    // Previously "Zoom closed." printed unconditionally — the ini write below
     // can silently lose against a still-open Zoom.us.ini handle.
     send('  WARNING: some Zoom processes may still be running for user1.', 'err');
-    warnings.push({ code: 'zoom_close_residual', message: 'Some Zoom processes were still running when preferences were written ΓÇö the dark-mode setting may not stick.' });
+    warnings.push({ code: 'zoom_close_residual', message: 'Some Zoom processes were still running when preferences were written — the dark-mode setting may not stick.' });
   }
 
   if (fs.existsSync(zoomIni)) {
@@ -2526,7 +2545,7 @@ async function runFixFlow(event) {
     const iniWrite = await runPSScript(iniEdit, send);
     if (iniWrite.timedOut || iniWrite.code !== 0) {
       send('  WARNING: could not write dark mode into Zoom.us.ini.', 'err');
-      warnings.push({ code: 'ini_write_failed', message: 'Could not write dark mode into Zoom.us.ini ΓÇö Zoom may open in light mode. Cosmetic only; everything else still applies.' });
+      warnings.push({ code: 'ini_write_failed', message: 'Could not write dark mode into Zoom.us.ini — Zoom may open in light mode. Cosmetic only; everything else still applies.' });
     }
   }
 
@@ -2581,15 +2600,15 @@ async function runFixFlow(event) {
       .map(s => s.trim()).find(l => l.startsWith('Launch failed: ')) || '';
     warnings.push({
       code: 'relaunch_failed',
-      message: `Initial launch succeeded but the relaunch ${relaunchFailLine ? `failed ΓÇö ${relaunchFailLine}` : `exited with code ${relaunch.code}`}. Open Zoom manually.`
+      message: `Initial launch succeeded but the relaunch ${relaunchFailLine ? `failed — ${relaunchFailLine}` : `exited with code ${relaunch.code}`}. Open Zoom manually.`
     });
   }
 
   // ============================================================
-  // STEP 8.5: Outcome verification ΓÇö cheap read-only re-checks of what the
+  // STEP 8.5: Outcome verification — cheap read-only re-checks of what the
   // fix exists to deliver, recorded into the receipt. No mutations:
   //   (a) consent registry values actually present for user1 (readback is
-  //       authoritative ΓÇö resolves the write-time UNVERIFIED cases),
+  //       authoritative — resolves the write-time UNVERIFIED cases),
   //   (b) FrameServer service state,
   //   (c) Zoom.exe running as user1 (the relaunch above is detached and was
   //       previously never confirmed).
@@ -2653,7 +2672,7 @@ async function runFixFlow(event) {
   };
   // Readback is authoritative where it could see the values, and OK requires
   // PER-USER evidence: the HKU value is the toggle Zoom actually reads
-  // (grant-media-consent.ps1) ΓÇö the HKLM device-wide floor alone never yields
+  // (grant-media-consent.ps1) — the HKLM device-wide floor alone never yields
   // OK (P1-A). POLICY-BLOCKED always stands. VERIFY_HKLM_* stays in the
   // captured output as diagnostics only. Logic lives in run-verdict.js so
   // tools/run-verdict-smoke.js exercises the exact shipped semantics.
@@ -2669,7 +2688,7 @@ async function runFixFlow(event) {
   step('consent', 'Grant camera and microphone access',
     consentBad ? 'fail' : (consentPolicy ? 'warn' : 'ok'),
     consentBad
-      ? `camera=${receipt.camera}, microphone=${receipt.microphone} ΓÇö sign in as ${FIX_USER}, open Settings > Privacy & security > Camera (and Microphone), and toggle access on manually.`
+      ? `camera=${receipt.camera}, microphone=${receipt.microphone} — sign in as ${FIX_USER}, open Settings > Privacy & security > Camera (and Microphone), and toggle access on manually.`
       : `camera=${receipt.camera}, microphone=${receipt.microphone}`);
 
   // FrameServer readback refines the receipt; never downgrades an honest
@@ -2680,7 +2699,7 @@ async function runFixFlow(event) {
   } else if (vfs.endsWith('/Disabled')) {
     receipt.frameServer = 'disabled-unfixable';
     if (!warnings.some(w => w.code === 'frameserver_disabled')) {
-      warnings.push({ code: 'frameserver_disabled', message: 'Windows Camera Frame Server service is Disabled ΓÇö cameras will not enumerate for any desktop app until it is set to Manual or Automatic.' });
+      warnings.push({ code: 'frameserver_disabled', message: 'Windows Camera Frame Server service is Disabled — cameras will not enumerate for any desktop app until it is set to Manual or Automatic.' });
     }
   } else if (vfs && !receipt.frameServer) {
     receipt.frameServer = 'ok';
@@ -2692,13 +2711,13 @@ async function runFixFlow(event) {
     step('relaunch', `Restart Zoom as ${FIX_USER}`, 'ok', '');
     receipt.zoomRelaunch = 'confirmed';
   } else if (vprobeFailed) {
-    step('relaunch', `Restart Zoom as ${FIX_USER}`, 'warn', 'could not confirm the relaunch ΓÇö the verification probe did not finish');
+    step('relaunch', `Restart Zoom as ${FIX_USER}`, 'warn', 'could not confirm the relaunch — the verification probe did not finish');
     warnings.push({ code: 'verify_probe_failed', message: 'The final verification probe did not finish; the receipt reflects what each step reported at the time.' });
     receipt.zoomRelaunch = 'unverified';
   } else {
     send(`  WARNING: Zoom.exe is not running as ${FIX_USER} after the relaunch.`, 'err');
     step('relaunch', `Restart Zoom as ${FIX_USER}`, 'fail',
-      `Zoom did not start as ${FIX_USER} after the fix ΓÇö double-click "Open Zoom with 1132 Helper" on your desktop to start it.`);
+      `Zoom did not start as ${FIX_USER} after the fix — double-click "Open Zoom with 1132 Helper" on your desktop to start it.`);
     receipt.zoomRelaunch = 'not-detected';
   }
   if (clearAttempts > 0) {
@@ -2743,7 +2762,7 @@ async function runFixFlow(event) {
 //
 // The shortcut was renamed in the 2026-08-07 branding correction. Installs
 // made before that carry the old filename, which the scan would no longer
-// recognize ΓÇö so the app would create the new shortcut and leave the old one
+// recognize — so the app would create the new shortcut and leave the old one
 // sitting beside it. LEGACY_SHORTCUT_FILENAMES is an EXPLICIT allowlist of
 // exact previous names, used for recognition and for cleanup after a
 // successful create. Exact names only: never a glob, never a prefix match, so
@@ -2756,7 +2775,7 @@ const LEGACY_SHORTCUT_FILENAMES = [
 ];
 const LAUNCHER_SCRIPT_NAME = `launch-zoom-as-${FIX_USER}.ps1`;
 const LAUNCHER_SCRIPT_PATH = () => path.join(app.getPath('appData'), '1132 Fixer', LAUNCHER_SCRIPT_NAME);
-// DPAPI-sealed helper password (W5 Option A), co-located with the launcher ΓÇö
+// DPAPI-sealed helper password (W5 Option A), co-located with the launcher —
 // the launcher resolves it via $PSScriptRoot, so the two must share a dir.
 const CRED_BLOB_PATH = () => path.join(app.getPath('appData'), '1132 Fixer', helperCred.CRED_BLOB_NAME);
 
@@ -2854,7 +2873,7 @@ async function findLegacyShortcuts() {
 
 /**
  * Remove the exact legacy shortcuts. Never throws: a shortcut we cannot delete
- * (permissions on Public Desktop, file in use) is reported, not fatal ΓÇö the
+ * (permissions on Public Desktop, file in use) is reported, not fatal — the
  * user still has a working renamed shortcut.
  */
 async function removeLegacyShortcuts() {
@@ -2888,7 +2907,7 @@ async function findExistingShortcuts() {
   // A MISSING launcher, however, is a known-dead shortcut, not an unknown:
   // the fix deletes launcher+blob the moment the helper password rotates
   // (invalidate-at-rotation) and republishes only after a confirmed launch,
-  // so absence means a run ended between those points ΓÇö the .lnk points at
+  // so absence means a run ended between those points — the .lnk points at
   // nothing and must read invalid so the recreate path repairs it.
   const launcherPresent = fs.existsSync(expectedScript);
   let launcherStale = false;
@@ -2897,7 +2916,7 @@ async function findExistingShortcuts() {
       const baked = zoomDetect.extractLauncherZoomPath(fs.readFileSync(expectedScript, 'utf8'));
       if (baked && baked.toLowerCase() !== zoomInstall.path.toLowerCase()) {
         launcherStale = true;
-        console.warn(`[zoom-detect] launcher script bakes '${baked}' but resolved install is '${zoomInstall.path}' ΓÇö marking shortcut stale`);
+        console.warn(`[zoom-detect] launcher script bakes '${baked}' but resolved install is '${zoomInstall.path}' — marking shortcut stale`);
       }
     } catch (_) { /* unreadable script -> cannot judge, leave validity alone */ }
   }
@@ -2969,7 +2988,7 @@ async function migrateLegacyLauncherCredential() {
 // ============================================================
 ipcMain.handle('create-shortcut', async () => {
   // The shortcut launches Zoom as user1, so it needs the machine-wide
-  // install path ΓÇö reuse the preflight resolution, re-resolve if stale.
+  // install path — reuse the preflight resolution, re-resolve if stale.
   let zi = zoomInstall;
   if (!zi || !zi.path || !fs.existsSync(zi.path)) {
     zi = zoomInstall = await resolveZoomInstall();
@@ -2981,7 +3000,7 @@ ipcMain.handle('create-shortcut', async () => {
   const desktop = await getCanonicalUserDesktop();
   // The canonical Desktop exists by definition, but the homedir fallback
   // (used when the PS resolution fails) can point at a classic
-  // %USERPROFILE%\Desktop that OneDrive redirection has removed ΓÇö
+  // %USERPROFILE%\Desktop that OneDrive redirection has removed —
   // WScript.Shell Save() then throws file-not-found (#93 #111). Creating
   // the folder is harmless when it already exists; if this fails, the PS
   // step below reports the real error non-fatally as before.
@@ -3035,11 +3054,19 @@ ipcMain.handle('create-shortcut', async () => {
       { windowsHide: true }
     );
     let stderr = '';
+    let settled = false;
+    const settle = (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
+    // Bounded: WScript.Shell COM can hang behind a stuck Explorer session.
+    const timer = setTimeout(() => {
+      try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
+      settle({ success: false, error: 'Creating the shortcut took too long. Try again.' });
+    }, 30000);
     child.stderr.on('data', d => { stderr += d.toString(); });
-    child.on('error', err => resolve({ success: false, error: err.message }));
+    child.on('error', err => settle({ success: false, error: err.message }));
     child.on('close', async code => {
+      if (settled) return;
       if (code !== 0) {
-        return resolve({ success: false, error: stderr.trim() || `Exit ${code}` });
+        return settle({ success: false, error: stderr.trim() || `Exit ${code}` });
       }
       // Only after the renamed shortcut exists do we clear the old one, so a
       // failed create never leaves the user with no shortcut at all. Cleanup
@@ -3092,7 +3119,7 @@ ipcMain.handle('launch-zoom-helper', async () => {
 
 ipcMain.handle('shortcut-exists', async () => {
   const found = await findExistingShortcuts();
-  // valid === null means we found the shortcut but COM inspection failed ΓÇö
+  // valid === null means we found the shortcut but COM inspection failed —
   // err on the side of "present" so we don't accidentally re-prompt. Only
   // valid === true is treated as a confirmed match.
   const anyValid = found.some(f => f.valid === true);
@@ -3155,7 +3182,7 @@ ipcMain.handle('relaunch-elevated', async () => {
   let started = false;
   try { started = await relaunchElevated(); } catch (_) { /* declined/failed */ }
   if (started) setTimeout(() => app.quit(), 150);
-  return { started };
+  return { started, outcome: lastRelaunchOutcome };
 });
 
 ipcMain.handle('quit-app', () => {
@@ -3191,7 +3218,7 @@ ipcMain.handle('get-system-info', async () => {
 // The proxy builds the issue title/body/labels itself, so a tampered client
 // can't forge labels or issue content.
 // Attach-screenshot UI gate (#141): the renderer shows the control ONLY when
-// the proxy advertises the capability ΓÇö anything else would be a dead button
+// the proxy advertises the capability — anything else would be a dead button
 // while the support platform is dark.
 ipcMain.handle('feedback-capabilities', () => supportClient.capabilities(config));
 
@@ -3203,7 +3230,7 @@ ipcMain.handle('submit-feedback', async (event, type, text, screenshot) => {
       return { success: false, error: 'Feedback service not configured' };
     }
 
-    // A report carrying a screenshot goes through the /v1 support API ΓÇö the
+    // A report carrying a screenshot goes through the /v1 support API — the
     // legacy /feedback contract caps bodies at 8 KB and cannot carry an
     // image. Screenshot bytes are never logged.
     if (screenshot && screenshot.bytes && screenshot.bytes.length) {
@@ -3257,16 +3284,16 @@ ipcMain.handle('submit-feedback', async (event, type, text, screenshot) => {
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
           if (res.statusCode === 201) return resolve({ success: true });
-          if (res.statusCode === 429) return resolve({ success: false, error: 'Too many submissions ΓÇö try again later.' });
+          if (res.statusCode === 429) return resolve({ success: false, error: 'Too many submissions — try again later.' });
           if (res.statusCode === 503) return resolve({ success: false, error: 'Feedback service not configured' });
-          if (res.statusCode === 413) return resolve({ success: false, error: 'Message too large ΓÇö shorten it and try again.' });
-          if (res.statusCode === 502) return resolve({ success: false, error: 'Feedback service could not reach GitHub ΓÇö try again later.' });
+          if (res.statusCode === 413) return resolve({ success: false, error: 'Message too large — shorten it and try again.' });
+          if (res.statusCode === 502) return resolve({ success: false, error: 'Feedback service could not reach GitHub — try again later.' });
           if (res.statusCode === 400) {
             let code = '';
             try { code = JSON.parse(data).error || ''; } catch (_) { /* generic below */ }
-            if (code === 'bad_type') return resolve({ success: false, error: 'The support service can\'t accept this message type yet ΓÇö please try again later.' });
-            if (code === 'empty_text') return resolve({ success: false, error: 'Message is empty ΓÇö write something first.' });
-            return resolve({ success: false, error: 'Submission rejected ΓÇö check the message and try again.' });
+            if (code === 'bad_type') return resolve({ success: false, error: 'The support service can\'t accept this message type yet — please try again later.' });
+            if (code === 'empty_text') return resolve({ success: false, error: 'Message is empty — write something first.' });
+            return resolve({ success: false, error: 'Submission rejected — check the message and try again.' });
           }
           resolve({ success: false, error: 'Submission failed' });
         });
@@ -3277,7 +3304,7 @@ ipcMain.handle('submit-feedback', async (event, type, text, screenshot) => {
       req.end();
     });
   } catch (err) {
-    // Never surface a raw exception as the whole message ΓÇö the renderer shows
+    // Never surface a raw exception as the whole message — the renderer shows
     // this string verbatim in the feedback modal.
     console.warn('submit-feedback failed before the request was sent:', err && err.message);
     return { success: false, error: 'Could not send right now. Check your internet connection and try again in a minute.' };
@@ -3285,11 +3312,11 @@ ipcMain.handle('submit-feedback', async (event, type, text, screenshot) => {
 });
 
 // ============================================================
-// IPC: preflight-scan ΓÇö Slice C premium UX surface.
+// IPC: preflight-scan — Slice C premium UX surface.
 // Builds on preflightCheck() with extra read-only probes the
 // Preflight Scan screen needs: user1 account state, GPO media
 // policy, FrameServer service state, HKU hive load state.
-// Pure read ΓÇö never mutates. Status enum:
+// Pure read — never mutates. Status enum:
 //   'ready'      = green, nothing to do
 //   'repairable' = amber, FIX NOW will repair
 //   'warning'    = yellow, advisory, fix can still run
@@ -3297,7 +3324,7 @@ ipcMain.handle('submit-feedback', async (event, type, text, screenshot) => {
 // ============================================================
 ipcMain.handle('preflight-scan', async () => {
   // All three probes (base preflight, user1 existence, policy/FrameServer/HKU)
-  // are independent and read-only ΓÇö run them concurrently. This scan gates
+  // are independent and read-only — run them concurrently. This scan gates
   // the FIX NOW button on every launch and window-focus, so serial spawns
   // here were pure startup latency.
   const probePromise = runPSCapture(`
@@ -3318,7 +3345,7 @@ ipcMain.handle('preflight-scan', async () => {
       $out['fs_status']    = 'MISSING'
       $out['fs_starttype'] = 'MISSING'
     }
-    # HKU hive ΓÇö informational only (renderer maps to 'will load temp' vs 'already loaded')
+    # HKU hive — informational only (renderer maps to 'will load temp' vs 'already loaded')
     $sid = $null
     try { $sid = (New-Object Security.Principal.NTAccount('${FIX_USER}')).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
     if ($sid) {
@@ -3330,9 +3357,9 @@ ipcMain.handle('preflight-scan', async () => {
       $out['hku_sid']    = ''
     }
     # Helper-account health: existence, plus Administrators membership to
-    # detect a LEGACY admin user1 that FIX NOW must strip (SEC-A6 ΓÇö membership
+    # detect a LEGACY admin user1 that FIX NOW must strip (SEC-A6 — membership
     # is no longer created and no longer healthy). SID-based, same technique
-    # as verifyAdminMembership ΓÇö Get-LocalGroupMember chokes on orphaned SIDs,
+    # as verifyAdminMembership — Get-LocalGroupMember chokes on orphaned SIDs,
     # so fall back to net localgroup parsing.
     $out['user1_exists'] = $false
     try { if (Get-LocalUser -Name '${FIX_USER}' -EA SilentlyContinue) { $out['user1_exists'] = $true } } catch {}
@@ -3412,14 +3439,14 @@ ipcMain.handle('preflight-scan', async () => {
     }
   }
   const probeFailMsg = probe.timedOut
-    ? 'Probe timed out after 20s ΓÇö Windows Defender or another AV may be holding PowerShell. FIX NOW can still run. To clear this, add 1132 Fixer to your antivirus exclusions; the checklist re-scans when you come back to this window.'
-    : 'PowerShell probe failed ΓÇö could not read this value. FIX NOW can still run; the checklist re-scans when you come back to this window.';
+    ? 'Probe timed out after 20s — Windows Defender or another AV may be holding PowerShell. FIX NOW can still run. To clear this, add 1132 Fixer to your antivirus exclusions; the checklist re-scans when you come back to this window.'
+    : 'PowerShell probe failed — could not read this value. FIX NOW can still run; the checklist re-scans when you come back to this window.';
 
   // --- Helper user (user1) ------------------------------------
   // A user1 that exists WITH a profile as a STANDARD user is the normal,
-  // healthy state after a successful fix ΓÇö report it green. The account
+  // healthy state after a successful fix — report it green. The account
   // is no longer added to Administrators (SEC-A6): a legacy user1 that
-  // still has admin rights is repairable ΓÇö FIX NOW removes them. Amber is
+  // still has admin rights is repairable — FIX NOW removes them. Amber is
   // reserved for states FIX NOW actually has to repair.
   const helperProfileDir = `C:\\Users\\${FIX_USER}`;
   const helperProfileExists = fs.existsSync(helperProfileDir);
@@ -3431,9 +3458,9 @@ ipcMain.handle('preflight-scan', async () => {
     if (!helperExists && !helperProfileExists) {
       cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' will be created on FIX NOW.` };
     } else if (helperExists && helperAdmin) {
-      cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' has administrator rights it no longer needs ΓÇö FIX NOW will remove them.` };
+      cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' has administrator rights it no longer needs — FIX NOW will remove them.` };
     } else if (helperExists && helperProfileExists) {
-      cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' is set up ΓÇö standard account, profile present. FIX NOW rebuilds it fresh.` };
+      cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' is set up — standard account, profile present. FIX NOW rebuilds it fresh.` };
     } else if (helperExists) {
       cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' account exists but no profile yet. FIX NOW will reset.` };
     } else {
@@ -3461,7 +3488,7 @@ ipcMain.handle('preflight-scan', async () => {
   // Hard gate (W3-LAUNCH): launching Zoom as user1 rides Start-Process
   // -Credential, which needs this service actually running. Field reports
   // showed it Stopped with an all-green scan and the launch then silently
-  // no-opping ΓÇö so it now has its own row, self-heal happens inside
+  // no-opping — so it now has its own row, self-heal happens inside
   // preflightCheck(), and a not-running service blocks the Fix button.
   {
     const sl = pre.info.seclogon || {};
@@ -3469,30 +3496,30 @@ ipcMain.handle('preflight-scan', async () => {
       cards.seclogon = {
         status: 'ready', label: 'Secondary Logon',
         message: sl.selfHeal === 'started'
-          ? 'Was stopped ΓÇö 1132 Fixer started it for you. Ready to launch Zoom as user1.'
-          : 'Running ΓÇö ready to launch Zoom as user1.'
+          ? 'Was stopped — 1132 Fixer started it for you. Ready to launch Zoom as user1.'
+          : 'Running — ready to launch Zoom as user1.'
       };
     } else if (sl.startType === 'Disabled') {
       cards.seclogon = {
         status: 'blocked', label: 'Secondary Logon',
-        message: 'Disabled ΓÇö Windows cannot launch Zoom as user1. Run "sc.exe config seclogon start= demand" from an admin shell, then come back.'
+        message: 'Disabled — Windows cannot launch Zoom as user1. Run "sc.exe config seclogon start= demand" from an admin shell, then come back.'
       };
     } else if (sl.status === 'MISSING') {
       cards.seclogon = {
         status: 'warning', label: 'Secondary Logon',
-        message: 'Service not found on this Windows build ΓÇö launching Zoom as user1 will likely fail.'
+        message: 'Service not found on this Windows build — launching Zoom as user1 will likely fail.'
       };
     } else if (sl.status === 'not checked') {
       cards.seclogon = { status: 'warning', label: 'Secondary Logon', message: probeFailMsg };
     } else if (sl.selfHeal === 'start-failed') {
       cards.seclogon = {
         status: 'blocked', label: 'Secondary Logon',
-        message: 'Stopped and could not be started ΓÇö the fix would finish without Zoom ever launching. Run "sc.exe start seclogon" from an admin shell, then come back.'
+        message: 'Stopped and could not be started — the fix would finish without Zoom ever launching. Run "sc.exe start seclogon" from an admin shell, then come back.'
       };
     } else {
       cards.seclogon = {
         status: 'warning', label: 'Secondary Logon',
-        message: `${sl.status} / ${sl.startType} ΓÇö unexpected state; the fix may not be able to launch Zoom as user1.`
+        message: `${sl.status} / ${sl.startType} — unexpected state; the fix may not be able to launch Zoom as user1.`
       };
     }
   }
@@ -3500,7 +3527,7 @@ ipcMain.handle('preflight-scan', async () => {
   const policyCard = (label, val, valueName) => {
     if (probeFailed) return { status: 'warning', label, message: probeFailMsg };
     // val: 0 = Force Allow, 1 = User in control, 2 = Force Deny, -1 = no policy
-    if (val === 2) return { status: 'blocked',   label, message: `Blocked by Windows policy (Force Deny) ΓÇö 1132 Fixer cannot override it. If IT manages this PC, ask them to allow app access. On a personal PC, run from an admin shell: reg.exe delete "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\AppPrivacy" /v ${valueName} /f ΓÇö then come back to re-check.` };
+    if (val === 2) return { status: 'blocked',   label, message: `Blocked by Windows policy (Force Deny) — 1132 Fixer cannot override it. If IT manages this PC, ask them to allow app access. On a personal PC, run from an admin shell: reg.exe delete "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\AppPrivacy" /v ${valueName} /f — then come back to re-check.` };
     if (val === 0) return { status: 'ready',     label, message: 'Allowed by policy (Force Allow).' };
     if (val === 1) return { status: 'ready',     label, message: 'Under user control (no Force Deny).' };
     if (val === -1) return { status: 'ready',    label, message: 'No restrictive policy detected.' };
@@ -3522,7 +3549,7 @@ ipcMain.handle('preflight-scan', async () => {
     } else if (fsStatus === 'Running' || fsStart === 'Manual' || fsStart === 'Automatic') {
       cards.frameServer = { status: 'ready', label: 'Camera Frame Server', message: `${fsStatus} / ${fsStart}.` };
     } else {
-      cards.frameServer = { status: 'warning', label: 'Camera Frame Server', message: `${fsStatus} / ${fsStart} ΓÇö unexpected state.` };
+      cards.frameServer = { status: 'warning', label: 'Camera Frame Server', message: `${fsStatus} / ${fsStart} — unexpected state.` };
     }
   }
 
@@ -3530,14 +3557,14 @@ ipcMain.handle('preflight-scan', async () => {
   if (probeFailed) {
     cards.hku = { status: 'warning', label: 'User registry hive', message: probeFailMsg };
   } else if (probeData.hku_sid) {
-    // Not-loaded is the NORMAL state while user1 is logged off ΓÇö mounting the
+    // Not-loaded is the NORMAL state while user1 is logged off — mounting the
     // hive is part of the fix procedure, not a defect to repair. Both states
     // are green; the message says which path FIX NOW takes.
     cards.hku = probeData.hku_loaded
-      ? { status: 'ready', label: 'User registry hive', message: `HKU\\${probeData.hku_sid} active ΓÇö consent will write live.` }
-      : { status: 'ready', label: 'User registry hive', message: `Hive not loaded (normal while '${FIX_USER}' is logged off) ΓÇö FIX NOW will mount NTUSER.DAT, write consent, then unmount.` };
+      ? { status: 'ready', label: 'User registry hive', message: `HKU\\${probeData.hku_sid} active — consent will write live.` }
+      : { status: 'ready', label: 'User registry hive', message: `Hive not loaded (normal while '${FIX_USER}' is logged off) — FIX NOW will mount NTUSER.DAT, write consent, then unmount.` };
   } else {
-    cards.hku = { status: 'ready', label: 'User registry hive', message: `No '${FIX_USER}' SID yet ΓÇö fresh create, nothing to mount.` };
+    cards.hku = { status: 'ready', label: 'User registry hive', message: `No '${FIX_USER}' SID yet — fresh create, nothing to mount.` };
   }
 
   // App version
@@ -3545,7 +3572,7 @@ ipcMain.handle('preflight-scan', async () => {
 
   // Roll up overall readiness for renderer convenience. Preflight blockers
   // count even when no card carries them (running_as_target, missing_tool,
-  // tool-probe failure) ΓÇö otherwise the Fix button sits enabled while
+  // tool-probe failure) — otherwise the Fix button sits enabled while
   // run-fix would refuse at [0/8] anyway (F-W22).
   const statuses = Object.values(cards).map(c => c.status);
   let overall = 'ready';
@@ -3564,7 +3591,7 @@ ipcMain.handle('preflight-scan', async () => {
 });
 
 // ============================================================
-// IPC: support-report ΓÇö sanitized markdown bundle for support.
+// IPC: support-report — sanitized markdown bundle for support.
 // Caller passes the renderer-held context (last receipt, log tail);
 // main process adds version/OS/preflight and sanitizes user-identifying
 // strings before returning. Renderer presents Copy button.
@@ -3608,7 +3635,7 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
         out = out.replace(new RegExp(`\\b${safeUser}\\b`, 'gi'), '<you>');
       }
     }
-    // Machine name ΓÇö appears in stale "user1.MACHINENAME" profile-folder
+    // Machine name — appears in stale "user1.MACHINENAME" profile-folder
     // residue and in Windows path enumerations. Redact bare hostname; the
     // \b boundary keeps it from mangling unrelated substrings.
     if (hostname) {
@@ -3618,7 +3645,7 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
   };
 
   const md = [];
-  md.push('## 1132 Fixer ΓÇö Support Report');
+  md.push('## 1132 Fixer — Support Report');
   md.push('');
   md.push(`- **App version:** ${version}`);
   md.push(`- **OS:** ${osLine}`);
@@ -3628,8 +3655,8 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
   if (preflight) {
     md.push('### Preflight summary');
     md.push(`- OK: ${preflight.ok}`);
-    md.push(`- Blockers: ${preflight.blockers.length} ΓÇö ${preflight.blockers.map(b => b.code).join(', ') || 'none'}`);
-    md.push(`- Warnings: ${preflight.warnings.length} ΓÇö ${preflight.warnings.map(w => w.code).join(', ') || 'none'}`);
+    md.push(`- Blockers: ${preflight.blockers.length} — ${preflight.blockers.map(b => b.code).join(', ') || 'none'}`);
+    md.push(`- Warnings: ${preflight.warnings.length} — ${preflight.warnings.map(w => w.code).join(', ') || 'none'}`);
     if (preflight.info && preflight.info.seclogon) {
       md.push(`- Secondary Logon: ${preflight.info.seclogon.status} / ${preflight.info.seclogon.startType}`);
     }
@@ -3648,7 +3675,7 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
     md.push('');
   }
   if (logTail) {
-    md.push('### Recent log (sanitized ΓÇö last ~80 lines)');
+    md.push('### Recent log (sanitized — last ~80 lines)');
     md.push('```');
     const tail = logTail.split(/\r?\n/).slice(-80).join('\n');
     md.push(sanitize(tail));

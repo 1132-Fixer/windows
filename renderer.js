@@ -1435,14 +1435,25 @@ elevateBtn.addEventListener('click', async () => {
   elevateBtn.disabled = true;
   elevateBtn.textContent = 'Waiting for Windows approval…';
   let started = false;
+  let outcome = 'failed';
   try {
     const r = await window.electronAPI.relaunchElevated();
     started = !!(r && r.started);
+    if (r && typeof r.outcome === 'string') outcome = r.outcome;
   } catch (_) { /* treated as declined */ }
   if (started) {
     elevateBtn.textContent = WIZARD.ADMIN_RESTARTING;
     return; // main.js quits this instance; the elevated one takes over
   }
+  // Plain-English reason under View details. No PowerShell text.
+  const reasons = {
+    declined: 'Windows approval was cancelled or refused.',
+    timeout: 'Windows approval was not answered in time.',
+    'launch-error': 'Windows PowerShell could not be started to request approval.',
+    failed: 'Windows did not confirm that the restart began.',
+    'already-elevated': 'The app is already running as administrator.'
+  };
+  addFileItem(`Restart as administrator: ${reasons[outcome] || reasons.failed}`, 'failed');
   elevateBtn.disabled = false;
   elevateBtn.textContent = WIZARD.ADMIN_PRIMARY;
   showResultPane('warn', WIZARD.ADMIN_TITLE, WIZARD.ADMIN_DECLINED_SUB);
