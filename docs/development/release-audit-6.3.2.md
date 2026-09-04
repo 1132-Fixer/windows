@@ -10,6 +10,7 @@ from appearance alone.
 
 | Release | Symptom | Cause | Evidence |
 |---|---|---|---|
+| 6.2.0 – 6.3.1 (every packaged build with the compact shell) | window opens, then **Unable to complete — the startup check did not finish in time**; older renderers stayed on Checking | `preload.js` did `require('./src/preload/compact-shell')`. The renderer is sandboxed, so the preload's `require` resolves only Electron shim modules; the call threw `module not found`, the preload aborted, and `window.electronAPI` never existed | packaged acceptance run 33886860785 raw-launch stderr: `Unable to load preload script: …\app.asar\preload.js` / `Error: module not found: ./src/preload/compact-shell`; screenshot `scale100-02-landing-.png` |
 | 6.3.0 (last release actually published) | stays on **Checking…** | elevation probe ran a PowerShell `Add-Type` compile that could not return in the packaged app, so `startup-status` never replied | PR #193 body; `git log v6.3.0..v6.3.1` |
 | 6.3.1 (tag exists, release run 33552908133 succeeded, release later removed) | never reached users; auto-update feed still points at 6.3.0 | — | `gh api repos/1132-Fixer/windows/releases/tags/v6.3.1` → 404 |
 | PR #194 as opened (48f3da8) | "Restart as administrator" always reported declined | `Start-Process -LiteralPath` — not a `Start-Process` parameter in Windows PowerShell 5.1 | `powershell -Command "Start-Process -LiteralPath 'x'"` → `A parameter cannot be found that matches parameter name 'LiteralPath'` (this host, 5.1.26100.9168) |
@@ -80,6 +81,8 @@ no hex.
 
 | # | Area | State/component | Finding | Severity | Correction | Evidence | Result |
 |---|---|---|---|---|---|---|---|
+| 0 | Startup | preload / compact shell | sandboxed preload required a repository module; whole bridge missing in every packaged build since 6.2.0 | P1 | shell loads as a page script; preload requires only `electron`; smoke guards | run 33886860785 stderr + screenshot; `electron-security-smoke` | fixed (99289ab) |
+| 0b | Test host | packaged acceptance on the runner | requireAdministrator image cannot be created from the sandbox's restricted token on the runner (`SBOX_ERROR_CREATE_PROCESS` = 18); no renderer | P2 (evidence) | driver stamps a throwaway asInvoker copy, records host `EnableLUA` and which binary ran | run 33886860785 `test-copy`, `raw-launch` | fixed (cf369c4) |
 | 1 | Elevation | UAC relaunch | `Start-Process -LiteralPath` is rejected by PowerShell 5.1; every relaunch reported declined | P1 | `-FilePath`; real-PowerShell test | `elevation-controller-smoke` transport section | fixed |
 | 2 | Elevation | `runTimed` | result read on `exit` before stdout drained; approved relaunch could read as failed | P1 | read on `close` + 500 ms grace | controller smoke `inherited handles…` | fixed |
 | 3 | Elevation | `runTimed` | `/STARTED/` substring match could accept unrelated output | P2 | whole-line sentinel `FIXER_RELAUNCH=STARTED` | controller smoke `unrelated output…` | fixed |
