@@ -22,7 +22,7 @@ for (const text of [
   'Your personal files won’t be changed.',
   'Fixing Zoom',
   'Getting things ready…',
-  'Step ${view.step} of 4',
+  'Step ${view.step} of ${FIX_STAGE_COUNT}',
   "You're all set",
   'Zoom is ready to use.',
   'Open Zoom',
@@ -53,7 +53,9 @@ check(compactStageView('prep').step === 1, 'prep -> step 1');
 check(compactStageView('verify').step === 2, 'verify -> step 2');
 check(compactStageView('consent').step === 3, 'consent -> step 3');
 check(compactStageView('launch').step === 4, 'launch -> step 4');
-check(compactStageView('receipt').step === 4, 'receipt folds into step 4');
+check(compactStageView('receipt').step === 5, 'receipt (verification) is its own step 5');
+check(!shell.includes('compact-progress-fill') && !/progressFill\.style\.width/.test(shell), 'no decorative progress bar; the stage tracker is the progress display');
+check(!/#wizFixing \.stage-tracker[^{]*\{[^}]*display:\s*none/.test(shell), 'compact shell shows the five-stage tracker while fixing');
 
 console.log('compact-shell-smoke: cancellation is real, not Exit masquerading as Cancel');
 check(shell.includes('requestCancel'), 'shell requests cooperative cancellation');

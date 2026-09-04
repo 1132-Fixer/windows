@@ -281,10 +281,18 @@ body[data-compact-state="ready"] #shortcutOpt .shortcut-opt-sub {
 }
 
 /* FIXING --------------------------------------------------------- */
-body.compact-shell-enabled #wizFixing .stage-tracker,
+/* The renderer's five-stage tracker IS the progress display: it is driven
+   by the real orchestrator (prep → helper environment → camera/mic →
+   launch → verification), each row done ✓ / active / pending with a
+   connector. No decorative bar. */
 body.compact-shell-enabled #wizFixing > .wiz-step-line,
 body.compact-shell-enabled #wizFixing > .wiz-hint {
   display: none !important;
+}
+body.compact-shell-enabled #wizFixing .stage-tracker {
+  width: min(420px, 100%);
+  margin: 16px auto 0;
+  text-align: left;
 }
 
 .compact-fix-detail {
@@ -300,21 +308,6 @@ body.compact-shell-enabled #wizFixing > .wiz-hint {
   font-size: 13px;
   line-height: 18px;
   font-weight: 600;
-}
-.compact-progress {
-  width: min(380px, 86%);
-  height: 5px;
-  margin-top: 14px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(168,181,199,0.18);
-}
-.compact-progress-fill {
-  width: 25%;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--compact-accent);
-  transition: width 220ms ease-out;
 }
 
 /* SUCCESS -------------------------------------------------------- */
@@ -651,17 +644,19 @@ body[data-compact-state="blocked"] .zoom-recovery {
 
 @media (prefers-reduced-motion: reduce) {
   .compact-spinner { animation: none; border-top-color: rgba(168,181,199,0.28); }
-  .compact-progress-fill { transition: none; }
 }
 `;
 
+// Five real orchestrator stages, one row each in #stageTracker. The step
+// number is the row's position; nothing here is a percentage.
 const FIX_STAGE_VIEW = Object.freeze({
   prep:    { step: 1, detail: 'Getting things ready…' },
-  verify:  { step: 2, detail: 'Setting up a fresh Zoom profile…' },
+  verify:  { step: 2, detail: 'Setting up the fresh Zoom environment…' },
   consent: { step: 3, detail: 'Applying camera and microphone settings…' },
   launch:  { step: 4, detail: 'Starting Zoom…' },
-  receipt: { step: 4, detail: 'Checking that Zoom is ready…' }
+  receipt: { step: 5, detail: 'Checking that Zoom is ready…' }
 });
+const FIX_STAGE_COUNT = 5;
 
 function compactStageView(stage) {
   return FIX_STAGE_VIEW[stage] || FIX_STAGE_VIEW.prep;
@@ -755,20 +750,18 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
     const fixingTitle = fixing && fixing.querySelector('.wiz-title');
     const fixDetail = document.createElement('p');
     fixDetail.className = 'compact-fix-detail';
+    // "Step n of 5" is the accessible progress value: role=progressbar with
+    // integer steps, announced politely as the orchestrator advances. The
+    // visible rows live in #stageTracker (renderer-owned).
     const stepLine = document.createElement('p');
     stepLine.className = 'compact-step-line';
-    const progress = document.createElement('div');
-    progress.className = 'compact-progress';
-    progress.setAttribute('role', 'progressbar');
-    progress.setAttribute('aria-valuemin', '1');
-    progress.setAttribute('aria-valuemax', '4');
-    const progressFill = document.createElement('div');
-    progressFill.className = 'compact-progress-fill';
-    progress.appendChild(progressFill);
+    stepLine.setAttribute('role', 'progressbar');
+    stepLine.setAttribute('aria-valuemin', '1');
+    stepLine.setAttribute('aria-valuemax', String(FIX_STAGE_COUNT));
+    stepLine.setAttribute('aria-live', 'polite');
     if (fixing) {
       fixing.appendChild(fixDetail);
       fixing.appendChild(stepLine);
-      fixing.appendChild(progress);
     }
 
     // Running/success actions that are intentionally not part of the old
@@ -960,10 +953,9 @@ function installCompactShell({ requestCancel, requestQuit } = {}) {
       }
       const view = compactStageView(stage);
       fixDetail.textContent = view.detail;
-      stepLine.textContent = `Step ${view.step} of 4`;
-      progressFill.style.width = `${view.step * 25}%`;
-      progress.setAttribute('aria-valuenow', String(view.step));
-      progress.setAttribute('aria-valuetext', `Step ${view.step} of 4: ${view.detail}`);
+      stepLine.textContent = `Step ${view.step} of ${FIX_STAGE_COUNT}`;
+      stepLine.setAttribute('aria-valuenow', String(view.step));
+      stepLine.setAttribute('aria-valuetext', `Step ${view.step} of ${FIX_STAGE_COUNT}: ${view.detail}`);
     }
 
     let syncing = false;

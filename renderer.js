@@ -176,7 +176,7 @@ function setStatus(tone, text) {
 
 const STAGE_ORDER = ['prep', 'verify', 'consent', 'launch', 'receipt'];
 const STAGE_LABEL = {
-  prep: 'Preparing the repair', verify: 'Repairing helper account',
+  prep: 'Preparing the repair', verify: 'Setting up the fresh Zoom environment',
   consent: 'Camera & microphone access', launch: 'Launch Zoom', receipt: 'Verify repair'
 };
 // Consumer-language detail for the ACTIVE step (design critique 2026-08-23:
@@ -184,7 +184,7 @@ const STAGE_LABEL = {
 // stays behind View details).
 const STAGE_DETAIL = {
   prep: 'Getting things ready…',
-  verify: 'Setting up the helper account…',
+  verify: 'Setting up the fresh Zoom environment…',
   consent: 'Configuring camera & microphone access…',
   launch: 'Starting Zoom…',
   receipt: 'Checking the repair…'
