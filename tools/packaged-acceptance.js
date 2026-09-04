@@ -137,7 +137,8 @@ async function layoutFacts(page) {
       footerText: footer ? footer.innerText.replace(/\s+/g, ' ').trim() : null,
       disclosureText: disclosure ? disclosure.textContent.trim() : null,
       disclosureInFooter: !!(footer && disclosure && footer.contains(disclosure)),
-      disclosureClipped: !!(disclosure && [...disclosure.querySelectorAll('span')].some((s) => s.scrollWidth > s.clientWidth + 1)),
+      disclosureClipped: !!(disclosure && ([...disclosure.querySelectorAll('span')].some((s) => s.scrollWidth > s.clientWidth + 1) ||
+        (() => { const r = disclosure.getBoundingClientRect(); return r.bottom > vh + 1 || r.top < 0 || r.right > vw + 1; })())),
       exploreVisible: !!(explore && !explore.hidden && getComputedStyle(explore).display !== 'none'),
       versionText: version ? version.textContent.trim() : null,
       title: (document.querySelector('.wizard-pane.active h2, .wizard-pane.active h1, [data-compact-title]') || {}).textContent || null

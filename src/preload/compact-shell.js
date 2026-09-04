@@ -495,19 +495,21 @@ body[data-compact-state="cancelled"] .action-area {
 }
 
 /* Footer appears only on the ready/result screen. */
-/* Two quiet rows: version + Support/Feedback/About, then the full
-   independence line (never truncated). */
+/* One quiet row: version · full independence line · Support/Feedback/About.
+   The "Open Source" label is hidden here (it stays in About) so the
+   disclosure fits untruncated at 520 px; a second row would fall below the
+   fixed-height window. */
 .compact-footer {
-  flex: 0 0 auto;
+  flex: 0 0 48px;
   width: min(560px, 100%);
   min-height: 48px;
   margin-top: auto;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0 16px;
-  padding: 0 2px 6px;
+  gap: 12px;
+  padding: 0 2px;
   color: var(--compact-dim);
   font-size: 12px;
 }
@@ -556,8 +558,7 @@ body.compact-shell-enabled #projectDisclosure {
   gap: 6px;
   margin: 0;
   min-width: 0;
-  flex: 1 1 100%;
-  order: 3;
+  flex: 1 1 auto;
   overflow: visible;
   color: var(--compact-dim);
   font-size: 12px;
@@ -569,8 +570,12 @@ body.compact-shell-enabled #projectDisclosure span {
   min-width: 0;
   overflow: visible;
   text-overflow: clip;
-  white-space: normal;
-  text-align: center;
+  white-space: nowrap;
+}
+body.compact-shell-enabled #projectDisclosure .os-icon,
+body.compact-shell-enabled #projectDisclosure .os-label,
+body.compact-shell-enabled #projectDisclosure .os-sep {
+  display: none !important;
 }
 body.compact-shell-enabled #projectDisclosure .os-icon {
   width: 14px;
