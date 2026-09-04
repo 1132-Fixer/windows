@@ -27,7 +27,7 @@ dist/
 
 # Packaged acceptance evidence (tools/packaged-acceptance.js) — uploaded as a
 # CI artifact, never committed.
-.acceptance/
+acceptance-evidence/
 
 # OS / Editor
 nul

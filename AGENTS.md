@@ -66,7 +66,7 @@ npm test                       # all tools/*-smoke.js, node only, no Electron ne
 node feedback-proxy/test.js
 npm run build                  # portable exe   (electron-builder)
 npm run build:installer        # NSIS installer
-node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out .acceptance
+node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out acceptance-evidence   # add --test-copy where UAC is disabled
 ```
 
 - `npm test` must pass from the exact final commit. Add a regression test for

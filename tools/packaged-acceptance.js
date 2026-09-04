@@ -41,8 +41,15 @@ const argOf = (flag, dflt) => {
 };
 const has = (flag) => args.includes(flag);
 
-const EXE = path.resolve(argOf('--exe', path.join(ROOT, 'dist', 'win-unpacked', '1132 Fixer.exe')));
-const OUT = path.resolve(argOf('--out', path.join(ROOT, '.acceptance')));
+const SHIPPED_EXE = path.resolve(argOf('--exe', path.join(ROOT, 'dist', 'win-unpacked', '1132 Fixer.exe')));
+const OUT = path.resolve(argOf('--out', path.join(ROOT, 'acceptance-evidence')));
+// --test-copy: drive a throwaway copy of the unpacked app whose exe manifest
+// is stamped asInvoker. Needed on hosts with UAC disabled (GitHub-hosted
+// runners): there, CreateProcess of a requireAdministrator image from the
+// Chromium sandbox's restricted token fails (SBOX_ERROR_CREATE_PROCESS = 18)
+// and no renderer ever starts. The shipped artifact is not modified. The
+// report records which binary was driven.
+const TEST_COPY = has('--test-copy');
 const SCALES = String(argOf('--scales', '1,1.25,1.5')).split(',').map(Number).filter((n) => n > 0);
 const FIX_TIMEOUT_MS = Number(argOf('--fix-timeout-ms', 360000));
 const SKIP_FIX = has('--skip-fix');
@@ -54,7 +61,8 @@ const CHECKING_DEADLINE_MS = 15000;
 const DISCLOSURE = 'Independent project. Not affiliated with Zoom.';
 const TERMINAL_STATES = ['success', 'error', 'notice', 'cancelled', 'blocked', 'ready'];
 
-const report = { exe: EXE, startedAt: new Date().toISOString(), host: {}, cases: [] };
+let EXE = SHIPPED_EXE;
+const report = { exe: EXE, shippedExe: SHIPPED_EXE, testCopy: TEST_COPY, startedAt: new Date().toISOString(), host: {}, cases: [] };
 function record(id, status, detail, extra) {
   const row = { id, status, detail: detail || '', ...(extra || {}) };
   report.cases.push(row);
@@ -308,11 +316,64 @@ async function runFixJourney(page) {
   (!rawPs ? passed : failed)('fix.no-raw-powershell-on-primary-surface', rawPs ? 'PowerShell text visible on the primary surface' : 'primary surface is plain English');
 }
 
+function readEnableLua() {
+  try {
+    const r = require('child_process').spawnSync('reg.exe', ['query', 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System', '/v', 'EnableLUA'], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    const m = /EnableLUA\s+REG_DWORD\s+0x([0-9a-f]+)/i.exec(r.stdout || '');
+    return m ? parseInt(m[1], 16) : null;
+  } catch (_) { return null; }
+}
+
+async function prepareTestCopy() {
+  const srcDir = path.dirname(SHIPPED_EXE);
+  const dstDir = path.join(path.dirname(srcDir), 'acceptance-unpacked');
+  fs.rmSync(dstDir, { recursive: true, force: true });
+  fs.cpSync(srcDir, dstDir, { recursive: true });
+  const exe = path.join(dstDir, path.basename(SHIPPED_EXE));
+  const { stampExecutionLevel } = require('../scripts/stamp-exe-manifest');
+  const how = await stampExecutionLevel(exe, 'asInvoker');
+  return { exe, how };
+}
+
+// Raw launch without the debugger: the app's own stderr for 12 s, so a
+// renderer/GPU child launch failure is visible in the report even when the
+// driver cannot attach.
+async function rawLaunchProbe(exe) {
+  return new Promise((resolve) => {
+    let out = '';
+    const child = spawn(exe, ['--enable-logging=stderr'], { windowsHide: true });
+    const done = (why) => {
+      try { require('child_process').spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
+      resolve({ why, out: out.slice(-4000) });
+    };
+    const timer = setTimeout(() => done('timeout'), 12000);
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    child.on('error', (e) => { clearTimeout(timer); resolve({ why: `error: ${e.message}`, out }); });
+    child.on('exit', (code) => { clearTimeout(timer); resolve({ why: `exited ${code}`, out: out.slice(-4000) }); });
+  });
+}
+
 (async () => {
-  report.host = { platform: process.platform, release: require('os').release(), user: require('os').userInfo().username ? '(set)' : '(unset)', exeExists: fs.existsSync(EXE) };
-  console.log(`packaged-acceptance: ${EXE}`);
-  if (!fs.existsSync(EXE)) { failed('exe-present', `missing ${EXE}`); finish(); return; }
-  passed('exe-present', path.basename(EXE));
+  report.host = { platform: process.platform, release: require('os').release(), enableLUA: readEnableLua(), exeExists: fs.existsSync(SHIPPED_EXE) };
+  console.log(`packaged-acceptance: ${SHIPPED_EXE} (EnableLUA=${report.host.enableLUA})`);
+  if (!fs.existsSync(SHIPPED_EXE)) { failed('exe-present', `missing ${SHIPPED_EXE}`); finish(); return; }
+  passed('exe-present', path.basename(SHIPPED_EXE));
+  if (TEST_COPY) {
+    try {
+      const c = await prepareTestCopy();
+      EXE = c.exe;
+      report.exe = EXE;
+      passed('test-copy', `asInvoker copy stamped via ${c.how}: ${path.relative(ROOT, EXE)} (shipped artifact untouched; host EnableLUA=${report.host.enableLUA})`);
+    } catch (err) {
+      failed('test-copy', `could not prepare the asInvoker copy: ${err && err.message}`);
+      finish();
+      return;
+    }
+  }
+  const raw = await rawLaunchProbe(EXE);
+  const rawFatal = /render-process-gone|GPU process launch failed|FATAL/.test(raw.out);
+  (!rawFatal ? passed : failed)('raw-launch', `${raw.why}; ${rawFatal ? 'renderer/GPU launch failure in stderr' : 'no fatal child-launch error in 12 s'}`, { stderrTail: raw.out.split(/\r?\n/).filter(Boolean).slice(-12) });
 
   const main = await runLanding(1, 'scale100');
   if (main) {
@@ -337,7 +398,7 @@ function finish() {
   for (const c of report.cases) counts[c.status]++;
   report.counts = counts;
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
-  const lines = ['# Packaged acceptance', '', `Executable: \`${report.exe}\``, `Run: ${report.startedAt} → ${report.finishedAt}`, '',
+  const lines = ['# Packaged acceptance', '', `Executable driven: \`${report.exe}\``, `Shipped executable: \`${report.shippedExe}\` (${report.testCopy ? 'driven through an asInvoker-stamped copy because the host has UAC disabled' : 'driven directly'})`, `Host: ${report.host.platform} ${report.host.release}, EnableLUA=${report.host.enableLUA}`, `Run: ${report.startedAt} → ${report.finishedAt}`, '',
     `Passed ${counts.passed} · Failed ${counts.failed} · Not run ${counts['not-run']}`, '',
     '| Case | Result | Detail | Evidence |', '|---|---|---|---|'];
   const cell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');

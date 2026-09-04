@@ -59,8 +59,14 @@ jobs:
           if ($p.ExitCode -ne 0) { exit $p.ExitCode }
           Get-ChildItem 'C:\Program Files\Zoom\bin\Zoom.exe' -ErrorAction SilentlyContinue | Select-Object FullName, Length
 
+      # --test-copy: GitHub-hosted runners have UAC disabled, and with UAC off
+      # Windows will not CreateProcess a requireAdministrator image from the
+      # Chromium sandbox's restricted token (renderer/GPU launch fails,
+      # SBOX_ERROR_CREATE_PROCESS = 18). The driver therefore stamps a
+      # throwaway copy asInvoker and drives that; dist/win-unpacked and the
+      # installers are untouched and the report records which binary ran.
       - name: Packaged acceptance (launch, states, keyboard, scaling, Fix now)
-        run: node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out .acceptance
+        run: node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out acceptance-evidence --test-copy
 
       - name: Upload packaged acceptance evidence
         if: always()
@@ -68,7 +74,7 @@ jobs:
         continue-on-error: true
         with:
           name: packaged-acceptance
-          path: .acceptance/
+          path: acceptance-evidence/
           retention-days: 30
 
       # package.json "files" is a broad glob with a deny list, so what ships
