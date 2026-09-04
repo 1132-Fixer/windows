@@ -366,6 +366,18 @@ body.compact-shell-enabled #launchBtn:hover:not(:disabled) {
   background: var(--compact-accent-hover) !important;
   border-color: var(--compact-accent-hover) !important;
 }
+/* Keyboard focus: the shared --focus-ring (2px ring on a 2px gap). The
+   box-shadow:none above resets the legacy glow; this must win for
+   :focus-visible so Fix now / Open Zoom show a ring like every other control. */
+body.compact-shell-enabled .action-area .btn:focus-visible,
+body.compact-shell-enabled .action-area .btn-primary:focus-visible,
+body.compact-shell-enabled #fixBtn:focus-visible,
+body.compact-shell-enabled #launchBtn:focus-visible,
+body.compact-shell-enabled .compact-footer button:focus-visible,
+body.compact-shell-enabled .compact-exit:focus-visible {
+  outline: none !important;
+  box-shadow: var(--focus-ring) !important;
+}
 
 body.compact-shell-enabled .secondary-row {
   margin-top: 0 !important;
@@ -483,16 +495,19 @@ body[data-compact-state="cancelled"] .action-area {
 }
 
 /* Footer appears only on the ready/result screen. */
+/* Two quiet rows: version + Support/Feedback/About, then the full
+   independence line (never truncated). */
 .compact-footer {
-  flex: 0 0 48px;
+  flex: 0 0 auto;
   width: min(560px, 100%);
   min-height: 48px;
   margin-top: auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 0 2px;
+  gap: 0 16px;
+  padding: 0 2px 6px;
   color: var(--compact-dim);
   font-size: 12px;
 }
@@ -537,22 +552,25 @@ body.compact-shell-enabled #adminBadge {
 body.compact-shell-enabled #projectDisclosure {
   display: flex !important;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   margin: 0;
   min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
+  flex: 1 1 100%;
+  order: 3;
+  overflow: visible;
   color: var(--compact-dim);
-  font-size: 11px;
-  line-height: 14px;
+  font-size: 12px;
+  line-height: 16px;
   font-weight: 500;
   pointer-events: none;
 }
 body.compact-shell-enabled #projectDisclosure span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  text-align: center;
 }
 body.compact-shell-enabled #projectDisclosure .os-icon {
   width: 14px;

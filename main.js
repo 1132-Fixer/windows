@@ -522,7 +522,9 @@ ipcMain.handle('window-maximize', () => {
 function compactWindowBounds() {
   const workArea = screen.getPrimaryDisplay().workArea;
   const width = Math.min(520, Math.max(440, workArea.width - 64));
-  const height = Math.min(640, Math.max(560, workArea.height - 64));
+  // 600 fits the tallest state (five-stage Fixing + actions + two-row
+  // footer) without leaving the Ready state mostly empty.
+  const height = Math.min(600, Math.max(560, workArea.height - 64));
   const x = workArea.x + Math.max(0, Math.round((workArea.width - width) / 2));
   const y = workArea.y + Math.max(0, Math.round((workArea.height - height) / 2));
   return { x, y, width, height };

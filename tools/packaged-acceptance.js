@@ -137,6 +137,7 @@ async function layoutFacts(page) {
       footerText: footer ? footer.innerText.replace(/\s+/g, ' ').trim() : null,
       disclosureText: disclosure ? disclosure.textContent.trim() : null,
       disclosureInFooter: !!(footer && disclosure && footer.contains(disclosure)),
+      disclosureClipped: !!(disclosure && [...disclosure.querySelectorAll('span')].some((s) => s.scrollWidth > s.clientWidth + 1)),
       exploreVisible: !!(explore && !explore.hidden && getComputedStyle(explore).display !== 'none'),
       versionText: version ? version.textContent.trim() : null,
       title: (document.querySelector('.wizard-pane.active h2, .wizard-pane.active h1, [data-compact-title]') || {}).textContent || null
@@ -161,7 +162,9 @@ async function keyboardFacts(page) {
       const ring = (cs.outlineStyle && cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0) ||
         (cs.boxShadow && cs.boxShadow !== 'none');
       const name = (el.getAttribute('aria-label') || el.textContent || el.value || '').replace(/\s+/g, ' ').trim().slice(0, 40);
-      const r = el.getBoundingClientRect();
+      // A checkbox's target is its label (WCAG 2.5.8 measures the whole target).
+      const target = (el.type === 'checkbox' || el.type === 'radio') && el.closest('label') ? el.closest('label') : el;
+      const r = target.getBoundingClientRect();
       rows.push({ tag: el.tagName.toLowerCase(), id: el.id || null, name, focusVisible: !!ring, w: Math.round(r.width), h: Math.round(r.height) });
     }
     if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
@@ -200,7 +203,8 @@ async function runLanding(scale, tag) {
       ? `viewport ${facts.viewport.w}x${facts.viewport.h} @${facts.viewport.dpr}, content fits`
       : `overflow: ${facts.overflow.join('; ') || `doc ${facts.docScroll.w}x${facts.docScroll.h} > ${facts.docScroll.cw}x${facts.docScroll.ch}`}`,
       { screenshot: landingShot, facts });
-    (facts.disclosureText === DISCLOSURE && facts.disclosureInFooter ? passed : failed)(`${tag}.footer-disclosure`, `footer: ${facts.footerText}`);
+    const disclosureOk = facts.disclosureInFooter && (facts.disclosureText || '').includes(DISCLOSURE) && (facts.footerText || '').includes(DISCLOSURE) && !facts.disclosureClipped;
+    (disclosureOk ? passed : failed)(`${tag}.footer-disclosure`, `footer: ${facts.footerText}${facts.disclosureClipped ? ' (disclosure clipped)' : ''}`);
     (!facts.exploreVisible ? passed : failed)(`${tag}.explore-hidden`, facts.exploreVisible ? 'Explore visible in landing chrome' : 'Explore absent from landing chrome');
     (facts.versionText && /\d+\.\d+\.\d+/.test(facts.versionText) ? passed : failed)(`${tag}.version-shown`, `version: ${facts.versionText}`);
     const kb = await keyboardFacts(page);
@@ -296,18 +300,20 @@ async function runFixJourney(page) {
   const endFacts = await page.evaluate(() => {
     const launch = document.getElementById('launchBtn');
     const title = document.querySelector('.wizard-pane.active h2, .wizard-pane.active h1');
-    const spinning = [...document.querySelectorAll('*')].some((el) => {
+    // Only a still-looping animation counts; a finished one-shot transition
+    // still reports animationPlayState "running".
+    const spinning = [...document.querySelectorAll('*')].filter((el) => {
       const cs = getComputedStyle(el);
-      return cs.animationName && cs.animationName !== 'none' && cs.animationPlayState === 'running' && el.getBoundingClientRect().width > 0 && !el.hidden;
-    });
-    return { openZoomVisible: !!(launch && !launch.hidden), title: title ? title.textContent.trim() : null, spinning };
+      return cs.animationName && cs.animationName !== 'none' && cs.animationIterationCount === 'infinite' && cs.animationPlayState === 'running' && el.getBoundingClientRect().width > 0 && !el.hidden;
+    }).map((el) => `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}.${String(el.className).split(' ')[0]}`);
+    return { openZoomVisible: !!(launch && !launch.hidden), title: title ? title.textContent.trim() : null, spinning: spinning.length ? spinning.join(', ') : '' };
   });
   if (done.state === 'success') {
     (endFacts.openZoomVisible ? passed : failed)('fix.open-zoom-after-success', `Open Zoom visible=${endFacts.openZoomVisible}; title=${endFacts.title}`);
   } else {
     (!endFacts.openZoomVisible ? passed : failed)('fix.no-open-zoom-without-success', `state=${done.state}; Open Zoom visible=${endFacts.openZoomVisible}; title=${endFacts.title}`);
   }
-  (!endFacts.spinning ? passed : failed)('fix.no-animation-after-end', endFacts.spinning ? 'an animation is still running' : 'no running animation');
+  (!endFacts.spinning ? passed : failed)('fix.no-animation-after-end', endFacts.spinning ? `looping animation still running on: ${endFacts.spinning}` : 'no looping animation');
   const details = await page.click('#detailsBtn').then(() => true).catch(() => false);
   await sleep(300);
   const detailsShot = await shot(page, '06-details');
