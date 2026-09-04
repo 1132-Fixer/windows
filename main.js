@@ -204,7 +204,7 @@ ipcMain.handle('open-download-page', async () => {
   return electronSecurity.openExternalSafe(shell.openExternal.bind(shell), RELEASES_LATEST_URL);
 });
 
-// Explore modal (operator directive 2026-08-23): the renderer sends a
+// Explore modal: the renderer sends a
 // destination KEY, never a URL. The key→URL map is trusted main-process
 // data (electron-security.EXPLORE_DESTINATIONS); the schema layer already
 // rejected unknown keys, and openExternalSafe still validates the mapped
@@ -216,13 +216,13 @@ ipcMain.handle('open-explore-destination', async (_event, key) => {
 });
 
 const FIX_USER = 'user1';
-// There is NO static password (W5-SECURITY-DESIGN Option A — SEC-A6, #33/#76).
+// There is NO static password (security design, option A — SEC-A6, #33/#76).
 // Every fix run mints a fresh CSPRNG password (helper-credential.js) at
 // STEP 4; the delete->recreate model means the run that mints it also writes
 // every consumer (launch, relaunch, DPAPI-sealed shortcut blob), so no
 // old-password knowledge is ever needed and nothing plaintext hits disk.
 // Default machine-wide install candidates only — the actual install is
-// resolved by resolveZoomInstall() (W1-DETECT: 32-bit MSI, custom install
+// resolved by resolveZoomInstall() (32-bit MSI, custom install
 // dirs, and per-user installs all exist in the field).
 const ZOOM_PATH = 'C:\\Program Files\\Zoom\\bin\\Zoom.exe';
 // Working directory for Start-Process -Credential. Without an explicit
@@ -234,7 +234,7 @@ const ZOOM_DIR  = 'C:\\Program Files\\Zoom\\bin';
 const ZOOM_X86_PATH = 'C:\\Program Files (x86)\\Zoom\\bin\\Zoom.exe';
 
 // ============================================================
-// Machine-wide Zoom install resolution (W1-DETECT).
+// Machine-wide Zoom install resolution.
 // The fix launches Zoom under the user1 helper account, so ONLY machine-wide
 // installs are launchable. A per-user install (%APPDATA%\Zoom of the CURRENT
 // user) is probed purely so preflight can explain the situation instead of a
@@ -305,7 +305,7 @@ async function resolveZoomInstall() {
 }
 
 // ============================================================
-// Zoom Workplace guided recovery card (operator directive 2026-08-09).
+// Zoom Workplace guided recovery card.
 // Three IPCs, all renderer-argument-free by design:
 //   zoom-open-download    opens EXACTLY the official admin download URL —
 //                         the allowlisted catalog constant. The handler
@@ -872,7 +872,7 @@ function runProcess(exe, args, onLine, opts = {}) {
       killTimer = setTimeout(() => {
         timedOut = true;
         onLine(`  TIMEOUT after ${Math.round(timeoutMs / 1000)}s — killing ${exe}`, 'err');
-        // Kill the TREE, not just the direct child (W4-HANG): the profile
+        // Kill the TREE, not just the direct child: the profile
         // traversal steps run takeown/icacls via Start-Process inside
         // powershell.exe, and killing only PS orphans a recursive tool
         // mid-cycle — it keeps grinding (and holding profile handles)
@@ -900,7 +900,7 @@ function runProcess(exe, args, onLine, opts = {}) {
   });
 }
 
-// Output-side twin of the UTF-8 BOM fix below (W6-SHORTCUT, #93 #111).
+// Output-side twin of the UTF-8 BOM fix below (#93 #111).
 // Windows PowerShell 5.1 writes REDIRECTED stdout/stderr in the legacy OEM
 // codepage while runProcess decodes the pipes as UTF-8, so any non-ASCII
 // character in captured output arrived corrupted \u2014 most damagingly the
@@ -930,7 +930,7 @@ async function runPSScript(scriptContent, onLine, opts = {}) {
   }
 }
 
-// Zoom-launch runner (W3-LAUNCH). Start-Process -Credential
+// Zoom-launch runner. Start-Process -Credential
 // (CreateProcessWithLogonW) makes the launched Zoom inherit the parent
 // PowerShell's std handles. The old stdio:'ignore' variant existed because
 // with plain runPSScript pipes, Zoom held our stderr pipe open after PS
@@ -1134,7 +1134,7 @@ async function preflightCheck() {
   // absent by design on Home. tryLogoffUser gates on info.tools and falls back
   // to taskkill alone, so we don't surface this to the user as a warning.
   //
-  // seclogon is a HARD GATE with self-heal (W3-LAUNCH). Field reports
+  // seclogon is a HARD GATE with self-heal. Field reports
   // (#54 #58 #64 #66 #70 #72) show Stopped/Manual passing preflight and the
   // fix then finishing with a silent no-op launch — "Windows auto-starts it
   // on demand" is not reliable evidence. Green now requires the service
@@ -1431,7 +1431,7 @@ function Unload-UserHive {
         Write-Host ("    reg unload exit: " + $rc.ExitCode)
     }
 }
-# W4-HANG guard: default profiles hide XP-compat junctions BELOW the top
+# Hang guard: default profiles hide XP-compat junctions BELOW the top
 # level too — Documents\\My Music, and AppData\\Local\\Application Data which
 # points back at AppData\\Local (a real cycle). takeown /R, icacls /T and
 # attrib /S all follow junctions, so recursing them across such a subtree
@@ -1542,7 +1542,7 @@ function Remove-ProfileFolder {
             if ($k.PSIsContainer) {
                 # takeown /R, icacls /T and attrib /S follow junctions — only
                 # run them once the subtree is confirmed junction-free
-                # (W4-HANG); otherwise leave the child to the rd retry.
+                # (hang guard); otherwise leave the child to the rd retry.
                 if (Remove-NestedReparsePoints -Root $k.FullName) {
                     Start-Process takeown.exe -ArgumentList @('/F',$k.FullName,'/A','/R','/D','Y') -Wait -WindowStyle Hidden | Out-Null
                     Start-Process icacls.exe -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:(OI)(CI)F','/T','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
@@ -2068,7 +2068,7 @@ async function runFixFlow(event) {
   send(`  Dispatching Zoom launch (detached) ...`, 'out');
   const launch = await runPSScriptLaunchCapture(launchPs);
   // The launcher writes '  Zoom launched as user1.' on success or
-  // '  Launch failed: <exception>' before exit 1 — captured now (W3-LAUNCH),
+  // '  Launch failed: <exception>' before exit 1 — captured now,
   // so the exact Start-Process error reaches the log instead of a guess-list.
   const launchFailLine = (launch.stdout || '').split(/\r?\n/)
     .map(s => s.trim()).find(l => l.startsWith('Launch failed: ')) || '';
@@ -2103,7 +2103,7 @@ async function runFixFlow(event) {
   if (!zoomSeen) {
     send(`ERROR: Zoom.exe is not running as '${FIX_USER}' after launch.`, 'err');
     if (launchFailLine) {
-      // The exact exception beats the guess-list (W3-LAUNCH); messages.js
+      // The exact exception beats the guess-list; messages.js
       // launch_failed copy already points the user at this log line.
       send(`  PowerShell launcher reported: ${launchFailLine}`, 'err');
     } else {
@@ -2116,7 +2116,7 @@ async function runFixFlow(event) {
   step('launch-zoom', `Start Zoom as ${FIX_USER}`, 'ok', '');
 
   // ============================================================
-  // Seal this run's password for the desktop shortcut (W5 Option A).
+  // Seal this run's password for the desktop shortcut (security design, option A).
   // DPAPI scope justification — CurrentUser, NOT LocalMachine: the shortcut
   // runs in the PRIMARY user's non-elevated session, and this elevated
   // process is the SAME account. CurrentUser blobs are keyed to the user
@@ -2775,7 +2775,7 @@ const LEGACY_SHORTCUT_FILENAMES = [
 ];
 const LAUNCHER_SCRIPT_NAME = `launch-zoom-as-${FIX_USER}.ps1`;
 const LAUNCHER_SCRIPT_PATH = () => path.join(app.getPath('appData'), '1132 Fixer', LAUNCHER_SCRIPT_NAME);
-// DPAPI-sealed helper password (W5 Option A), co-located with the launcher —
+// DPAPI-sealed helper password (security design, option A), co-located with the launcher —
 // the launcher resolves it via $PSScriptRoot, so the two must share a dir.
 const CRED_BLOB_PATH = () => path.join(app.getPath('appData'), '1132 Fixer', helperCred.CRED_BLOB_NAME);
 
@@ -3010,7 +3010,7 @@ ipcMain.handle('create-shortcut', async () => {
 
   const scriptPath = LAUNCHER_SCRIPT_PATH();
   const scriptDir = path.dirname(scriptPath);
-  // The launcher carries NO secret (W5 Option A): it reads the DPAPI-sealed
+  // The launcher carries NO secret (security design, option A): it reads the DPAPI-sealed
   // helper-credential.bin written by the last fix run. Without that blob
   // there is no working sign-in to point a shortcut at — FIX NOW is what
   // mints and seals it — so refuse with the next step instead of minting a
@@ -3312,7 +3312,7 @@ ipcMain.handle('submit-feedback', async (event, type, text, screenshot) => {
 });
 
 // ============================================================
-// IPC: preflight-scan — Slice C premium UX surface.
+// IPC: preflight-scan — premium UX surface.
 // Builds on preflightCheck() with extra read-only probes the
 // Preflight Scan screen needs: user1 account state, GPO media
 // policy, FrameServer service state, HKU hive load state.
@@ -3485,7 +3485,7 @@ ipcMain.handle('preflight-scan', async () => {
   });
 
   // --- Secondary Logon (seclogon) -----------------------------
-  // Hard gate (W3-LAUNCH): launching Zoom as user1 rides Start-Process
+  // Hard gate: launching Zoom as user1 rides Start-Process
   // -Credential, which needs this service actually running. Field reports
   // showed it Stopped with an all-green scan and the launch then silently
   // no-opping — so it now has its own row, self-heal happens inside
@@ -3573,7 +3573,7 @@ ipcMain.handle('preflight-scan', async () => {
   // Roll up overall readiness for renderer convenience. Preflight blockers
   // count even when no card carries them (running_as_target, missing_tool,
   // tool-probe failure) — otherwise the Fix button sits enabled while
-  // run-fix would refuse at [0/8] anyway (F-W22).
+  // run-fix would refuse at [0/8] anyway.
   const statuses = Object.values(cards).map(c => c.status);
   let overall = 'ready';
   if (statuses.includes('blocked') || pre.blockers.length) overall = 'blocked';
