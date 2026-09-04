@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.3.2] - 2026-09-04
+
+Verified on the packaged build by `tools/packaged-acceptance.js` on the Windows CI runner (43 cases passed: launch, leaves Checking within 15 s, no scrollbars at 100/125/150 % scaling, footer, focus rings, target sizes, second-instance guard, confirmation dialog, real **Fix now** run to a truthful end state, View details). Releases remain unsigned; Smart App Control in enforcement still blocks the app (see `docs/security/code-signing.md` §11).
+
 ### Fixed
 
 - **Every packaged start since 6.2.0 ended on “Unable to complete” (or stayed on Checking…).** The renderer runs sandboxed, and a sandboxed preload can only `require` Electron’s own modules; `preload.js` required the compact presentation shell from the repository, which threw `module not found`, aborted the whole preload, and left the page without `window.electronAPI`. The shell now loads as a page script from `index.html`; `preload.js` requires only `electron`, and a test fails the build if a repository `require` ever returns there. Found by the new packaged acceptance run on the Windows runner, whose first screenshot showed exactly this screen.
