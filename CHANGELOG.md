@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.3.3] - 2026-09-04
+
+Verified on the packaged build by `tools/packaged-acceptance.js` on the Windows CI runner at `main` `4d48efc` (85 cases passed, 0 failed, 0 not-run: launch, states, only each state's controls visible, the Details round trip, focus rings, target sizes, no scrollbars at 100/125/150 % scaling, second-instance guard, real **Fix now** run). Releases remain unsigned; Smart App Control in enforcement still blocks the app (see `docs/security/code-signing.md` §11).
+
 ### Changed — Ready screen composition and the Details view
 
 - **Ready screen** is one centered group: `Ready to fix Zoom`, the two-line explanation, a 240px **Fix now** (the only filled button), the **Create desktop shortcut** checkbox directly beneath it (18px box, body-weight white label, whole label clickable), and **View details** as a tertiary disclosure with a chevron. Content column is capped at 420px; the group sits at the optical center of the space between a fixed 56px header (Back · centered product mark · Exit) and a fixed 48px footer (version + `Independent project. Not affiliated with Zoom.` on the left; Support · Feedback · About grouped on the right). The layout is a header/main/footer flex column — no absolute positioning beyond the centered mark — and fits 520×600, 520×560 and the 440×520 minimum at 100/125/150 % scaling with no scrollbar, overlap or clipped text.
