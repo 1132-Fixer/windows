@@ -508,7 +508,7 @@ body[data-compact-state="cancelled"] .action-area {
   flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   padding: 0 2px;
   color: var(--compact-dim);
   font-size: 12px;
@@ -524,7 +524,7 @@ body[data-compact-state="cancelled"] .action-area {
 .compact-footer .badge,
 .compact-footer button {
   min-height: 32px !important;
-  padding: 5px 8px !important;
+  padding: 5px 6px !important;
   border: 0 !important;
   border-radius: 8px !important;
   background: transparent !important;
@@ -556,9 +556,9 @@ body.compact-shell-enabled #projectDisclosure {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  margin: 0;
-  min-width: 0;
-  flex: 1 1 auto;
+  margin: 0 auto;
+  min-width: max-content;
+  flex: 0 0 auto;
   overflow: visible;
   color: var(--compact-dim);
   font-size: 12px;
