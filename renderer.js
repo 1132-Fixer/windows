@@ -1797,12 +1797,14 @@ function openExplore() {
   // (the Explore button) on release.
   releaseExploreTrap = installFocusTrap(exploreOverlay);
 }
+// Closing Explore closes everything: About does not come back (operator
+// request 2026-09-05). Focus returns to the About control in the footer.
 function closeExplore() {
   exploreOverlay.classList.remove('show');
-  if (aboutOverlay) aboutOverlay.hidden = false;
+  if (aboutOverlay) aboutOverlay.hidden = true;
   if (releaseExploreTrap) { releaseExploreTrap(); releaseExploreTrap = null; }
-  const explore = document.getElementById('btnExplore');
-  if (explore) explore.focus();
+  const about = document.getElementById('aboutBtn');
+  if (about) about.focus();
 }
 
 async function openExploreDestination(key) {
