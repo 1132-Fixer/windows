@@ -67,6 +67,44 @@ function extractReferencedFiles(yamlText) {
   return [...out];
 }
 
+// The published latest.yml is what every installed client trusts. Check it
+// the way the client does (src/main/updater.js): version equals the tag,
+// the installer path follows the artifact name, the recorded size equals
+// the attached asset's size, the recorded SHA-512 equals the hash of the
+// bytes GitHub serves, and the isAdminRightsRequired flag is absent (the
+// package ships no elevate.exe; with the flag, 6.3.1–6.3.3 clients fail to
+// install — scripts/finalize-update-metadata.mjs strips it before upload).
+async function validateUpdaterMetadata(yaml, assetByName) {
+  const version = (/^version:\s*['"]?([^'"\s]+)/m.exec(yaml) || [])[1] || '';
+  const filePath = (/^path:\s*['"]?([^'"\s]+)/m.exec(yaml) || [])[1] || '';
+  const sha512 = (/^sha512:\s*(\S+)/m.exec(yaml) || [])[1] || '';
+  const size = Number((/^\s+size:\s*(\d+)/m.exec(yaml) || [])[1] || 0);
+  const expected = tag.replace(/^v/, '');
+  if (version === expected) ok(`latest.yml version ${version} matches tag ${tag}`);
+  else fail(`latest.yml version "${version}" does not match tag ${tag}`);
+  if (filePath === `1132-Fixer-Setup-${version}.exe`) ok(`latest.yml path is ${filePath}`);
+  else fail(`latest.yml path "${filePath}" is not 1132-Fixer-Setup-${version}.exe`);
+  if (/^\s*isAdminRightsRequired:\s*true/m.test(yaml)) fail('latest.yml still carries isAdminRightsRequired: true (finalize-update-metadata.mjs did not run)');
+  else ok('latest.yml has no isAdminRightsRequired flag');
+  const asset = assetByName.get(filePath);
+  if (!asset) return; // already reported above
+  if (asset.size === size) ok(`latest.yml size ${size} matches the uploaded installer`);
+  else fail(`latest.yml size ${size} != uploaded asset size ${asset.size}`);
+  try {
+    const res = await fetch(asset.url, { headers: authHeaders('application/octet-stream') });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const { createHash } = await import('node:crypto');
+    const h = createHash('sha512');
+    let bytes = 0;
+    for await (const chunk of res.body) { h.update(chunk); bytes += chunk.length; }
+    const digest = h.digest('base64');
+    if (digest === sha512 && bytes === size) ok(`uploaded ${filePath} hashes to the SHA-512 in latest.yml (${bytes} bytes)`);
+    else fail(`uploaded ${filePath} does not match latest.yml (sha512 ${digest === sha512 ? 'ok' : 'differs'}, ${bytes} bytes vs ${size})`);
+  } catch (e) {
+    fail(`Could not download ${filePath} to verify its SHA-512: ${e.message}`);
+  }
+}
+
 (async () => {
   console.log(`Validating ${OWNER}/${REPO} @ ${tag}`);
 
@@ -121,6 +159,7 @@ function extractReferencedFiles(yamlText) {
       if (assetByName.has(ref)) ok(`${ymlName} -> ${ref} resolves to a release asset`);
       else fail(`${ymlName} references "${ref}" but no such asset is attached to ${tag}`);
     }
+    if (ymlName === 'latest.yml') await validateUpdaterMetadata(yaml, assetByName);
   }
 
   // checksums-sha256.txt must be usable as published: coreutils format

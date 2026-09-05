@@ -59,6 +59,14 @@ the allowlist wraps `ipcMain.handle` so that:
 Main → renderer send channels (`fix-log`, `update-status`, `zoom-installer-done`)
 are documented in `IPC_SEND_CHANNELS`. They are not invoke targets.
 
+The update channels (`install-update-now`, `defer-update`, `update-retry`,
+`update-continue`, `update-diagnostics`, `update-status-get`,
+`update-app-ready`) take no arguments. The renderer can ask for an install,
+defer it, retry, dismiss, read sanitized diagnostics, pull the current state
+and report readiness; it cannot name an installer, a directory, a feed URL or
+a version — those come from the verified metadata in the main process
+(`src/main/updater.js`).
+
 The renderer cannot spawn a process, choose an updater URL, or pass a
 filesystem path into `msiexec`. The Zoom installer path comes from the native
 file dialog and is re-validated in the main process.

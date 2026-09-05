@@ -58,6 +58,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   installUpdateNow: () => ipcRenderer.invoke('install-update-now'),
   deferUpdate: () => ipcRenderer.invoke('defer-update'),
+  // Update recovery and status (src/main/updater.js): retry a failed
+  // update, dismiss it and keep the current version, read sanitized
+  // diagnostics, pull the current state (the relaunched process may have
+  // emitted it before this page listened), and report the app is ready so
+  // a successful handoff can be closed out.
+  updateRetry: () => ipcRenderer.invoke('update-retry'),
+  updateContinue: () => ipcRenderer.invoke('update-continue'),
+  updateDiagnostics: () => ipcRenderer.invoke('update-diagnostics'),
+  updateStatus: () => ipcRenderer.invoke('update-status-get'),
+  updateAppReady: () => ipcRenderer.invoke('update-app-ready'),
   openDownloadPage: () => ipcRenderer.invoke('open-download-page'),
   // Explore modal: destination KEY only — the URL mapping lives in the main
   // process; arbitrary URLs cannot ride through this bridge.

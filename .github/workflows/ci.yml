@@ -47,6 +47,12 @@ jobs:
       - name: Build NSIS installer
         run: npm run build:installer
 
+      # Updater metadata as release.yml will publish it: no
+      # isAdminRightsRequired flag, and version / installer name / size /
+      # SHA-512 in latest.yml proven against the bytes in dist/.
+      - name: Finalize updater metadata
+        run: node scripts/finalize-update-metadata.mjs --dist dist
+
       # Packaged-build acceptance. The runner is an elevated Windows session
       # without Smart App Control, so the unsigned host binary can start here
       # (it cannot on a SAC-enforcing operator machine). Zoom Workplace is

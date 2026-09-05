@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — auto-update closed the app and never installed (6.3.1 – 6.3.3)
+
+- **Root cause.** electron-builder writes `isAdminRightsRequired: true` into
+  `latest.yml` for a per-machine one-click installer, and electron-updater's
+  `quitAndInstall()` then starts the installer through
+  `resources/elevate.exe`. Releases since 6.3.1 delete that unsigned helper
+  at pack time (Smart App Control policy), so the spawn failed with
+  `ENOENT` — reported *after* `app.quit()` had already been scheduled. The
+  app closed, nothing was installed, the downloaded installer stayed in the
+  updater cache, and every later launch armed the same 10-second restart and
+  closed the app again. Manual reopen ran the old version because the old
+  version was all that was installed. `build/installer.nsh` also ran
+  `taskkill /F /IM "1132 Fixer.exe" /T` before installing, which could kill
+  the installer itself (it is a descendant of the exiting app), and the
+  `--force-run` relaunch de-elevated through `ExecShellAsUser`, producing a
+  second Windows approval prompt for a requireAdministrator app.
+- **Install handoff is now the app's own** (`src/main/updater.js`): one
+  observable state machine (checking, available, downloading, verifying,
+  ready, installing, restarting, updated, failed, recovery), events
+  registered once, metadata validated (version, channel, artifact name,
+  architecture, checksum present), the downloaded file re-hashed before it
+  is called ready, and the app quits only after Windows confirms the NSIS
+  installer process started (`--updated /S --fixer-relaunch /D=<install
+  dir>`, from the already-elevated app; `/D=` pins the directory, spaces
+  included). `quitAndInstall` and `autoInstallOnAppQuit` are no longer used.
+  A deferred update installs silently on exit.
+- **Relaunch** happens inside the elevated installer (`customInstall` in
+  `build/installer.nsh`, only with `--fixer-relaunch`): same account, same
+  session, no second prompt. The new process validates itself against the
+  handoff record (`%APPDATA%\1132-fixer\update-handoff.json`: current and
+  target version, executable path, install directory, channel, artifact
+  identity, timestamp, state) and shows **1132 Fixer was updated**; the
+  record is cleared only once the app is ready. A previous version, an
+  unexpected executable path or an installer that never started is reported
+  as **The update could not be completed** with **Retry update**, **Continue
+  with current version** and **View diagnostic details**. Bounded retries
+  with backoff (two automatic, four total, then the manual download) end the
+  update/restart loop.
+- **Diagnostics.** Sanitized JSON-lines updater log at
+  `%APPDATA%\1132-fixer\logs\updater.log` (app and target version, platform,
+  channel, execution mode, executable path, install directory, metadata
+  resolution, download, verification, installer invocation, shutdown,
+  relaunch path and version, completion or failure stage; no URL query
+  strings, tokens, home directory or user name). It survives the update and
+  is quoted in the support report. Shutdown reasons are recorded
+  (`user_exit`, `update_restart`, `update_install_on_exit`,
+  `elevated_relaunch`, `second_instance`, `system_shutdown`).
+- **Release pipeline.** `scripts/finalize-update-metadata.mjs` strips
+  `isAdminRightsRequired` from `latest.yml` and fails the build on any
+  version / name / size / SHA-512 mismatch (`ci.yml`, `release.yml`);
+  `scripts/validate-release-assets.mjs` re-checks the *published*
+  `latest.yml` (flag absent, version equals tag, uploaded installer hashes
+  to the recorded SHA-512). Without the flag the shipped 6.3.1–6.3.3
+  clients start the installer directly and can update to this release
+  (Windows asks for approval once on that relaunch).
+- **Tests.** `tools/updater-lifecycle-smoke.js` (25 mock-driven lifecycle
+  cases plus install-on-exit, shutdown reasons and log sanitization) and
+  `tools/updater-handoff-smoke.js` (wiring, `installer.nsh`, workflows,
+  metadata finalizer fixture) are in `npm test`;
+  `tools/packaged-update-acceptance.js` drives a real installed version A
+  → version B update on Windows.
+
 ### Changed
 
 - `design-system` submodule pinned to `133fd766b1f53f34c63de1941e9aedeefde48516` (design-system PR #4): the design system now records the shipped Windows palette, radii, spacing and window sizes as a platform overlay (`tokens/windows.json`, `docs/platforms/windows.md`), so the `DESIGN-SYNC.md` token table lists recorded values instead of divergences. Closes #196. No app tokens changed. `tools/design-sync-pin-smoke.js` (in `npm test`) fails when the gitlink, `AGENTS.md` and `DESIGN-SYNC.md` cite different pins, or when the app's `:root` colours drift from the pinned `tokens/windows.json`; CI now checks out submodules so that runs from a clean clone.

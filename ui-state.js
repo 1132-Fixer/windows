@@ -176,45 +176,85 @@ function fixDisabledNoteText(labels, canRunFix) {
 // to date" — an unknown update state presented as a settled result. It
 // also auto-hid the 'error' banner after 6s, so a failed update check
 // erased itself and left the app looking current.
+// Copy lives in messages.js (UPDATE). The view returns which controls the
+// banner shows: restartBtn / laterBtn (ready), retryBtn / continueBtn /
+// diagBtn (failed, recovery), downloadBtn (portable notice, or the manual
+// fallback once automatic retries are exhausted), okBtn (updated), and
+// `overlay` names the blocking notice shown while the app is closing for
+// the installer ('installing' | 'restarting').
+function updateCopy() {
+  if (typeof UPDATE !== 'undefined') return UPDATE;
+  try { return require('./messages').UPDATE; } catch (_) { return null; }
+}
+
+function updateReasonText(stage, reason) {
+  const U = updateCopy();
+  const table = (U && U.REASONS) || {};
+  // A library error is described by the stage it interrupted; every other
+  // reason has its own sentence.
+  if (reason === 'library-error' || reason === 'check-rejected' || !reason) {
+    if (stage === 'check') return (U && U.FAILED_CHECK) || 'Could not check for updates.';
+    if (stage === 'download') return (U && U.FAILED_DOWNLOAD) || 'The update download did not finish.';
+  }
+  if (reason && table[reason]) return table[reason];
+  return table['library-error'] || 'Something interrupted the update.';
+}
+
 function updateBannerView(data) {
   const d = data && typeof data === 'object' ? data : {};
   const state = typeof d.state === 'string' ? d.state : '';
+  const U = updateCopy() || {};
   const v = d.version ? 'v' + d.version : 'update';
+  const c = d.current ? 'v' + d.current : 'the current version';
+  const fill = (s) => String(s || '').replace('{v}', v).replace('{c}', c);
+  const pct = Math.max(0, Math.min(100, Number(d.percent) || 0));
 
   switch (state) {
-    case 'downloading': {
-      const pct = Math.max(0, Math.min(100, Number(d.percent) || 0));
-      return { show: true, msg: 'Updating to ' + v + ' — ' + pct + '%. You can keep using 1132 Fixer while it downloads.', progress: pct };
-    }
-    case 'restarting':
+    case 'checking':
+      return { show: true, msg: fill(U.CHECKING || 'Checking for updates'), quiet: true };
+    case 'available':
+      return { show: true, msg: fill(U.AVAILABLE || 'Update {v} found. Downloading…'), progress: 0 };
+    case 'downloading':
+      return { show: true, msg: fill(U.DOWNLOADING || 'Downloading update {v} — {p}%.').replace('{p}', String(pct)), progress: pct };
+    case 'verifying':
+      return { show: true, msg: fill(U.VERIFYING || 'Verifying update {v}…'), progress: 100 };
+    case 'ready':
+      if (d.deferred) {
+        return { show: true, msg: fill(U.READY_DEFERRED || 'Update {v} is ready.'), restartBtn: true };
+      }
       return {
         show: true,
-        msg: 'Update ' + v + ' is ready — restarting in {s}s to install.',
+        msg: fill(U.READY || 'Ready to restart — 1132 Fixer restarts in {s}s to install {v}.'),
         countdown: true,
         seconds: Number(d.seconds) > 0 ? Number(d.seconds) : 10,
         restartBtn: true,
         laterBtn: true
       };
-    case 'deferred':
+    case 'installing':
+      return { show: true, msg: fill(U.INSTALLING || 'Installing update {v} — 1132 Fixer will reopen automatically.'), overlay: 'installing' };
+    case 'restarting':
+      return { show: true, msg: fill(U.RESTARTING || 'Restarting 1132 Fixer…'), overlay: 'restarting' };
+    case 'updated':
+      return { show: true, msg: fill(U.UPDATED || '1132 Fixer was updated to {v}.'), okBtn: true, tone: 'success' };
+    case 'failed':
+    case 'recovery':
+    case 'error': {
+      const headline = state === 'recovery' ? fill(U.RECOVERY || 'The update could not be completed.') : (U.FAILED || 'The update could not be completed.');
+      const canRetry = d.canRetry !== false;
       return {
         show: true,
-        msg: 'Update ' + v + ' is ready — it installs automatically when you exit the app.',
-        restartBtn: true
+        msg: headline + ' ' + updateReasonText(d.stage, d.reason),
+        tone: 'warning',
+        retryBtn: canRetry,
+        downloadBtn: !canRetry,
+        continueBtn: true,
+        diagBtn: true
       };
+    }
     case 'manual':
       return {
         show: true,
-        msg: 'Update ' + v + " is available. This portable version can't update itself — download the new one.",
-        downloadBtn: true,
-        laterBtn: true
-      };
-    case 'error':
-      // Stays until dismissed. "Retries next launch" is true but does not
-      // change the fact that RIGHT NOW the update state is unknown.
-      return {
-        show: true,
-        msg: 'Update check failed — 1132 Fixer could not confirm whether a newer version exists. ' +
-             'It retries on the next launch; you can also open the download page and check by hand.',
+        msg: fill(U.MANUAL || "Update {v} is available. This portable version can't update itself — download the new one."),
         downloadBtn: true,
         laterBtn: true
       };
@@ -223,9 +263,8 @@ function updateBannerView(data) {
     default:
       return {
         show: true,
-        msg: 'Update status is unknown — 1132 Fixer could not tell whether a newer version exists' +
-             (state ? ' (it reported "' + state + '", which this version does not recognise)' : '') +
-             '. Open the download page to check by hand, or restart the app to try again.',
+        msg: (U.UNKNOWN || 'Update status is unknown — 1132 Fixer could not tell whether a newer version exists. Open the download page to check by hand, or restart the app to try again.') +
+             (state ? ' (it reported "' + state + '", which this version does not recognise.)' : ''),
         downloadBtn: true,
         laterBtn: true
       };
@@ -285,6 +324,7 @@ if (typeof module !== 'undefined' && module.exports) {
     FIX_DISABLED_FALLBACK,
     fixDisabledNoteText,
     updateBannerView,
+    updateReasonText,
     INSTALLER_NOT_STARTED,
     INSTALLER_DECLINED,
     installerExitNote,
