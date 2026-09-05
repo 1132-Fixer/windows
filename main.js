@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage, screen } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage, screen, powerMonitor } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -63,12 +63,99 @@ autoUpdater.logger = {
 
 const shutdown = shutdownMod.createShutdownController({ quit: () => app.quit(), log: updaterLog });
 
+// ============================================================
+// Critical operations and the inactivity exit.
+//
+// criticalOps is the one answer to "may the app close by itself right
+// now?". Scoped operations (a repair, the shortcut writer, the Zoom
+// installer, an elevated relaunch, a blocking native dialog) register
+// themselves through the IPC wrapper below or explicitly; the update
+// lifecycle is a source (any state from checking to restarting, and a
+// verified update waiting to install). The inactivity controller
+// (src/main/inactivity.js) suspends while anything is active and starts a
+// fresh timer when it ends. Its exit is a graceful shutdown with reason
+// inactive_exit — never a kill, and never confused with update_restart.
+// ============================================================
+const criticalOpsMod = require('./src/main/critical-ops');
+const inactivityMod = require('./src/main/inactivity');
+const appLog = createUpdaterLog({ file: path.join(app.getPath('userData'), 'logs', 'app.log'), mirror: console });
+const criticalOps = criticalOpsMod.createCriticalOps({ log: appLog });
+criticalOps.addSource('updater', () => !!updaterCtl && (updaterCtl.isCritical() || updaterCtl.isReady()));
+criticalOps.addSource('repair', () => fixInProgress);
+const CRITICAL_IPC = Object.freeze({
+  'run-fix': 'repair',
+  'create-shortcut': 'shortcut',
+  'launch-zoom-helper': 'zoom-launch',
+  'preflight': 'zoom-validate',
+  'preflight-scan': 'zoom-validate',
+  'relaunch-elevated': 'elevated-relaunch',
+  'install-update-now': 'update-install',
+  'update-retry': 'update-retry'
+});
+{
+  // Every handler named above is a critical operation for as long as it
+  // runs (including when it throws). Wraps the allowlisted ipcMain.handle.
+  const origHandle = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = (channel, listener) => origHandle(channel, CRITICAL_IPC[channel]
+    ? (event, ...args) => criticalOps.run(CRITICAL_IPC[channel], () => listener(event, ...args))
+    : listener);
+}
+
+let inactivityCtl = null;
+function sendInactivityStatus(payload) {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('inactivity-status', payload);
+      // A warning in a window nobody is looking at: ask for attention once,
+      // stop asking when it is dismissed or the app is about to close.
+      if (payload && payload.event === 'warning' && !mainWindow.isFocused()) mainWindow.flashFrame(true);
+      if (payload && (payload.event === 'dismiss' || payload.event === 'exiting')) mainWindow.flashFrame(false);
+    }
+  } catch (_) { /* renderer gone — the main-process timer keeps its own time */ }
+}
+function getInactivity() {
+  if (inactivityCtl) return inactivityCtl;
+  inactivityCtl = inactivityMod.createInactivityController({
+    emit: sendInactivityStatus,
+    requestExit: (reason) => shutdown.request(reason),
+    criticalOps,
+    log: appLog
+  });
+  return inactivityCtl;
+}
+// Starts the fresh timer once the app has reached a settled first screen
+// (the renderer says so); a window that never gets there still starts the
+// timer after a minute so an abandoned "Unable to complete" screen closes.
+function startInactivityTimer(why) {
+  const ctl = getInactivity();
+  appLog.info('inactivity.start-requested', { why, state: ctl.getState() });
+  ctl.start();
+}
+
+ipcMain.handle('user-activity', (_event, kind) => {
+  if (inactivityCtl) inactivityCtl.activity(kind, 'renderer');
+  return { ok: true };
+});
+ipcMain.handle('inactivity-keep-open', () => {
+  if (inactivityCtl) inactivityCtl.keepOpen('button');
+  return { ok: true };
+});
+ipcMain.handle('inactivity-close-now', () => {
+  if (inactivityCtl) return inactivityCtl.closeNow('button');
+  shutdown.request(shutdown.REASONS.USER_EXIT);
+  return { accepted: true };
+});
+ipcMain.handle('inactivity-status-get', () => (inactivityCtl ? inactivityCtl.status() : { state: 'ACTIVE', remainingMs: null }));
+
 function sendUpdateStatus(payload) {
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-status', payload);
     }
   } catch (_) { /* renderer gone — nothing to notify */ }
+  // The update lifecycle is a critical-operation source; re-evaluate it on
+  // every state change so the inactivity timer suspends and resumes.
+  criticalOps.poll('update-status');
 }
 
 // Bounded registry read of the location the NSIS installer will update.
@@ -170,7 +257,13 @@ ipcMain.handle('update-status-get', () => {
   if (status.state === 'idle' && portableNotice) return { state: 'manual', version: portableNotice.version };
   return status;
 });
-ipcMain.handle('update-app-ready', () => { getUpdater().markAppReady(); return { ok: true }; });
+ipcMain.handle('update-app-ready', () => {
+  getUpdater().markAppReady();
+  // The inactivity timer starts fresh only now — after a relaunched build
+  // has proved itself and the first screen is settled.
+  startInactivityTimer('app-ready');
+  return { ok: true };
+});
 
 // ============================================================
 // Portable-build update notice.
@@ -559,14 +652,18 @@ ipcMain.handle('zoom-run-installer', async () => {
       mainWindow.webContents.send('zoom-installer-done', { code });
     }
   };
+  // The whole installer run is a critical operation: the inactivity exit
+  // must not close 1132 Fixer while Windows Installer is still working.
+  const releaseInstaller = criticalOps.begin('zoom-installer');
   try {
     // Deliberately NOT added to activeChildren: quitting 1132 Fixer must
     // never kill a Windows Installer transaction mid-flight.
     const child = spawn('msiexec.exe', ['/i', file], { windowsHide: false });
-    child.on('error', () => notifyDone(-1));
-    child.on('exit', (code) => notifyDone(code));
+    child.on('error', () => { notifyDone(-1); releaseInstaller(); });
+    child.on('exit', (code) => { notifyDone(code); releaseInstaller(); });
     return { started: true };
   } catch (_) {
+    releaseInstaller();
     return { started: false };
   }
 });
@@ -632,7 +729,12 @@ function createWindow() {
   // while PowerShell grinds; the prompt says so instead of guessing.
   mainWindow.on('unresponsive', () => {
     if (fatalDialogShown) return;
-    const choice = dialog.showMessageBoxSync(mainWindow, {
+    // A blocking native dialog is a critical operation: the inactivity
+    // countdown must not run out behind it.
+    const releaseDialog = criticalOps.begin('dialog');
+    let choice = 0;
+    try {
+    choice = dialog.showMessageBoxSync(mainWindow, {
       type: 'warning',
       title: '1132 Fixer',
       message: 'The 1132 Fixer window is not responding.',
@@ -644,6 +746,10 @@ function createWindow() {
       cancelId: 0,
       noLink: true
     });
+    } finally {
+      releaseDialog();
+      if (inactivityCtl) inactivityCtl.activity('dialog', 'unresponsive-dialog');
+    }
     if (choice === 1) {
       fatalDialogShown = true;
       killActiveChildren();
@@ -751,6 +857,20 @@ app.whenReady().then(async () => {
   }
   createWindow();
 
+  // Inactivity exit: main-process timer, renderer reports activity. Window
+  // focus is activity; sleep and session lock pause the clock and the real
+  // elapsed time is evaluated on resume (warning first, never an immediate
+  // exit). The timer itself starts when the renderer reports ready
+  // (update-app-ready), or after a minute at the latest.
+  getInactivity();
+  app.on('browser-window-focus', () => { if (inactivityCtl) inactivityCtl.activity('focus', 'window'); });
+  powerMonitor.on('suspend', () => { if (inactivityCtl) inactivityCtl.pause('sleep'); });
+  powerMonitor.on('resume', () => { if (inactivityCtl) inactivityCtl.resume('resume'); });
+  powerMonitor.on('lock-screen', () => { if (inactivityCtl) inactivityCtl.pause('lock'); });
+  powerMonitor.on('unlock-screen', () => { if (inactivityCtl) inactivityCtl.resume('unlock'); });
+  powerMonitor.on('shutdown', () => { shutdown.note(shutdown.REASONS.SYSTEM_SHUTDOWN); });
+  setTimeout(() => startInactivityTimer('window-open-fallback'), 60000);
+
   // Auto-update only makes sense for the packaged NSIS install. The portable
   // exe has no installer to hand off to (electron-updater cannot update
   // portable targets) — it gets a manual-download notice instead — and dev
@@ -794,6 +914,8 @@ app.on('before-quit', () => {
   // Windows-initiated close) is recorded as such; the first named reason
   // wins so an update restart is never mislabelled.
   const reason = shutdown.note(shutdown.REASONS.SYSTEM_SHUTDOWN);
+  // No warning can reopen and no countdown can fire once shutdown began.
+  if (inactivityCtl) inactivityCtl.dispose();
   killActiveChildren();
   // A verified update the user deferred installs silently as the app exits
   // (no relaunch — the user chose to leave). Excluded for an update restart
@@ -1673,11 +1795,13 @@ ipcMain.handle('run-fix', async (event) => {
   // isBusy() blocks any install until the fix has finished.
   fixInProgress = true;
   fixHasRun = true;
+  criticalOps.poll('fix-start');
   if (updaterCtl && updaterCtl.isReady()) updaterCtl.defer();
   try {
     return await runFixFlow(event);
   } finally {
     fixInProgress = false;
+    criticalOps.poll('fix-end');
     if (updaterCtl) sendUpdateStatus(updaterCtl.getStatus());
   }
 });

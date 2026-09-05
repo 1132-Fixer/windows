@@ -73,6 +73,13 @@ a version — those come from the verified metadata in the main process
 through `openExternalSafe()`. An unlisted or missing destination hides the
 section rather than showing a dead control.
 
+The inactivity channels (`user-activity`, `inactivity-keep-open`,
+`inactivity-close-now`, `inactivity-status-get`) let the renderer report
+that the user did something (one of a fixed set of kinds, validated), keep
+the app open, or close it through the normal shutdown path. The renderer
+cannot shorten, lengthen or bypass the main-process timer
+(`src/main/inactivity.js`).
+
 The renderer cannot spawn a process, choose an updater URL, or pass a
 filesystem path into `msiexec`. The Zoom installer path comes from the native
 file dialog and is re-validated in the main process.

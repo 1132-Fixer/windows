@@ -68,6 +68,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateDiagnostics: () => ipcRenderer.invoke('update-diagnostics'),
   updateStatus: () => ipcRenderer.invoke('update-status-get'),
   updateAppReady: () => ipcRenderer.invoke('update-app-ready'),
+  // Inactivity exit (src/main/inactivity.js): the renderer reports real
+  // user input by kind (validated in main), shows the main-process
+  // countdown, and offers Keep open / Close now.
+  reportActivity: (kind) => ipcRenderer.invoke('user-activity', kind),
+  inactivityKeepOpen: () => ipcRenderer.invoke('inactivity-keep-open'),
+  inactivityCloseNow: () => ipcRenderer.invoke('inactivity-close-now'),
+  inactivityStatus: () => ipcRenderer.invoke('inactivity-status-get'),
+  onInactivityStatus: (cb) => {
+    const handler = (_, data) => cb(data);
+    ipcRenderer.on('inactivity-status', handler);
+    return () => ipcRenderer.removeListener('inactivity-status', handler);
+  },
   openDownloadPage: () => ipcRenderer.invoke('open-download-page'),
   // Explore modal: destination KEY only — the URL mapping lives in the main
   // process; arbitrary URLs cannot ride through this bridge.

@@ -39,6 +39,10 @@ const IPC_INVOKE_CHANNELS = Object.freeze([
   'update-diagnostics',
   'update-status-get',
   'update-app-ready',
+  'user-activity',
+  'inactivity-keep-open',
+  'inactivity-close-now',
+  'inactivity-status-get',
   'open-download-page',
   'open-explore-destination',
   'products-page-available',
@@ -59,7 +63,13 @@ const IPC_SEND_CHANNELS = Object.freeze([
   'fix-log',
   'update-status',
   'zoom-installer-done',
+  'inactivity-status',
 ]);
+
+// What the renderer may report as user activity (src/main/inactivity.js).
+// Anything else is rejected before the handler sees it, so an internal
+// event can never masquerade as the user.
+const ACTIVITY_KINDS = Object.freeze(['pointermove', 'pointerdown', 'keydown', 'touch', 'pen', 'wheel', 'scroll', 'focus', 'command', 'dialog']);
 
 const FEEDBACK_TYPES = Object.freeze(['Bug Report', 'User Rating', 'Contact']);
 const SCREENSHOT_MIME = Object.freeze(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
@@ -113,6 +123,7 @@ function exploreDestinationUrl(key) {
 }
 
 const IPC_SCHEMAS = Object.freeze({
+  'user-activity': { args: ['activity-kind'] },
   'submit-feedback': { args: ['feedback-type', 'feedback-text', 'screenshot?'] },
   'support-report': { args: ['support-context?'] },
   'open-explore-destination': { args: ['explore-destination'] },
@@ -308,6 +319,11 @@ function screenshotBytesLength(bytes) {
 
 function coerceArg(kind, value) {
   switch (kind) {
+    case 'activity-kind':
+      if (typeof value !== 'string' || !ACTIVITY_KINDS.includes(value)) {
+        return { ok: false, reason: 'activity kind not allowed' };
+      }
+      return { ok: true, value };
     case 'explore-destination':
       // Keys only — a URL-shaped value is rejected here before the handler
       // ever sees it.
@@ -439,6 +455,7 @@ function installIpcAllowlist(ipcMain) {
 module.exports = {
   IPC_INVOKE_CHANNELS,
   IPC_SEND_CHANNELS,
+  ACTIVITY_KINDS,
   FEEDBACK_TYPES,
   SCREENSHOT_MIME,
   SCREENSHOT_MAX_BYTES,

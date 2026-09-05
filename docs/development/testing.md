@@ -72,6 +72,21 @@ excerpt) lands in `update-acceptance/evidence/`. The reboot check is
 reported as not-run and is done by hand. `--keep` leaves B installed;
 `--dry-run` checks preconditions only.
 
+## Packaged inactivity acceptance (real elapsed time)
+
+```bash
+node tools/packaged-inactivity-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe"
+```
+
+Drives a throwaway asInvoker copy of the unpacked build (no approval
+prompt) through the real 30 s warning and 60 s exit, activity reset,
+reopen, keyboard, reduced motion and the 100/125/150 % layouts. With
+`--feed-dir <dir holding latest.yml + installer>` it also proves a verified
+update waiting to install suspends the warning. Evidence lands in
+`inactivity-evidence/`. Cases that need elevation (a running repair, an
+installing update) are reported as not-run and covered by
+`tools/inactivity-smoke.js` and `tools/packaged-update-acceptance.js`.
+
 ## What needs an isolated disposable VM
 
 Deleting and recreating `user1`, launching Zoom as that account, and proving
