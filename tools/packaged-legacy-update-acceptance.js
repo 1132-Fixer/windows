@@ -332,7 +332,8 @@ function finish() {
   report.summary = counts;
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
   const md = [`# Public-feed update acceptance — ${path.basename(SETUP)} → ${TARGET}`, '', `Host: ${os.release()} ${process.arch}. Feed: ${FEED}. Started ${report.startedAt}, finished ${report.finishedAt}.`, '', '| Case | Result | Detail |', '| --- | --- | --- |'];
-  for (const c of report.cases) md.push(`| ${c.id} | ${c.status} | ${String(c.detail).replace(/\|/g, '\\|').replace(/\n/g, ' ')} |`);
+  const cell = (v) => String(v).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  for (const c of report.cases) md.push(`| ${c.id} | ${c.status} | ${cell(c.detail)} |`);
   md.push('', `**${counts.passed} passed, ${counts.failed} failed, ${counts['not-run']} not run.**`, '');
   fs.writeFileSync(path.join(OUT, 'report.md'), md.join('\n'));
   console.log(`\npackaged-legacy-update-acceptance: ${counts.passed} passed, ${counts.failed} failed, ${counts['not-run']} not run → ${OUT}`);
