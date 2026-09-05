@@ -42,4 +42,16 @@ module.exports = {
     process.env.FEEDBACK_PROXY_URL ||
     generated.FEEDBACK_PROXY_URL ||
     '',
+
+  // Product directory opened by "Explore Our Products" on the completed-
+  // repair screen (operator request 2026-09-05). The official Botify Network
+  // home — the same destination the About → Explore chooser uses for the
+  // network. It is opened only through openExternalSafe, so it must be an
+  // https URL on the WEBSITE_HOSTS allowlist in src/main/electron-security.js;
+  // anything else hides the section instead of showing a dead button. Not a
+  // secret; override at build time with PRODUCTS_URL if the page moves.
+  PRODUCTS_URL:
+    process.env.PRODUCTS_URL ||
+    generated.PRODUCTS_URL ||
+    'https://botify-network.com/',
 };

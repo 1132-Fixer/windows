@@ -59,6 +59,13 @@ the allowlist wraps `ipcMain.handle` so that:
 Main → renderer send channels (`fix-log`, `update-status`, `zoom-installer-done`)
 are documented in `IPC_SEND_CHANNELS`. They are not invoke targets.
 
+`products-page-available` and `open-products-page` (the Complete screen's
+**Explore Our Products**) take no arguments: the destination is
+`PRODUCTS_URL` in `src/main/config.js`, checked by
+`productsPageAvailability()` against the same https allowlist and opened only
+through `openExternalSafe()`. An unlisted or missing destination hides the
+section rather than showing a dead control.
+
 The renderer cannot spawn a process, choose an updater URL, or pass a
 filesystem path into `msiexec`. The Zoom installer path comes from the native
 file dialog and is re-validated in the main process.

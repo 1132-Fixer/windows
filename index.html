@@ -638,6 +638,28 @@
     .wiz-title { font-size: 24px; line-height: 32px; font-weight: 700; color: var(--text); }
     .wiz-sub { font-size: 14px; line-height: 20px; color: var(--muted); max-width: 520px; overflow-wrap: anywhere; margin-top: var(--s-3); }
     .wiz-sub[hidden] { display: none; }
+    /* Product discovery under the Complete notice: a hairline divider, one
+       short heading, one line of body copy, one quiet secondary button.
+       Tokens only; nothing here may read louder than the repair result. */
+    .discovery {
+      width: 100%;
+      max-width: 360px;
+      margin: var(--s-2) auto 0;
+      padding-top: var(--s-4);
+      border-top: 1px solid var(--border);
+      text-align: center;
+    }
+    .discovery[hidden] { display: none; }
+    .discovery-title { margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; color: var(--text); }
+    .discovery-body { margin: var(--s-1) 0 0; font-size: 13px; line-height: 18px; color: var(--muted); }
+    .discovery-btn { margin-top: var(--s-3); min-height: 36px; padding: 0 var(--s-4); font-size: 13px; }
+    .discovery-btn[hidden] { display: none; }
+    .discovery-status { margin: var(--s-2) 0 0; min-height: 0; font-size: 12px; line-height: 16px; color: var(--warning); }
+    .discovery-status:empty { display: none; }
+    @media (max-height: 560px) {
+      .discovery { margin-top: var(--s-4); padding-top: var(--s-3); }
+      .discovery-body { display: none; }
+    }
     .wiz-hint { font-size: 12px; line-height: 16px; color: var(--dim); margin-top: var(--s-4); }
     .wiz-glyph { color: var(--muted); margin-bottom: var(--s-5); }
     .wiz-glyph svg { width: 32px; height: 32px; display: block; }
@@ -719,6 +741,10 @@
     .stage-sep { display: none; }
     .wiz-step-line { font-size: 13px; line-height: 18px; font-weight: 500; color: var(--muted); margin-top: var(--s-2); }
     .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    /* The live status badge sits in the header's right column. Anchored
+       at the window origin so its (clipped) text never lays out past the
+       right edge — that registers as overflow in the packaged acceptance. */
+    .status-badge.visually-hidden { left: 0; top: 0; }
     .fix-confirm-overlay {
       position: fixed; inset: 0; z-index: 10000;
       display: grid; place-items: center; padding: 24px;
@@ -1128,8 +1154,11 @@
       z-index: 20;
     }
     .app-header-side { display: flex; align-items: center; min-width: 0; }
-    .app-header-left { justify-content: flex-start; }
-    .app-header-right { justify-content: flex-end; }
+    /* Explicit columns: the mark below is absolutely positioned, so it is
+       not a grid item. Without these, the right side auto-placed into the
+       middle (auto) column and Exit rendered underneath the mark. */
+    .app-header-left { grid-column: 1; justify-content: flex-start; }
+    .app-header-right { grid-column: 3; justify-content: flex-end; }
     /* Canonical product mark, centered against the full window width so a
        Back or Exit control can never move it. Same box in every state. */
     .app-mark {
@@ -1602,6 +1631,17 @@
         </button>
       </div>
       <p class="button-note" id="buttonNote" hidden></p>
+      <!-- Product discovery (operator request 2026-09-05). Shown by the
+           compact shell on the verified Complete screen only, and only
+           when main reports the product directory is available. The
+           button is a managed secondary control (screen-actions.js);
+           Open Zoom stays the primary action. -->
+      <section class="discovery" id="discoverySection" hidden aria-labelledby="discoveryTitle">
+        <h3 class="discovery-title" id="discoveryTitle">Explore more tools</h3>
+        <p class="discovery-body" id="discoveryBody">Discover other products and tools designed to make your experience easier.</p>
+        <button type="button" class="btn discovery-btn" id="productsBtn" aria-label="Explore Our Products — opens our product directory in your browser">Explore Our Products</button>
+        <p class="discovery-status" id="discoveryStatus" role="status" aria-live="polite"></p>
+      </section>
     </div>
 
     <!-- ============================================================
