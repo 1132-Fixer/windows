@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.0] - 2026-09-05
+
+Verified on this branch's packaged builds by `tools/packaged-update-acceptance.js` on an elevated Windows 11 session: a real per-machine install of a local pre-release build followed by an in-place update to 6.4.0 through a local copy of the update feed. Four full runs on the release candidate passed every check except the handoff-notice check, which found the defect fixed below; a targeted re-check of that fix is recorded in the release notes. The rebuilt uninstaller exits 0 on every run; the 6.3.1–6.3.3 uninstaller exited 2 on every start. `npm test` and the CI packaged acceptance are green on `main`. Releases remain unsigned.
+
 ### Fixed — the "Installing update" notice was not on screen before the handoff
 
 - After **Restart now** the app sent the *Installing update* notice to the
@@ -1181,6 +1185,9 @@ The following manual cases must pass before tagging the release:
 - Direct publish of releases to the `1132-Fixer-Windows-Releases` repo
   for the auto-updater.
 
+[6.4.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.4.0
+[6.3.3]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.3
+[6.3.2]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.2
 [6.3.1]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.1
 [6.3.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.0
 [6.2.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.2.0
