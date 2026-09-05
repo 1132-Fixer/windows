@@ -46,7 +46,9 @@ check(/catch \(err\)/.test(openBlock) && /success: false/.test(openBlock) && !/s
 check(!/handle\('open-products-page', async \(_event, [a-z]/.test(main), 'open-products-page takes no arguments');
 check(es.IPC_INVOKE_CHANNELS.includes('open-products-page') && es.IPC_INVOKE_CHANNELS.includes('products-page-available'), 'both channels are allowlisted');
 check(preload.includes("ipcRenderer.invoke('open-products-page')") && preload.includes("ipcRenderer.invoke('products-page-available')"), 'preload exposes both channels');
-check(!renderer.includes('botify-network.com') && !html.includes('botify-network.com/"'), 'renderer and markup never carry the destination URL');
+const rendererDiscovery = renderer.slice(renderer.indexOf('function initDiscovery'), renderer.indexOf("productsBtn.addEventListener('click'") + 700);
+const sectionMarkup = html.slice(html.indexOf('<section class="discovery"'), html.indexOf('</section>', html.indexOf('<section class="discovery"')));
+check(!/https?:\/\//i.test(rendererDiscovery) && !/https?:\/\//i.test(sectionMarkup), 'renderer discovery code and markup carry no URL at all');
 
 console.log('discovery-smoke: copy and markup');
 check(messages.DISCOVERY.TITLE === 'Explore more tools', 'heading copy');
