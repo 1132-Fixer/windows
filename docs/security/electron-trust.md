@@ -59,12 +59,26 @@ the allowlist wraps `ipcMain.handle` so that:
 Main → renderer send channels (`fix-log`, `update-status`, `zoom-installer-done`)
 are documented in `IPC_SEND_CHANNELS`. They are not invoke targets.
 
+The update channels (`install-update-now`, `defer-update`, `update-retry`,
+`update-continue`, `update-diagnostics`, `update-status-get`,
+`update-app-ready`) take no arguments. The renderer can ask for an install,
+defer it, retry, dismiss, read sanitized diagnostics, pull the current state
+and report readiness; it cannot name an installer, a directory, a feed URL or
+a version — those come from the verified metadata in the main process
+(`src/main/updater.js`).
 `products-page-available` and `open-products-page` (the Complete screen's
 **Explore Our Products**) take no arguments: the destination is
 `PRODUCTS_URL` in `src/main/config.js`, checked by
 `productsPageAvailability()` against the same https allowlist and opened only
 through `openExternalSafe()`. An unlisted or missing destination hides the
 section rather than showing a dead control.
+
+The inactivity channels (`user-activity`, `inactivity-keep-open`,
+`inactivity-close-now`, `inactivity-status-get`) let the renderer report
+that the user did something (one of a fixed set of kinds, validated), keep
+the app open, or close it through the normal shutdown path. The renderer
+cannot shorten, lengthen or bypass the main-process timer
+(`src/main/inactivity.js`).
 
 The renderer cannot spawn a process, choose an updater URL, or pass a
 filesystem path into `msiexec`. The Zoom installer path comes from the native

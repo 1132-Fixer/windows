@@ -7,6 +7,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — inactivity warning and automatic exit
+
+- After 30 seconds without use, 1132 Fixer shows **Closing soon** — an
+  hourglass whose sand follows the time left, *1132 Fixer will close in 30
+  seconds because it hasn’t been used.*, a live countdown, **Keep open**
+  (primary; also Enter, Space and Escape) and **Close now**. After another
+  30 seconds without use it closes through the normal shutdown path (reason
+  `inactive_exit`). Mouse, click, keyboard, touch, pen, wheel, scroll,
+  window focus and any application command reset the timer; mouse movement
+  is throttled before it crosses the bridge; background events (update
+  status, repair log, timers) are not activity and are rejected at the IPC
+  boundary.
+- The timer is authoritative in the main process (`src/main/inactivity.js`)
+  and reads a monotonic clock — the countdown is elapsed time, never a
+  tick count. One inactivity timer and one countdown timer exist at any
+  moment; a renderer reload re-pulls the live state; sleep and session
+  lock pause the clock and the real elapsed time is evaluated on resume
+  (warning first with a full countdown, never an immediate exit).
+- Critical operations are tracked in one registry
+  (`src/main/critical-ops.js`): the update lifecycle from checking through
+  restarting **and a verified update waiting to install**, a running
+  repair, shortcut creation, Zoom launch and validation, the Zoom
+  installer, an elevated relaunch, and blocking native dialogs. While any
+  is active the warning is suspended; when it ends the timer starts
+  fresh. The inactivity exit can never override an updater restart, and a
+  relaunched build starts its own fresh timer only after it reports ready.
+- Tests: `tools/inactivity-smoke.js` (fake clock: timing, activity kinds,
+  duplicate timers, critical operations, update lifecycle, reload, sleep,
+  duplicate shutdown, wiring) in `npm test`;
+  `tools/packaged-inactivity-acceptance.js` runs the real packaged binary
+  with real elapsed time (timeline, reopen, keyboard, reduced motion,
+  100/125/150 % scaling, update-ready suspension).
+
+### Fixed — auto-update closed the app and never installed (6.3.1 – 6.3.3)
+
+- **Root cause.** electron-builder writes `isAdminRightsRequired: true` into
+  `latest.yml` for a per-machine one-click installer, and electron-updater's
+  `quitAndInstall()` then starts the installer through
+  `resources/elevate.exe`. Releases since 6.3.1 delete that unsigned helper
+  at pack time (Smart App Control policy), so the spawn failed with
+  `ENOENT` — reported *after* `app.quit()` had already been scheduled. The
+  app closed, nothing was installed, the downloaded installer stayed in the
+  updater cache, and every later launch armed the same 10-second restart and
+  closed the app again. Manual reopen ran the old version because the old
+  version was all that was installed. `build/installer.nsh` also ran
+  `taskkill /F /IM "1132 Fixer.exe" /T` before installing, which could kill
+  the installer itself (it is a descendant of the exiting app), and the
+  `--force-run` relaunch de-elevated through `ExecShellAsUser`, producing a
+  second Windows approval prompt for a requireAdministrator app.
+- **Install handoff is now the app's own** (`src/main/updater.js`): one
+  observable state machine (checking, available, downloading, verifying,
+  ready, installing, restarting, updated, failed, recovery), events
+  registered once, metadata validated (version, channel, artifact name,
+  architecture, checksum present), the downloaded file re-hashed before it
+  is called ready, and the app quits only after Windows confirms the NSIS
+  installer process started (`--updated /S --fixer-relaunch /D=<install
+  dir>`, from the already-elevated app; `/D=` pins the directory, spaces
+  included). `quitAndInstall` and `autoInstallOnAppQuit` are no longer used.
+  A deferred update installs silently on exit.
+- **Relaunch** happens inside the elevated installer (`customInstall` in
+  `build/installer.nsh`, only with `--fixer-relaunch`): same account, same
+  session, no second prompt. The new process validates itself against the
+  handoff record (`%APPDATA%\1132-fixer\update-handoff.json`: current and
+  target version, executable path, install directory, channel, artifact
+  identity, timestamp, state) and shows **1132 Fixer was updated**; the
+  record is cleared only once the app is ready. A previous version, an
+  unexpected executable path or an installer that never started is reported
+  as **The update could not be completed** with **Retry update**, **Continue
+  with current version** and **View diagnostic details**. Bounded retries
+  with backoff (two automatic, four total, then the manual download) end the
+  update/restart loop.
+- **Diagnostics.** Sanitized JSON-lines updater log at
+  `%APPDATA%\1132-fixer\logs\updater.log` (app and target version, platform,
+  channel, execution mode, executable path, install directory, metadata
+  resolution, download, verification, installer invocation, shutdown,
+  relaunch path and version, completion or failure stage; no URL query
+  strings, tokens, home directory or user name). It survives the update and
+  is quoted in the support report. Shutdown reasons are recorded
+  (`user_exit`, `update_restart`, `update_install_on_exit`,
+  `elevated_relaunch`, `second_instance`, `system_shutdown`).
+- **Release pipeline.** `scripts/finalize-update-metadata.mjs` strips
+  `isAdminRightsRequired` from `latest.yml` and fails the build on any
+  version / name / size / SHA-512 mismatch (`ci.yml`, `release.yml`);
+  `scripts/validate-release-assets.mjs` re-checks the *published*
+  `latest.yml` (flag absent, version equals tag, uploaded installer hashes
+  to the recorded SHA-512). Without the flag the shipped 6.3.1–6.3.3
+  clients start the installer directly and can update to this release
+  (Windows asks for approval once on that relaunch).
+- **Tests.** `tools/updater-lifecycle-smoke.js` (25 mock-driven lifecycle
+  cases plus install-on-exit, shutdown reasons and log sanitization) and
+  `tools/updater-handoff-smoke.js` (wiring, `installer.nsh`, workflows,
+  metadata finalizer fixture) are in `npm test`;
+  `tools/packaged-update-acceptance.js` drives a real installed version A
+  → version B update on Windows.
 ### Added
 
 - **Product discovery on the Complete screen.** After a verified repair

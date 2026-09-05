@@ -100,6 +100,17 @@ jobs:
           # electron-builder's own publish would race it and duplicate the release.
           npx electron-builder --win --x64 -p never
 
+      # Updater metadata. Strips the isAdminRightsRequired flag electron-builder
+      # writes for per-machine installers (this package ships no elevate.exe,
+      # so clients 6.3.1–6.3.3 could not install with it) and proves the
+      # version, installer name, size and SHA-512 in latest.yml match the
+      # bytes in dist/ and the tag being released. See
+      # docs/development/updater-channel.md.
+      - name: Finalize updater metadata
+        shell: pwsh
+        run: |
+          node scripts/finalize-update-metadata.mjs --dist dist --expect-version "${{ steps.version.outputs.VERSION }}"
+
       - name: Verify build artifacts exist
         shell: pwsh
         run: |

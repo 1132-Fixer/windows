@@ -15,7 +15,7 @@
     "start": "electron .",
     "dev": "electron . --enable-logging",
     "inject-config": "node scripts/inject-config.js",
-    "test": "node tools/sanitizer-smoke.js && node tools/shortcut-legacy-smoke.js && node tools/messages-smoke.js && node tools/zoom-detection-smoke.js && node tools/run-verdict-smoke.js && node tools/ui-state-smoke.js && node tools/screen-actions-smoke.js && node tools/discovery-smoke.js && node tools/details-view-smoke.js && node tools/ps-encoding-smoke.js && node tools/helper-credential-smoke.js && node tools/profile-safety-smoke.js && node tools/fix-cancel-smoke.js && node tools/compact-shell-smoke.js && node tools/electron-security-smoke.js && node tools/updater-channel-smoke.js && node tools/release-identity-smoke.js && node tools/release-checksums-smoke.js &&node tools/fix-now-orchestrator-smoke.js && node tools/identity-independence-smoke.js && node tools/brand-placement-smoke.js && node tools/design-sync-pin-smoke.js &&node tools/explore-package-smoke.js && node tools/elevation-startup-smoke.js && node tools/elevation-controller-smoke.js",
+    "test": "node tools/sanitizer-smoke.js && node tools/shortcut-legacy-smoke.js && node tools/messages-smoke.js && node tools/zoom-detection-smoke.js && node tools/run-verdict-smoke.js && node tools/ui-state-smoke.js && node tools/screen-actions-smoke.js && node tools/discovery-smoke.js && node tools/details-view-smoke.js && node tools/ps-encoding-smoke.js && node tools/helper-credential-smoke.js && node tools/profile-safety-smoke.js && node tools/fix-cancel-smoke.js && node tools/compact-shell-smoke.js && node tools/electron-security-smoke.js && node tools/updater-channel-smoke.js && node tools/updater-lifecycle-smoke.js && node tools/updater-handoff-smoke.js && node tools/inactivity-smoke.js && node tools/release-identity-smoke.js && node tools/release-checksums-smoke.js && node tools/fix-now-orchestrator-smoke.js && node tools/identity-independence-smoke.js && node tools/brand-placement-smoke.js && node tools/design-sync-pin-smoke.js && node tools/explore-package-smoke.js && node tools/elevation-startup-smoke.js && node tools/elevation-controller-smoke.js",
     "postinstall": "node scripts/postinstall.js",
     "build": "node scripts/inject-config.js && electron-builder --win portable --x64 --publish never",
     "build:installer": "node scripts/inject-config.js && electron-builder --win nsis --x64 --publish never",
@@ -119,7 +119,10 @@
       "!test-*/**",
       "!*.zip",
       "!v2/**",
-      "!CleanZoom*/**"
+      "!CleanZoom*/**",
+      "!update-acceptance/**",
+      "!acceptance-evidence/**",
+      "!inactivity-evidence/**"
     ],
     "extraResources": [
       {

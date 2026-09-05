@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage, screen } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage, screen, powerMonitor } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -18,31 +18,134 @@ const helperCred = require('./helper-credential');
 const profileSafety = require('./profile-safety');
 const { computeRunVerdict, deletionOutcome, consentOutcome, profsvcRefreshResult } = require('./run-verdict');
 
+const updaterMod = require('./src/main/updater');
+const { createUpdaterLog } = require('./src/main/updater-log');
+const shutdownMod = require('./src/main/shutdown');
+
 autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;
+// The install handoff is owned by src/main/updater.js, never by
+// electron-updater's quitAndInstall()/autoInstallOnAppQuit. Those paths
+// start the installer through resources/elevate.exe whenever latest.yml
+// says isAdminRightsRequired, and this package does not ship that helper
+// (docs/security/BINARY-POLICY.md) — the spawn failed after app.quit() was
+// already scheduled, so 6.3.1–6.3.3 closed and never installed anything.
+autoUpdater.autoInstallOnAppQuit = false;
 // Differential (blockmap) downloads from GitHub are a recurring source of
 // stuck / never-completing updates in the field. The full installer is small
 // enough that a plain download is the reliable choice.
 autoUpdater.disableDifferentialDownload = true;
+autoUpdater.disableWebInstaller = true;
 
 // ============================================================
-// Updater state machine.
-//
-// Old behavior force-called quitAndInstall() 2 seconds after the download
-// finished — even while the destructive fix flow was mid-run, and with no
-// UI at all. To the user that read as "the app randomly closed / froze /
-// the update never finished". New rules:
-//   - Everything is surfaced to the renderer via 'update-status' events.
-//   - App idle (no fix started): visible 10s countdown, then restart+install.
-//   - Fix running or already ran: NEVER auto-restart. Banner offers
-//     "Restart now"; otherwise autoInstallOnAppQuit installs on exit.
+// Updater wiring. The state machine, verification, handoff record, retry
+// policy and relaunch validation live in src/main/updater.js; this file
+// only supplies the Electron / process / registry adapters and the IPC.
+// Every event is logged (sanitized) to <userData>/logs/updater.log, which
+// survives the update and can be read after a failed relaunch.
 // ============================================================
 const UPDATER = '[updater]';
 let fixInProgress = false;
 let fixHasRun = false;
-let updateDownloaded = false;
-let updateVersion = '';
-let updateRestartTimer = null;
+let portableNotice = null; // { version } when the portable build found a newer release
+
+const updaterLog = createUpdaterLog({
+  file: path.join(app.getPath('userData'), 'logs', 'updater.log'),
+  mirror: console
+});
+// electron-updater's own lines (feed resolution, download URL, cache reuse)
+// go through the same sanitizer: query strings and tokens never reach disk.
+autoUpdater.logger = {
+  info: (m) => updaterLog.info('library', { message: String(m) }),
+  warn: (m) => updaterLog.warn('library', { message: String(m) }),
+  error: (m) => updaterLog.error('library', { message: String(m) }),
+  debug: () => {}
+};
+
+const shutdown = shutdownMod.createShutdownController({ quit: () => app.quit(), log: updaterLog });
+
+// ============================================================
+// Critical operations and the inactivity exit.
+//
+// criticalOps is the one answer to "may the app close by itself right
+// now?". Scoped operations (a repair, the shortcut writer, the Zoom
+// installer, an elevated relaunch, a blocking native dialog) register
+// themselves through the IPC wrapper below or explicitly; the update
+// lifecycle is a source (any state from checking to restarting, and a
+// verified update waiting to install). The inactivity controller
+// (src/main/inactivity.js) suspends while anything is active and starts a
+// fresh timer when it ends. Its exit is a graceful shutdown with reason
+// inactive_exit — never a kill, and never confused with update_restart.
+// ============================================================
+const criticalOpsMod = require('./src/main/critical-ops');
+const inactivityMod = require('./src/main/inactivity');
+const appLog = createUpdaterLog({ file: path.join(app.getPath('userData'), 'logs', 'app.log'), mirror: console });
+const criticalOps = criticalOpsMod.createCriticalOps({ log: appLog });
+criticalOps.addSource('updater', () => !!updaterCtl && (updaterCtl.isCritical() || updaterCtl.isReady()));
+criticalOps.addSource('repair', () => fixInProgress);
+const CRITICAL_IPC = Object.freeze({
+  'run-fix': 'repair',
+  'create-shortcut': 'shortcut',
+  'launch-zoom-helper': 'zoom-launch',
+  'preflight': 'zoom-validate',
+  'preflight-scan': 'zoom-validate',
+  'relaunch-elevated': 'elevated-relaunch',
+  'install-update-now': 'update-install',
+  'update-retry': 'update-retry'
+});
+{
+  // Every handler named above is a critical operation for as long as it
+  // runs (including when it throws). Wraps the allowlisted ipcMain.handle.
+  const origHandle = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = (channel, listener) => origHandle(channel, CRITICAL_IPC[channel]
+    ? (event, ...args) => criticalOps.run(CRITICAL_IPC[channel], () => listener(event, ...args))
+    : listener);
+}
+
+let inactivityCtl = null;
+function sendInactivityStatus(payload) {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('inactivity-status', payload);
+      // A warning in a window nobody is looking at: ask for attention once,
+      // stop asking when it is dismissed or the app is about to close.
+      if (payload && payload.event === 'warning' && !mainWindow.isFocused()) mainWindow.flashFrame(true);
+      if (payload && (payload.event === 'dismiss' || payload.event === 'exiting')) mainWindow.flashFrame(false);
+    }
+  } catch (_) { /* renderer gone — the main-process timer keeps its own time */ }
+}
+function getInactivity() {
+  if (inactivityCtl) return inactivityCtl;
+  inactivityCtl = inactivityMod.createInactivityController({
+    emit: sendInactivityStatus,
+    requestExit: (reason) => shutdown.request(reason),
+    criticalOps,
+    log: appLog
+  });
+  return inactivityCtl;
+}
+// Starts the fresh timer once the app has reached a settled first screen
+// (the renderer says so); a window that never gets there still starts the
+// timer after a minute so an abandoned "Unable to complete" screen closes.
+function startInactivityTimer(why) {
+  const ctl = getInactivity();
+  appLog.info('inactivity.start-requested', { why, state: ctl.getState() });
+  ctl.start();
+}
+
+ipcMain.handle('user-activity', (_event, kind) => {
+  if (inactivityCtl) inactivityCtl.activity(kind, 'renderer');
+  return { ok: true };
+});
+ipcMain.handle('inactivity-keep-open', () => {
+  if (inactivityCtl) inactivityCtl.keepOpen('button');
+  return { ok: true };
+});
+ipcMain.handle('inactivity-close-now', () => {
+  if (inactivityCtl) return inactivityCtl.closeNow('button');
+  shutdown.request(shutdown.REASONS.USER_EXIT);
+  return { accepted: true };
+});
+ipcMain.handle('inactivity-status-get', () => (inactivityCtl ? inactivityCtl.status() : { state: 'ACTIVE', remainingMs: null }));
 
 function sendUpdateStatus(payload) {
   try {
@@ -50,75 +153,116 @@ function sendUpdateStatus(payload) {
       mainWindow.webContents.send('update-status', payload);
     }
   } catch (_) { /* renderer gone — nothing to notify */ }
+  // The update lifecycle is a critical-operation source; re-evaluate it on
+  // every state change so the inactivity timer suspends and resumes.
+  criticalOps.poll('update-status');
 }
 
-function cancelUpdateRestartCountdown() {
-  if (updateRestartTimer) {
-    clearTimeout(updateRestartTimer);
-    updateRestartTimer = null;
+// Bounded registry read of the location the NSIS installer will update.
+function readRegistryValue(key, name) {
+  try {
+    const r = spawnSync('reg.exe', ['query', key, '/v', name], { windowsHide: true, timeout: 5000, encoding: 'utf8' });
+    if (r.status !== 0) return null;
+    const m = new RegExp(`^\\s*${name}\\s+REG_\\w+\\s+(.+?)\\s*$`, 'mi').exec(r.stdout || '');
+    return m ? m[1] : null;
+  } catch (_) {
+    return null;
+  }
+}
+async function readRegisteredInstallDir() {
+  return readRegistryValue(updaterMod.INSTALL_REGISTRY_KEY, 'InstallLocation')
+    || readRegistryValue(updaterMod.LEGACY_INSTALL_REGISTRY_KEY, 'InstallPath');
+}
+
+// Starts the NSIS installer detached from this process. windowsVerbatimArguments
+// keeps `/D=<dir>` unquoted (NSIS requires that, even with spaces) while argv0
+// quotes the installer path itself. Resolves once Windows confirms the process
+// started, or with the spawn error.
+function installerSpawnOptions(installerPath) {
+  return {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: false,
+    windowsVerbatimArguments: true,
+    argv0: `"${installerPath}"`,
+    cwd: path.dirname(installerPath)
+  };
+}
+function spawnInstallerDetached(installerPath, args, opts = {}) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(installerPath, args, installerSpawnOptions(installerPath));
+    } catch (err) {
+      return resolve({ ok: false, error: err });
+    }
+    let settled = false;
+    const done = (r) => { if (!settled) { settled = true; clearTimeout(timer); resolve(r); } };
+    const timer = setTimeout(() => {
+      done(child.pid ? { ok: true, pid: child.pid } : { ok: false, error: new Error('installer start not confirmed') });
+    }, opts.timeoutMs || 5000);
+    child.once('spawn', () => { try { child.unref(); } catch (_) { /* ignore */ } done({ ok: true, pid: child.pid }); });
+    child.once('error', (err) => done({ ok: false, error: err }));
+    child.once('exit', (code, signal) => {
+      updaterLog.info('installer.exit-observed', { code, signal, pid: child.pid });
+      if (!settled) done({ ok: false, error: Object.assign(new Error(`installer exited immediately with code ${code}`), { code: 'EEXIT', exitCode: code }) });
+    });
+  });
+}
+function spawnInstallerSync(installerPath, args) {
+  try {
+    const child = spawn(installerPath, args, installerSpawnOptions(installerPath));
+    child.once('error', (err) => updaterLog.error('installer.spawn-error', { error: err }));
+    try { child.unref(); } catch (_) { /* ignore */ }
+    return child.pid ? { ok: true, pid: child.pid } : { ok: false, error: new Error('no pid') };
+  } catch (err) {
+    return { ok: false, error: err };
   }
 }
 
-let _lastUpdaterProgressPct = -10;
-autoUpdater.on('checking-for-update', () => {
-  console.log(`${UPDATER} checking-for-update`);
-});
-autoUpdater.on('update-available', (info) => {
-  updateVersion = (info && info.version) || '';
-  console.log(`${UPDATER} update-available version=${updateVersion}`);
-  sendUpdateStatus({ state: 'downloading', version: updateVersion, percent: 0 });
-});
-autoUpdater.on('update-not-available', (info) => {
-  console.log(`${UPDATER} update-not-available current=${info && info.version}`);
-  sendUpdateStatus({ state: 'idle' });
-});
-autoUpdater.on('error', (err) => {
-  console.warn(`${UPDATER} error: ${(err && err.message) || err}`);
-  cancelUpdateRestartCountdown();
-  // Non-fatal: the app works without the update; retried on next launch.
-  sendUpdateStatus({ state: 'error' });
-});
-autoUpdater.on('download-progress', (p) => {
-  const pct = Math.floor((p && p.percent) || 0);
-  if (pct - _lastUpdaterProgressPct >= 5 || pct >= 100) {
-    _lastUpdaterProgressPct = pct;
-    const mb = (n) => Math.round((n || 0) / 1024 / 1024);
-    console.log(`${UPDATER} download-progress ${pct}% (${mb(p && p.transferred)}MB / ${mb(p && p.total)}MB)`);
-    sendUpdateStatus({ state: 'downloading', version: updateVersion, percent: pct });
-  }
-});
-autoUpdater.on('update-downloaded', (info) => {
-  updateDownloaded = true;
-  updateVersion = (info && info.version) || updateVersion;
-  console.log(`${UPDATER} update-downloaded version=${updateVersion}`);
-  if (fixInProgress || fixHasRun) {
-    // Never yank the app out from under a running or just-finished fix —
-    // that was the #1 "update didn't complete / app died mid-fix" report.
-    sendUpdateStatus({ state: 'deferred', version: updateVersion });
-  } else {
-    const seconds = 10;
-    sendUpdateStatus({ state: 'restarting', version: updateVersion, seconds });
-    updateRestartTimer = setTimeout(() => {
-      updateRestartTimer = null;
-      autoUpdater.quitAndInstall(true, true);
-    }, seconds * 1000);
-  }
-});
+let updaterCtl = null;
+function getUpdater() {
+  if (updaterCtl) return updaterCtl;
+  const isPortable = !!process.env.PORTABLE_EXECUTABLE_DIR;
+  updaterCtl = updaterMod.createUpdaterController({
+    autoUpdater,
+    log: updaterLog,
+    emit: sendUpdateStatus,
+    currentVersion: app.getVersion(),
+    execPath: process.execPath,
+    argv: process.argv,
+    arch: process.arch,
+    platform: process.platform,
+    userDataDir: app.getPath('userData'),
+    isPackaged: app.isPackaged,
+    isPortable,
+    isElevated: () => isElevatedSync(),
+    isBusy: () => fixInProgress,
+    hasUpdateConfig: () => fs.existsSync(path.join(process.resourcesPath, 'app-update.yml')),
+    spawnInstaller: spawnInstallerDetached,
+    spawnInstallerSync,
+    readRegisteredInstallDir,
+    requestShutdown: (reason) => shutdown.request(reason)
+  });
+  return updaterCtl;
+}
 
-ipcMain.handle('install-update-now', () => {
-  if (!updateDownloaded) return { success: false };
-  cancelUpdateRestartCountdown();
-  autoUpdater.quitAndInstall(true, true);
-  return { success: true };
+ipcMain.handle('install-update-now', async () => getUpdater().installNow('user'));
+ipcMain.handle('defer-update', () => getUpdater().defer());
+ipcMain.handle('update-retry', async () => getUpdater().retry('user'));
+ipcMain.handle('update-continue', () => getUpdater().continueCurrent());
+ipcMain.handle('update-diagnostics', () => getUpdater().diagnostics());
+ipcMain.handle('update-status-get', () => {
+  const status = getUpdater().getStatus();
+  if (status.state === 'idle' && portableNotice) return { state: 'manual', version: portableNotice.version };
+  return status;
 });
-
-ipcMain.handle('defer-update', () => {
-  cancelUpdateRestartCountdown();
-  if (updateDownloaded) {
-    // autoInstallOnAppQuit picks it up when the user exits.
-    sendUpdateStatus({ state: 'deferred', version: updateVersion });
-  }
-  return { success: true };
+ipcMain.handle('update-app-ready', () => {
+  getUpdater().markAppReady();
+  // The inactivity timer starts fresh only now — after a relaunched build
+  // has proved itself and the first screen is settled.
+  startInactivityTimer('app-ready');
+  return { ok: true };
 });
 
 // ============================================================
@@ -190,6 +334,7 @@ async function checkPortableUpdate() {
     const latest = m[1].trim();
     if (isNewerVersion(latest, app.getVersion())) {
       console.log(`${UPDATER} portable check: v${latest} available (running v${app.getVersion()})`);
+      portableNotice = { version: latest };
       sendUpdateStatus({ state: 'manual', version: latest });
     } else {
       console.log(`${UPDATER} portable check: up to date (v${app.getVersion()})`);
@@ -507,14 +652,18 @@ ipcMain.handle('zoom-run-installer', async () => {
       mainWindow.webContents.send('zoom-installer-done', { code });
     }
   };
+  // The whole installer run is a critical operation: the inactivity exit
+  // must not close 1132 Fixer while Windows Installer is still working.
+  const releaseInstaller = criticalOps.begin('zoom-installer');
   try {
     // Deliberately NOT added to activeChildren: quitting 1132 Fixer must
     // never kill a Windows Installer transaction mid-flight.
     const child = spawn('msiexec.exe', ['/i', file], { windowsHide: false });
-    child.on('error', () => notifyDone(-1));
-    child.on('exit', (code) => notifyDone(code));
+    child.on('error', () => { notifyDone(-1); releaseInstaller(); });
+    child.on('exit', (code) => { notifyDone(code); releaseInstaller(); });
     return { started: true };
   } catch (_) {
+    releaseInstaller();
     return { started: false };
   }
 });
@@ -580,7 +729,12 @@ function createWindow() {
   // while PowerShell grinds; the prompt says so instead of guessing.
   mainWindow.on('unresponsive', () => {
     if (fatalDialogShown) return;
-    const choice = dialog.showMessageBoxSync(mainWindow, {
+    // A blocking native dialog is a critical operation: the inactivity
+    // countdown must not run out behind it.
+    const releaseDialog = criticalOps.begin('dialog');
+    let choice = 0;
+    try {
+    choice = dialog.showMessageBoxSync(mainWindow, {
       type: 'warning',
       title: '1132 Fixer',
       message: 'The 1132 Fixer window is not responding.',
@@ -592,6 +746,10 @@ function createWindow() {
       cancelId: 0,
       noLink: true
     });
+    } finally {
+      releaseDialog();
+      if (inactivityCtl) inactivityCtl.activity('dialog', 'unresponsive-dialog');
+    }
     if (choice === 1) {
       fatalDialogShown = true;
       killActiveChildren();
@@ -631,7 +789,7 @@ const singleInstanceReady = (async () => {
   return false;
 })();
 singleInstanceReady.then(got => {
-  if (!got) { app.quit(); return; }
+  if (!got) { shutdown.request(shutdown.REASONS.SECOND_INSTANCE); return; }
   app.on('second-instance', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -694,10 +852,24 @@ app.whenReady().then(async () => {
     if (!elevated) {
       let started = false;
       try { started = await relaunchElevated(); } catch (_) { /* stay un-elevated */ }
-      if (started) { app.quit(); return; }
+      if (started) { shutdown.request(shutdown.REASONS.ELEVATED_RELAUNCH); return; }
     }
   }
   createWindow();
+
+  // Inactivity exit: main-process timer, renderer reports activity. Window
+  // focus is activity; sleep and session lock pause the clock and the real
+  // elapsed time is evaluated on resume (warning first, never an immediate
+  // exit). The timer itself starts when the renderer reports ready
+  // (update-app-ready), or after a minute at the latest.
+  getInactivity();
+  app.on('browser-window-focus', () => { if (inactivityCtl) inactivityCtl.activity('focus', 'window'); });
+  powerMonitor.on('suspend', () => { if (inactivityCtl) inactivityCtl.pause('sleep'); });
+  powerMonitor.on('resume', () => { if (inactivityCtl) inactivityCtl.resume('resume'); });
+  powerMonitor.on('lock-screen', () => { if (inactivityCtl) inactivityCtl.pause('lock'); });
+  powerMonitor.on('unlock-screen', () => { if (inactivityCtl) inactivityCtl.resume('unlock'); });
+  powerMonitor.on('shutdown', () => { shutdown.note(shutdown.REASONS.SYSTEM_SHUTDOWN); });
+  setTimeout(() => startInactivityTimer('window-open-fallback'), 60000);
 
   // Auto-update only makes sense for the packaged NSIS install. The portable
   // exe has no installer to hand off to (electron-updater cannot update
@@ -705,20 +877,17 @@ app.whenReady().then(async () => {
   // runs have no app-update.yml, which used to produce a red-herring updater
   // error on every launch.
   const isPortable = !!process.env.PORTABLE_EXECUTABLE_DIR;
+  // Evaluate what the previous process left behind (a handoff record from
+  // an install we started) before any new check: a relaunch that came back
+  // as the wrong version is reported, never silently re-checked over.
+  const updater = getUpdater();
+  updater.start();
   if (app.isPackaged && !isPortable) {
-    const checkNow = () => {
-      autoUpdater.checkForUpdates().catch((err) => {
-        // Non-fatal: app continues without auto-update. Visible in logs now.
-        console.warn(`${UPDATER} checkForUpdates rejected: ${(err && err.message) || err}`);
-      });
-    };
-    setTimeout(checkNow, 3000);
-    // Long-open sessions: re-check periodically. Skip while a fix is running
-    // (never surprise the destructive flow) or once a download already landed.
-    setInterval(() => {
-      if (updateDownloaded || fixInProgress) return;
-      checkNow();
-    }, UPDATE_RECHECK_MS);
+    // The controller refuses duplicate checks, checks during a fix, and
+    // checks inside the backoff window after a failed handoff.
+    setTimeout(() => { updater.check('startup').catch(() => {}); }, 3000);
+    // Long-open sessions: re-check periodically.
+    setInterval(() => { updater.check('interval').catch(() => {}); }, UPDATE_RECHECK_MS);
   } else if (app.isPackaged && isPortable) {
     setTimeout(checkPortableUpdate, 3000);
     setInterval(() => {
@@ -736,11 +905,25 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  shutdown.note(shutdown.REASONS.USER_EXIT);
   app.quit();
 });
 
 app.on('before-quit', () => {
+  // A quit that nothing in this process asked for (OS session end, a
+  // Windows-initiated close) is recorded as such; the first named reason
+  // wins so an update restart is never mislabelled.
+  const reason = shutdown.note(shutdown.REASONS.SYSTEM_SHUTDOWN);
+  // No warning can reopen and no countdown can fire once shutdown began.
+  if (inactivityCtl) inactivityCtl.dispose();
   killActiveChildren();
+  // A verified update the user deferred installs silently as the app exits
+  // (no relaunch — the user chose to leave). Excluded for an update restart
+  // (the installer is already running) and for fatal / relaunch exits.
+  if (updaterCtl && updaterCtl.isReady()) {
+    const r = updaterCtl.installOnExit(reason);
+    updaterLog.info('install-on-exit', { reason, result: r });
+  }
 });
 
 // ============================================================
@@ -1607,17 +1790,19 @@ ipcMain.handle('preflight', async () => {
 // IPC: run-fix - the destructive flow
 // ============================================================
 ipcMain.handle('run-fix', async (event) => {
-  // A fix in progress must never be interrupted by an update restart.
-  cancelUpdateRestartCountdown();
+  // A fix in progress must never be interrupted by an update restart: a
+  // ready update is deferred (its countdown cancelled) and the controller's
+  // isBusy() blocks any install until the fix has finished.
   fixInProgress = true;
   fixHasRun = true;
+  criticalOps.poll('fix-start');
+  if (updaterCtl && updaterCtl.isReady()) updaterCtl.defer();
   try {
     return await runFixFlow(event);
   } finally {
     fixInProgress = false;
-    if (updateDownloaded) {
-      sendUpdateStatus({ state: 'deferred', version: updateVersion });
-    }
+    criticalOps.poll('fix-end');
+    if (updaterCtl) sendUpdateStatus(updaterCtl.getStatus());
   }
 });
 
@@ -3208,12 +3393,12 @@ ipcMain.handle('startup-status', async () => {
 ipcMain.handle('relaunch-elevated', async () => {
   let started = false;
   try { started = await relaunchElevated(); } catch (_) { /* declined/failed */ }
-  if (started) setTimeout(() => app.quit(), 150);
+  if (started) setTimeout(() => shutdown.request(shutdown.REASONS.ELEVATED_RELAUNCH), 150);
   return { started, outcome: lastRelaunchOutcome };
 });
 
 ipcMain.handle('quit-app', () => {
-  app.quit();
+  shutdown.request(shutdown.REASONS.USER_EXIT);
 });
 
 ipcMain.handle('get-version', () => {
@@ -3700,6 +3885,23 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
     md.push(`zoomRelaunch: ${receipt.zoomRelaunch || 'not recorded'}`);
     md.push('```');
     md.push('');
+  }
+  if (updaterCtl) {
+    // Update lifecycle, as the updater log recorded it: stage, reason and
+    // the last entries. Paths and URLs are already sanitized by that log.
+    let diag = null;
+    try { diag = updaterCtl.diagnostics(); } catch (_) { diag = null; }
+    if (diag) {
+      md.push('### Update status');
+      md.push('```');
+      md.push(`state:    ${diag.state}${diag.stage ? ` (${diag.stage})` : ''}`);
+      md.push(`reason:   ${diag.reason || 'none'}`);
+      md.push(`version:  ${diag.current} -> ${diag.target || 'none'} (${diag.channel}, ${diag.executionMode})`);
+      md.push(`attempts: ${diag.attempts}`);
+      for (const line of (diag.recent || []).slice(-12)) md.push(sanitize(line));
+      md.push('```');
+      md.push('');
+    }
   }
   if (logTail) {
     md.push('### Recent log (sanitized — last ~80 lines)');
