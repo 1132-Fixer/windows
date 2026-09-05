@@ -124,8 +124,13 @@ retry).
    `--updated /S` is the same silent-update invocation electron-updater
    uses; `/D=` pins the install directory (unquoted, spaces allowed, always
    last — `windowsVerbatimArguments` keeps it that way); `--fixer-relaunch`
-   asks `build/installer.nsh` to relaunch. Only after Windows confirms the
-   installer process started does the app quit, with shutdown reason
+   asks `build/installer.nsh` to relaunch. Before the installer is started
+   the main process waits (up to 1.5 s) until the renderer confirms the
+   blocking *Installing update* notice is on screen and logs
+   `install.notice` — starting a 118 MB unsigned installer blocks the main
+   process for several seconds while Windows scans it, so without that wait
+   the notice could be sent but never painted. Only after Windows confirms
+   the installer process started does the app quit, with shutdown reason
    `update_restart`.
 7. **Relaunch** — `customInstall` in `build/installer.nsh` runs
    `"$INSTDIR\1132 Fixer.exe" --updated --fixer-relaunch` from the elevated

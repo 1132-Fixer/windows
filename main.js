@@ -191,6 +191,26 @@ function installerSpawnOptions(installerPath) {
     cwd: path.dirname(installerPath)
   };
 }
+// Polls the renderer until the blocking "Installing update" notice is
+// visible (or the timeout passes). Read-only: it never changes the page.
+async function confirmInstallNoticeShown(timeoutMs) {
+  const t0 = Date.now();
+  const probe = "(function(){var o=document.getElementById('updateInstallOverlay');return !!o&&!o.hidden;})()";
+  while (Date.now() - t0 < timeoutMs) {
+    let shown = false;
+    try {
+      if (!mainWindow || mainWindow.isDestroyed()) return { shown: false, ms: Date.now() - t0, reason: 'no-window' };
+      shown = await mainWindow.webContents.executeJavaScript(probe, true);
+    } catch (_) { shown = false; }
+    if (shown) {
+      // One more frame so the compositor has painted it.
+      await new Promise((r) => setTimeout(r, 80));
+      return { shown: true, ms: Date.now() - t0 };
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return { shown: false, ms: Date.now() - t0, reason: 'timeout' };
+}
 function spawnInstallerDetached(installerPath, args, opts = {}) {
   return new Promise((resolve) => {
     let child;
@@ -244,6 +264,7 @@ function getUpdater() {
     hasUpdateConfig: () => fs.existsSync(path.join(process.resourcesPath, 'app-update.yml')),
     spawnInstaller: spawnInstallerDetached,
     spawnInstallerSync,
+    confirmNotice: confirmInstallNoticeShown,
     readRegisteredInstallDir,
     requestShutdown: (reason) => shutdown.request(reason)
   });

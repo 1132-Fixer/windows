@@ -116,6 +116,32 @@ function runningInstances() {
   const r = ps(`Get-Process -Name '1132 Fixer' -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id)|$($_.Path)|$($_.StartTime.ToString('o'))" }`);
   return r.out ? r.out.split(/\r?\n/).filter(Boolean).map((l) => { const [id, p, start] = l.split('|'); return { pid: Number(id), path: p, start }; }) : [];
 }
+// The process that owns the main window (Electron spawns several
+// "1132 Fixer.exe" children; only the browser process has a window).
+function mainWindowPid() {
+  const r = ps(`Get-Process -Name '1132 Fixer' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1 -ExpandProperty Id`);
+  return r.out ? Number(r.out) : null;
+}
+// Every synthetic click the driver makes is logged with a timestamp and the
+// target id, and the page records every click it receives (trusted flag and
+// screen position), so a click that did not come from the driver is visible.
+async function driverClick(page, selector, opts) {
+  const at = new Date().toISOString();
+  report.driverClicks = report.driverClicks || [];
+  try { await page.click(selector, opts || {}); report.driverClicks.push({ at, selector, ok: true }); console.log(`    click ${selector} at ${at}`); return true; }
+  catch (err) { report.driverClicks.push({ at, selector, ok: false, error: err.message.split('\n')[0] }); console.log(`    click ${selector} FAILED at ${at}: ${err.message.split('\n')[0]}`); return false; }
+}
+function installClickLog(page) {
+  return page.evaluate(() => {
+    if (window.__clicks) return;
+    window.__clicks = [];
+    document.addEventListener('click', (e) => {
+      const el = e.target && e.target.closest ? e.target.closest('button, a, [role="button"]') : null;
+      window.__clicks.push({ at: new Date().toISOString(), id: (el && el.id) || (e.target && e.target.id) || '', text: el ? (el.textContent || '').trim().slice(0, 40) : '', trusted: e.isTrusted, x: e.screenX, y: e.screenY });
+    }, true);
+  }).catch(() => {});
+}
+function readClickLog(page) { return page.evaluate(() => window.__clicks || []).catch(() => null); }
 function shortcutTargets() {
   const links = [
     path.join(process.env.PUBLIC || 'C:\\Users\\Public', 'Desktop', '1132 Fixer.lnk'),
@@ -170,6 +196,48 @@ function waitFor(pred, timeoutMs, everyMs = 500) {
 }
 // Capture a top-level window of a process by PID (works for a window this
 // driver did not launch — the automatically relaunched B).
+// Samples the window title of the process that owns the main window and
+// captures the window every ~200 ms for a few seconds, writing one line per
+// sample. Runs as its own PowerShell process so a stalled browser process
+// (the main process blocks in CreateProcess while Windows scans the 118 MB
+// installer) cannot hide what the renderer painted.
+function startWindowSampler(pid, outPrefix, seconds) {
+  const script = `
+Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public class W2 { [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R2 r); [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n); }
+public struct R2 { public int L, T, Rt, B; }
+"@
+[W2]::SetProcessDPIAware() | Out-Null
+$end = (Get-Date).AddSeconds(${seconds})
+$i = 0
+$last = ''
+while ((Get-Date) -lt $end) {
+  $p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue
+  if (-not $p) { Add-Content -LiteralPath $env:FIXER_SAMPLES -Value ("$(Get-Date -Format o)|GONE|"); break }
+  $h = $p.MainWindowHandle
+  $sb = New-Object System.Text.StringBuilder 512
+  [W2]::GetWindowText($h, $sb, 512) | Out-Null
+  $t = $sb.ToString()
+  Add-Content -LiteralPath $env:FIXER_SAMPLES -Value ("$(Get-Date -Format o)|" + $h + "|" + $t)
+  if ($h -ne 0 -and ($t -ne $last -or ($i % 5) -eq 0)) {
+    $r = New-Object R2
+    [W2]::GetWindowRect($h, [ref]$r) | Out-Null
+    $w = $r.Rt - $r.L; $hh = $r.B - $r.T
+    if ($w -gt 0 -and $hh -gt 0) {
+      try { $bmp = New-Object System.Drawing.Bitmap $w, $hh; $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size); $bmp.Save(($env:FIXER_PREFIX + '-' + $i.ToString('00') + '.png'), [System.Drawing.Imaging.ImageFormat]::Png); $i++ } catch {}
+    }
+    $last = $t
+  }
+  Start-Sleep -Milliseconds 200
+}
+`;
+  const samples = outPrefix + '-samples.txt';
+  try { fs.unlinkSync(samples); } catch (_) {}
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], { stdio: 'ignore', windowsHide: true, env: Object.assign({}, process.env, { FIXER_SAMPLES: samples, FIXER_PREFIX: outPrefix }) });
+  return { child, samples, done: new Promise((resolve) => { child.once('exit', () => resolve()); child.once('error', () => resolve()); }) };
+}
 function captureWindow(pid, file) {
   const script = `
 Add-Type -AssemblyName System.Drawing
@@ -223,6 +291,7 @@ function startFeed(pair) {
 // ---------------------------------------------------------------- main
 (async () => {
   console.log(`packaged-update-acceptance: builds=${BUILDS} out=${OUT} port=${PORT}${DRY ? ' (dry run)' : ''}`);
+  if (!DRY) console.log('\n  ================================================================\n  DO NOT TOUCH THE 1132 FIXER TEST WINDOW, MOUSE OR KEYBOARD WHILE THIS\n  RUNS. Every click is recorded; one stray click fails the run.\n  ================================================================\n');
   report.host = { platform: process.platform, release: os.release(), arch: process.arch, elevated: isElevated(), node: process.version, scale: SCALE };
   if (process.platform !== 'win32') { notRun('host.windows', 'not Windows'); return finish(); }
   passed('host.windows', `Windows ${os.release()} ${process.arch}`);
@@ -369,6 +438,7 @@ function startFeed(pair) {
   await waitFor(() => page.evaluate(() => { const s = document.body.dataset.compactState; return s && s !== 'checking' ? s : null; }), 30000);
   await sleep(500);
   await page.screenshot({ path: path.join(OUT, '01-A-before-update.png') });
+  await installClickLog(page);
 
   // ---- 3. observe check → download → verify → ready
   // The banner title carries the state ("Update available", "Downloading
@@ -390,9 +460,10 @@ function startFeed(pair) {
     if (/^Update available/.test(t) && !downloadClicked) {
       downloadClicked = true;
       await page.screenshot({ path: path.join(OUT, '02a-A-update-available.png') }).catch(() => {});
-      await page.click('#ubDownload').catch(() => {});
+      await driverClick(page, '#ubDownload');
     }
     if (/^Downloading update/.test(t) && !report.downloadShot) { report.downloadShot = true; await page.screenshot({ path: path.join(OUT, '02-A-downloading.png') }).catch(() => {}); }
+    if (/^Verifying update/.test(t) && !report.verifyShot) { report.verifyShot = true; await page.screenshot({ path: path.join(OUT, '02b-A-verifying.png') }).catch(() => {}); }
     return /^Ready to restart/.test(t) ? t : null;
   }, 240000, 300);
   const aExitReason = aGone ? (logEvents(logSince).filter((e) => e.event === 'shutdown.start').pop() || {}).reason : null;
@@ -412,28 +483,69 @@ function startFeed(pair) {
   // inactivity hourglass must not appear, and only the updater may close
   // the app. Defer the countdown, sit idle past the 30 s warning point.
   const exitPromise = new Promise((resolve) => { app.process().once('exit', (code) => resolve({ code, at: Date.now() })); });
-  await page.click('#ubLater').catch(() => {});
+  await driverClick(page, '#ubLater');
   const idleStart = Date.now();
-  const earlyExit = await Promise.race([exitPromise, sleep(36000).then(() => null)]);
+  await sleep(1200);
+  const deferred = await page.evaluate(() => ({ title: (document.getElementById('ubTitle') || {}).textContent || '', msg: (document.getElementById('ubMsg') || {}).textContent || '', restart: !!(document.getElementById('ubRestart') && !document.getElementById('ubRestart').hidden), later: !!(document.getElementById('ubLater') && !document.getElementById('ubLater').hidden) })).catch(() => null);
+  await page.screenshot({ path: path.join(OUT, '03b-A-deferred-after-later.png') }).catch(() => {});
+  (deferred && !/restarts in \d+ seconds/i.test(deferred.msg) && /restart now/i.test(deferred.msg) && deferred.restart && !deferred.later ? passed : failed)('update.later-defers',
+    deferred ? `after Later: "${deferred.title} — ${deferred.msg}"; Restart now visible=${deferred.restart}; Later visible=${deferred.later}` : 'could not read the banner after Later');
+  // Full inactivity window = 30 s warning + 30 s countdown. Sit 66 s.
+  let earlyExit = null;
+  let pageClicks = [];
+  { let done = false; exitPromise.then((e) => { earlyExit = e; done = true; });
+    while (!done && Date.now() - idleStart < 66000) { await sleep(1000); const c = await readClickLog(page); if (c) pageClicks = c; } }
   const idle = earlyExit ? { visible: null } : await page.evaluate(() => { const o = document.getElementById('idleOverlay'); return { visible: !!o && !o.hidden, banner: (document.getElementById('ubMsg') || {}).textContent || '' }; }).catch(() => ({ visible: null }));
   const idleEvents = logEvents(logSince);
   const idleInstall = idleEvents.find((e) => e.event === 'install.begin');
+  const foreign = pageClicks.filter((c) => !(report.driverClicks || []).some((d) => Math.abs(new Date(d.at) - new Date(c.at)) < 1500 && ('#' + c.id) === d.selector));
+  report.pageClicks = pageClicks;
   (idle.visible === false && !earlyExit && runningInstances().some((p) => p.pid === aFacts.pid) ? passed : failed)('update.no-inactivity-exit-while-ready',
-    idle.visible === false && !earlyExit ? `no hourglass after 36 s idle with the update ready ("${idle.banner}")`
-      : earlyExit ? `A exited ${earlyExit.at - idleStart} ms into the idle window (code ${earlyExit.code})${idleInstall ? `; install.begin origin=${idleInstall.origin} — something clicked Restart now (do not touch the test window)` : '; no install.begin logged'}`
+    idle.visible === false && !earlyExit ? `no hourglass after 66 s idle with the update ready ("${idle.banner}"); ${pageClicks.length} page clicks, all from the driver`
+      : earlyExit ? `A exited ${earlyExit.at - idleStart} ms into the idle window (code ${earlyExit.code})${idleInstall ? `; install.begin origin=${idleInstall.origin}` : '; no install.begin logged'}; clicks not made by the driver: ${foreign.length ? foreign.map((c) => `${c.at} #${c.id} "${c.text}" trusted=${c.trusted} at ${c.x},${c.y}`).join('; ') : 'none recorded'}`
       : `hourglass visible=${idle.visible}`);
+  (foreign.length === 0 ? passed : failed)('update.no-foreign-clicks', foreign.length ? `${foreign.length} click(s) reached the window that the driver did not make` : `every click on A came from the driver (${(report.driverClicks || []).length} synthetic clicks logged)`);
 
   // ---- 4. approve the restart
   let overlay = { ok: false };
   const approvedAt = Date.now();
-  if (!earlyExit) {
-    await page.click('#ubRestart').catch(() => {});
-    let lastProbe = 'no probe ran';
-    overlay = await waitFor(() => page.evaluate(() => { const o = document.getElementById('updateInstallOverlay'); const t = (document.getElementById('ubTitle') || {}).textContent || ''; return { hidden: !o || o.hidden, body: (document.getElementById('updateInstallBody') || {}).textContent || '', banner: t }; }).then((r) => { lastProbe = `overlay hidden=${r.hidden} banner="${r.banner}"`; return !r.hidden ? (r.body || '(no body text)') : null; }, (err) => { lastProbe = `evaluate failed: ${err.message.split('\n')[0]}`; return null; }), 15000, 200).catch(() => ({ ok: false }));
-    overlay.lastProbe = lastProbe;
-    if (overlay.ok) await page.screenshot({ path: path.join(OUT, '04-A-install-handoff.png') }).catch(() => {});
+  const exitedBeforeApproval = !!earlyExit;
+  let sampler = null;
+  if (!exitedBeforeApproval) {
+    // The renderer marks the window title the moment the blocking notice is
+    // shown. The title is read by a separate process, so it is visible even
+    // while the browser process is busy starting the installer.
+    await page.evaluate(() => {
+      const o = document.getElementById('updateInstallOverlay');
+      const mark = () => { if (o && !o.hidden) document.title = '1132 Fixer [HANDOFF-NOTICE] ' + ((document.getElementById('updateInstallBody') || {}).textContent || '').slice(0, 60); };
+      new MutationObserver(mark).observe(o, { attributes: true, attributeFilter: ['hidden'] });
+      mark();
+    }).catch(() => {});
+    sampler = startWindowSampler(mainWindowPid() || aFacts.pid, path.join(OUT, '04-A-install-handoff'), 12);
+    await sleep(600);
+    report.driverClicks = report.driverClicks || [];
+    const at = new Date().toISOString();
+    report.driverClicks.push({ at, selector: '#ubRestart', ok: true, how: 'dom-click' });
+    console.log(`    click #ubRestart at ${at} (dispatched through the DOM so the driver does not wait on a busy browser process)`);
+    // Do not await the round trip: the browser process may block for seconds.
+    page.evaluate(() => { const b = document.getElementById('ubRestart'); if (b) b.click(); }).catch(() => {});
+    await sampler.done;
+    const lines = (() => { try { return fs.readFileSync(sampler.samples, 'utf8').split(/\r?\n/).filter(Boolean); } catch (_) { return []; } })();
+    const seenAt = lines.find((l) => /HANDOFF-NOTICE/.test(l));
+    const noticeEvent = logEvents(logSince).find((e) => e.event === 'install.notice');
+    const firstTitles = lines.slice(0, 6).map((l) => l.split('|').slice(2).join('|')).join(' / ');
+    if (seenAt || (noticeEvent && noticeEvent.shown === true)) {
+      const [ts, , ...rest] = (seenAt || '').split('|');
+      overlay = { ok: true, value: seenAt ? rest.join('|').replace('1132 Fixer [HANDOFF-NOTICE] ', '') : 'main process confirmed the notice on screen', ms: seenAt ? new Date(ts) - new Date(at) : noticeEvent.ms };
+      overlay.value += noticeEvent ? ` [app log install.notice shown=${noticeEvent.shown} in ${noticeEvent.ms} ms]` : ' [no install.notice log event: build predates the confirmation step]';
+      const shots = fs.readdirSync(OUT).filter((f) => /^04-A-install-handoff-\d+\.png$/.test(f)).sort();
+      if (shots.length) fs.copyFileSync(path.join(OUT, shots[shots.length - 1]), path.join(OUT, '04-A-install-handoff.png'));
+    } else {
+      overlay = { ok: false, lastProbe: `${lines.length} title samples, none carried the notice marker; first titles: ${firstTitles || '(none)'}; app log install.notice: ${noticeEvent ? JSON.stringify(noticeEvent) : 'absent'}` };
+    }
+    report.handoffSamples = lines.slice(0, 40);
   }
-  (overlay.ok ? passed : earlyExit ? notRun : failed)('update.handoff-notice', overlay.ok ? overlay.value : earlyExit ? 'A had already exited before the driver approved the restart' : `installing notice not shown before exit (last probe: ${overlay.lastProbe})`);
+  (overlay.ok ? passed : exitedBeforeApproval ? notRun : failed)('update.handoff-notice', overlay.ok ? `${overlay.value} (seen ${overlay.ms} ms after Restart now)` : exitedBeforeApproval ? 'A had already exited before the driver approved the restart' : `installing notice not shown before exit (${overlay.lastProbe})`);
   const exit = earlyExit || await Promise.race([exitPromise, sleep(90000).then(() => null)]);
   (exit ? passed : failed)('update.A-exits', exit ? `A exited ${exit.at - approvedAt} ms after approval (code ${exit.code})` : 'A did not exit within 90 s');
   // The handoff record must say installer-started before A is gone.
@@ -464,7 +576,9 @@ function startFeed(pair) {
   if (relaunch.ok) {
     (relaunch.value.path.toLowerCase() === installedExe.toLowerCase() ? passed : failed)('update.B-executable-path', relaunch.value.path);
     await sleep(6000); // let B reach its ready screen and clear the handoff
-    const cap = captureWindow(relaunch.value.pid, path.join(OUT, '05-B-after-auto-relaunch.png'));
+    const bPid = mainWindowPid() || relaunch.value.pid;
+    report.bPid = bPid;
+    const cap = captureWindow(bPid, path.join(OUT, '05-B-after-auto-relaunch.png'));
     (cap.code === 0 ? passed : notRun)('update.B-screenshot', cap.code === 0 ? cap.out : `window capture unavailable: ${cap.out || cap.err}`);
   }
   // Evidence from B's own log: the relaunch was verified and completed.
@@ -484,9 +598,14 @@ function startFeed(pair) {
 
   // ---- 6. close B, reopen manually from the installed path
   if (relaunch.ok) {
-    ps(`Get-Process -Id ${relaunch.value.pid} -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }`);
-    const closed = await waitFor(() => (runningInstances().some((p) => p.pid === relaunch.value.pid) ? null : true), 20000, 500);
-    (closed.ok ? passed : failed)('reopen.B-closed-gracefully', closed.ok ? `B closed in ${closed.ms} ms via its window` : 'B did not close in 20 s');
+    // A standard Windows close request (WM_CLOSE) to the window-owning
+    // process: Electron's window-all-closed -> shutdown reason user_exit.
+    const closeSince = new Date().toISOString();
+    const closePid = report.bPid || mainWindowPid() || relaunch.value.pid;
+    ps(`Get-Process -Id ${closePid} -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }`);
+    const closed = await waitFor(() => (runningInstances().length ? null : true), 20000, 500);
+    const closeReason = (logEvents(closeSince).filter((e) => e.event === 'shutdown.start').pop() || {}).reason;
+    (closed.ok ? passed : failed)('reopen.B-closed-gracefully', closed.ok ? `B (pid ${closePid}) closed in ${closed.ms} ms via a window close request; no 1132 Fixer process left; shutdown reason ${closeReason || 'not logged'}` : `B (pid ${closePid}) still running after 20 s; instances: ${runningInstances().map((p) => p.pid).join(',')}`);
     if (!closed.ok) { try { process.kill(relaunch.value.pid); } catch (_) {} }
   }
   for (const p of runningInstances()) { try { process.kill(p.pid); } catch (_) {} }
@@ -502,7 +621,29 @@ function startFeed(pair) {
     await page2.screenshot({ path: path.join(OUT, '06-B-manual-reopen.png') });
     (f2.version === pair.b.version && f2.execPath.toLowerCase() === installedExe.toLowerCase() ? passed : failed)('reopen.manual', `runtime ${f2.version} at ${f2.execPath}`);
     (!banner.visible || !/could not be completed|previous version/i.test(banner.text) ? passed : failed)('reopen.no-stale-warning', banner.visible ? `banner: ${banner.text}` : 'no update banner');
-    await app2.close().catch(() => {});
+    // Supported exit path: the header Exit control -> quit-app IPC ->
+    // shutdown reason user_exit. Three times; no force-close allowed.
+    let appN = app2;
+    let pageN = page2;
+    for (let i = 1; i <= 3; i++) {
+      if (i > 1) {
+        appN = await electron.launch({ executablePath: installedExe, args: launchArgs, timeout: 60000 });
+        pageN = await appN.firstWindow({ timeout: 60000 });
+        await pageN.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
+        await waitFor(() => pageN.evaluate(() => { const s = document.body.dataset.compactState; return s && s !== 'checking' ? s : null; }), 30000);
+        await sleep(500);
+      }
+      const since = new Date().toISOString();
+      const exitP = new Promise((resolve) => { appN.process().once('exit', (code) => resolve({ code, at: Date.now() })); });
+      const t0 = Date.now();
+      const clicked = await driverClick(pageN, '#btnExit');
+      const ex = await Promise.race([exitP, sleep(20000).then(() => null)]);
+      await sleep(1500);
+      const left = runningInstances();
+      const reason = (logEvents(since).filter((e) => e.event === 'shutdown.start').pop() || {}).reason;
+      (clicked && ex && left.length === 0 && reason === 'user_exit' ? passed : failed)(`exit.graceful-${i}`, ex ? `Exit control -> process exit code ${ex.code} in ${ex.at - t0} ms; shutdown reason ${reason || 'not logged'}; processes left: ${left.length}` : `no exit within 20 s after Exit (clicked=${clicked}); processes left: ${left.map((p) => p.pid).join(',') || 'none'}`);
+      if (!ex) { for (const p of left) { try { process.kill(p.pid); } catch (_) {} } await sleep(1500); }
+    }
   } catch (err) {
     failed('reopen.manual', `could not relaunch ${installedExe}: ${err.message}`);
   }
