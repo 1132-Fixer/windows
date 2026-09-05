@@ -73,8 +73,12 @@ const notRun = (id, d, x) => record(id, 'not-run', d, x);
 
 async function prepareTestCopy() {
   const srcDir = path.dirname(SHIPPED_EXE);
-  const dstDir = path.join(path.dirname(srcDir), 'inactivity-unpacked');
-  fs.rmSync(dstDir, { recursive: true, force: true });
+  let dstDir = path.join(path.dirname(srcDir), 'inactivity-unpacked');
+  try { fs.rmSync(dstDir, { recursive: true, force: true }); } catch (_) {
+    // A previous copy is still running (for example an elevated instance a
+    // person started from it); use a fresh directory instead of failing.
+    dstDir = path.join(path.dirname(srcDir), 'inactivity-unpacked-' + Date.now());
+  }
   fs.cpSync(srcDir, dstDir, { recursive: true });
   const exe = path.join(dstDir, path.basename(SHIPPED_EXE));
   const { stampExecutionLevel } = require('../scripts/stamp-exe-manifest');
@@ -339,7 +343,8 @@ function finish() {
   report.summary = counts;
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
   const md = ['# Packaged inactivity acceptance — 1132 Fixer for Windows', '', `Run: ${report.startedAt} → ${report.finishedAt}. Host: ${JSON.stringify(report.host)}.`, '', `**${counts.passed} passed, ${counts.failed} failed, ${counts['not-run']} not run.**`, '', '| Case | Status | Detail |', '| --- | --- | --- |'];
-  for (const c of report.cases) md.push(`| ${c.id} | ${c.status} | ${String(c.detail).replace(/\|/g, '\\|')} |`);
+  const cell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  for (const c of report.cases) md.push(`| ${c.id} | ${c.status} | ${cell(c.detail)} |`);
   fs.writeFileSync(path.join(OUT, 'report.md'), md.join('\n') + '\n');
   console.log(`\npackaged-inactivity-acceptance: ${counts.passed} passed, ${counts.failed} failed, ${counts['not-run']} not run → ${OUT}`);
   process.exitCode = counts.failed ? 1 : 0;
