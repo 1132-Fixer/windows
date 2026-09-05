@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Product discovery on the Complete screen.** After a verified repair
+  the notice reads **Complete** / *Zoom has been fixed and is ready to
+  use.*, **Open Zoom** stays the primary action, and below a hairline
+  divider a compact **Explore more tools** section offers a secondary
+  **Explore Our Products** button that opens the official product directory
+  (`https://botify-network.com/`, `PRODUCTS_URL` in `src/main/config.js`) in
+  the default browser through the allowlisted `openExternal` path. The
+  section exists on no other screen, is hidden when the destination is
+  missing or not allowlisted, and a browser failure shows *We couldn’t open
+  that page. Please try again.* without changing the result.
+  `tools/discovery-smoke.js` is in `npm test`.
+
+### Fixed
+
+- **Exit was invisible.** The header grid is `1fr auto 1fr`, but the
+  centered product mark is absolutely positioned and not a grid item, so
+  the right-hand side auto-placed into the middle column and Exit rendered
+  underneath the mark. The sides are pinned to columns 1 and 3.
+- **Closing Explore brought About back.** Close, the backdrop and Escape
+  now dismiss everything; focus returns to whatever opened the chooser.
+
 ### Changed
 
 - `design-system` submodule pinned to `133fd766b1f53f34c63de1941e9aedeefde48516` (design-system PR #4): the design system now records the shipped Windows palette, radii, spacing and window sizes as a platform overlay (`tokens/windows.json`, `docs/platforms/windows.md`), so the `DESIGN-SYNC.md` token table lists recorded values instead of divergences. Closes #196. No app tokens changed. `tools/design-sync-pin-smoke.js` (in `npm test`) fails when the gitlink, `AGENTS.md` and `DESIGN-SYNC.md` cite different pins, or when the app's `:root` colours drift from the pinned `tokens/windows.json`; CI now checks out submodules so that runs from a clean clone.
