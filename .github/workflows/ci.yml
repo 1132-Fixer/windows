@@ -36,6 +36,11 @@ jobs:
         run: npm ci
 
       - name: Run tests
+        # tools/updater-channel-smoke.js reads GitHub release metadata; the
+        # unauthenticated API rate limit is shared by every runner and
+        # returned 403 mid-run. The token is read-only here.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm test
 
       - name: Run feedback-proxy tests
