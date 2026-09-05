@@ -286,8 +286,8 @@ const WIZARD = {
   TRY_AGAIN:      'Try again',
   FIXING_TITLE:   'Fixing Zoom',
   FIXING_START:   'Getting things ready…',
-  SUCCESS_TITLE:  "You're all set",
-  SUCCESS_SUB:    'Zoom is ready to use.',
+  SUCCESS_TITLE:  'Complete',
+  SUCCESS_SUB:    'Zoom has been fixed and is ready to use.',
   PARTIAL_TITLE:  'Finished — some items need attention',
   PARTIAL_SUB:    'The fix ran, but some steps could not be completed. Open View details to see exactly what needs attention.',
   WARNINGS_SUB:   'The fix finished with warnings. Open View details to read them.',
@@ -499,10 +499,24 @@ const INACTIVITY = {
   ARIA_HOURGLASS: 'Hourglass showing the time left'
 };
 
+// ------------------------------------------------------------
+// Product discovery on the completed-repair screen (operator request
+// 2026-09-05). Secondary to the repair result; opens the official product
+// directory in the default browser. No URL is ever shown to the user.
+// ------------------------------------------------------------
+const DISCOVERY = {
+  TITLE: 'Explore more tools',
+  BODY: 'Discover other products and tools designed to make your experience easier.',
+  BUTTON: 'Explore Our Products',
+  ARIA: 'Explore Our Products — opens our product directory in your browser',
+  FAILED: 'We couldn’t open that page. Please try again.'
+};
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     UPDATE,
     INACTIVITY,
+    DISCOVERY,
     CHECK_ORDER,
     FRIENDLY_ERRORS, friendlyError, unexpectedFixFailure, scanFailureMessage,
     shortcutFailureMessage, HKU_STATES, FRAME_SERVER_STATES, describeHku,

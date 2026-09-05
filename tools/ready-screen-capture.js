@@ -488,7 +488,7 @@ async function newPage(browser, vp) {
     await page.waitForTimeout(300);
     f = await facts(page);
     await shot(page, `${tag}-03-complete`);
-    check(f.title === "You're all set", `${tag}: Complete title`);
+    check(f.title === 'Complete', `${tag}: Complete title`);
     expectControls(`${tag} complete`, f, 'success');
     check(f.managedVisible.slice().sort().join(',') === ['btnExit', 'detailsBtn', 'doneBtn', 'launchBtn'].sort().join(','), `${tag} complete: Exit, Open Zoom, Done, View details (${f.managedVisible.join(', ')})`);
     check(f.visibleControls.some(c => c.id === 'launchBtn' && /Open Zoom/.test(c.text)), `${tag} complete: Open Zoom present`);
@@ -513,7 +513,7 @@ async function newPage(browser, vp) {
     await page.click('#backBtn');
     await page.waitForTimeout(100);
     f = await facts(page);
-    check(f.title === "You're all set" && f.managedVisible.indexOf('launchBtn') !== -1, `${tag}: Back from Details restores Complete`);
+    check(f.title === 'Complete' && f.managedVisible.indexOf('launchBtn') !== -1, `${tag}: Back from Details restores Complete`);
     await ctx.close();
   }
 

@@ -29,6 +29,9 @@ const MANAGED_CONTROLS = Object.freeze([
   'shortcutOpt',
   // secondary row
   'cancelFixBtn', 'doneBtn', 'rescanBtn', 'closeBtn', 'detailsBtn', 'supportBtn', 'copyErrBtn',
+  // completed-repair product discovery (opens the product directory in the
+  // browser; success only)
+  'productsBtn',
   // Zoom recovery card (blocked screen only)
   'zrDownloadBtn', 'zrRecheckBtn', 'zrChooseBtn', 'zrCancelBtn',
   // details view
@@ -57,7 +60,9 @@ const SCREEN_CONTROLS = Object.freeze({
   // Complete (verified success): Open Zoom is allowed here and nowhere
   // before it. The shortcut control appears only when the shortcut step
   // did not complete.
-  success:    Object.freeze([...COMMON, 'launchBtn', 'shortcutBtn', 'doneBtn', 'rescanBtn', 'detailsBtn']),
+  // Product discovery is offered only once a repair has verifiably
+  // completed; Open Zoom stays the primary action.
+  success:    Object.freeze([...COMMON, 'launchBtn', 'shortcutBtn', 'doneBtn', 'rescanBtn', 'detailsBtn', 'productsBtn']),
   // Unable: retry, support, copy details, close.
   error:      Object.freeze([...COMMON, 'fixBtn', 'rescanBtn', 'closeBtn', 'supportBtn', 'copyErrBtn', 'detailsBtn']),
   // Notice (finished with items to attend to, shortcut states): the

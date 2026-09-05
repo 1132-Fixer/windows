@@ -2087,7 +2087,9 @@ buildExplore();
 // Explore is reached from the About dialog only. About steps aside while
 // the chooser is open and returns, with focus on the Explore control,
 // when it closes.
+let exploreOpener = null;
 function openExplore() {
+  exploreOpener = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
   exploreStatus.textContent = '';
   exploreStatus.className = 'fb-status';
   hideAbout();
@@ -2096,12 +2098,17 @@ function openExplore() {
   // (the Explore button) on release.
   releaseExploreTrap = installFocusTrap(exploreOverlay);
 }
+// Closing Explore closes everything: About does not come back (operator
+// request 2026-09-05). Focus returns to the About control in the footer.
 function closeExplore() {
   exploreOverlay.classList.remove('show');
-  if (aboutOverlay) aboutOverlay.hidden = false;
+  if (aboutOverlay) aboutOverlay.hidden = true;
   if (releaseExploreTrap) { releaseExploreTrap(); releaseExploreTrap = null; }
-  const explore = document.getElementById('btnExplore');
-  if (explore) explore.focus();
+  // Back to whatever opened it: the completed-repair offer, or the footer
+  // About control when it came from the About dialog.
+  const opener = exploreOpener && document.contains(exploreOpener) && !exploreOpener.hidden && exploreOpener.id !== 'btnExplore' ? exploreOpener : document.getElementById('aboutBtn');
+  exploreOpener = null;
+  if (opener) opener.focus();
 }
 
 async function openExploreDestination(key) {
@@ -2116,6 +2123,41 @@ async function openExploreDestination(key) {
 }
 
 document.getElementById('btnExplore').addEventListener('click', openExplore);
+// ============================================================
+// Product discovery on the Complete screen. The destination lives in the
+// main process (src/main/config.js) and opens in the default browser via
+// the allowlisted openExternal path; this side only asks whether it is
+// available (section hidden otherwise) and asks to open it. A failure to
+// open the browser is a one-line notice; the repair result is untouched.
+// ============================================================
+const DISCOVERY_COPY = typeof DISCOVERY !== 'undefined' ? DISCOVERY : {};
+const productsBtn = document.getElementById('productsBtn');
+const discoveryStatus = document.getElementById('discoveryStatus');
+let productsOpening = false;
+(function initDiscovery() {
+  const api = window.electronAPI;
+  if (DISCOVERY_COPY.TITLE) document.getElementById('discoveryTitle').textContent = DISCOVERY_COPY.TITLE;
+  if (DISCOVERY_COPY.BODY) document.getElementById('discoveryBody').textContent = DISCOVERY_COPY.BODY;
+  if (DISCOVERY_COPY.BUTTON) productsBtn.textContent = DISCOVERY_COPY.BUTTON;
+  if (DISCOVERY_COPY.ARIA) productsBtn.setAttribute('aria-label', DISCOVERY_COPY.ARIA);
+  document.body.dataset.productsAvailable = 'false';
+  if (!api || typeof api.productsPageAvailable !== 'function') return;
+  api.productsPageAvailable().then((r) => {
+    document.body.dataset.productsAvailable = r && r.available ? 'true' : 'false';
+  }).catch(() => { document.body.dataset.productsAvailable = 'false'; });
+})();
+productsBtn.addEventListener('click', async () => {
+  if (productsOpening) return;
+  productsOpening = true;
+  discoveryStatus.textContent = '';
+  let ok = false;
+  try {
+    const r = await window.electronAPI.openProductsPage();
+    ok = !!(r && r.success);
+  } catch (_) { ok = false; }
+  productsOpening = false;
+  if (!ok) discoveryStatus.textContent = DISCOVERY_COPY.FAILED || 'We couldn’t open that page. Please try again.';
+});
 document.getElementById('exploreClose').addEventListener('click', closeExplore);
 // Backdrop click and Escape both dismiss — this modal is unrelated to the
 // destructive fix flow, so normal dismissal is fine.

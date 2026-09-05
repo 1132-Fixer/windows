@@ -101,6 +101,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metadata finalizer fixture) are in `npm test`;
   `tools/packaged-update-acceptance.js` drives a real installed version A
   → version B update on Windows.
+### Added
+
+- **Product discovery on the Complete screen.** After a verified repair
+  the notice reads **Complete** / *Zoom has been fixed and is ready to
+  use.*, **Open Zoom** stays the primary action, and below a hairline
+  divider a compact **Explore more tools** section offers a secondary
+  **Explore Our Products** button that opens the official product directory
+  (`https://botify-network.com/`, `PRODUCTS_URL` in `src/main/config.js`) in
+  the default browser through the allowlisted `openExternal` path. The
+  section exists on no other screen, is hidden when the destination is
+  missing or not allowlisted, and a browser failure shows *We couldn’t open
+  that page. Please try again.* without changing the result.
+  `tools/discovery-smoke.js` is in `npm test`.
+
+### Fixed
+
+- **Exit was invisible.** The header grid is `1fr auto 1fr`, but the
+  centered product mark is absolutely positioned and not a grid item, so
+  the right-hand side auto-placed into the middle column and Exit rendered
+  underneath the mark. The sides are pinned to columns 1 and 3.
+- **Closing Explore brought About back.** Close, the backdrop and Escape
+  now dismiss everything; focus returns to whatever opened the chooser.
 
 ### Changed
 

@@ -45,6 +45,8 @@ const IPC_INVOKE_CHANNELS = Object.freeze([
   'inactivity-status-get',
   'open-download-page',
   'open-explore-destination',
+  'products-page-available',
+  'open-products-page',
   'window-minimize',
   'window-maximize',
   'quit-app',
@@ -192,6 +194,15 @@ function isAllowedExternalUrl(urlString) {
   if (WEBSITE_HOSTS.has(parsed.host)) return true;
   if (ZOOM_HOSTS.has(parsed.host)) return true;
   return false;
+}
+
+// "Explore Our Products" (completed-repair screen). The destination comes
+// from src/main/config.js, never from the renderer; the section is shown
+// only when this says the URL is usable through openExternalSafe.
+function productsPageAvailability(urlString) {
+  if (typeof urlString !== 'string' || !urlString.trim()) return { available: false, reason: 'not configured' };
+  if (!isAllowedExternalUrl(urlString)) return { available: false, reason: 'url not allowed' };
+  return { available: true };
 }
 
 async function openExternalSafe(openExternal, urlString) {
@@ -456,6 +467,7 @@ module.exports = {
   isAllowedExternalUrl,
   EXPLORE_DESTINATIONS,
   exploreDestinationUrl,
+  productsPageAvailability,
   openExternalSafe,
   isAllowedRendererNavigation,
   hardenWebContents,

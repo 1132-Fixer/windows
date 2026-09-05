@@ -143,6 +143,22 @@ check((html.match(/class="app-mark"/g) || []).length === 1,
 check((html.match(/<img class="app-mark"/g) || []).length === 1 && !shell.includes('appendChild(appMark)'),
   'the single mark is static markup; the shell never appends a second one');
 
+console.log('brand-placement-smoke: closing Explore closes About too');
+{
+  const renderer = fs.readFileSync(path.join(ROOT, 'renderer.js'), 'utf8');
+  const body = renderer.slice(renderer.indexOf('function closeExplore()'), renderer.indexOf('async function openExploreDestination'));
+  check(body.includes('aboutOverlay.hidden = true'), 'closeExplore hides the About dialog instead of restoring it');
+  check(!body.includes('aboutOverlay.hidden = false'), 'closeExplore never re-shows About');
+  check(body.includes("getElementById('aboutBtn')"), 'focus returns to the footer About control');
+}
+
+console.log('brand-placement-smoke: header side controls do not sit under the mark');
+// The mark is absolutely positioned, so it is not a grid item. Without
+// explicit columns the right side auto-placed into the middle (auto) column
+// and Exit rendered underneath the mark (6.3.3).
+check(/\.app-header-left\s*\{[^}]*grid-column:\s*1/.test(html), 'left header side is pinned to column 1');
+check(/\.app-header-right\s*\{[^}]*grid-column:\s*3/.test(html), 'right header side (Exit) is pinned to column 3');
+
 if (failures) {
   console.error(`brand-placement-smoke: ${failures} failure(s)`);
   process.exit(1);

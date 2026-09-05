@@ -58,3 +58,5 @@ update-acceptance/
 
 # Packaged inactivity acceptance evidence (tools/packaged-inactivity-acceptance.js)
 inactivity-evidence/
+# Discovery-section evidence (scratch probe)
+discovery-evidence/

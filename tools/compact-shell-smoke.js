@@ -25,8 +25,8 @@ for (const text of [
   'Fixing Zoom',
   'Getting things ready…',
   'Step ${view.step} of ${FIX_STAGE_COUNT}',
-  "You're all set",
-  'Zoom is ready to use.',
+  'Complete',
+  'Zoom has been fixed and is ready to use.',
   'Open Zoom'
 ]) {
   check(shell.includes(text), `shell covers ${JSON.stringify(text)}`);
