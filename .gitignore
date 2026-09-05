@@ -60,3 +60,10 @@ update-acceptance/
 inactivity-evidence/
 # Discovery-section evidence (scratch probe)
 discovery-evidence/
+
+# Landing-screen evidence (scratch probe)
+landing-evidence/
+
+# Packaged update acceptance (tools/build-update-test-pair.js,
+# tools/packaged-update-acceptance.js): test installers and evidence.
+update-acceptance/

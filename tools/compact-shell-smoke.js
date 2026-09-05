@@ -46,7 +46,7 @@ check(!shell.includes('insertBefore(actionArea') && !shell.includes('runActions.
 check(!shell.includes("setCompactStatus('✓', 'Ready')"), 'ready state does not add a duplicate Ready pill');
 check(!/Everything looks good/.test(shell), 'shell never claims everything looks good');
 check(shell.includes("appMark.src = 'assets/brand/app-mark.png'"), 'header mark is the canonical gear');
-check(/<header class="app-header"[\s\S]*<img class="app-mark" src="assets\/brand\/app-mark\.png" alt="1132 Fixer">[\s\S]*<\/header>/.test(html),
+check(/<header class="app-header"[\s\S]*<img class="app-mark" src="assets\/brand\/app-mark\.png"[^>]*alt="1132 Fixer"[^>]*>[\s\S]*<\/header>/.test(html),
   'gear lives in the static app header');
 check(!shell.includes('compact-brand-slot'), 'gear is not in a state-owned brand slot');
 check(!shell.includes('1132-helper-shortcut'), 'helper-shortcut artwork is not the header mark');
