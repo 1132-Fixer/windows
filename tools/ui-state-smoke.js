@@ -170,29 +170,63 @@ for (const empty of [[], null, undefined, [''], [null]]) {
 // ------------------------------------------------------------
 console.log('ui-state-smoke: update banner never renders unknown as silence');
 
-// Every state src/main/updater.js emits, plus the portable notice.
+// Every state src/main/updater.js emits, plus the portable notice. Each has
+// a title and a message, no raw library text, and never both a download
+// offer and a failure at once.
 const shownStates = ['checking', 'available', 'downloading', 'verifying', 'ready', 'installing', 'restarting', 'updated', 'failed', 'recovery', 'manual', 'error'];
 for (const state of shownStates) {
   const v = ui.updateBannerView({ state, version: '6.4.0', current: '6.3.3', percent: 40, seconds: 5, stage: 'install', reason: 'installer-launch-failed' });
   check(v.show === true, `update state '${state}' shows the banner`);
-  check(typeof v.msg === 'string' && v.msg.length > 10, `update state '${state}' has real copy`);
-  check(!/quitAndInstall|ENOENT|spawn|Error:/.test(v.msg), `update state '${state}' shows no raw library text`);
+  check(typeof v.title === 'string' && v.title.length > 5 && typeof v.msg === 'string' && v.msg.length > 10, `update state '${state}' has a title and real copy`);
+  check(!/quitAndInstall|ENOENT|spawn|Error:|ERR_/.test(v.title + v.msg), `update state '${state}' shows no raw library text`);
+  check(['info', 'warning', 'success', 'quiet'].includes(v.tone) && typeof v.icon === 'string', `update state '${state}' has a tone and an icon`);
 }
-check(ui.updateBannerView({ state: 'idle' }).show === false, "update state 'idle' hides the banner");
+check(ui.updateBannerView({ state: 'idle' }).show === false, "update state 'idle' (current) hides the banner");
 
-// The required user-facing statuses, verbatim.
-check(ui.updateBannerView({ state: 'checking' }).msg === 'Checking for updates', "'Checking for updates'");
-check(/^Downloading update v6\.4\.0/.test(ui.updateBannerView({ state: 'downloading', version: '6.4.0', percent: 40 }).msg), "'Downloading update'");
-check(/^Ready to restart/.test(ui.updateBannerView({ state: 'ready', version: '6.4.0', seconds: 10 }).msg), "'Ready to restart'");
-check(/^Installing update/.test(ui.updateBannerView({ state: 'installing', version: '6.4.0' }).msg), "'Installing update'");
-check(/^Restarting 1132 Fixer/.test(ui.updateBannerView({ state: 'restarting', version: '6.4.0' }).msg), "'Restarting 1132 Fixer'");
-check(/^1132 Fixer was updated/.test(ui.updateBannerView({ state: 'updated', version: '6.4.0' }).msg), "'1132 Fixer was updated'");
-check(/^The update could not be completed/.test(ui.updateBannerView({ state: 'failed', stage: 'install', reason: 'installer-launch-failed' }).msg), "'The update could not be completed'");
+// The required user-facing titles, verbatim.
+check(ui.updateBannerView({ state: 'checking' }).title === 'Checking for updates', "'Checking for updates'");
+check(ui.updateBannerView({ state: 'available', version: '6.4.0' }).title === 'Update available', "'Update available'");
+check(ui.updateBannerView({ state: 'available', version: '6.4.0' }).msg === 'Version 6.4.0 is ready to download.', "'Version {version} is ready to download.'");
+check(ui.updateBannerView({ state: 'downloading', version: '6.4.0', percent: 40 }).title === 'Downloading update' && /40%/.test(ui.updateBannerView({ state: 'downloading', version: '6.4.0', percent: 40 }).msg), "'Downloading update' with real progress");
+check(ui.updateBannerView({ state: 'ready', version: '6.4.0', seconds: 10 }).title === 'Ready to restart', "'Ready to restart'");
+check(ui.updateBannerView({ state: 'installing', version: '6.4.0' }).title === 'Installing update', "'Installing update'");
+check(ui.updateBannerView({ state: 'restarting', version: '6.4.0' }).title === 'Restarting 1132 Fixer', "'Restarting 1132 Fixer'");
+check(ui.updateBannerView({ state: 'updated', version: '6.4.0' }).title === '1132 Fixer was updated', "'1132 Fixer was updated'");
+check(ui.updateBannerView({ state: 'failed', stage: 'check', reason: 'offline' }).title === 'Couldn’t check for updates', "'Couldn’t check for updates'");
+check(ui.updateBannerView({ state: 'failed', stage: 'check', reason: 'offline' }).msg === 'You can continue using 1132 Fixer. We’ll try again the next time the app starts.', 'failed-check message verbatim');
+check(ui.updateBannerView({ state: 'failed', stage: 'install', reason: 'installer-launch-failed', current: '6.3.3' }).title === 'The update could not be installed', "'The update could not be installed'");
+check(/still on version 6\.3\.3/.test(ui.updateBannerView({ state: 'recovery', current: '6.3.3', stage: 'install', reason: 'previous-version-running' }).msg), 'recovery names the version still running');
 
-// Ready: countdown with Restart now / After I'm done; deferred: no countdown.
+// A confirmed newer version: Download update + Not now, nothing else.
+{
+  const v = ui.updateBannerView({ state: 'available', version: '6.4.0' });
+  check(v.downloadBtn === true && v.notNowBtn === true && !v.retryBtn && !v.restartBtn && !v.pageLink, 'available offers Download update and Not now only');
+  check(ui.updateBannerView({ state: 'available', version: '6.4.0', quiet: true }).show === false, '"Not now" hides the offer for now');
+}
+// A failed check is never an update: Retry + Dismiss + the download page link.
+for (const reason of ['offline', 'timeout', 'service-unavailable', 'invalid-response', 'library-error', null]) {
+  const v = ui.updateBannerView({ state: 'failed', stage: 'check', reason });
+  check(v.retryBtn === true && v.dismissBtn === true && v.pageLink === true && !v.downloadBtn && !v.restartBtn, `failed check (${reason}) offers Retry, Dismiss and the download page — never Download update`);
+  check(v.tone === 'warning' && v.icon === 'offline', `failed check (${reason}) is a restrained warning with a connection icon`);
+}
+check(ui.updateBannerView({ state: 'failed', stage: 'metadata', reason: 'metadata-version-invalid' }).downloadBtn !== true, 'invalid release metadata never offers a download');
+check(ui.updateBannerView({ state: 'failed', stage: 'check', reason: 'offline', quiet: true }).show === false, 'a dismissed check failure stays hidden for the session');
+// A failed download: Retry + Dismiss + details.
+{
+  const v = ui.updateBannerView({ state: 'failed', stage: 'download', reason: 'download-failed', version: '6.4.0' });
+  check(v.title === 'The update didn’t finish downloading' && v.retryBtn === true && v.dismissBtn === true && v.diagBtn === true && !v.downloadBtn, 'failed download offers Retry, Dismiss, details');
+}
+// No state offers Download update except a verified newer version (and the portable notice's page link).
+for (const state of shownStates.filter((s) => s !== 'available')) {
+  const v = ui.updateBannerView({ state, version: '6.4.0', current: '6.3.3', stage: 'check', reason: 'offline' });
+  check(!v.downloadBtn, `'${state}' does not offer Download update`);
+}
+check(ui.updateBannerView({ state: 'manual', version: '6.4.0' }).pageLink === true && !ui.updateBannerView({ state: 'manual', version: '6.4.0' }).downloadBtn, 'portable notice links to the download page (no in-app download)');
+
+// Ready: countdown with Restart now / Later; deferred: no countdown.
 {
   const v = ui.updateBannerView({ state: 'ready', version: '6.4.0', seconds: 10 });
-  check(v.countdown === true && v.seconds === 10 && v.restartBtn === true && v.laterBtn === true, 'ready shows a countdown with restart and later');
+  check(v.countdown === true && v.seconds === 10 && v.restartBtn === true && v.laterBtn === true, 'ready shows a countdown with Restart now and Later');
   const d = ui.updateBannerView({ state: 'ready', version: '6.4.0', deferred: true });
   check(!d.countdown && d.restartBtn === true && !d.laterBtn, 'deferred ready shows restart only, no countdown');
 }
@@ -202,32 +236,28 @@ check(ui.updateBannerView({ state: 'installing', version: '6.4.0' }).overlay ===
 check(ui.updateBannerView({ state: 'restarting', version: '6.4.0' }).overlay === 'restarting', 'restarting raises the restart notice');
 check(/reopen automatically/.test(ui.updateBannerView({ state: 'installing', version: '6.4.0' }).msg), 'installing says the app reopens automatically');
 
-// Failure: the three recovery actions, plain-English reason, no auto-hide.
-for (const state of ['failed', 'recovery', 'error']) {
+// Install failure / recovery: Retry, Continue with current version, details; the manual page only once retries are exhausted.
+for (const state of ['failed', 'recovery']) {
   const v = ui.updateBannerView({ state, version: '6.4.0', current: '6.3.3', stage: 'elevation', reason: 'elevation-required' });
   check(!('autoHideMs' in v), `${state} banner does not auto-hide`);
-  check(v.retryBtn === true && v.continueBtn === true && v.diagBtn === true, `${state} offers Retry update / Continue with current version / View diagnostic details`);
-  check(/administrator access/i.test(v.msg), `${state} explains the reason in plain English`);
+  check(v.retryBtn === true && v.continueBtn === true && v.diagBtn === true && !v.downloadBtn, `${state} offers Retry / Continue with current version / View diagnostic details`);
   check(v.tone === 'warning', `${state} is toned as a warning`);
 }
 {
   const v = ui.updateBannerView({ state: 'recovery', version: '6.4.0', current: '6.3.3', stage: 'install', reason: 'retry-limit-reached', canRetry: false });
-  check(v.retryBtn === false && v.downloadBtn === true, 'after the retry limit the manual download replaces retry (fallback only)');
-  check(/still on v6\.3\.3/.test(v.msg), 'recovery names the version still running');
-  const prev = ui.updateBannerView({ state: 'recovery', version: '6.4.0', current: '6.3.3', stage: 'install', reason: 'previous-version-running' });
-  check(/previous version opened/i.test(prev.msg), 'a relaunch of the previous version is named as such');
-  check(/could not check/i.test(ui.updateReasonText('check', 'library-error')), 'a failed check is described as a failed check');
-  check(/download did not finish/i.test(ui.updateReasonText('download', null)), 'a failed download is described as a failed download');
+  check(v.retryBtn === false && v.pageLink === true && !v.downloadBtn, 'after the retry limit the download page link replaces Retry (fallback only)');
+  check(/administrator access/i.test(ui.updateReasonText('elevation', 'elevation-required')), 'reasons stay available for diagnostics');
+  check(/No internet/i.test(ui.updateReasonText('check', 'offline')) && /did not answer in time/i.test(ui.updateReasonText('check', 'timeout')) && /could not be reached/i.test(ui.updateReasonText('check', 'service-unavailable')) && /could not read/i.test(ui.updateReasonText('check', 'invalid-response')), 'offline / timeout / service / invalid-response are distinct in diagnostics');
 }
 check(ui.updateBannerView({ state: 'updated', version: '6.4.0' }).okBtn === true, 'updated banner is dismissable with OK');
 
-// Unrecognised / malformed payloads.
+// Unrecognised / malformed payloads: still say something, still dismissable, never a download.
 for (const bad of [undefined, null, {}, { state: '' }, { state: 'deferred' },
                    { state: 'up-to-date' }, 42, 'error']) {
   const v = ui.updateBannerView(bad);
   check(v.show === true, `malformed/unknown update payload ${JSON.stringify(bad)} still tells the user something`);
-  check(/unknown/i.test(v.msg), `payload ${JSON.stringify(bad)} is described as unknown`);
-  check(v.laterBtn === true, `payload ${JSON.stringify(bad)} stays dismissable`);
+  check(/unknown/i.test(v.title + v.msg), `payload ${JSON.stringify(bad)} is described as unknown`);
+  check(v.dismissBtn === true && !v.downloadBtn, `payload ${JSON.stringify(bad)} stays dismissable and offers no download`);
 }
 check(/"deferred"/.test(ui.updateBannerView({ state: 'deferred' }).msg),
   'an unrecognised update state keeps its raw value visible for support');

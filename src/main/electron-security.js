@@ -35,6 +35,8 @@ const IPC_INVOKE_CHANNELS = Object.freeze([
   'install-update-now',
   'defer-update',
   'update-retry',
+  'update-download',
+  'update-dismiss',
   'update-continue',
   'update-diagnostics',
   'update-status-get',

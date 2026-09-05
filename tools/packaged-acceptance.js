@@ -365,7 +365,7 @@ async function runFixJourney(page) {
   if (!fixing.ok) return;
   const fixingShot = await shot(page, '04-fixing');
   const progress = await page.evaluate(() => {
-    const p = document.querySelector('[role="progressbar"]');
+    const p = document.querySelector('#stepLine[role="progressbar"], .compact-step-line[role="progressbar"]');
     const line = document.querySelector('.compact-step-line, #stepLine');
     const btn = document.getElementById('fixBtn');
     return { aria: p ? p.getAttribute('aria-valuetext') : null, step: line ? line.textContent : null, fixDisabledOrHidden: !btn || btn.hidden || btn.disabled };

@@ -59,7 +59,8 @@ the allowlist wraps `ipcMain.handle` so that:
 Main → renderer send channels (`fix-log`, `update-status`, `zoom-installer-done`)
 are documented in `IPC_SEND_CHANNELS`. They are not invoke targets.
 
-The update channels (`install-update-now`, `defer-update`, `update-retry`,
+The update channels (`install-update-now`, `defer-update`, `update-download`,
+`update-dismiss`, `update-retry`,
 `update-continue`, `update-diagnostics`, `update-status-get`,
 `update-app-ready`) take no arguments. The renderer can ask for an install,
 defer it, retry, dismiss, read sanitized diagnostics, pull the current state

@@ -66,6 +66,7 @@ function makeEnv(opts = {}) {
     if (typeof opts.onCheck === 'function') await opts.onCheck(au);
     return { updateInfo: null };
   };
+  au.downloadUpdate = async () => { if (typeof opts.onDownload === 'function') await opts.onDownload(au); return []; };
   const statuses = [];
   const timers = [];
   let clock = opts.now || 1_800_000_000_000;
@@ -121,13 +122,15 @@ async function settle() {
   for (let i = 0; i < 20; i++) await tick();
 }
 
-// Drives a check → available → downloaded flow on a fresh env.
+// Drives a check → available → (user) download → downloaded flow on a
+// fresh env. The download starts only when the controller is asked to.
 async function driveToReady(env, inst, info) {
   settleTarget = env.ctl;
   env.ctl.start();
   await env.ctl.check('startup');
   env.au.emit('checking-for-update');
   env.au.emit('update-available', info || infoFor(inst));
+  await env.ctl.download('user');
   env.au.emit('download-progress', { percent: 50, transferred: 1, total: 2 });
   env.au.emit('update-downloaded', info || infoFor(inst));
   await settle();
@@ -168,8 +171,8 @@ async function driveToReady(env, inst, info) {
     env.ctl.start();
     await env.ctl.check('startup');
     env.au.emit('update-available', infoFor(inst));
-    check(env.ctl.getState() === 'downloading', 'state is downloading');
-    check(env.states().includes('available'), 'available was observed');
+    check(env.ctl.getState() === 'available', 'state is available (waiting for the user, nothing downloaded)');
+    check(!env.states().includes('downloading'), 'no download starts on its own');
     const r = await env.ctl.installNow('user');
     check(r.ok === false && r.reason === 'not-ready', 'install refused before readiness');
     check(env.shutdowns.length === 0 && env.liveTimers().length === 0, 'no shutdown, no countdown before the download lands');
@@ -196,6 +199,7 @@ async function driveToReady(env, inst, info) {
     env.ctl.start();
     await env.ctl.check('startup');
     env.au.emit('update-available', infoFor(inst));
+    await env.ctl.download('user');
     env.au.emit('error', Object.assign(new Error('net::ERR_CONNECTION_RESET https://objects.githubusercontent.com/x?X-Amz-Signature=abc'), { code: 'ERR_UPDATER' }));
     check(env.ctl.getState() === 'failed' && env.last().stage === 'download', 'failed at the download stage');
     check(env.last().canRetry === true, 'retry offered');
@@ -288,6 +292,7 @@ async function driveToReady(env, inst, info) {
     env.ctl.start();
     await env.ctl.check('startup');
     env.au.emit('update-available', infoFor(inst));
+    await env.ctl.download('user');
     env.au.emit('download-progress', { percent: 99 });
     check(env.shutdowns.length === 0 && env.spawnCalls.length === 0 && env.liveTimers().length === 0, 'nothing exits or spawns during download');
     env.au.emit('update-downloaded', infoFor(inst));
@@ -330,6 +335,8 @@ async function driveToReady(env, inst, info) {
     await env.ctl.check('startup');
     env.au.emit('update-available', infoFor(inst));
     env.au.emit('update-available', infoFor(inst));
+    await env.ctl.download('user');
+    await env.ctl.download('user');
     env.au.emit('update-downloaded', infoFor(inst));
     env.au.emit('update-downloaded', infoFor(inst));
     env.au.emit('update-downloaded', infoFor(inst));
@@ -541,6 +548,7 @@ async function driveToReady(env, inst, info) {
     check(env2.ctl.getState() === 'recovery', 'second launch sees the failed handoff');
     await env2.ctl.retry('user');
     env2.au.emit('update-available', infoFor(inst));
+    await env2.ctl.download('user');
     env2.au.emit('update-downloaded', infoFor(inst));
     await settle();
     check(env2.ctl.getState() === 'ready' && env2.liveTimers().length === 1, 'attempt 2 may still count down automatically');
@@ -552,6 +560,7 @@ async function driveToReady(env, inst, info) {
     env3.ctl.start();
     await env3.ctl.retry('user');
     env3.au.emit('update-available', infoFor(inst));
+    await env3.ctl.download('user');
     env3.au.emit('update-downloaded', infoFor(inst));
     await settle();
     check(env3.ctl.getState() === 'ready' && env3.last().deferred === true && env3.liveTimers().length === 0, 'after two failed attempts no automatic countdown is armed');
@@ -561,6 +570,7 @@ async function driveToReady(env, inst, info) {
     env4.ctl.start();
     await env4.ctl.retry('user');
     env4.au.emit('update-available', infoFor(inst));
+    await env4.ctl.download('user');
     env4.au.emit('update-downloaded', infoFor(inst));
     await settle();
     await env4.ctl.installNow('user');
@@ -635,6 +645,70 @@ async function driveToReady(env, inst, info) {
     busy = false;
     const r2 = await env.ctl.installNow('user');
     check(r2.ok === true, 'install proceeds once the repair finished');
+  }
+
+  console.log('updater-lifecycle-smoke: failure classification, check timeout, dismiss, duplicate download');
+  {
+    const env = makeEnv({ label: 'classify' });
+    const c = env.ctl.classifyError;
+    check(c(Object.assign(new Error('getaddrinfo ENOTFOUND github.com'), { code: 'ENOTFOUND' })) === 'offline', 'ENOTFOUND → offline');
+    check(c(new Error('net::ERR_INTERNET_DISCONNECTED')) === 'offline', 'ERR_INTERNET_DISCONNECTED → offline');
+    check(c(Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' })) === 'timeout', 'ETIMEDOUT → timeout');
+    check(c(Object.assign(new Error('HTTP 503 Service Unavailable'), { statusCode: 503 })) === 'service-unavailable', 'HTTP 503 → service-unavailable');
+    check(c(new Error('HTTP 403 for https://api.github.com/x')) === 'service-unavailable', 'HTTP 403 → service-unavailable');
+    check(c(Object.assign(new Error('Cannot parse update info from latest.yml'), { code: 'ERR_UPDATER_INVALID_VERSION' })) === 'invalid-response', 'invalid latest.yml → invalid-response');
+    check(c(Object.assign(new Error('sha512 checksum mismatch'), { code: 'ERR_UPDATER_INVALID_SIGNATURE' })) === 'integrity-failed', 'checksum → integrity-failed');
+    check(c(new Error('something else')) === 'library-error', 'anything else → library-error');
+
+    // A check that never answers ends as a timeout, never a stuck "Checking".
+    const hang = makeEnv({ label: 'hang', onCheck: () => new Promise(() => {}) });
+    hang.ctl.start();
+    const p = hang.ctl.check('startup');
+    check(hang.ctl.getState() === 'checking', 'check in progress');
+    const t = hang.liveTimers().find((x) => x.ms === updater.CHECK_TIMEOUT_MS);
+    check(!!t, `a ${updater.CHECK_TIMEOUT_MS} ms check timeout is armed`);
+    t.fn(); const r = await p;
+    check(r.ok === false && hang.ctl.getState() === 'failed' && hang.last().stage === 'check' && hang.last().reason === 'timeout', 'timeout → failed(check, timeout)');
+    hang.au.emit('update-available', { version: '9.9.9', files: [] });
+    check(hang.ctl.getState() === 'failed', 'a late answer after the timeout is ignored');
+    check(hang.shutdowns.length === 0, 'a failed check never closes the app');
+
+    // Dismiss: the failed check is gone for the session; automatic re-checks
+    // that fail again are quiet; a user retry reports again.
+    let fails = 0;
+    const off = makeEnv({ label: 'offline', onCheck: (au) => { fails++; au.emit('error', Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' })); } });
+    off.ctl.start();
+    await off.ctl.check('startup');
+    check(off.ctl.getState() === 'failed' && off.last().reason === 'offline' && off.last().quiet === false, 'offline check → failed(check, offline), shown');
+    off.ctl.dismiss();
+    check(off.ctl.getState() === 'idle' && off.last().state === 'idle', 'Dismiss hides the notice');
+    off.advance(5 * 60 * 60 * 1000);
+    await off.ctl.check('interval');
+    check(off.ctl.getState() === 'failed' && off.last().quiet === true, 'a later automatic failure stays quiet this session');
+    await off.ctl.retry('user');
+    check(fails === 3 && off.last().quiet === false, 'Retry performs exactly one new request and reports again');
+    check(!off.states().includes('available') && !off.states().includes('downloading'), 'a failed check never became an update');
+
+    // Duplicate download attempts are refused; "Not now" hides the offer.
+    const dup = makeEnv({ label: 'dup' });
+    const inst = makeInstaller(dup.dir, `1132-Fixer-Setup-${TARGET}.exe`);
+    let downloads = 0;
+    dup.au.downloadUpdate = async () => { downloads++; await new Promise((r) => setTimeout(r, 30)); };
+    dup.ctl.start();
+    await dup.ctl.check('startup');
+    dup.au.emit('update-available', infoFor(inst));
+    check(dup.ctl.getState() === 'available' && dup.last().state === 'available', 'verified newer version → available (Download update offered)');
+    const [d1, d2, d3] = await Promise.all([dup.ctl.download('user'), dup.ctl.download('user'), dup.ctl.download('user')]);
+    check(d1.ok === true && d2.ok === false && d3.ok === false && downloads === 1, 'three clicks → one download');
+    const nn = makeEnv({ label: 'notnow' });
+    const inst2 = makeInstaller(nn.dir, `1132-Fixer-Setup-${TARGET}.exe`);
+    nn.ctl.start();
+    await nn.ctl.check('startup');
+    nn.au.emit('update-available', infoFor(inst2));
+    nn.ctl.dismiss();
+    check(nn.ctl.getState() === 'available' && nn.last().quiet === true, '"Not now" keeps the version known and hides the banner');
+    const dl = await nn.ctl.download('user');
+    check(dl.ok === true && nn.ctl.getState() === 'downloading', 'the download can still be started later');
   }
 
   console.log('updater-lifecycle-smoke: sanitized log');

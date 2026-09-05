@@ -22,7 +22,9 @@ const updaterMod = require('./src/main/updater');
 const { createUpdaterLog } = require('./src/main/updater-log');
 const shutdownMod = require('./src/main/shutdown');
 
-autoUpdater.autoDownload = true;
+// The download starts only when the user chooses "Download update"; the
+// controller calls autoUpdater.downloadUpdate() exactly once per version.
+autoUpdater.autoDownload = false;
 // The install handoff is owned by src/main/updater.js, never by
 // electron-updater's quitAndInstall()/autoInstallOnAppQuit. Those paths
 // start the installer through resources/elevate.exe whenever latest.yml
@@ -90,6 +92,7 @@ const CRITICAL_IPC = Object.freeze({
   'preflight-scan': 'zoom-validate',
   'relaunch-elevated': 'elevated-relaunch',
   'install-update-now': 'update-install',
+  'update-download': 'update-download',
   'update-retry': 'update-retry'
 });
 {
@@ -249,6 +252,8 @@ function getUpdater() {
 
 ipcMain.handle('install-update-now', async () => getUpdater().installNow('user'));
 ipcMain.handle('defer-update', () => getUpdater().defer());
+ipcMain.handle('update-download', async () => getUpdater().download('user'));
+ipcMain.handle('update-dismiss', () => getUpdater().dismiss());
 ipcMain.handle('update-retry', async () => getUpdater().retry('user'));
 ipcMain.handle('update-continue', () => getUpdater().continueCurrent());
 ipcMain.handle('update-diagnostics', () => getUpdater().diagnostics());

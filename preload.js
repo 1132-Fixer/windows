@@ -64,6 +64,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // emitted it before this page listened), and report the app is ready so
   // a successful handoff can be closed out.
   updateRetry: () => ipcRenderer.invoke('update-retry'),
+  updateDownload: () => ipcRenderer.invoke('update-download'),
+  updateDismiss: () => ipcRenderer.invoke('update-dismiss'),
   updateContinue: () => ipcRenderer.invoke('update-continue'),
   updateDiagnostics: () => ipcRenderer.invoke('update-diagnostics'),
   updateStatus: () => ipcRenderer.invoke('update-status-get'),

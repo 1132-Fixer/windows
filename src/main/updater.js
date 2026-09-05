@@ -84,6 +84,7 @@ const MAX_AUTO_INSTALL_ATTEMPTS = 2;   // automatic countdown allowed below this
 const MAX_TOTAL_INSTALL_ATTEMPTS = 4;  // after this only the manual download remains
 const BACKOFF_MS = [0, 15 * 60 * 1000, 60 * 60 * 1000, 4 * 60 * 60 * 1000];
 const SPAWN_CONFIRM_MS = 5000;
+const CHECK_TIMEOUT_MS = 30 * 1000;   // a check never sits in "Checking for updates" longer than this
 const PRODUCT_EXE = '1132 Fixer.exe';
 // Installer artifact: 1132-Fixer-Setup-<semver>[-<arch>].exe. The arch
 // suffix is split off first so a prerelease tag can never swallow it.
@@ -352,6 +353,10 @@ function createUpdaterController(deps) {
   let readyMarked = false;
   let lastCheckAt = 0;
   let checkInFlight = false;
+  let lastCheckOrigin = null;
+  let sessionDismissedCheck = false;
+  let quiet = false;
+  const checkTimeoutMs = deps.checkTimeoutMs || CHECK_TIMEOUT_MS;
   const eventCounts = {};
 
   // ---- persistence -------------------------------------------------
@@ -413,6 +418,7 @@ function createUpdaterController(deps) {
       deferred,
       attempts: policy ? policy.attempts : (startupVerdict && startupVerdict.record ? startupVerdict.record.attempt || 0 : 0),
       canRetry: policy ? policy.installAllowed : true,
+      quiet,
       executionMode,
       channel
     };
@@ -431,7 +437,29 @@ function createUpdaterController(deps) {
     const targetVersion = target ? target.version : null;
     if (targetVersion) recordOutcome(targetVersion, st, why);
     log.error('update.failed', Object.assign({ stage: st, reason: why, target: targetVersion }, extra));
+    // A failed CHECK the user already dismissed this session stays quiet
+    // when a later automatic re-check fails the same way; a user-initiated
+    // retry always reports.
+    quiet = st === STAGES.CHECK && sessionDismissedCheck && lastCheckOrigin !== 'user' && lastCheckOrigin !== 'retry';
     setState(STATES.FAILED, { stage: st, reason: why, detail: extra.detail || null });
+  }
+
+  // Which kind of failure this is, in the words the UI needs (never the
+  // library's). Error codes and messages stay in the log.
+  function classifyError(err) {
+    const code = String((err && err.code) || '').toUpperCase();
+    const msg = String((err && err.message) || err || '');
+    const status = (err && (err.statusCode || err.status)) || (/HTTP (\d{3})|status(?:Code)?[:= ]+(\d{3})/i.exec(msg) || [])[1];
+    if (/ENOTFOUND|ENETUNREACH|ECONNREFUSED|EAI_AGAIN|ERR_INTERNET_DISCONNECTED|ERR_NAME_NOT_RESOLVED|ERR_NETWORK_CHANGED|ERR_CONNECTION_REFUSED|ERR_PROXY_CONNECTION_FAILED/.test(code + ' ' + msg)) return 'offline';
+    if (/ETIMEDOUT|ESOCKETTIMEDOUT|ERR_CONNECTION_TIMED_OUT|ERR_TIMED_OUT|\btimeout\b|timed out/i.test(code + ' ' + msg)) return 'timeout';
+    if (/ERR_UPDATER_INVALID_VERSION|ERR_UPDATER_INVALID_CHANNEL|ERR_UPDATER_ZIP_FILE_NOT_FOUND|cannot parse|Unable to find latest version|latest\.yml|YAML|Unexpected token|JSON/i.test(code + ' ' + msg)) return 'invalid-response';
+    if (/ERR_UPDATER_CHANNEL_FILE_NOT_FOUND|no compatible|ERR_UPDATER_ASSET/i.test(code + ' ' + msg)) return 'no-compatible-asset';
+    if (/ERR_UPDATER_INVALID_SIGNATURE|sha512|checksum|ERR_UPDATER_CHECKSUM/i.test(code + ' ' + msg)) return 'integrity-failed';
+    if (/ECONNRESET|EPIPE|ERR_CONNECTION_RESET|ERR_CONNECTION_CLOSED|aborted/i.test(code + ' ' + msg)) return state === STATES.DOWNLOADING ? 'download-failed' : 'service-unavailable';
+    const n = Number(status);
+    if (n >= 500 || n === 403 || n === 404 || n === 429) return 'service-unavailable';
+    if (n >= 400) return 'invalid-response';
+    return state === STATES.DOWNLOADING ? 'download-failed' : 'library-error';
   }
   function cancelCountdown() {
     if (countdownTimer) { clearTimer(countdownTimer); countdownTimer = null; }
@@ -479,10 +507,30 @@ function createUpdaterController(deps) {
       return;
     }
     target = { version: v.target, file: v.file, downloadedFile: null, verifiedStat: null };
-    setState(STATES.AVAILABLE);
     percent = 0;
-    setState(STATES.DOWNLOADING);
-    log.info('download.start', { target: v.target, artifact: v.file.name, size: v.file.size });
+    // A positively verified newer version. The download waits for the user
+    // ("Download update"); autoDownload is off in main.js.
+    setState(STATES.AVAILABLE, { stage: null, reason: null });
+    log.info('update.available', { target: v.target, artifact: v.file.name, size: v.file.size });
+  }
+
+  // "Download update": exactly one download per available version.
+  async function download(origin) {
+    if (state !== STATES.AVAILABLE || !target) {
+      log.info('download.refused', { origin, state });
+      return { ok: false, reason: state === STATES.DOWNLOADING ? 'already-downloading' : 'not-available' };
+    }
+    percent = 0;
+    setState(STATES.DOWNLOADING, { stage: STAGES.DOWNLOAD, reason: null });
+    log.info('download.start', { origin, target: target.version, artifact: target.file.name, size: target.file.size });
+    try {
+      await autoUpdater.downloadUpdate();
+      return { ok: true };
+    } catch (err) {
+      // dispatchError already routed this through onError → failed(download).
+      if (state === STATES.DOWNLOADING) fail(STAGES.DOWNLOAD, classifyError(err), { error: err });
+      return { ok: false, reason: 'download-failed' };
+    }
   }
 
   function onNotAvailable(info) {
@@ -547,15 +595,21 @@ function createUpdaterController(deps) {
 
   function onError(err) {
     count('error');
-    const st = state === STATES.FAILED || state === STATES.RECOVERY || state === STATES.IDLE ? STAGES.CHECK : stageForState();
     if (state === STATES.READY || state === STATES.INSTALLING || state === STATES.RESTARTING || state === STATES.UPDATED) {
       // A verified file is on disk; a late library error (for example the
       // now-unused autoInstallOnAppQuit path) does not invalidate it.
       log.warn('library.error-ignored', { state, error: err });
       return;
     }
+    if (state === STATES.FAILED || state === STATES.RECOVERY || state === STATES.IDLE || state === STATES.AVAILABLE) {
+      // A late error from a check that already settled (timed out, or was
+      // dismissed): logged, never re-shown.
+      log.warn('library.error-late', { state, error: err });
+      return;
+    }
+    const st = stageForState();
     checkInFlight = false;
-    fail(st, 'library-error', { error: err, detail: (err && err.code) || null });
+    fail(st, classifyError(err), { error: err, detail: (err && err.code) || null });
   }
 
   async function verifyDownloaded(info, downloadedFile) {
@@ -850,17 +904,22 @@ function createUpdaterController(deps) {
     }
     checkInFlight = true;
     lastCheckAt = now();
+    lastCheckOrigin = origin;
+    quiet = false;
     const prevTarget = target;
     target = null;
     percent = 0;
     setState(STATES.CHECKING, { stage: STAGES.CHECK, reason: null, detail: null });
+    let timer = null;
+    const timeout = new Promise((_, reject) => { timer = setTimer(() => reject(Object.assign(new Error(`update check timed out after ${checkTimeoutMs} ms`), { code: 'ETIMEDOUT' })), checkTimeoutMs); });
     try {
-      await autoUpdater.checkForUpdates();
+      await Promise.race([autoUpdater.checkForUpdates(), timeout]);
       return { ok: true };
     } catch (err) {
-      if (state === STATES.CHECKING) fail(STAGES.CHECK, 'check-rejected', { error: err });
-      return { ok: false, reason: 'check-rejected' };
+      if (state === STATES.CHECKING) fail(STAGES.CHECK, classifyError(err), { error: err });
+      return { ok: false, reason: 'check-failed' };
     } finally {
+      clearTimer(timer);
       checkInFlight = false;
       if (state === STATES.CHECKING) {
         // The promise settled without an update-available / not-available
@@ -870,6 +929,24 @@ function createUpdaterController(deps) {
         setState(STATES.IDLE, { stage: null, reason: null });
       }
     }
+  }
+
+  // "Dismiss" on a failed check: gone for this session. Later automatic
+  // re-checks that fail the same way stay quiet; a user retry, or the next
+  // launch, reports again.
+  function dismiss() {
+    log.info('user.dismiss', { state, stage, reason });
+    if (state === STATES.FAILED && stage === STAGES.CHECK) sessionDismissedCheck = true;
+    if (state === STATES.FAILED || state === STATES.RECOVERY || state === STATES.UPDATED) {
+      if (state === STATES.RECOVERY && startupVerdict && startupVerdict.record) clearHandoff('user-dismiss');
+      setState(STATES.IDLE, { stage: null, reason: null, detail: null });
+    } else if (state === STATES.AVAILABLE) {
+      // "Not now": keep the knowledge, drop the banner until the next check.
+      quiet = true;
+      log.info('available.not-now', { target: target && target.version });
+      try { emit(payload()); } catch (_) { /* ignore */ }
+    }
+    return { ok: true };
   }
 
   function defer() {
@@ -935,7 +1012,8 @@ function createUpdaterController(deps) {
 
   return {
     STATES, STAGES,
-    start, check, installNow, installOnExit, defer, retry, continueCurrent, diagnostics, markAppReady, dispose,
+    start, check, download, dismiss, installNow, installOnExit, defer, retry, continueCurrent, diagnostics, markAppReady, dispose,
+    classifyError,
     getStatus: payload,
     getState: () => state,
     isCritical: () => CRITICAL_STATES.has(state),
@@ -956,6 +1034,7 @@ module.exports = {
   STATE_FILE,
   HANDOFF_MAX_AGE_MS,
   RESTART_COUNTDOWN_SECONDS,
+  CHECK_TIMEOUT_MS,
   MAX_AUTO_INSTALL_ATTEMPTS,
   MAX_TOTAL_INSTALL_ATTEMPTS,
   BACKOFF_MS,

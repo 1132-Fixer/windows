@@ -58,17 +58,39 @@ armed the same restart again.
 One state machine, registered once, observable in the UI and in the log:
 
 ```text
-idle → checking → available → downloading → verifying → ready
+idle → checking → available → (user: Download update) downloading → verifying → ready
      → installing → restarting → (new process) updated
 any step → failed;  a failed or unverified handoff at start → recovery
 ```
+
+| User-visible state | Controller state | Banner |
+| --- | --- | --- |
+| Checking for updates | `checking` (30 s timeout) | quiet strip |
+| Application is current | `idle` | none |
+| Update available | `available` | *Update available* — Download update / Not now |
+| Downloading update | `downloading` | real progress, no actions |
+| Ready to install | `ready` | *Ready to restart* — Restart now / Later |
+| Installing and restarting | `installing`, `restarting` | blocking notice |
+| Update check unavailable | `failed` (stage `check`/`metadata`) | *Couldn’t check for updates* — Retry / Dismiss / Check the download page |
+| Update download failed | `failed` (stage `download`/`verify`) | *The update didn’t finish downloading* — Retry / Dismiss |
+| Update installation failed | `failed` (later stages), `recovery` | *The update could not be installed* — Retry / Continue with current version / View diagnostic details |
+
+Failure reasons recorded in the log and diagnostics: `offline`, `timeout`,
+`service-unavailable`, `invalid-response`, `no-compatible-asset`,
+`integrity-failed`, `download-failed`, plus the metadata / install /
+relaunch reasons below. The banner never shows them; a failed check never
+offers a download. **Dismiss** on a failed check hides it for the session
+(automatic re-checks that fail stay quiet until the next launch or a manual
+retry).
 
 1. **Check** — refused while a fix runs, while another check or a download
    is in flight, and inside the backoff window after a failed handoff.
 2. **Metadata** — version must parse and be newer; channel must match;
    the installer name must be `1132-Fixer-Setup-<version>[-<arch>].exe`
    for the running arch; a SHA-512 must be present.
-3. **Download** — `autoDownload`, full file (no blockmap).
+3. **Download** — only when the user chooses *Download update*
+   (`autoDownload` is off); full file (no blockmap); one attempt per
+   available version.
 4. **Verify** — the downloaded file's name, size and SHA-512 are re-checked
    against the metadata before it is called *ready*.
 5. **Ready** — 10 s visible countdown when the app is idle; deferred (no
