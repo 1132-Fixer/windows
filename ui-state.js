@@ -200,73 +200,87 @@ function updateReasonText(stage, reason) {
   return table['library-error'] || 'Something interrupted the update.';
 }
 
+// The banner view for every 'update-status' payload: a title, one short
+// message, a tone (info | warning | success | quiet), an icon name, an
+// optional progress value or countdown, and which compact actions exist.
+// Actions are booleans so the renderer only shows what the state allows:
+//   downloadBtn  — only a positively verified newer version ("Download update")
+//   notNowBtn    — dismisses that offer for now
+//   restartBtn / laterBtn — a verified, downloaded update
+//   retryBtn / dismissBtn — a failed check or download (never "Download update")
+//   continueBtn / diagBtn — a failed or unverified install (recovery)
+//   pageLink     — "Check the download page" text link (failed check, manual)
+//   okBtn        — the post-update confirmation
+// `overlay` names the blocking notice while the app is closing.
 function updateBannerView(data) {
   const d = data && typeof data === 'object' ? data : {};
   const state = typeof d.state === 'string' ? d.state : '';
   const U = updateCopy() || {};
-  const v = d.version ? 'v' + d.version : 'update';
-  const c = d.current ? 'v' + d.current : 'the current version';
-  const fill = (s) => String(s || '').replace('{v}', v).replace('{c}', c);
+  const v = d.version ? String(d.version) : '';
+  const c = d.current ? String(d.current) : '';
   const pct = Math.max(0, Math.min(100, Number(d.percent) || 0));
+  const fill = (s) => String(s || '').replace('{v}', v || 'the new version').replace('{c}', c || 'the current version').replace('{p}', String(pct));
+  const t = (key, dflt) => fill(U[key] || dflt);
 
   switch (state) {
     case 'checking':
-      return { show: true, msg: fill(U.CHECKING || 'Checking for updates'), quiet: true };
+      return { show: true, tone: 'quiet', icon: 'sync', title: t('CHECKING', 'Checking for updates'), msg: t('CHECKING_MSG', 'This only takes a moment.') };
     case 'available':
-      return { show: true, msg: fill(U.AVAILABLE || 'Update {v} found. Downloading…'), progress: 0 };
+      if (d.quiet) return { show: false };
+      return { show: true, tone: 'info', icon: 'download', title: t('AVAILABLE', 'Update available'), msg: t('AVAILABLE_MSG', 'Version {v} is ready to download.'), downloadBtn: true, notNowBtn: true };
     case 'downloading':
-      return { show: true, msg: fill(U.DOWNLOADING || 'Downloading update {v} — {p}%.').replace('{p}', String(pct)), progress: pct };
+      return { show: true, tone: 'info', icon: 'download', title: t('DOWNLOADING', 'Downloading update'), msg: t('DOWNLOADING_MSG', 'Version {v} — {p}%.'), progress: pct };
     case 'verifying':
-      return { show: true, msg: fill(U.VERIFYING || 'Verifying update {v}…'), progress: 100 };
+      return { show: true, tone: 'info', icon: 'shield', title: t('VERIFYING', 'Verifying update'), msg: t('VERIFYING_MSG', 'Checking that version {v} downloaded correctly.'), progress: 100 };
     case 'ready':
       if (d.deferred) {
-        return { show: true, msg: fill(U.READY_DEFERRED || 'Update {v} is ready.'), restartBtn: true };
+        return { show: true, tone: 'info', icon: 'restart', title: t('READY', 'Ready to restart'), msg: t('READY_DEFERRED_MSG', 'Version {v} installs when you exit, or restart now.'), restartBtn: true };
       }
       return {
-        show: true,
-        msg: fill(U.READY || 'Ready to restart — 1132 Fixer restarts in {s}s to install {v}.'),
+        show: true, tone: 'info', icon: 'restart',
+        title: t('READY', 'Ready to restart'),
+        msg: t('READY_MSG', '1132 Fixer restarts in {s} seconds to install version {v}.'),
         countdown: true,
         seconds: Number(d.seconds) > 0 ? Number(d.seconds) : 10,
         restartBtn: true,
         laterBtn: true
       };
     case 'installing':
-      return { show: true, msg: fill(U.INSTALLING || 'Installing update {v} — 1132 Fixer will reopen automatically.'), overlay: 'installing' };
+      return { show: true, tone: 'info', icon: 'restart', title: t('INSTALLING', 'Installing update'), msg: t('INSTALLING_MSG', 'Version {v} is being installed. 1132 Fixer will reopen automatically.'), overlay: 'installing' };
     case 'restarting':
-      return { show: true, msg: fill(U.RESTARTING || 'Restarting 1132 Fixer…'), overlay: 'restarting' };
+      return { show: true, tone: 'info', icon: 'restart', title: t('RESTARTING', 'Restarting 1132 Fixer'), msg: t('RESTARTING_MSG', 'The installer is finishing. 1132 Fixer reopens by itself.'), overlay: 'restarting' };
     case 'updated':
-      return { show: true, msg: fill(U.UPDATED || '1132 Fixer was updated to {v}.'), okBtn: true, tone: 'success' };
+      return { show: true, tone: 'success', icon: 'check', title: t('UPDATED', '1132 Fixer was updated'), msg: t('UPDATED_MSG', 'You are now on version {v}.'), okBtn: true };
     case 'failed':
-    case 'recovery':
     case 'error': {
-      const headline = state === 'recovery' ? fill(U.RECOVERY || 'The update could not be completed.') : (U.FAILED || 'The update could not be completed.');
+      if (d.quiet) return { show: false };
+      const stage = d.stage || 'check';
+      if (stage === 'check' || stage === 'metadata') {
+        // The check did not produce a result. Nothing is known about a newer
+        // version, so no download is offered — only a retry, a dismissal and
+        // the official download page.
+        return { show: true, tone: 'warning', icon: 'offline', title: t('CHECK_FAILED', 'Couldn’t check for updates'), msg: t('CHECK_FAILED_MSG', 'You can continue using 1132 Fixer. We’ll try again the next time the app starts.'), retryBtn: true, dismissBtn: true, pageLink: true };
+      }
+      if (stage === 'download' || stage === 'verify') {
+        return { show: true, tone: 'warning', icon: 'offline', title: t('DOWNLOAD_FAILED', 'The update didn’t finish downloading'), msg: t('DOWNLOAD_FAILED_MSG', 'You can continue using 1132 Fixer and try the download again.'), retryBtn: true, dismissBtn: true, diagBtn: true };
+      }
       const canRetry = d.canRetry !== false;
-      return {
-        show: true,
-        msg: headline + ' ' + updateReasonText(d.stage, d.reason),
-        tone: 'warning',
-        retryBtn: canRetry,
-        downloadBtn: !canRetry,
-        continueBtn: true,
-        diagBtn: true
-      };
+      return { show: true, tone: 'warning', icon: 'warning', title: t('INSTALL_FAILED', 'The update could not be installed'), msg: t('INSTALL_FAILED_MSG', '1132 Fixer is still on version {c} and works normally.'), retryBtn: canRetry, pageLink: !canRetry, continueBtn: true, diagBtn: true };
+    }
+    case 'recovery': {
+      const canRetry = d.canRetry !== false;
+      return { show: true, tone: 'warning', icon: 'warning', title: t('RECOVERY', 'The update could not be completed'), msg: t('RECOVERY_MSG', '1132 Fixer is still on version {c} and works normally.'), retryBtn: canRetry, pageLink: !canRetry, continueBtn: true, diagBtn: true };
     }
     case 'manual':
-      return {
-        show: true,
-        msg: fill(U.MANUAL || "Update {v} is available. This portable version can't update itself — download the new one."),
-        downloadBtn: true,
-        laterBtn: true
-      };
+      return { show: true, tone: 'info', icon: 'download', title: t('MANUAL', 'Update available'), msg: t('MANUAL_MSG', "Version {v} is available. This portable version can't update itself — download the new one."), pageLink: true, dismissBtn: true };
     case 'idle':
       return { show: false };
     default:
       return {
-        show: true,
-        msg: (U.UNKNOWN || 'Update status is unknown — 1132 Fixer could not tell whether a newer version exists. Open the download page to check by hand, or restart the app to try again.') +
-             (state ? ' (it reported "' + state + '", which this version does not recognise.)' : ''),
-        downloadBtn: true,
-        laterBtn: true
+        show: true, tone: 'warning', icon: 'warning',
+        title: t('UNKNOWN', 'Update status unknown'),
+        msg: t('UNKNOWN_MSG', '1132 Fixer could not tell whether a newer version exists. You can continue using it.') + (state ? ' (It reported "' + state + '", which this version does not recognise.)' : ''),
+        retryBtn: true, dismissBtn: true, pageLink: true
       };
   }
 }

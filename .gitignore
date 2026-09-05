@@ -60,3 +60,6 @@ update-acceptance/
 inactivity-evidence/
 # Discovery-section evidence (scratch probe)
 discovery-evidence/
+
+# Update-banner evidence (scratch probe)
+banner-evidence/

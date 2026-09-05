@@ -1251,14 +1251,19 @@ async function createShortcut(showHeader) {
 // ui-state.js updateBannerView(), covered by tools/ui-state-smoke.js.
 // ============================================================
 const updateBanner  = document.getElementById('updateBanner');
+const ubIcon        = document.getElementById('ubIcon');
+const ubTitle       = document.getElementById('ubTitle');
 const ubMsg         = document.getElementById('ubMsg');
 const ubRestart     = document.getElementById('ubRestart');
 const ubRetry       = document.getElementById('ubRetry');
 const ubDownload    = document.getElementById('ubDownload');
 const ubOk          = document.getElementById('ubOk');
 const ubLater       = document.getElementById('ubLater');
+const ubNotNow      = document.getElementById('ubNotNow');
+const ubDismiss     = document.getElementById('ubDismiss');
 const ubContinue    = document.getElementById('ubContinue');
 const ubDiag        = document.getElementById('ubDiag');
+const ubPage        = document.getElementById('ubPage');
 const ubProgress    = document.getElementById('ubProgress');
 const ubProgressFill= document.getElementById('ubProgressFill');
 const updateInstallOverlay = document.getElementById('updateInstallOverlay');
@@ -1271,10 +1276,22 @@ const updateDiagCopy    = document.getElementById('updateDiagCopy');
 const updateDiagClose   = document.getElementById('updateDiagClose');
 const UPDATE_COPY = typeof UPDATE !== 'undefined' ? UPDATE : {};
 
+// One restrained line icon per tone. Stroke inherits the banner colour.
+const UB_ICONS = {
+  sync:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+  shield:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>',
+  restart:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>',
+  check:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="16.5 9 10.5 15.2 7.5 12.2"/></svg>',
+  offline:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.56 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>',
+  warning:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>'
+};
+
 let ubTickTimer = null;
 let ubHideTimer = null;
 let lastUpdateStatus = null;
 let updateAppReadySignalled = false;
+let ubBusy = false;
 
 function ubClearTimers() {
   if (ubTickTimer) { clearInterval(ubTickTimer); ubTickTimer = null; }
@@ -1283,25 +1300,30 @@ function ubClearTimers() {
 
 function ubShow(view, msg) {
   updateBanner.classList.add('visible');
-  updateBanner.classList.toggle('quiet', !!view.quiet);
-  if (view.tone) updateBanner.dataset.tone = view.tone; else delete updateBanner.dataset.tone;
-  ubMsg.textContent = msg;
+  updateBanner.dataset.tone = view.tone || 'info';
+  ubIcon.innerHTML = UB_ICONS[view.icon] || UB_ICONS.warning;
+  ubTitle.textContent = view.title || '';
+  ubMsg.textContent = msg || '';
   const show = (el, on, label) => {
-    el.style.display = on ? '' : 'none';
+    el.hidden = !on;
     if (on && label) el.textContent = label;
   };
+  show(ubDownload, !!view.downloadBtn, UPDATE_COPY.DOWNLOAD);
   show(ubRestart, !!view.restartBtn, UPDATE_COPY.RESTART_NOW);
   show(ubRetry, !!view.retryBtn, UPDATE_COPY.RETRY);
-  show(ubDownload, !!view.downloadBtn, UPDATE_COPY.DOWNLOAD);
   show(ubOk, !!view.okBtn, UPDATE_COPY.OK);
+  show(ubNotNow, !!view.notNowBtn, UPDATE_COPY.NOT_NOW);
   show(ubLater, !!view.laterBtn, UPDATE_COPY.LATER);
+  show(ubDismiss, !!view.dismissBtn, UPDATE_COPY.DISMISS);
   show(ubContinue, !!view.continueBtn, UPDATE_COPY.CONTINUE);
   show(ubDiag, !!view.diagBtn, UPDATE_COPY.DIAGNOSTICS);
+  show(ubPage, !!view.pageLink, UPDATE_COPY.DOWNLOAD_PAGE);
   if (typeof view.progress === 'number') {
-    ubProgress.style.display = '';
+    ubProgress.hidden = false;
+    ubProgress.setAttribute('aria-valuenow', String(Math.round(view.progress)));
     ubProgressFill.style.width = `${Math.max(0, Math.min(100, view.progress))}%`;
   } else {
-    ubProgress.style.display = 'none';
+    ubProgress.hidden = true;
   }
 }
 
@@ -1331,6 +1353,7 @@ function hideInstallOverlay() {
 function handleUpdateStatus(data) {
   lastUpdateStatus = data || null;
   ubClearTimers();
+  ubBusy = false;
   const view = updateBannerView(data);
   if (view.overlay) showInstallOverlay(view.overlay, data && data.version); else hideInstallOverlay();
   if (!view.show) { ubHide(); return; }
@@ -1358,40 +1381,34 @@ function signalUpdateAppReady() {
   try { window.electronAPI.updateAppReady().catch(() => {}); } catch (_) { /* bridge missing */ }
 }
 
-ubRestart.addEventListener('click', async () => {
+// Every action goes to main once; main emits the resulting state, which
+// repaints the banner. A second click while one is in flight is ignored.
+async function ubAction(name, call) {
+  if (ubBusy) return;
+  ubBusy = true;
   ubClearTimers();
   let r = null;
-  try { r = await window.electronAPI.installUpdateNow(); } catch (_) { r = null; }
-  // Main emits the installing / failed state itself; a refusal that is not
-  // a state change (busy, not ready) is logged under details.
-  if (r && r.ok === false && r.reason) addFileItem(`Update install request refused: ${r.reason}.`, 'failed');
+  try { r = await call(); } catch (_) { r = null; }
+  ubBusy = false;
+  if (r && r.ok === false && r.reason) addFileItem(`Update action "${name}" refused: ${r.reason}.`, 'failed');
+}
+ubDownload.addEventListener('click', () => ubAction('download', () => window.electronAPI.updateDownload()));
+ubRestart.addEventListener('click', () => ubAction('restart', () => window.electronAPI.installUpdateNow()));
+ubRetry.addEventListener('click', () => {
+  ubShow({ tone: 'quiet', icon: 'sync', title: UPDATE_COPY.CHECKING || 'Checking for updates' }, UPDATE_COPY.CHECKING_MSG || '');
+  ubAction('retry', () => window.electronAPI.updateRetry());
 });
-ubRetry.addEventListener('click', async () => {
-  ubClearTimers();
-  ubShow({ quiet: true }, UPDATE_COPY.CHECKING || 'Checking for updates');
-  try { await window.electronAPI.updateRetry(); } catch (_) { /* main emits the resulting state */ }
-});
-ubContinue.addEventListener('click', () => {
-  ubClearTimers();
-  ubHide();
-  window.electronAPI.updateContinue();
-});
-ubOk.addEventListener('click', () => {
-  ubClearTimers();
-  ubHide();
-  window.electronAPI.updateContinue();
-});
-ubDownload.addEventListener('click', () => {
-  window.electronAPI.openDownloadPage();
-  ubShow({}, 'Download page opened in your browser — grab the newest version there.');
-  ubHideTimer = setTimeout(ubHide, 8000);
-});
+ubNotNow.addEventListener('click', () => { ubHide(); ubAction('not-now', () => window.electronAPI.updateDismiss()); });
+ubDismiss.addEventListener('click', () => { ubHide(); ubAction('dismiss', () => window.electronAPI.updateDismiss()); });
+ubContinue.addEventListener('click', () => { ubHide(); ubAction('continue', () => window.electronAPI.updateContinue()); });
+ubOk.addEventListener('click', () => { ubHide(); ubAction('ok', () => window.electronAPI.updateContinue()); });
 ubLater.addEventListener('click', () => {
-  ubClearTimers();
-  // Hide immediately; main re-shows the ready update as deferred, and the
-  // portable notice returns on the next 4h check.
-  ubHide();
-  window.electronAPI.deferUpdate();
+  // Main re-shows the ready update as deferred (no countdown).
+  ubAction('later', () => window.electronAPI.deferUpdate());
+});
+ubPage.addEventListener('click', () => {
+  // The official releases page in the default browser (allowlisted in main).
+  ubAction('download-page', () => window.electronAPI.openDownloadPage());
 });
 
 // ============================================================

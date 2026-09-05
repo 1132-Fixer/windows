@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — update notices
+
+- **Compact update banner.** The oversized card between the header and the
+  repair workflow is replaced by a full-width notification strip: a small
+  line icon, a title, one short message (two lines at most at the default
+  window), and compact actions on the right — under the message only when
+  the window is too narrow. Text links (*Check the download page*, *View
+  diagnostic details*) sit with the message so the action row never holds
+  more than two buttons, one filled at most. Tones stay inside the navy
+  system; a failed check is a restrained warning, not a red alarm. **Fix
+  now** stays the primary action and the footer never moves.
+- **A failed check is never an update.** *Couldn’t check for updates — You
+  can continue using 1132 Fixer. We’ll try again the next time the app
+  starts.* with **Retry**, **Dismiss** and the download-page link.
+  *Download update* appears only for a positively verified newer version
+  (*Update available — Version X is ready to download.*, with **Not now**),
+  and the download starts only when chosen; duplicate attempts are refused.
+  *After I’m done* is now **Later**.
+- **Explicit update states** (checking, current, available, downloading,
+  verifying, ready to install, installing and restarting, check
+  unavailable, download failed, install failed / recovery, updated). A
+  check that does not answer within 30 seconds ends as a timeout instead of
+  sitting in *Checking for updates*; failures are classified (no internet,
+  timeout, update service unavailable, invalid release response, no
+  compatible release asset, download failure, integrity failure, installer
+  launch failure, relaunch failure) in the log and diagnostics, never in
+  the banner. **Dismiss** hides a failed check for the session (later
+  automatic re-checks that fail stay quiet; a manual retry or the next
+  launch reports again). The repair workflow is never blocked by an update
+  failure and the app never closes because of one.
+
 ### Added — inactivity warning and automatic exit
 
 - After 30 seconds without use, 1132 Fixer shows **Closing soon** — an

@@ -97,7 +97,8 @@ check(renderer.includes('api.updateStatus().then(handleUpdateStatus)'), 'rendere
 for (const id of ['ubRetry', 'ubContinue', 'ubDiag', 'ubOk', 'updateInstallOverlay', 'updateDiagOverlay', 'updateDiagCopy', 'updateDiagClose']) {
   check(html.includes(`id="${id}"`), `index.html has #${id}`);
 }
-check(html.includes('Retry update') && html.includes('Continue with current version') && html.includes('View diagnostic details'), 'the three recovery actions are in the markup');
+check(html.includes('>Retry<') && html.includes('>Dismiss<') && html.includes('Continue with current version') && html.includes('View diagnostic details'), 'the recovery actions (Retry, Dismiss, Continue with current version, View diagnostic details) are in the markup');
+check(html.includes('id="ubTitle"') && html.includes('id="ubMsg"') && html.includes('id="ubPage"') && html.includes('id="ubNotNow"'), 'banner has a title, a message, the download-page link and Not now');
 check(!/quitAndInstall|elevate\.exe/.test(renderer), 'renderer never names updater internals');
 
 console.log('updater-handoff-smoke: release pipeline');
