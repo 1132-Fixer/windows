@@ -69,10 +69,14 @@ console.log(`  hash  ${HELPER_PNG} ${helperHash}`);
 console.log(`  hash  assets/icon.ico ${iconHash}`);
 
 console.log('brand-placement-smoke: main header references the product mark');
-check(/<img class="app-mark" src="assets\/brand\/app-mark\.png" alt="1132 Fixer">/.test(html),
-  'index.html header img is the canonical gear');
-check(/\.app-mark\s*\{[\s\S]*?left:\s*50%;[\s\S]*?transform:\s*translate\(-50%,\s*-50%\);[\s\S]*?width:\s*44px;[\s\S]*?height:\s*44px;[\s\S]*?object-fit:\s*contain;/.test(html),
-  'index.html centers a 44px contain-fit mark in the header');
+check(/<img class="app-mark" src="assets\/brand\/app-mark\.png" srcset="assets\/brand\/app-mark\.png 96w, assets\/logo-transparent\.png 256w" sizes="80px" width="80" height="80" alt="1132 Fixer" draggable="false">/.test(html),
+  'index.html header img is the canonical gear with the 256px export for 125%/150%');
+check(/--mark-size:\s*80px;/.test(html) && /--header-h:\s*104px;/.test(html),
+  'mark size (80px) and header height (104px) are :root tokens');
+check(/\.app-mark\s*\{[\s\S]*?grid-column:\s*2;[\s\S]*?width:\s*var\(--mark-size\);[\s\S]*?height:\s*var\(--mark-size\);[\s\S]*?object-fit:\s*contain;/.test(html),
+  'index.html places a contain-fit 80px mark in the middle grid track');
+check(!/\.app-mark\s*\{[^}]*(position:\s*absolute|transform:)/.test(html),
+  'the mark is centered by the grid, not by absolute positioning or a transform');
 check(!/header[\s\S]{0,800}1132-helper-shortcut/.test(html),
   'index.html header block does not reference the helper icon');
 
@@ -84,12 +88,12 @@ check(explorePos > html.indexOf('id="aboutOverlay"') && explorePos < html.indexO
   'Explore control is inside the About dialog');
 check(shell.includes("appMark.src = 'assets/brand/app-mark.png'"),
   'compact shell locks the header mark to app-mark.png');
-check(/<header class="app-header"[\s\S]*?<img class="app-mark" src="assets\/brand\/app-mark\.png" alt="1132 Fixer">[\s\S]*?<\/header>/.test(html),
+check(/<header class="app-header"[\s\S]*?<img class="app-mark" src="assets\/brand\/app-mark\.png"[^>]*alt="1132 Fixer"[^>]*>[\s\S]*?<\/header>/.test(html),
   'index.html places the mark inside the static app header');
 check(!shell.includes('compact-brand-slot') && !shell.includes('topbar'),
   'compact shell builds no header and moves the mark nowhere');
-check(/\.app-mark\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?left:\s*50%;[\s\S]*?transform:\s*translate\(-50%,\s*-50%\);/.test(html),
-  'header mark is horizontally window-centered against the full width');
+check(/\.app-header\s*\{[\s\S]*?grid-template-columns:\s*1fr auto 1fr;[\s\S]*?place-items:\s*center;/.test(html) && /\.app-mark\s*\{[\s\S]*?grid-column:\s*2;/.test(html),
+  'header mark is window-centered by equal 1fr side tracks around the middle track');
 check(!/app-mark[^}]*display:\s*none/.test(shell) && !/data-compact-state="[a-z]+"[^}]*\.app-mark/.test(shell),
   'no state restyles or hides the product mark');
 check(/grid-template-columns:\s*1fr auto 1fr/.test(html),

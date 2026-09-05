@@ -146,6 +146,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that page. Please try again.* without changing the result.
   `tools/discovery-smoke.js` is in `npm test`.
 
+### Changed — landing screen rebalance
+
+- The header is a 104px band on the surface colour with a hairline divider,
+  and the product mark is 80px (artwork about 78px tall at 100 %), served
+  from the 96px export at 100 % and the 256px export at 125 % / 150 % so it
+  stays sharp. It sits in the middle track of a `1fr auto 1fr` grid with
+  `place-items: center`, so it is mathematically centered against the full
+  window regardless of Back or Exit; no absolute positioning or transforms.
+- The content column (title, description, **Fix now**, shortcut option,
+  **View details**) keeps its 420px cap and sits optically centered in the
+  smaller space between header and footer, so the screen no longer reads as
+  three disconnected pieces. Header and footer share the surface colour.
+- The shortcut option has a larger hit area (36px) with the same 18px box;
+  the footer keeps version and disclosure left, links right, and wraps the
+  links to a second row below 480px instead of colliding.
+
 ### Fixed
 
 - **Exit was invisible.** The header grid is `1fr auto 1fr`, but the
