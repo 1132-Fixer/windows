@@ -448,7 +448,8 @@ function finish() {
   md.push('');
   md.push('| Case | Status | Detail |');
   md.push('| --- | --- | --- |');
-  for (const c of report.cases) md.push(`| ${c.id} | ${c.status} | ${String(c.detail).replace(/\|/g, '\\|')} |`);
+  const cell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  for (const c of report.cases) md.push(`| ${c.id} | ${c.status} | ${cell(c.detail)} |`);
   md.push('');
   md.push('Screenshots: 01-A-before-update, 02-A-downloading, 03-A-ready-to-restart, 04-A-install-handoff, 05-B-after-auto-relaunch, 06-B-manual-reopen. Log: updater-log-excerpt.jsonl.');
   fs.writeFileSync(path.join(OUT, 'report.md'), md.join('\n') + '\n');
