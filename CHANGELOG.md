@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `design-system` submodule pinned to `133fd766b1f53f34c63de1941e9aedeefde48516` (design-system PR #4): the design system now records the shipped Windows palette, radii, spacing and window sizes as a platform overlay (`tokens/windows.json`, `docs/platforms/windows.md`), so the `DESIGN-SYNC.md` token table lists recorded values instead of divergences. Closes #196. No app tokens changed. `tools/design-sync-pin-smoke.js` (in `npm test`) fails when the gitlink, `AGENTS.md` and `DESIGN-SYNC.md` cite different pins, or when the app's `:root` colours drift from the pinned `tokens/windows.json`; CI now checks out submodules so that runs from a clean clone.
+
 ### Fixed
 
 - `checksums-sha256.txt` on GitHub Releases was written with CRLF line endings (PowerShell `Out-File`), so `sha256sum -c checksums-sha256.txt` reported "No such file or directory" for every entry — the filename carried a trailing `\r`. Releases 6.3.3 and earlier are affected; verify those with `tr -d '\r' < checksums-sha256.txt | sha256sum -c -`. The manifest is now produced by a repository-owned generator, `scripts/generate-checksums.mjs` (coreutils format, LF, UTF-8 without BOM, sorted, final LF), read back as bytes by its `--verify` mode, and checked with `sha256sum -c` in both `ci.yml` and `release.yml`; `scripts/validate-release-assets.mjs` fails the release if the published file has a BOM, CRLF, a malformed line, or is missing a line for any shipped `.exe`. `tools/release-checksums-smoke.js` is the byte-level regression test with negative controls; `tools/release-identity-smoke.js` pins the workflow wiring.
