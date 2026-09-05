@@ -61,6 +61,9 @@ console.log('screen-actions-smoke: state-specific controls stay in their state')
 check(has('fixing', 'cancelFixBtn') && has('cancelling', 'cancelFixBtn'), 'Cancel fix is allowed while work runs');
 for (const s of STATES.filter(s => s !== 'fixing' && s !== 'cancelling')) check(!has(s, 'cancelFixBtn'), `${s} does not allow Cancel fix`);
 check(has('success', 'doneBtn'), 'Done is allowed on success');
+check(has('success', 'productsBtn'), 'Explore Our Products is allowed on success');
+for (const s of STATES.filter(s => s !== 'success')) check(!has(s, 'productsBtn'), `${s} does not show Explore Our Products`);
+check(sa.SCREEN_CONTROLS.details.indexOf('productsBtn') === -1, 'the Details overlay does not add the products control');
 for (const s of STATES.filter(s => s !== 'success')) check(!has(s, 'doneBtn'), `${s} does not allow Done`);
 check(has('error', 'copyErrBtn'), 'Unable allows Copy error details');
 for (const s of STATES.filter(s => s !== 'error')) check(!has(s, 'copyErrBtn'), `${s} does not allow Copy error details`);

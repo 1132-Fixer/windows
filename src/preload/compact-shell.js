@@ -398,6 +398,8 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
 
       if (checkingTitle) checkingTitle.textContent = 'Checking…';
       if (fixingTitle) fixingTitle.textContent = 'Fixing Zoom';
+      // Product discovery exists on the verified Complete screen only.
+      if (state !== 'success') setElementHidden(document.getElementById('discoverySection'), true);
 
       // Shell-owned controls: Cancel only while work runs, Done only on a
       // completed repair. Everything else is the renderer's outcome table.
@@ -448,14 +450,18 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
           window.setTimeout(() => requestQuit(), 0);
         }
       } else if (state === 'success') {
-        if (noticeTitle) noticeTitle.textContent = "You're all set";
+        if (noticeTitle) noticeTitle.textContent = 'Complete';
         if (noticeSub) {
           noticeSub.textContent = document.documentElement.dataset.fixOutcome === 'cancel-too-late'
-            ? 'Zoom is ready to use. The fix finished before it could be cancelled.'
-            : 'Zoom is ready to use.';
+            ? 'Zoom has been fixed and is ready to use. The fix finished before it could be cancelled.'
+            : 'Zoom has been fixed and is ready to use.';
           noticeSub.hidden = false;
         }
         resetCancelButton();
+        // Product discovery: only here, and only when main reported a usable
+        // destination (renderer sets data-products-available at start).
+        setElementHidden(document.getElementById('discoverySection'), document.body.dataset.productsAvailable !== 'true');
+        setElementHidden(document.getElementById('productsBtn'), document.body.dataset.productsAvailable !== 'true');
         setElementHidden(launchBtn, false);
         launchBtn.textContent = 'Open Zoom';
         setElementHidden(rescanBtn, true);

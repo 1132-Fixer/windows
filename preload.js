@@ -72,6 +72,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Explore modal: destination KEY only — the URL mapping lives in the main
   // process; arbitrary URLs cannot ride through this bridge.
   openExploreDestination: (key) => ipcRenderer.invoke('open-explore-destination', key),
+  // Completed-repair "Explore Our Products": the destination lives in main
+  // (src/main/config.js) and opens in the default browser; the renderer
+  // only asks whether it is available and asks to open it.
+  productsPageAvailable: () => ipcRenderer.invoke('products-page-available'),
+  openProductsPage: () => ipcRenderer.invoke('open-products-page'),
   minimizeWindow: () => ipcRenderer.invoke('window-minimize'),
   maximizeWindow: () => ipcRenderer.invoke('window-maximize'),
   quitApp: () => ipcRenderer.invoke('quit-app'),

@@ -63,7 +63,7 @@ check(!/Everything looks good/.test(messages.WIZARD.READY_TITLE), 'not a false a
 check(messages.WIZARD.CONFIRM_BODY.includes('helper account and helper profile'), 'confirm names helper account replacement');
 check(messages.WIZARD.CONFIRM_BODY.includes('personal files will not be changed'), 'confirm protects the signed-in user');
 check(messages.WIZARD.CONFIRM_BODY.includes('cancel only at safe checkpoints'), 'confirm names cancellation bounds');
-check(messages.WIZARD.SUCCESS_TITLE === "You're all set", 'success title');
+check(messages.WIZARD.SUCCESS_TITLE === 'Complete', 'success title');
 check(messages.WIZARD.FAIL_TITLE === "Couldn't complete the fix", 'failure title');
 
 if (failures) {

@@ -66,6 +66,12 @@ defer it, retry, dismiss, read sanitized diagnostics, pull the current state
 and report readiness; it cannot name an installer, a directory, a feed URL or
 a version — those come from the verified metadata in the main process
 (`src/main/updater.js`).
+`products-page-available` and `open-products-page` (the Complete screen's
+**Explore Our Products**) take no arguments: the destination is
+`PRODUCTS_URL` in `src/main/config.js`, checked by
+`productsPageAvailability()` against the same https allowlist and opened only
+through `openExternalSafe()`. An unlisted or missing destination hides the
+section rather than showing a dead control.
 
 The renderer cannot spawn a process, choose an updater URL, or pass a
 filesystem path into `msiexec`. The Zoom installer path comes from the native
