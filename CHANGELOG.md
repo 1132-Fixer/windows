@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — uninstaller integrity
+
+- **The uninstaller shipped in 6.3.1–6.3.3 fails its own integrity check.**
+  `afterPack` re-stamped the generated NSIS uninstaller with a
+  `requireAdministrator` manifest after makensis had computed its CRC, so it
+  exits with code 2 (*Installer integrity check has failed*) every time it
+  runs. That broke Add/Remove Programs for those versions and stopped every
+  update at *Failed to uninstall old application files ... : 2*, even once
+  the app started the installer correctly. The uninstaller is no longer
+  edited after it is generated (it elevates itself; the manifest was never
+  needed), `afterPack` now guards against it, and the installer's
+  `customInit` skips the broken uninstaller of an installed 6.3.1–6.3.3 so
+  the next release applies over it in place. Found by the new packaged
+  update acceptance, which also grew a clean-slate fallback and installer
+  dialog capture for this case.
+
 ### Changed — update notices
 
 - **Compact update banner.** The oversized card between the header and the

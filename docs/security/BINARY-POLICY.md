@@ -72,10 +72,16 @@ Smart App Control blocks it as “part of this app”. First-party code does not
 call it.
 
 `scripts/after-pack-verify-manifest.js` deletes it after the copy, before the
-NSIS 7z is built, and stamps the generated `__uninstaller.exe` to
-`requireAdministrator` so uninstall UAC is Windows, not that helper. Do **not**
-add a custom `build/installer.nsi`: electron-builder then skips uninstaller
-generation and makensis fails with a `File` usage error.
+NSIS 7z is built. Uninstall UAC is Windows, not that helper: electron-builder
+builds the uninstaller `RequestExecutionLevel user` on purpose and it
+re-launches itself elevated when it runs per-machine. Do **not** edit the
+generated `__uninstaller.exe` after makensis writes it (no manifest stamp, no
+icon, no version strings): NSIS computes its CRC at build time and checks it
+on every start, so an edited uninstaller fails with *Installer integrity check
+has failed* (exit code 2). Releases 6.3.1–6.3.3 shipped exactly that; see
+[`../development/updater-channel.md`](../development/updater-channel.md).
+Do **not** add a custom `build/installer.nsi` either: electron-builder then
+skips uninstaller generation and makensis fails with a `File` usage error.
 `build/package-allowlist.json` must not list `resources/elevate.exe`. If a
 build leaves that file in `dist/win-unpacked`, inventory fails.
 

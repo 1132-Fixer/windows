@@ -52,6 +52,21 @@ armed the same restart again.
   `--force-run` → `ExecShellAsUser`, which de-elevates. The app manifest
   requires administrator, so the relaunch produced a second approval prompt
   and could run under a different account than the one that updated.
+- **The shipped uninstaller was corrupt.** `afterPack` re-stamped the
+  generated `__uninstaller.exe` with a `requireAdministrator` manifest after
+  makensis had computed its CRC. Every start of that uninstaller — Add/Remove
+  Programs, or the *uninstall old version* step of the next installer — ends
+  with *Installer integrity check has failed* (exit code 2). The installer
+  retries five times, then shows *Failed to uninstall old application files.
+  Please try running the installer again.: 2* and stops, so even a correctly
+  started update could not apply. Found by the packaged acceptance
+  (`tools/packaged-update-acceptance.js`) on 2026-09-05. The uninstaller is
+  no longer edited (it elevates itself; electron-builder builds it
+  `RequestExecutionLevel user` deliberately), and `customInit` in
+  `build/installer.nsh` clears the `UninstallString` of an installed
+  6.3.1–6.3.3 so the new installer overwrites in place instead of running the
+  broken uninstaller. Users who need to *uninstall* 6.3.1–6.3.3 by hand: run
+  the newer installer once (it repairs the record), then uninstall.
 
 ### What the client does now (`src/main/updater.js`)
 

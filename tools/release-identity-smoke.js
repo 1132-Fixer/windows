@@ -57,9 +57,11 @@ check(!fs.existsSync(path.join(ROOT, 'build', 'installer.nsi')),
   const afterPack = fs.readFileSync(path.join(ROOT, 'scripts', 'after-pack-verify-manifest.js'), 'utf8');
   check(afterPack.includes('CopyElevateHelper') && afterPack.includes('elevate.exe'),
     'afterPack strips elevate.exe after NSIS copy');
-  check(afterPack.includes('__uninstaller.exe'),
-    'afterPack stamps the generated NSIS uninstaller requireAdministrator');
+  check(afterPack.includes('guardUninstaller') && !afterPack.includes('installUninstallerStamp'),
+    'afterPack never edits the generated NSIS uninstaller (re-stamping breaks its integrity check, exit 2)');
   const nsh = fs.readFileSync(path.join(ROOT, 'build', 'installer.nsh'), 'utf8');
+  check(/customInit[\s\S]*DisplayVersion[\s\S]*"6\.3\.1"[\s\S]*"6\.3\.3"[\s\S]*DeleteRegValue HKLM "\$\{UNINSTALL_REGISTRY_KEY\}" "UninstallString"/.test(nsh),
+    'customInit skips the corrupt 6.3.1-6.3.3 uninstaller so the update can apply over it');
   check(nsh.includes('Delete "$INSTDIR\\resources\\elevate.exe"'),
     'customInstall still deletes elevate.exe if copy-strip misses');
   const allow = fs.readFileSync(path.join(ROOT, 'build', 'package-allowlist.json'), 'utf8');
