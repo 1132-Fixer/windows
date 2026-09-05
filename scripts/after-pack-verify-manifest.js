@@ -52,23 +52,37 @@ function installElevateStrip() {
   return true;
 }
 
-// Custom installer.nsi makes electron-builder skip uninstaller generation
-// (UNINSTALLER_OUT_FILE unset → makensis File usage error). Keep the stock
-// template so the uninstaller is produced, then stamp it requireAdministrator
-// before it is embedded. Do not RequestExecutionLevel admin on BUILD_UNINSTALLER:
-// that stub must run asInvoker during the pack.
-function installUninstallerStamp(packager) {
-  if (!packager || typeof packager.signIf !== 'function' || packager.signIf.__1132_stamp) return;
+// The generated NSIS uninstaller (__uninstaller.exe) must NOT be edited after
+// makensis writes it. NSIS computes the executable's CRC at build time and
+// verifies it on every start; re-stamping the manifest with rcedit changes
+// the resource section, so the uninstaller fails with "Installer integrity
+// check has failed" (exit code 2). Releases 6.3.1-6.3.3 shipped such an
+// uninstaller: Add/Remove could not uninstall them, and the next installer's
+// "uninstall old version" step stopped at "Failed to uninstall old
+// application files ... : 2". The uninstaller does not need the manifest:
+// electron-builder builds it `RequestExecutionLevel user` on purpose and it
+// elevates itself through UAC when it runs per-machine. Guard against the
+// mistake coming back: refuse to let anything under afterPack touch it.
+function guardUninstaller(packager) {
+  if (!packager || typeof packager.signIf !== 'function' || packager.signIf.__1132_guard) return;
   const orig = packager.signIf.bind(packager);
-  packager.signIf = async function stampThenSign(file) {
+  packager.signIf = async function signUntouched(file) {
     const name = path.basename(String(file || ''));
     if (name.endsWith('__uninstaller.exe')) {
-      const { how, info } = await stampRequireAdmin(file);
-      console.log(`[afterPack] stamped uninstaller via ${how}; requestedExecutionLevel=${info.requestedExecutionLevel} size=${info.size}`);
+      const before = fs.statSync(file);
+      const result = await orig(file);
+      const after = fs.statSync(file);
+      if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+        // Signing appends a signature block and is the only edit NSIS tolerates.
+        console.log(`[afterPack] uninstaller signed (${before.size} -> ${after.size} bytes)`);
+      } else {
+        console.log(`[afterPack] uninstaller left untouched (${after.size} bytes) so its NSIS integrity check stays valid`);
+      }
+      return result;
     }
     return orig(file);
   };
-  packager.signIf.__1132_stamp = true;
+  packager.signIf.__1132_guard = true;
 }
 
 exports.default = async function afterPack(context) {
@@ -94,5 +108,5 @@ exports.default = async function afterPack(context) {
 
   removeElevateHelper(context.appOutDir);
   installElevateStrip();
-  installUninstallerStamp(packager);
+  guardUninstaller(packager);
 };

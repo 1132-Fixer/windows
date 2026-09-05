@@ -128,8 +128,8 @@ check(pkg.build.afterPack === './scripts/after-pack-verify-manifest.js', 'afterP
 check(afterPack.includes('assertRequireAdministrator'), 'afterPack fails the build if the manifest is missing');
 check(afterPack.includes('requestedExecutionLevel: \'requireAdministrator\'') || afterPack.includes('stampRequireAdministrator'),
   'afterPack stamps requireAdministrator before verify');
-check(afterPack.includes('CopyElevateHelper') && afterPack.includes('__uninstaller.exe'),
-  'afterPack strips elevate.exe and stamps the NSIS uninstaller');
+check(afterPack.includes('CopyElevateHelper') && afterPack.includes('__uninstaller.exe') && !/stampRequireAdmin\((?:file|uninstaller)/.test(afterPack.slice(afterPack.indexOf('__uninstaller.exe'))),
+  'afterPack strips elevate.exe and leaves the NSIS uninstaller unmodified (its CRC must stay valid)');
 
 console.log('elevation-startup-smoke: parser unit tests');
 {

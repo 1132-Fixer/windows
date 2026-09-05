@@ -36,6 +36,20 @@
 ; ============================================================================
 
 !macro customInit
+  ; Releases 6.3.1-6.3.3 shipped an uninstaller whose NSIS integrity check
+  ; fails (afterPack re-stamped its manifest after makensis had computed the
+  ; CRC). Running it aborts with exit code 2, so the "uninstall old version"
+  ; step of this installer would stop at "Failed to uninstall old application
+  ; files ... : 2" and the update would never apply. For those versions skip
+  ; that uninstaller: the new files overwrite the old ones in the same
+  ; directory and this installer registers a fresh, valid uninstaller.
+  ReadRegStr $R0 HKLM "${UNINSTALL_REGISTRY_KEY}" "DisplayVersion"
+  ${If} $R0 == "6.3.1"
+  ${OrIf} $R0 == "6.3.2"
+  ${OrIf} $R0 == "6.3.3"
+    DeleteRegValue HKLM "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+    DeleteRegValue HKLM "${UNINSTALL_REGISTRY_KEY}" "QuietUninstallString"
+  ${EndIf}
 !macroend
 
 ; ============================================================================

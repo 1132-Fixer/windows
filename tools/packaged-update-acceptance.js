@@ -65,6 +65,21 @@ const INSTALL_KEY = 'HKLM\\Software\\c20c91ed-7fa6-5700-98ba-65c22b67c802';
 
 const sanitize = createSanitizer();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// NSIS installers/uninstallers run taskkill through nsExec, which ends by
+// sending Ctrl+C to the console it inherited. Run them detached (no console)
+// and ignore a stray console break so the driver is not killed mid-step.
+process.on('SIGINT', () => console.log('  (ignoring console Ctrl+C event from a child process)'));
+process.on('SIGBREAK', () => console.log('  (ignoring console Ctrl+Break event from a child process)'));
+process.on('SIGHUP', () => console.log('  (ignoring console close event)'));
+function runDetached(exe, args, timeoutMs) {
+  return new Promise((resolve) => {
+    let child;
+    try { child = spawn(exe, args, { detached: true, stdio: 'ignore', windowsHide: true }); } catch (err) { return resolve({ status: null, error: err.message }); }
+    const timer = setTimeout(() => { try { child.kill(); } catch (_) {} resolve({ status: null, error: `timeout after ${timeoutMs} ms` }); }, timeoutMs);
+    child.once('error', (err) => { clearTimeout(timer); resolve({ status: null, error: err.message }); });
+    child.once('exit', (code) => { clearTimeout(timer); resolve({ status: code }); });
+  });
+}
 fs.mkdirSync(OUT, { recursive: true });
 
 const report = { startedAt: new Date().toISOString(), host: {}, pair: null, cases: [], feedRequests: [] };
@@ -132,7 +147,7 @@ function otherInstallDirs(canonical) {
     path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', '1132 Fixer'),
     path.join(process.env.LOCALAPPDATA || '', 'Programs', '1132 Fixer')
   ];
-  return candidates.filter((d) => d && fs.existsSync(path.join(d, PRODUCT_EXE)) && path.resolve(d).toLowerCase() !== path.resolve(canonical).toLowerCase());
+  return candidates.filter((d) => d && fs.existsSync(path.join(d, PRODUCT_EXE)) && (!canonical || path.resolve(d).toLowerCase() !== path.resolve(canonical).toLowerCase()));
 }
 function readLog() {
   try { return fs.readFileSync(UPDATER_LOG, 'utf8').split(/\r?\n/).filter(Boolean).map((l) => { try { return JSON.parse(l); } catch (_) { return { raw: l }; } }); } catch (_) { return []; }
@@ -259,22 +274,58 @@ function startFeed(pair) {
     const m = /^"([^"]+)"\s*(.*)$/.exec(before.quietUninstall);
     if (m) {
       const uninstDir = path.dirname(m[1]);
-      const uargs = m[2].split(' ').filter(Boolean).concat([`_?=${uninstDir}`]);
-      const r = spawnSync(m[1], uargs, { windowsHide: true, timeout: 300000, windowsVerbatimArguments: false });
+      // Not `_?=<dir>`: electron-builder's uninstaller treats any process
+      // running from $INSTDIR as "the app" — including itself when run in
+      // place — and aborts (exit 2). Let it copy itself to %TEMP% (Un_A.exe)
+      // and wait for the Add/Remove record and that copy to be gone.
+      const r = await runDetached(m[1], m[2].split(' ').filter(Boolean), 300000);
+      const unCopyRunning = () => /Un_A\.exe/i.test(spawnSync('tasklist.exe', ['/FI', 'IMAGENAME eq Un_A.exe', '/NH'], { encoding: 'utf8', windowsHide: true }).stdout || '');
       let gone = false;
-      for (let i = 0; i < 60 && !gone; i++) { await sleep(2000); gone = !installRecord().displayVersion; }
-      let locked = '';
-      if (!gone) {
-        const probe = ps(`Get-ChildItem -LiteralPath '${uninstDir.replace(/'/g, "''")}' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { try { $s=[IO.File]::Open($_.FullName,'Open','Read','None'); $s.Close() } catch { $_.FullName } }`);
-        locked = (probe.out || '').split(/\r?\n/).filter(Boolean).join('; ');
+      const limit = r.status === 0 ? 90 : 10;
+      for (let i = 0; i < limit && !gone; i++) { await sleep(2000); gone = !installRecord().displayVersion && !unCopyRunning(); }
+      if (gone) {
+        passed('prep.uninstall-existing', `removed ${before.displayVersion} (uninstaller exit ${r.status})`);
+      } else {
+        // The shipped uninstaller can refuse to run: its "is the app
+        // running" check matches any process whose path starts with the
+        // install directory, and it aborts (exit 2) after a few retries.
+        // The acceptance needs a clean slate, not that uninstaller: remove
+        // the files, registry records and shortcuts directly (elevated).
+        const probe = ps(`Get-CimInstance Win32_Process | Where-Object { $_.Path -and $_.Path.StartsWith('${uninstDir.replace(/'/g, "''")}', 'CurrentCultureIgnoreCase') } | ForEach-Object { "$($_.ProcessId) $($_.Path)" }`);
+        for (const p of runningInstances()) { try { process.kill(p.pid); } catch (_) {} }
+        await sleep(1000);
+        const targets = [before.installLocation, uninstDir].filter(Boolean);
+        const errors = [];
+        for (const dir of new Set(targets.map((d) => path.resolve(d).toLowerCase()))) {
+          try { fs.rmSync(dir, { recursive: true, force: true }); } catch (err) { errors.push(`${dir}: ${err.message}`); }
+        }
+        for (const key of [UNINSTALL_KEY, INSTALL_KEY, 'HKLM\\Software\\1132Fixer']) {
+          spawnSync('reg.exe', ['delete', key, '/f'], { windowsHide: true, timeout: 10000 });
+        }
+        for (const l of shortcutTargets()) { try { fs.unlinkSync(l.link); } catch (err) { errors.push(`${l.link}: ${err.message}`); } }
+        const after = installRecord();
+        const clean = !after.displayVersion && !after.installLocation && !fs.existsSync(path.join(uninstDir, PRODUCT_EXE)) && errors.length === 0;
+        (clean ? passed : failed)('prep.uninstall-existing', `${before.displayVersion} uninstaller exited ${r.status} and left the install registered (processes under install dir: ${probe.out || 'none'}); ${clean ? 'removed files, registry records and shortcuts directly' : `manual removal incomplete: ${errors.join('; ') || JSON.stringify(after)}`}`);
+        if (!clean) { server.close(); return finish(); }
       }
-      (gone ? passed : failed)('prep.uninstall-existing', gone ? `removed ${before.displayVersion} (uninstaller exit ${r.status})` : `still registered after uninstall (exit ${r.status})${locked ? `; locked: ${locked}` : ''}`);
-      if (!gone) { server.close(); return finish(); }
     }
   } else {
     passed('prep.uninstall-existing', 'no existing install');
   }
   for (const p of runningInstances()) { try { process.kill(p.pid); } catch (_) {} }
+  // Updater bookkeeping from a previous run must not leak into this one:
+  // update-state.json carries the per-target retry backoff (a successful
+  // 6.9.1 handoff would make a freshly installed 6.9.0 skip its check for
+  // an hour) and a stale handoff record would put A straight into recovery.
+  for (const f of [path.join(USER_DATA, 'update-state.json'), HANDOFF]) { try { fs.unlinkSync(f); console.log(`  cleared ${path.basename(f)}`); } catch (_) {} }
+  // An interrupted uninstall can leave files behind with no Add/Remove
+  // record; a fresh install would land on top of them. Clear them first.
+  for (const dir of otherInstallDirs(null)) {
+    if (fs.existsSync(path.join(dir, PRODUCT_EXE))) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); passed('prep.remove-leftover', `removed leftover files at ${dir}`); }
+      catch (err) { failed('prep.remove-leftover', `could not remove ${dir}: ${err.message}`); server.close(); return finish(); }
+    }
+  }
   try { fs.unlinkSync(HANDOFF); } catch (_) {}
   const pending = path.join(process.env.LOCALAPPDATA || '', '1132-fixer-updater', 'pending');
   fs.rmSync(pending, { recursive: true, force: true });
@@ -288,7 +339,7 @@ function startFeed(pair) {
 
   // ---- 1. install A with the real installer
   {
-    const r = spawnSync(pair.a.setup, ['/S'], { windowsHide: true, timeout: 300000 });
+    const r = await runDetached(pair.a.setup, ['/S'], 300000);
     await sleep(1500);
     const rec = installRecord();
     const exe = rec.installLocation ? path.join(rec.installLocation, PRODUCT_EXE) : null;
@@ -330,7 +381,10 @@ function startFeed(pair) {
   }).catch(() => '');
   const seen = [];
   let downloadClicked = false;
+  let aGone = null;
+  app.process().once('exit', (code) => { aGone = { code, at: Date.now() }; });
   const readyWait = await waitFor(async () => {
+    if (aGone) return null;
     const t = await bannerText();
     if (t && seen[seen.length - 1] !== t) { seen.push(t); console.log(`    banner: ${t}`); }
     if (/^Update available/.test(t) && !downloadClicked) {
@@ -341,7 +395,12 @@ function startFeed(pair) {
     if (/^Downloading update/.test(t) && !report.downloadShot) { report.downloadShot = true; await page.screenshot({ path: path.join(OUT, '02-A-downloading.png') }).catch(() => {}); }
     return /^Ready to restart/.test(t) ? t : null;
   }, 240000, 300);
-  (readyWait.ok ? passed : failed)('update.ready', readyWait.ok ? `"${readyWait.value}" after ${readyWait.ms} ms` : `never reached Ready to restart (last: "${seen[seen.length - 1] || ''}") after ${readyWait.ms} ms`, { bannerSequence: seen });
+  const aExitReason = aGone ? (logEvents(logSince).filter((e) => e.event === 'shutdown.start').pop() || {}).reason : null;
+  (readyWait.ok ? passed : failed)('update.ready', readyWait.ok ? `"${readyWait.value}" after ${readyWait.ms} ms` : aGone ? `A exited (code ${aGone.code}, shutdown reason ${aExitReason || 'unknown'}) before Ready to restart; last banner "${seen[seen.length - 1] || ''}"` : `never reached Ready to restart (last: "${seen[seen.length - 1] || ''}") after ${readyWait.ms} ms`, { bannerSequence: seen });
+  if (!readyWait.ok) {
+    const chk = logEvents(logSince).filter((e) => /^check\./.test(e.event)).map((e) => `${e.event}${e.waitMs ? ` wait ${e.waitMs} ms` : ''}${e.reason ? ` ${e.reason}` : ''}`);
+    failed('update.check-observed', chk.length ? chk.join(' | ') : 'A never logged an update check');
+  }
   (seen.some((t) => /^Update available/.test(t)) && downloadClicked && seen.some((t) => /^Downloading update/.test(t)) && seen.some((t) => /^Verifying update/.test(t)) ? passed : failed)('update.download-and-verify-observed', `download chosen by the user; ${seen.join(' | ')}`);
   const feedHits = report.feedRequests.map((r) => r.url);
   (feedHits.includes('/latest.yml') && feedHits.some((u) => u.endsWith(path.basename(pair.b.setup))) ? passed : failed)('feed.requested', feedHits.join(', '));
@@ -352,19 +411,30 @@ function startFeed(pair) {
   // A verified update waiting to install is a critical operation: the
   // inactivity hourglass must not appear, and only the updater may close
   // the app. Defer the countdown, sit idle past the 30 s warning point.
+  const exitPromise = new Promise((resolve) => { app.process().once('exit', (code) => resolve({ code, at: Date.now() })); });
   await page.click('#ubLater').catch(() => {});
-  await sleep(36000);
-  const idle = await page.evaluate(() => { const o = document.getElementById('idleOverlay'); return { visible: !!o && !o.hidden, banner: (document.getElementById('ubMsg') || {}).textContent || '' }; }).catch(() => ({ visible: null }));
-  (idle.visible === false && runningInstances().some((p) => p.pid === aFacts.pid) ? passed : failed)('update.no-inactivity-exit-while-ready', idle.visible === false ? `no hourglass after 36 s idle with the update ready ("${idle.banner}")` : `hourglass visible=${idle.visible}`);
+  const idleStart = Date.now();
+  const earlyExit = await Promise.race([exitPromise, sleep(36000).then(() => null)]);
+  const idle = earlyExit ? { visible: null } : await page.evaluate(() => { const o = document.getElementById('idleOverlay'); return { visible: !!o && !o.hidden, banner: (document.getElementById('ubMsg') || {}).textContent || '' }; }).catch(() => ({ visible: null }));
+  const idleEvents = logEvents(logSince);
+  const idleInstall = idleEvents.find((e) => e.event === 'install.begin');
+  (idle.visible === false && !earlyExit && runningInstances().some((p) => p.pid === aFacts.pid) ? passed : failed)('update.no-inactivity-exit-while-ready',
+    idle.visible === false && !earlyExit ? `no hourglass after 36 s idle with the update ready ("${idle.banner}")`
+      : earlyExit ? `A exited ${earlyExit.at - idleStart} ms into the idle window (code ${earlyExit.code})${idleInstall ? `; install.begin origin=${idleInstall.origin} — something clicked Restart now (do not touch the test window)` : '; no install.begin logged'}`
+      : `hourglass visible=${idle.visible}`);
 
   // ---- 4. approve the restart
-  const exitPromise = new Promise((resolve) => { app.process().once('exit', (code) => resolve({ code, at: Date.now() })); });
-  await page.click('#ubRestart');
-  const overlay = await waitFor(() => page.evaluate(() => { const o = document.getElementById('updateInstallOverlay'); return o && !o.hidden ? (document.getElementById('updateInstallBody') || {}).textContent : null; }), 15000, 200).catch(() => ({ ok: false }));
-  if (overlay.ok) await page.screenshot({ path: path.join(OUT, '04-A-install-handoff.png') }).catch(() => {});
-  (overlay.ok ? passed : failed)('update.handoff-notice', overlay.ok ? overlay.value : 'installing notice not shown before exit');
+  let overlay = { ok: false };
   const approvedAt = Date.now();
-  const exit = await Promise.race([exitPromise, sleep(90000).then(() => null)]);
+  if (!earlyExit) {
+    await page.click('#ubRestart').catch(() => {});
+    let lastProbe = 'no probe ran';
+    overlay = await waitFor(() => page.evaluate(() => { const o = document.getElementById('updateInstallOverlay'); const t = (document.getElementById('ubTitle') || {}).textContent || ''; return { hidden: !o || o.hidden, body: (document.getElementById('updateInstallBody') || {}).textContent || '', banner: t }; }).then((r) => { lastProbe = `overlay hidden=${r.hidden} banner="${r.banner}"`; return !r.hidden ? (r.body || '(no body text)') : null; }, (err) => { lastProbe = `evaluate failed: ${err.message.split('\n')[0]}`; return null; }), 15000, 200).catch(() => ({ ok: false }));
+    overlay.lastProbe = lastProbe;
+    if (overlay.ok) await page.screenshot({ path: path.join(OUT, '04-A-install-handoff.png') }).catch(() => {});
+  }
+  (overlay.ok ? passed : earlyExit ? notRun : failed)('update.handoff-notice', overlay.ok ? overlay.value : earlyExit ? 'A had already exited before the driver approved the restart' : `installing notice not shown before exit (last probe: ${overlay.lastProbe})`);
+  const exit = earlyExit || await Promise.race([exitPromise, sleep(90000).then(() => null)]);
   (exit ? passed : failed)('update.A-exits', exit ? `A exited ${exit.at - approvedAt} ms after approval (code ${exit.code})` : 'A did not exit within 90 s');
   // The handoff record must say installer-started before A is gone.
   let handoff = null;
@@ -375,8 +445,18 @@ function startFeed(pair) {
   // ---- 5. the installer applies B and relaunches it
   const relaunch = await waitFor(() => {
     const procs = runningInstances().filter((p) => p.pid !== aFacts.pid && p.path && p.path.toLowerCase() === installedExe.toLowerCase());
-    return procs.length ? procs[0] : null;
+    if (procs.length) return procs[0];
+    const started = logEvents(logSince).find((e) => e.event === 'startup' && e.app === pair.b.version && e.execPath && e.execPath.toLowerCase() === installedExe.toLowerCase());
+    return started ? { pid: started.pid || 0, path: started.execPath, start: started.ts, fromLog: true } : null;
   }, 240000, 1000);
+  if (!relaunch.ok) {
+    // A stalled installer usually means a dialog. Read its text (UI Automation
+    // works from the elevated driver) so the failure names the real cause.
+    const dlg = ps(`Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes; Get-Process -ErrorAction SilentlyContinue | Where-Object { ($_.ProcessName -like '1132-Fixer-Setup*' -or $_.ProcessName -like 'Un_A*' -or $_.ProcessName -like 'Uninstall 1132*') -and $_.MainWindowHandle -ne 0 } | ForEach-Object { $el=[System.Windows.Automation.AutomationElement]::FromHandle($_.MainWindowHandle); $t=$el.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ }; "pid=$($_.Id) $($_.ProcessName) '$($_.MainWindowTitle)': $($t -join ' / ')" }`, 30000);
+    const stuck = (dlg.out || '').split(/\r?\n/).filter(Boolean);
+    (stuck.length ? failed : notRun)('update.installer-dialog', stuck.length ? stuck.join(' | ') : 'no installer or uninstaller window found');
+    for (const p of ps(`Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like '1132-Fixer-Setup*' -or $_.ProcessName -like 'Un_A*' } | ForEach-Object { $_.Id }`).out.split(/\r?\n/).filter(Boolean)) { try { process.kill(Number(p)); } catch (_) {} }
+  }
   const bVersionOnDisk = fs.existsSync(installedExe) ? exeVersion(installedExe) : null;
   const recAfter = installRecord();
   (bVersionOnDisk && bVersionOnDisk.startsWith(pair.b.version) && recAfter.displayVersion === pair.b.version && recAfter.installLocation && recAfter.installLocation.toLowerCase() === installDir.toLowerCase() ? passed : failed)('update.B-applied', `exe ${bVersionOnDisk}; Add/Remove ${recAfter.displayVersion}; InstallLocation ${recAfter.installLocation}`, { record: recAfter });
@@ -409,6 +489,8 @@ function startFeed(pair) {
     (closed.ok ? passed : failed)('reopen.B-closed-gracefully', closed.ok ? `B closed in ${closed.ms} ms via its window` : 'B did not close in 20 s');
     if (!closed.ok) { try { process.kill(relaunch.value.pid); } catch (_) {} }
   }
+  for (const p of runningInstances()) { try { process.kill(p.pid); } catch (_) {} }
+  await sleep(2000);
   try {
     const app2 = await electron.launch({ executablePath: installedExe, args: launchArgs, timeout: 60000 });
     const page2 = await app2.firstWindow({ timeout: 60000 });
@@ -446,7 +528,8 @@ function startFeed(pair) {
     const q = installRecord().quietUninstall;
     const m = q && /^"([^"]+)"\s*(.*)$/.exec(q);
     if (m) {
-      spawnSync(m[1], m[2].split(' ').filter(Boolean), { windowsHide: true, timeout: 180000 });
+      await runDetached(m[1], m[2].split(' ').filter(Boolean), 180000);
+      for (let i = 0; i < 60 && installRecord().displayVersion; i++) await sleep(2000);
       passed('cleanup.uninstalled-B', `removed test version ${pair.b.version} (use --keep to leave it installed)`);
     }
   } else {
