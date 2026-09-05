@@ -407,6 +407,83 @@ function reportBuildFailure(err) {
 }
 
 // ------------------------------------------------------------
+// Update lifecycle copy. One line per state, plain English, no library
+// error text. The {v} and {s} placeholders are the target version and the
+// countdown seconds. REASONS explains a failed stage in one sentence; the
+// technical detail stays in the updater log and the diagnostics dialog.
+// ------------------------------------------------------------
+const UPDATE = {
+  CHECKING:    'Checking for updates',
+  AVAILABLE:   'Update {v} found. Downloading…',
+  DOWNLOADING: 'Downloading update {v} — {p}%. You can keep using 1132 Fixer.',
+  VERIFYING:   'Verifying update {v}…',
+  READY:       'Ready to restart — 1132 Fixer restarts in {s}s to install {v}.',
+  READY_DEFERRED: 'Update {v} is ready. It installs when you exit, or restart now.',
+  INSTALLING:  'Installing update {v} — 1132 Fixer will reopen automatically.',
+  RESTARTING:  'Restarting 1132 Fixer…',
+  UPDATED:     '1132 Fixer was updated to {v}.',
+  FAILED:      'The update could not be completed.',
+  FAILED_CHECK: 'Could not check for updates.',
+  FAILED_DOWNLOAD: 'The update download did not finish.',
+  RECOVERY:    'The update could not be completed. 1132 Fixer is still on {c}.',
+  MANUAL:      "Update {v} is available. This portable version can't update itself — download the new one.",
+  UNKNOWN:     'Update status is unknown — 1132 Fixer could not tell whether a newer version exists. Open the download page to check by hand, or restart the app to try again.',
+  RESTART_NOW: 'Restart now',
+  LATER:       "After I'm done",
+  RETRY:       'Retry update',
+  CONTINUE:    'Continue with current version',
+  DIAGNOSTICS: 'View diagnostic details',
+  DOWNLOAD:    'Download update',
+  OK:          'OK',
+  INSTALL_OVERLAY_TITLE: 'Installing update',
+  INSTALL_OVERLAY_BODY:  'The verified update {v} is being installed. 1132 Fixer will close and reopen automatically — this takes about a minute.',
+  RESTART_OVERLAY_TITLE: 'Restarting 1132 Fixer',
+  RESTART_OVERLAY_BODY:  '1132 Fixer is closing so the installer can finish. It reopens by itself when the update is in place.',
+  DIAG_TITLE: 'Update diagnostic details',
+  DIAG_NOTE:  'Paths and names are redacted. The full log is in the updater log file listed below.',
+  DIAG_COPY:  'Copy details',
+  DIAG_COPIED: 'Copied',
+  DIAG_CLOSE: 'Close',
+  REASONS: {
+    'library-error':               'Something interrupted the update.',
+    'check-rejected':              'The update check did not finish. Check your internet connection.',
+    'metadata-missing':            'The release information was empty.',
+    'metadata-version-invalid':    'The release information had an invalid version.',
+    'metadata-version-current':    'The release offered is the version already installed.',
+    'metadata-version-older':      'The release offered is older than the installed version.',
+    'metadata-prerelease-on-stable': 'A pre-release build was offered to the stable channel and was refused.',
+    'metadata-no-installer':       'The release information named no installer.',
+    'metadata-artifact-name':      'The installer name in the release information was not recognised.',
+    'metadata-artifact-version-mismatch': 'The installer name did not match the release version.',
+    'metadata-arch-mismatch':      'The release is built for a different processor type than this Windows.',
+    'metadata-sha512-missing':     'The release information carried no checksum.',
+    'downloaded-version-mismatch': 'The downloaded release did not match the one that was announced.',
+    'downloaded-file-missing':     'The downloaded file could not be found.',
+    'downloaded-file-name':        'The downloaded file had an unexpected name.',
+    'size-mismatch':               'The downloaded file was the wrong size.',
+    'sha512-mismatch':             'The downloaded file did not match the published checksum.',
+    'hash-failed':                 'The downloaded file could not be read for verification.',
+    'verify-threw':                'Verification stopped unexpectedly.',
+    'no-verified-file':            'No verified update file was available.',
+    'not-installed-build':         'This copy of 1132 Fixer was not installed with the installer, so it cannot update itself.',
+    'unexpected-executable':       '1132 Fixer is running from an unexpected file.',
+    'elevation-required':          '1132 Fixer needs administrator access to install the update.',
+    'file-changed-after-verify':   'The downloaded file changed after it was verified.',
+    'install-location-mismatch':   '1132 Fixer is running from a different folder than the one Windows has registered.',
+    'handoff-write-failed':        'The update record could not be saved.',
+    'installer-missing':           'The installer file was missing when it was time to run it.',
+    'installer-elevation-refused': 'Windows did not allow the installer to start.',
+    'installer-launch-failed':     'The installer did not start.',
+    'installer-not-started':       'The installer did not start last time.',
+    'previous-version-running':    'The previous version opened instead of the new one.',
+    'version-mismatch':            'A different version opened than the one that was installed.',
+    'unexpected-executable-path':  '1132 Fixer opened from a different location than the one that was updated.',
+    'retry-limit-reached':         'Automatic retries have stopped. Download the update to install it by hand.',
+    'install-threw':               'The install step stopped unexpectedly.'
+  }
+};
+
+// ------------------------------------------------------------
 // Product discovery on the completed-repair screen (operator request
 // 2026-09-05). Secondary to the repair result; opens the official product
 // directory in the default browser. No URL is ever shown to the user.
@@ -421,6 +498,7 @@ const DISCOVERY = {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    UPDATE,
     DISCOVERY,
     CHECK_ORDER,
     FRIENDLY_ERRORS, friendlyError, unexpectedFixFailure, scanFailureMessage,

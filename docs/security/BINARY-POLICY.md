@@ -79,6 +79,14 @@ generation and makensis fails with a `File` usage error.
 `build/package-allowlist.json` must not list `resources/elevate.exe`. If a
 build leaves that file in `dist/win-unpacked`, inventory fails.
 
+The updater does not need the helper. electron-updater's `quitAndInstall()`
+would call it whenever `latest.yml` says `isAdminRightsRequired`, which is
+exactly what broke updates on 6.3.1–6.3.3; the app now starts the NSIS
+installer itself from its already-elevated process
+(`src/main/updater.js`), and `scripts/finalize-update-metadata.mjs` strips the
+flag from every published `latest.yml`. See
+[`../development/updater-channel.md`](../development/updater-channel.md).
+
 No other third-party DLL, `.node` addon, driver, or bundled tool is packaged.
 Adding one requires a row in this section before it may ship, and
 `build/package-allowlist.json` must be extended by exact path in the same pull

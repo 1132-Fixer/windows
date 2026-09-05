@@ -32,7 +32,10 @@ Center if it is not already installed.
 ## Updates
 
 - **v6.1.0** and later on this repository poll
-  `1132-Fixer/windows` GitHub Releases.
+  `1132-Fixer/windows` GitHub Releases. When a verified update is ready,
+  1132 Fixer shows **Ready to restart**, installs it in the same folder, and
+  reopens by itself as the new version. Updates on **6.3.1 to 6.3.3** close
+  the app without installing; install the newest release once by hand.
 - **v5.6.0** polls the Botify broker, which serves the same current installer.
 - **v5.5.1 and earlier** still poll
   `PrimeUpYourLife/1132-Fixer-Windows-Releases`. That feed remains for those

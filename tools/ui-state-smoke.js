@@ -170,31 +170,66 @@ for (const empty of [[], null, undefined, [''], [null]]) {
 // ------------------------------------------------------------
 console.log('ui-state-smoke: update banner never renders unknown as silence');
 
-const shownStates = ['downloading', 'restarting', 'deferred', 'manual', 'error'];
+// Every state src/main/updater.js emits, plus the portable notice.
+const shownStates = ['checking', 'available', 'downloading', 'verifying', 'ready', 'installing', 'restarting', 'updated', 'failed', 'recovery', 'manual', 'error'];
 for (const state of shownStates) {
-  const v = ui.updateBannerView({ state, version: '5.6.1', percent: 40, seconds: 5 });
+  const v = ui.updateBannerView({ state, version: '6.4.0', current: '6.3.3', percent: 40, seconds: 5, stage: 'install', reason: 'installer-launch-failed' });
   check(v.show === true, `update state '${state}' shows the banner`);
   check(typeof v.msg === 'string' && v.msg.length > 10, `update state '${state}' has real copy`);
+  check(!/quitAndInstall|ENOENT|spawn|Error:/.test(v.msg), `update state '${state}' shows no raw library text`);
 }
 check(ui.updateBannerView({ state: 'idle' }).show === false, "update state 'idle' hides the banner");
 
-// A failed check leaves the update state UNKNOWN. It must not erase itself.
+// The required user-facing statuses, verbatim.
+check(ui.updateBannerView({ state: 'checking' }).msg === 'Checking for updates', "'Checking for updates'");
+check(/^Downloading update v6\.4\.0/.test(ui.updateBannerView({ state: 'downloading', version: '6.4.0', percent: 40 }).msg), "'Downloading update'");
+check(/^Ready to restart/.test(ui.updateBannerView({ state: 'ready', version: '6.4.0', seconds: 10 }).msg), "'Ready to restart'");
+check(/^Installing update/.test(ui.updateBannerView({ state: 'installing', version: '6.4.0' }).msg), "'Installing update'");
+check(/^Restarting 1132 Fixer/.test(ui.updateBannerView({ state: 'restarting', version: '6.4.0' }).msg), "'Restarting 1132 Fixer'");
+check(/^1132 Fixer was updated/.test(ui.updateBannerView({ state: 'updated', version: '6.4.0' }).msg), "'1132 Fixer was updated'");
+check(/^The update could not be completed/.test(ui.updateBannerView({ state: 'failed', stage: 'install', reason: 'installer-launch-failed' }).msg), "'The update could not be completed'");
+
+// Ready: countdown with Restart now / After I'm done; deferred: no countdown.
 {
-  const v = ui.updateBannerView({ state: 'error' });
-  check(!('autoHideMs' in v), 'the update-error banner does not auto-hide');
-  check(v.laterBtn === true, 'the update-error banner is dismissable by the user');
-  check(/could not confirm/i.test(v.msg), 'the update-error banner says the state could not be confirmed');
+  const v = ui.updateBannerView({ state: 'ready', version: '6.4.0', seconds: 10 });
+  check(v.countdown === true && v.seconds === 10 && v.restartBtn === true && v.laterBtn === true, 'ready shows a countdown with restart and later');
+  const d = ui.updateBannerView({ state: 'ready', version: '6.4.0', deferred: true });
+  check(!d.countdown && d.restartBtn === true && !d.laterBtn, 'deferred ready shows restart only, no countdown');
 }
 
+// Installing / restarting raise the blocking notice before the window closes.
+check(ui.updateBannerView({ state: 'installing', version: '6.4.0' }).overlay === 'installing', 'installing raises the install notice');
+check(ui.updateBannerView({ state: 'restarting', version: '6.4.0' }).overlay === 'restarting', 'restarting raises the restart notice');
+check(/reopen automatically/.test(ui.updateBannerView({ state: 'installing', version: '6.4.0' }).msg), 'installing says the app reopens automatically');
+
+// Failure: the three recovery actions, plain-English reason, no auto-hide.
+for (const state of ['failed', 'recovery', 'error']) {
+  const v = ui.updateBannerView({ state, version: '6.4.0', current: '6.3.3', stage: 'elevation', reason: 'elevation-required' });
+  check(!('autoHideMs' in v), `${state} banner does not auto-hide`);
+  check(v.retryBtn === true && v.continueBtn === true && v.diagBtn === true, `${state} offers Retry update / Continue with current version / View diagnostic details`);
+  check(/administrator access/i.test(v.msg), `${state} explains the reason in plain English`);
+  check(v.tone === 'warning', `${state} is toned as a warning`);
+}
+{
+  const v = ui.updateBannerView({ state: 'recovery', version: '6.4.0', current: '6.3.3', stage: 'install', reason: 'retry-limit-reached', canRetry: false });
+  check(v.retryBtn === false && v.downloadBtn === true, 'after the retry limit the manual download replaces retry (fallback only)');
+  check(/still on v6\.3\.3/.test(v.msg), 'recovery names the version still running');
+  const prev = ui.updateBannerView({ state: 'recovery', version: '6.4.0', current: '6.3.3', stage: 'install', reason: 'previous-version-running' });
+  check(/previous version opened/i.test(prev.msg), 'a relaunch of the previous version is named as such');
+  check(/could not check/i.test(ui.updateReasonText('check', 'library-error')), 'a failed check is described as a failed check');
+  check(/download did not finish/i.test(ui.updateReasonText('download', null)), 'a failed download is described as a failed download');
+}
+check(ui.updateBannerView({ state: 'updated', version: '6.4.0' }).okBtn === true, 'updated banner is dismissable with OK');
+
 // Unrecognised / malformed payloads.
-for (const bad of [undefined, null, {}, { state: '' }, { state: 'checking' },
-                   { state: 'available' }, { state: 'up-to-date' }, 42, 'error']) {
+for (const bad of [undefined, null, {}, { state: '' }, { state: 'deferred' },
+                   { state: 'up-to-date' }, 42, 'error']) {
   const v = ui.updateBannerView(bad);
   check(v.show === true, `malformed/unknown update payload ${JSON.stringify(bad)} still tells the user something`);
   check(/unknown/i.test(v.msg), `payload ${JSON.stringify(bad)} is described as unknown`);
   check(v.laterBtn === true, `payload ${JSON.stringify(bad)} stays dismissable`);
 }
-check(/"checking"/.test(ui.updateBannerView({ state: 'checking' }).msg),
+check(/"deferred"/.test(ui.updateBannerView({ state: 'deferred' }).msg),
   'an unrecognised update state keeps its raw value visible for support');
 
 // ------------------------------------------------------------

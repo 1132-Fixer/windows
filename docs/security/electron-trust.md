@@ -59,6 +59,13 @@ the allowlist wraps `ipcMain.handle` so that:
 Main → renderer send channels (`fix-log`, `update-status`, `zoom-installer-done`)
 are documented in `IPC_SEND_CHANNELS`. They are not invoke targets.
 
+The update channels (`install-update-now`, `defer-update`, `update-retry`,
+`update-continue`, `update-diagnostics`, `update-status-get`,
+`update-app-ready`) take no arguments. The renderer can ask for an install,
+defer it, retry, dismiss, read sanitized diagnostics, pull the current state
+and report readiness; it cannot name an installer, a directory, a feed URL or
+a version — those come from the verified metadata in the main process
+(`src/main/updater.js`).
 `products-page-available` and `open-products-page` (the Complete screen's
 **Explore Our Products**) take no arguments: the destination is
 `PRODUCTS_URL` in `src/main/config.js`, checked by

@@ -1244,98 +1244,221 @@ async function createShortcut(showHeader) {
 }
 
 // ============================================================
-// Update banner — mirrors main-process 'update-status' events.
-// Main owns the real timers; this is display + two buttons.
+// Update banner — mirrors main-process 'update-status' events from
+// src/main/updater.js. Main owns every timer and the install handoff;
+// this is display plus the recovery actions (Retry update, Continue with
+// current version, View diagnostic details). The state -> view mapping is
+// ui-state.js updateBannerView(), covered by tools/ui-state-smoke.js.
 // ============================================================
 const updateBanner  = document.getElementById('updateBanner');
 const ubMsg         = document.getElementById('ubMsg');
 const ubRestart     = document.getElementById('ubRestart');
+const ubRetry       = document.getElementById('ubRetry');
 const ubDownload    = document.getElementById('ubDownload');
+const ubOk          = document.getElementById('ubOk');
 const ubLater       = document.getElementById('ubLater');
+const ubContinue    = document.getElementById('ubContinue');
+const ubDiag        = document.getElementById('ubDiag');
 const ubProgress    = document.getElementById('ubProgress');
 const ubProgressFill= document.getElementById('ubProgressFill');
+const updateInstallOverlay = document.getElementById('updateInstallOverlay');
+const updateInstallTitle   = document.getElementById('updateInstallTitle');
+const updateInstallBody    = document.getElementById('updateInstallBody');
+const updateDiagOverlay = document.getElementById('updateDiagOverlay');
+const updateDiagNote    = document.getElementById('updateDiagNote');
+const updateDiagText    = document.getElementById('updateDiagText');
+const updateDiagCopy    = document.getElementById('updateDiagCopy');
+const updateDiagClose   = document.getElementById('updateDiagClose');
+const UPDATE_COPY = typeof UPDATE !== 'undefined' ? UPDATE : {};
 
 let ubTickTimer = null;
 let ubHideTimer = null;
+let lastUpdateStatus = null;
+let updateAppReadySignalled = false;
 
 function ubClearTimers() {
   if (ubTickTimer) { clearInterval(ubTickTimer); ubTickTimer = null; }
   if (ubHideTimer) { clearTimeout(ubHideTimer); ubHideTimer = null; }
 }
 
-function ubShow({ msg, restartBtn = false, downloadBtn = false, laterBtn = false, progress = null }) {
+function ubShow(view, msg) {
   updateBanner.classList.add('visible');
+  updateBanner.classList.toggle('quiet', !!view.quiet);
+  if (view.tone) updateBanner.dataset.tone = view.tone; else delete updateBanner.dataset.tone;
   ubMsg.textContent = msg;
-  ubRestart.style.display = restartBtn ? '' : 'none';
-  ubDownload.style.display = downloadBtn ? '' : 'none';
-  ubLater.style.display = laterBtn ? '' : 'none';
-  if (progress === null) {
-    ubProgress.style.display = 'none';
-  } else {
+  const show = (el, on, label) => {
+    el.style.display = on ? '' : 'none';
+    if (on && label) el.textContent = label;
+  };
+  show(ubRestart, !!view.restartBtn, UPDATE_COPY.RESTART_NOW);
+  show(ubRetry, !!view.retryBtn, UPDATE_COPY.RETRY);
+  show(ubDownload, !!view.downloadBtn, UPDATE_COPY.DOWNLOAD);
+  show(ubOk, !!view.okBtn, UPDATE_COPY.OK);
+  show(ubLater, !!view.laterBtn, UPDATE_COPY.LATER);
+  show(ubContinue, !!view.continueBtn, UPDATE_COPY.CONTINUE);
+  show(ubDiag, !!view.diagBtn, UPDATE_COPY.DIAGNOSTICS);
+  if (typeof view.progress === 'number') {
     ubProgress.style.display = '';
-    ubProgressFill.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+    ubProgressFill.style.width = `${Math.max(0, Math.min(100, view.progress))}%`;
+  } else {
+    ubProgress.style.display = 'none';
   }
 }
 
 function ubHide() {
   updateBanner.classList.remove('visible');
+  delete updateBanner.dataset.tone;
 }
 
-// State -> banner view lives in ui-state.js (updateBannerView), covered by
-// tools/ui-state-smoke.js. Two behaviours changed there:
-//
-//  - a payload with no state, or a state this version does not recognise,
-//    used to hit `default: ubHide()` and render as an EMPTY banner. An
-//    empty update banner reads as "you are up to date"; an update state we
-//    could not determine is not that. It now says so, with a Later button
-//    so it is still dismissable.
-//  - the 'error' banner auto-hid itself after 6 seconds, so a failed
-//    update check erased its own evidence and left the app looking
-//    current. It now stays until the user dismisses it.
+// Blocking notice while the verified update installs and the window is
+// about to close. It is the last thing the user sees before the app
+// reopens on its own.
+function showInstallOverlay(kind, version) {
+  const v = version ? `v${version}` : 'update';
+  const installing = kind !== 'restarting';
+  updateInstallTitle.textContent = installing ? (UPDATE_COPY.INSTALL_OVERLAY_TITLE || 'Installing update') : (UPDATE_COPY.RESTART_OVERLAY_TITLE || 'Restarting 1132 Fixer');
+  updateInstallBody.textContent = String(installing ? (UPDATE_COPY.INSTALL_OVERLAY_BODY || '') : (UPDATE_COPY.RESTART_OVERLAY_BODY || '')).replace('{v}', v);
+  if (updateInstallOverlay.hidden) {
+    updateInstallOverlay.hidden = false;
+    updateInstallOverlay.setAttribute('tabindex', '-1');
+    updateInstallOverlay.focus();
+  }
+}
+function hideInstallOverlay() {
+  if (!updateInstallOverlay.hidden) updateInstallOverlay.hidden = true;
+}
+
 function handleUpdateStatus(data) {
+  lastUpdateStatus = data || null;
   ubClearTimers();
   const view = updateBannerView(data);
+  if (view.overlay) showInstallOverlay(view.overlay, data && data.version); else hideInstallOverlay();
   if (!view.show) { ubHide(); return; }
   if (view.countdown) {
+    // Display only — main's timer decides when the install starts.
     let remaining = view.seconds;
-    const render = () => ubShow({
-      msg: view.msg.replace('{s}', String(remaining)),
-      restartBtn: !!view.restartBtn,
-      laterBtn: !!view.laterBtn
-    });
+    const render = () => ubShow(view, view.msg.replace('{s}', String(Math.max(0, remaining))));
     render();
     ubTickTimer = setInterval(() => {
       remaining -= 1;
-      if (remaining <= 0) { ubClearTimers(); return; }
+      if (remaining <= 0) { ubClearTimers(); render(); return; }
       render();
     }, 1000);
     return;
   }
-  ubShow({
-    msg: view.msg,
-    restartBtn: !!view.restartBtn,
-    downloadBtn: !!view.downloadBtn,
-    laterBtn: !!view.laterBtn,
-    progress: typeof view.progress === 'number' ? view.progress : null
-  });
+  ubShow(view, view.msg);
 }
 
-ubRestart.addEventListener('click', () => {
+// The app reached a settled first screen. Main clears a successful update
+// handoff only on this signal, so a relaunch that never gets here is a
+// failed update, not a completed one. Sent once per page load.
+function signalUpdateAppReady() {
+  if (updateAppReadySignalled) return;
+  updateAppReadySignalled = true;
+  try { window.electronAPI.updateAppReady().catch(() => {}); } catch (_) { /* bridge missing */ }
+}
+
+ubRestart.addEventListener('click', async () => {
   ubClearTimers();
-  ubShow({ msg: 'Installing update — the app will restart itself…' });
-  window.electronAPI.installUpdateNow();
+  let r = null;
+  try { r = await window.electronAPI.installUpdateNow(); } catch (_) { r = null; }
+  // Main emits the installing / failed state itself; a refusal that is not
+  // a state change (busy, not ready) is logged under details.
+  if (r && r.ok === false && r.reason) addFileItem(`Update install request refused: ${r.reason}.`, 'failed');
+});
+ubRetry.addEventListener('click', async () => {
+  ubClearTimers();
+  ubShow({ quiet: true }, UPDATE_COPY.CHECKING || 'Checking for updates');
+  try { await window.electronAPI.updateRetry(); } catch (_) { /* main emits the resulting state */ }
+});
+ubContinue.addEventListener('click', () => {
+  ubClearTimers();
+  ubHide();
+  window.electronAPI.updateContinue();
+});
+ubOk.addEventListener('click', () => {
+  ubClearTimers();
+  ubHide();
+  window.electronAPI.updateContinue();
 });
 ubDownload.addEventListener('click', () => {
   window.electronAPI.openDownloadPage();
-  ubShow({ msg: 'Download page opened in your browser — grab the newest version there.' });
+  ubShow({}, 'Download page opened in your browser — grab the newest version there.');
   ubHideTimer = setTimeout(ubHide, 8000);
 });
 ubLater.addEventListener('click', () => {
   ubClearTimers();
-  // Hide immediately; a downloaded NSIS update re-shows itself as 'deferred'
-  // via the main process, and the portable notice returns on the next 4h check.
+  // Hide immediately; main re-shows the ready update as deferred, and the
+  // portable notice returns on the next 4h check.
   ubHide();
   window.electronAPI.deferUpdate();
+});
+
+// Diagnostics dialog: sanitized state, reason, paths and the last updater
+// log entries. Technical, but never a raw library exception in the banner.
+function formatUpdateDiagnostics(d) {
+  const lines = [];
+  lines.push(`1132 Fixer ${d.current || '?'} -> ${d.target || 'none'} (${d.channel || '?'}, ${d.executionMode || '?'}, ${d.arch || '?'})`);
+  lines.push(`State: ${d.state}${d.stage ? ` / stage ${d.stage}` : ''}${d.reason ? ` / ${d.reason}` : ''}`);
+  if (d.detail) lines.push(`Detail: ${d.detail}`);
+  lines.push(`Attempts: ${d.attempts}`);
+  if (d.lastOutcome) lines.push(`Last outcome: ${d.lastOutcome.stage || '?'} ${d.lastOutcome.reason || ''} at ${d.lastOutcome.at ? new Date(d.lastOutcome.at).toISOString() : '?'}`);
+  lines.push(`Executable: ${d.execPath || '?'}`);
+  lines.push(`Install folder: ${d.installDir || '?'}`);
+  if (d.handoff) lines.push(`Handoff: ${d.handoff.state} ${d.handoff.currentVersion} -> ${d.handoff.targetVersion} at ${d.handoff.timestamp} (attempt ${d.handoff.attempt}${d.handoff.failure ? `, ${d.handoff.failure}` : ''})`);
+  lines.push(`Log file: ${d.logFile || '?'}`);
+  lines.push('');
+  lines.push('Recent updater log:');
+  for (const raw of d.recent || []) {
+    try {
+      const e = JSON.parse(raw);
+      const rest = Object.assign({}, e);
+      for (const k of ['ts', 'level', 'event', 'app', 'platform', 'arch', 'channel', 'mode']) delete rest[k];
+      const extra = Object.keys(rest).length ? ' ' + JSON.stringify(rest) : '';
+      lines.push(`${e.ts} ${e.level} ${e.event}${extra}`);
+    } catch (_) {
+      lines.push(String(raw));
+    }
+  }
+  return lines.join('\n');
+}
+async function openUpdateDiagnostics() {
+  let d = null;
+  try { d = await window.electronAPI.updateDiagnostics(); } catch (_) { d = null; }
+  updateDiagNote.textContent = UPDATE_COPY.DIAG_NOTE || '';
+  updateDiagText.textContent = d ? formatUpdateDiagnostics(d) : 'Diagnostics are not available.';
+  updateDiagCopy.textContent = UPDATE_COPY.DIAG_COPY || 'Copy details';
+  updateDiagOverlay.hidden = false;
+  updateDiagClose.focus();
+}
+function closeUpdateDiagnostics() {
+  updateDiagOverlay.hidden = true;
+  if (ubDiag.style.display !== 'none' && updateBanner.classList.contains('visible')) ubDiag.focus();
+}
+ubDiag.addEventListener('click', openUpdateDiagnostics);
+updateDiagClose.addEventListener('click', closeUpdateDiagnostics);
+updateDiagCopy.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(updateDiagText.textContent || '');
+    updateDiagCopy.textContent = UPDATE_COPY.DIAG_COPIED || 'Copied';
+  } catch (_) {
+    updateDiagCopy.textContent = 'Could not copy';
+  }
+});
+updateDiagOverlay.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') { event.preventDefault(); closeUpdateDiagnostics(); return; }
+  if (event.key === 'Tab') {
+    // Focus stays inside the dialog: text, Copy, Close.
+    const order = [updateDiagText, updateDiagCopy, updateDiagClose];
+    const i = order.indexOf(document.activeElement);
+    const next = event.shiftKey ? (i <= 0 ? order.length - 1 : i - 1) : (i === -1 || i === order.length - 1 ? 0 : i + 1);
+    event.preventDefault();
+    order[next].focus();
+  }
+});
+updateInstallOverlay.addEventListener('keydown', (event) => {
+  // Nothing to do here but wait; keep focus on the notice.
+  if (event.key === 'Tab' || event.key === 'Escape') event.preventDefault();
 });
 
 // ============================================================
@@ -1401,6 +1524,12 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
 
   api.onUpdateStatus(handleUpdateStatus);
+  // The relaunched process evaluates its handoff record before this page
+  // listens; pull the current state so "1132 Fixer was updated" (or the
+  // recovery banner) is never missed.
+  if (typeof api.updateStatus === 'function') {
+    api.updateStatus().then(handleUpdateStatus).catch(() => {});
+  }
 
   // Installer exited — run the promised read-only re-check automatically.
   // If a scan is already in flight, the pending flag makes ITS result use
@@ -1492,16 +1621,19 @@ async function runStartupSequence() {
   addFileItem(`Startup ${status.state} in ${status.elapsedMs || (Date.now() - startedAt)}ms via ${status.elevationMethod || 'unknown'}.`, 'header');
   if (status.state === 'need-elevation' || status.elevated !== true) {
     showAdminRequired();
+    signalUpdateAppReady();
     return;
   }
   if (status.runningAsTarget) {
     showResultPane('warn', WIZARD.BLOCKED_TITLE, wizardBlockedSub(['Signed in as user1']));
     setActions({ close: true, details: true });
+    signalUpdateAppReady();
     return;
   }
   canRunFix = true;
   showResultPane('ok', WIZARD.READY_TITLE, WIZARD.READY_SUB);
   setActions({ fix: true, shortcutOption: true, details: true });
+  signalUpdateAppReady();
   runEnvironmentScan({ quiet: true });
 }
 
@@ -2248,7 +2380,8 @@ document.addEventListener('keydown', (e) => {
     // of the feedback modal, and closing both would wipe the user's draft.
     if      (supportOverlay.classList.contains('show'))                    closeSupportReport();
     else if (document.getElementById('fbOverlay').classList.contains('show')) closeFeedback();
-    else if (exploreOverlay.classList.contains('show') || !aboutOverlay.hidden || !fixConfirmOverlay.hidden) { /* those dialogs handle their own Escape */ }
+    else if (exploreOverlay.classList.contains('show') || !aboutOverlay.hidden || !fixConfirmOverlay.hidden ||
+             !updateDiagOverlay.hidden || !updateInstallOverlay.hidden) { /* those dialogs handle their own Escape */ }
     else if (detailsOpen()) { e.preventDefault(); closeDetails(); }
   }
 });

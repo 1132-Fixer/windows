@@ -146,8 +146,32 @@
       z-index: 1;
       -webkit-app-region: no-drag;
     }
-    .update-banner.visible { display: flex; }
-    .ub-msg { flex: 1; line-height: 1.4; }
+    .update-banner.visible { display: flex; flex-wrap: wrap; }
+    .update-banner[data-tone="warning"] { border-color: var(--warning-bd); background: var(--warning-bg); }
+    .update-banner[data-tone="success"] { border-color: var(--success-bd); background: var(--success-bg); }
+    .update-banner.quiet { color: var(--muted); }
+    .ub-msg { flex: 1 1 200px; line-height: 1.4; }
+    .ub-actions { display: flex; flex-wrap: wrap; gap: var(--s-2); justify-content: flex-end; }
+    .ub-actions:empty { display: none; }
+    /* Installing / restarting notice and the diagnostics dialog reuse the
+       confirm-dialog surface so nothing new is invented visually. */
+    .update-install-overlay .fix-confirm-dialog { text-align: center; }
+    .update-install-spinner {
+      width: 28px; height: 28px; margin: 0 auto var(--s-3);
+      border-radius: 50%;
+      border: 3px solid var(--border-strong);
+      border-top-color: var(--accent);
+      animation: update-spin 1s linear infinite;
+    }
+    @keyframes update-spin { to { transform: rotate(360deg); } }
+    .update-diag-dialog { width: min(460px, 100%); }
+    .update-diag-text {
+      max-height: 200px; overflow: auto; margin: 0 0 var(--s-4);
+      padding: var(--s-3); border-radius: var(--r-sm);
+      background: var(--bg); border: 1px solid var(--border);
+      color: var(--muted); font: 12px/1.5 Consolas, 'Cascadia Mono', monospace;
+      white-space: pre-wrap; word-break: break-word; user-select: text;
+    }
     .ub-btn {
       padding: 8px 14px;
       border-radius: var(--r-sm);
@@ -1483,13 +1507,46 @@
     </div>
   </header>
 
-  <!-- Update banner — hidden unless the auto-updater has news. -->
+  <!-- Update banner — hidden unless the auto-updater has news. Driven by
+       'update-status' (src/main/updater.js) through ui-state.js
+       updateBannerView(); the buttons are the failure-recovery actions. -->
   <div class="update-banner" id="updateBanner" role="status" aria-live="polite">
     <div class="ub-progress" id="ubProgress" style="display:none;"><div class="ub-progress-fill" id="ubProgressFill"></div></div>
     <span class="ub-msg" id="ubMsg"></span>
-    <button class="ub-btn primary" id="ubRestart" style="display:none;">Restart now</button>
-    <button class="ub-btn primary" id="ubDownload" style="display:none;">Download update</button>
-    <button class="ub-btn" id="ubLater" style="display:none;">After I'm done</button>
+    <div class="ub-actions">
+      <button class="ub-btn primary" id="ubRestart" style="display:none;">Restart now</button>
+      <button class="ub-btn primary" id="ubRetry" style="display:none;">Retry update</button>
+      <button class="ub-btn primary" id="ubDownload" style="display:none;">Download update</button>
+      <button class="ub-btn primary" id="ubOk" style="display:none;">OK</button>
+      <button class="ub-btn" id="ubLater" style="display:none;">After I'm done</button>
+      <button class="ub-btn" id="ubContinue" style="display:none;">Continue with current version</button>
+      <button class="ub-btn" id="ubDiag" style="display:none;">View diagnostic details</button>
+    </div>
+  </div>
+
+  <!-- Shown while the verified update is being installed and the window is
+       about to close. Blocking on purpose: the next thing the user sees is
+       the app reopening by itself. -->
+  <div class="fix-confirm-overlay update-install-overlay" id="updateInstallOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="updateInstallTitle" aria-describedby="updateInstallBody">
+    <div class="fix-confirm-dialog">
+      <div class="update-install-spinner" aria-hidden="true"></div>
+      <h2 id="updateInstallTitle">Installing update</h2>
+      <p id="updateInstallBody"></p>
+    </div>
+  </div>
+
+  <!-- Sanitized diagnostics for a failed update. Technical detail lives
+       here and in the updater log, never in the banner. -->
+  <div class="fix-confirm-overlay" id="updateDiagOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="updateDiagTitle">
+    <div class="fix-confirm-dialog update-diag-dialog">
+      <h2 id="updateDiagTitle">Update diagnostic details</h2>
+      <p id="updateDiagNote"></p>
+      <pre class="update-diag-text" id="updateDiagText" tabindex="0"></pre>
+      <div class="fix-confirm-actions">
+        <button type="button" class="btn" id="updateDiagCopy">Copy details</button>
+        <button type="button" class="btn btn-primary" id="updateDiagClose">Close</button>
+      </div>
+    </div>
   </div>
 
   <div class="main" role="main">

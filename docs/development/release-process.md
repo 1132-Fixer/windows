@@ -202,20 +202,30 @@ bucket, and exhausting it must not red a release that has already shipped.
 ### 10. Updater metadata
 
 `latest.yml` carries the version, the installer filename, its SHA-512, and its
-size. `electron-updater` on the client compares the downloaded installer against
-that SHA-512. The feed `main` publishes to is this repository:
-`https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml`.
-**No shipped binary polls it yet** — v5.6.0 installs poll the
+size. The client re-hashes the downloaded installer against that SHA-512 and
+size before it will install it. The feed is this repository:
+`https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml`;
+every install from v6.1.0 on polls it (v5.6.0 installs poll the
 `botify-network.com` broker and `<=5.5.1` installs poll the old Releases repo,
 because the feed is fixed by `build.publish` in the commit each build came
-from. `tools/updater-channel-smoke.js` asserts that file's `version` equals
+from). `tools/updater-channel-smoke.js` asserts that file's `version` equals
 `package.json`, and that the broker has not diverged from it. See
 [`updater-channel.md`](updater-channel.md).
 
+`scripts/finalize-update-metadata.mjs` runs right after the build, before any
+checksum or release step. It strips the `isAdminRightsRequired: true` flag
+electron-builder writes for per-machine installers — this package ships no
+`resources/elevate.exe`, and with the flag present the 6.3.1–6.3.3 clients
+tried to run that missing helper and never installed anything — and it fails
+the run if `latest.yml`'s version, installer name, size or SHA-512 disagree
+with the bytes in `dist/` or with the tag.
+
 `scripts/validate-release-assets.mjs` then re-reads the published release from
 the GitHub API and confirms every filename referenced by `latest.yml` resolves
-to an attached asset — catching the case where the metadata promises a file the
-release does not actually carry.
+to an attached asset, that the flag is absent, that the version equals the tag,
+and that the uploaded installer hashes to the SHA-512 in `latest.yml` at the
+recorded size — catching a release whose metadata and binary disagree, or a
+draft that would serve stale metadata.
 
 Differential (blockmap) downloads are disabled in the client
 (`autoUpdater.disableDifferentialDownload = true`) after repeated field reports
@@ -280,6 +290,16 @@ git push origin v5.6.1
    update channel, and its failures are not to be worked around by loosening it.
 5. After the run completes, confirm on the Releases page: both `.exe` assets,
    `checksums-sha256.txt`, `latest.yml`, `signature-state.json`.
+6. Confirm the published `latest.yml` carries no `isAdminRightsRequired` line
+   and that its `version` is the tag (the "Validate published release assets"
+   step fails otherwise). A release is not done until that step is green.
+
+The version is bumped in exactly one place, `package.json` (`npm version` or
+`scripts/bump-version.js`); the packaged executable, `latest.yml`, the
+installer filename and the Add/Remove entry all derive from it. Never publish
+a draft or prerelease to stable users: `action-gh-release` runs with
+`draft: false` and `make_latest: true`, and a prerelease tag (`v6.4.0-rc.1`)
+produces a `latest.yml` that stable clients refuse.
 
 ## Rolling back
 
