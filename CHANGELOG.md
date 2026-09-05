@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — inactivity warning and automatic exit
+
+- After 30 seconds without use, 1132 Fixer shows **Closing soon** — an
+  hourglass whose sand follows the time left, *1132 Fixer will close in 30
+  seconds because it hasn’t been used.*, a live countdown, **Keep open**
+  (primary; also Enter, Space and Escape) and **Close now**. After another
+  30 seconds without use it closes through the normal shutdown path (reason
+  `inactive_exit`). Mouse, click, keyboard, touch, pen, wheel, scroll,
+  window focus and any application command reset the timer; mouse movement
+  is throttled before it crosses the bridge; background events (update
+  status, repair log, timers) are not activity and are rejected at the IPC
+  boundary.
+- The timer is authoritative in the main process (`src/main/inactivity.js`)
+  and reads a monotonic clock — the countdown is elapsed time, never a
+  tick count. One inactivity timer and one countdown timer exist at any
+  moment; a renderer reload re-pulls the live state; sleep and session
+  lock pause the clock and the real elapsed time is evaluated on resume
+  (warning first with a full countdown, never an immediate exit).
+- Critical operations are tracked in one registry
+  (`src/main/critical-ops.js`): the update lifecycle from checking through
+  restarting **and a verified update waiting to install**, a running
+  repair, shortcut creation, Zoom launch and validation, the Zoom
+  installer, an elevated relaunch, and blocking native dialogs. While any
+  is active the warning is suspended; when it ends the timer starts
+  fresh. The inactivity exit can never override an updater restart, and a
+  relaunched build starts its own fresh timer only after it reports ready.
+- Tests: `tools/inactivity-smoke.js` (fake clock: timing, activity kinds,
+  duplicate timers, critical operations, update lifecycle, reload, sleep,
+  duplicate shutdown, wiring) in `npm test`;
+  `tools/packaged-inactivity-acceptance.js` runs the real packaged binary
+  with real elapsed time (timeline, reopen, keyboard, reduced motion,
+  100/125/150 % scaling, update-ready suspension).
+
 ### Fixed — auto-update closed the app and never installed (6.3.1 – 6.3.3)
 
 - **Root cause.** electron-builder writes `isAdminRightsRequired: true` into

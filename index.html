@@ -165,6 +165,33 @@
     }
     @keyframes update-spin { to { transform: rotate(360deg); } }
     .update-diag-dialog { width: min(460px, 100%); }
+    /* Inactivity warning — same dialog surface, centered, fits 440x520 at
+       150 % scaling without scrolling. The hourglass is drawn from tokens
+       (glass = border, sand = accent); the only motion is the sand stream
+       and a 250 ms level transition, both removed under reduced motion. */
+    .idle-overlay { z-index: 10001; }
+    .idle-dialog { width: min(360px, 100%); text-align: center; padding: var(--s-5) var(--s-5) var(--s-4); }
+    .idle-dialog h2 { font-size: 18px; line-height: 24px; }
+    .idle-dialog p { margin: var(--s-2) 0 0; }
+    .idle-hourglass { width: 48px; height: 66px; margin: 0 auto var(--s-3); }
+    .idle-hourglass svg { width: 100%; height: 100%; display: block; }
+    .idle-glass { fill: var(--panel-2); stroke: var(--border-strong); stroke-width: 2; stroke-linejoin: round; }
+    .idle-cap { fill: var(--border-strong); }
+    .idle-sand { fill: var(--accent); }
+    #idleTopSand, #idleBottomSand { transition: y 250ms linear, height 250ms linear; }
+    .idle-stream { stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 2 4; animation: idle-stream 900ms linear infinite; }
+    @keyframes idle-stream { to { stroke-dashoffset: -6; } }
+    .idle-countdown { font-size: 28px; line-height: 32px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); margin-top: var(--s-3) !important; }
+    .idle-actions { justify-content: center; margin-top: var(--s-4); }
+    .idle-actions .btn { min-width: 120px; }
+    @media (prefers-reduced-motion: reduce) {
+      .idle-stream { animation: none; }
+      #idleTopSand, #idleBottomSand { transition: none; }
+    }
+    @media (max-height: 560px) {
+      .idle-hourglass { width: 36px; height: 50px; }
+      .idle-countdown { font-size: 22px; line-height: 26px; }
+    }
     .update-diag-text {
       max-height: 200px; overflow: auto; margin: 0 0 var(--s-4);
       padding: var(--s-3); border-radius: var(--r-sm);
@@ -1498,6 +1525,37 @@
   <!-- Shown while the verified update is being installed and the window is
        about to close. Blocking on purpose: the next thing the user sees is
        the app reopening by itself. -->
+  <!-- Inactivity warning (src/main/inactivity.js). Shown after 30 s without
+       use; the main-process countdown is mirrored here, sand level follows
+       the time left. Focus stays inside; Escape, Enter and Space are
+       "Keep open"; reduced motion stops the falling sand. -->
+  <div class="fix-confirm-overlay idle-overlay" id="idleOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="idleTitle" aria-describedby="idleBody">
+    <div class="fix-confirm-dialog idle-dialog">
+      <div class="idle-hourglass" id="idleHourglass" role="img" aria-label="Hourglass showing the time left">
+        <svg viewBox="0 0 64 88" aria-hidden="true" focusable="false">
+          <defs>
+            <clipPath id="idleTopClip"><rect id="idleTopSand" x="14" y="16" width="36" height="24"/></clipPath>
+            <clipPath id="idleBottomClip"><rect id="idleBottomSand" x="14" y="72" width="36" height="0"/></clipPath>
+          </defs>
+          <path class="idle-glass" d="M14 8h36v10c0 10-8 18-14 24 6 6 14 14 14 24v12H14V66c0-10 8-18 14-24-6-6-14-14-14-24V8z"/>
+          <g clip-path="url(#idleTopClip)"><path class="idle-sand" d="M16 14h32v6c0 9-7 16-12 21h-8C23 36 16 29 16 20v-6z"/></g>
+          <g clip-path="url(#idleBottomClip)"><path class="idle-sand" d="M16 74h32v-6c0-9-7-16-12-21h-8C23 52 16 59 16 68v6z"/></g>
+          <line class="idle-stream" x1="32" y1="42" x2="32" y2="70"/>
+          <rect class="idle-cap" x="10" y="4" width="44" height="6" rx="2"/>
+          <rect class="idle-cap" x="10" y="78" width="44" height="6" rx="2"/>
+        </svg>
+      </div>
+      <h2 id="idleTitle">Closing soon</h2>
+      <p id="idleBody">1132 Fixer will close in 30 seconds because it hasn’t been used.</p>
+      <p class="idle-countdown" id="idleCountdown" aria-hidden="true">30 seconds</p>
+      <p class="visually-hidden" id="idleAnnounce" role="status" aria-live="polite" aria-atomic="true"></p>
+      <div class="fix-confirm-actions idle-actions">
+        <button type="button" class="btn" id="idleCloseBtn">Close now</button>
+        <button type="button" class="btn btn-primary" id="idleKeepBtn">Keep open</button>
+      </div>
+    </div>
+  </div>
+
   <div class="fix-confirm-overlay update-install-overlay" id="updateInstallOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="updateInstallTitle" aria-describedby="updateInstallBody">
     <div class="fix-confirm-dialog">
       <div class="update-install-spinner" aria-hidden="true"></div>

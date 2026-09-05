@@ -1394,6 +1394,167 @@ ubLater.addEventListener('click', () => {
   window.electronAPI.deferUpdate();
 });
 
+// ============================================================
+// Inactivity warning — mirrors main-process 'inactivity-status' events
+// (src/main/inactivity.js). Main owns the timer and the exit; this reports
+// real user input, shows the countdown from the monotonic clock, and
+// offers Keep open / Close now. Nothing here can close the app by itself.
+// ============================================================
+const idleOverlay   = document.getElementById('idleOverlay');
+const idleTitle     = document.getElementById('idleTitle');
+const idleBody      = document.getElementById('idleBody');
+const idleCountdown = document.getElementById('idleCountdown');
+const idleAnnounce  = document.getElementById('idleAnnounce');
+const idleKeepBtn   = document.getElementById('idleKeepBtn');
+const idleCloseBtn  = document.getElementById('idleCloseBtn');
+const idleTopSand   = document.getElementById('idleTopSand');
+const idleBottomSand= document.getElementById('idleBottomSand');
+const INACTIVITY_COPY = typeof INACTIVITY !== 'undefined' ? INACTIVITY : {};
+const IDLE_ANNOUNCE_AT = new Set([30, 20, 10, 5, 3, 2, 1]);
+
+let idleDeadline = 0;          // performance.now() at which main will exit
+let idleTotalMs = 30000;
+let idleTicker = null;
+let idleLastShown = -1;
+let idleLastAnnounced = -1;
+let idleReturnFocus = null;
+let idleExiting = false;
+
+function idleSetCopy() {
+  if (INACTIVITY_COPY.TITLE) idleTitle.textContent = INACTIVITY_COPY.TITLE;
+  if (INACTIVITY_COPY.BODY) idleBody.textContent = INACTIVITY_COPY.BODY;
+  if (INACTIVITY_COPY.KEEP_OPEN) idleKeepBtn.textContent = INACTIVITY_COPY.KEEP_OPEN;
+  if (INACTIVITY_COPY.CLOSE_NOW) idleCloseBtn.textContent = INACTIVITY_COPY.CLOSE_NOW;
+  idleOverlay.setAttribute('aria-label', INACTIVITY_COPY.ARIA_DIALOG || 'Closing soon');
+}
+
+// Elapsed time from performance.now(), never "one tick equals one second".
+function idleRender() {
+  const remainingMs = Math.max(0, idleDeadline - performance.now());
+  const seconds = Math.ceil(remainingMs / 1000);
+  const frac = idleTotalMs > 0 ? Math.max(0, Math.min(1, remainingMs / idleTotalMs)) : 0;
+  // Sand: top level = time left, bottom level = time elapsed.
+  const topH = Math.round(24 * frac * 100) / 100;
+  idleTopSand.setAttribute('y', String(16 + (24 - topH)));
+  idleTopSand.setAttribute('height', String(topH));
+  const botH = Math.round(24 * (1 - frac) * 100) / 100;
+  idleBottomSand.setAttribute('y', String(72 - botH));
+  idleBottomSand.setAttribute('height', String(botH));
+  if (seconds !== idleLastShown) {
+    idleLastShown = seconds;
+    idleCountdown.textContent = seconds === 1 ? (INACTIVITY_COPY.COUNTDOWN_ONE || '1 second') : String(INACTIVITY_COPY.COUNTDOWN || '{s} seconds').replace('{s}', String(seconds));
+    if (IDLE_ANNOUNCE_AT.has(seconds) && idleLastAnnounced !== seconds) {
+      idleLastAnnounced = seconds;
+      idleAnnounce.textContent = String(INACTIVITY_COPY.ANNOUNCE || 'Closing in {s} seconds').replace('{s}', String(seconds));
+    }
+  }
+}
+
+function idleShow(remainingMs, totalMs) {
+  idleSetCopy();
+  idleTotalMs = totalMs || 30000;
+  idleDeadline = performance.now() + Math.max(0, remainingMs);
+  idleLastShown = -1;
+  idleLastAnnounced = -1;
+  idleAnnounce.textContent = '';
+  idleRender();
+  if (idleOverlay.hidden) {
+    idleReturnFocus = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+    idleOverlay.hidden = false;
+    idleKeepBtn.focus();
+  }
+  if (!idleTicker) idleTicker = setInterval(idleRender, 250);
+}
+
+function idleHide() {
+  if (idleTicker) { clearInterval(idleTicker); idleTicker = null; }
+  if (idleOverlay.hidden) return;
+  idleOverlay.hidden = true;
+  idleAnnounce.textContent = '';
+  if (idleReturnFocus && typeof idleReturnFocus.focus === 'function' && document.contains(idleReturnFocus)) idleReturnFocus.focus();
+  idleReturnFocus = null;
+}
+
+function handleInactivityStatus(data) {
+  const d = data && typeof data === 'object' ? data : {};
+  if (d.state === 'EXITING') {
+    idleExiting = true;
+    if (idleTicker) { clearInterval(idleTicker); idleTicker = null; }
+    idleCountdown.textContent = INACTIVITY_COPY.COUNTDOWN_ONE ? '0 seconds' : '0';
+    idleKeepBtn.disabled = true;
+    idleCloseBtn.disabled = true;
+    return;
+  }
+  if (d.state === 'INACTIVE_WARNING' && typeof d.remainingMs === 'number') {
+    idleShow(d.remainingMs, d.totalMs ? d.totalMs - 30000 : 30000);
+    return;
+  }
+  idleHide();
+}
+
+// Real user input only. High-frequency events are throttled before they
+// cross the bridge; discrete events go through at most every 250 ms.
+// Internal updates (update-status, fix-log, timers) never call this.
+const IDLE_MOVE_THROTTLE_MS = 1000;
+const IDLE_DISCRETE_THROTTLE_MS = 250;
+let idleLastMoveSent = 0;
+let idleLastDiscreteSent = 0;
+function reportActivity(kind, discrete) {
+  if (idleExiting) return;
+  const t = performance.now();
+  if (discrete) {
+    if (t - idleLastDiscreteSent < IDLE_DISCRETE_THROTTLE_MS) return;
+    idleLastDiscreteSent = t;
+  } else {
+    if (t - idleLastMoveSent < IDLE_MOVE_THROTTLE_MS) return;
+    idleLastMoveSent = t;
+  }
+  try { window.electronAPI.reportActivity(kind).catch(() => {}); } catch (_) { /* bridge missing */ }
+}
+function pointerKind(event) {
+  if (event && event.pointerType === 'touch') return 'touch';
+  if (event && event.pointerType === 'pen') return 'pen';
+  return null;
+}
+window.addEventListener('pointermove', (e) => reportActivity(pointerKind(e) || 'pointermove', false), { capture: true, passive: true });
+window.addEventListener('pointerdown', (e) => reportActivity(pointerKind(e) || 'pointerdown', true), { capture: true, passive: true });
+window.addEventListener('keydown', () => reportActivity('keydown', true), { capture: true });
+window.addEventListener('wheel', () => reportActivity('wheel', false), { capture: true, passive: true });
+window.addEventListener('scroll', () => reportActivity('scroll', false), { capture: true, passive: true });
+window.addEventListener('touchstart', () => reportActivity('touch', true), { capture: true, passive: true });
+window.addEventListener('focus', () => reportActivity('focus', true));
+
+idleKeepBtn.addEventListener('click', () => {
+  idleHide();
+  try { window.electronAPI.inactivityKeepOpen(); } catch (_) { /* bridge missing */ }
+});
+idleCloseBtn.addEventListener('click', () => {
+  idleKeepBtn.disabled = true;
+  idleCloseBtn.disabled = true;
+  try { window.electronAPI.inactivityCloseNow(); } catch (_) { /* bridge missing */ }
+});
+idleOverlay.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    idleKeepBtn.click();
+    return;
+  }
+  if ((event.key === 'Enter' || event.key === ' ') && document.activeElement !== idleCloseBtn) {
+    event.preventDefault();
+    idleKeepBtn.click();
+    return;
+  }
+  if (event.key === 'Tab') {
+    // Focus stays on the two actions.
+    const order = [idleCloseBtn, idleKeepBtn];
+    const i = order.indexOf(document.activeElement);
+    const next = event.shiftKey ? (i <= 0 ? order.length - 1 : i - 1) : (i === -1 || i === order.length - 1 ? 0 : i + 1);
+    event.preventDefault();
+    order[next].focus();
+  }
+});
+
 // Diagnostics dialog: sanitized state, reason, paths and the last updater
 // log entries. Technical, but never a raw library exception in the banner.
 function formatUpdateDiagnostics(d) {
@@ -1529,6 +1690,12 @@ window.addEventListener('DOMContentLoaded', async () => {
   // recovery banner) is never missed.
   if (typeof api.updateStatus === 'function') {
     api.updateStatus().then(handleUpdateStatus).catch(() => {});
+  }
+  // Inactivity: the main-process timer survives a renderer reload; pull the
+  // current state so a warning in progress is shown again at once.
+  if (typeof api.onInactivityStatus === 'function') {
+    api.onInactivityStatus(handleInactivityStatus);
+    api.inactivityStatus().then(handleInactivityStatus).catch(() => {});
   }
 
   // Installer exited — run the promised read-only re-check automatically.
@@ -2339,7 +2506,7 @@ document.addEventListener('keydown', (e) => {
     if      (supportOverlay.classList.contains('show'))                    closeSupportReport();
     else if (document.getElementById('fbOverlay').classList.contains('show')) closeFeedback();
     else if (exploreOverlay.classList.contains('show') || !aboutOverlay.hidden || !fixConfirmOverlay.hidden ||
-             !updateDiagOverlay.hidden || !updateInstallOverlay.hidden) { /* those dialogs handle their own Escape */ }
+             !updateDiagOverlay.hidden || !updateInstallOverlay.hidden || !idleOverlay.hidden) { /* those dialogs handle their own Escape */ }
     else if (detailsOpen()) { e.preventDefault(); closeDetails(); }
   }
 });

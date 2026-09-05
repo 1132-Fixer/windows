@@ -483,9 +483,26 @@ const UPDATE = {
   }
 };
 
+// ------------------------------------------------------------
+// Inactivity warning. Shown after 30 s without use; the app closes 30 s
+// later unless the user does something. {s} is the live seconds value.
+// ------------------------------------------------------------
+const INACTIVITY = {
+  TITLE: 'Closing soon',
+  BODY: '1132 Fixer will close in 30 seconds because it hasn’t been used.',
+  COUNTDOWN: '{s} seconds',
+  COUNTDOWN_ONE: '1 second',
+  ANNOUNCE: 'Closing in {s} seconds',
+  KEEP_OPEN: 'Keep open',
+  CLOSE_NOW: 'Close now',
+  ARIA_DIALOG: 'Closing soon. 1132 Fixer will close because it hasn’t been used.',
+  ARIA_HOURGLASS: 'Hourglass showing the time left'
+};
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     UPDATE,
+    INACTIVITY,
     CHECK_ORDER,
     FRIENDLY_ERRORS, friendlyError, unexpectedFixFailure, scanFailureMessage,
     shortcutFailureMessage, HKU_STATES, FRAME_SERVER_STATES, describeHku,

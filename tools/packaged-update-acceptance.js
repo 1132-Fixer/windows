@@ -321,6 +321,13 @@ function startFeed(pair) {
   const stillRunning = runningInstances().some((p) => p.pid === aFacts.pid);
   (stillRunning ? passed : failed)('update.no-exit-before-ready', stillRunning ? 'A still running at ready' : 'A exited before approval');
   if (!readyWait.ok) { await app.close().catch(() => {}); server.close(); return finish(); }
+  // A verified update waiting to install is a critical operation: the
+  // inactivity hourglass must not appear, and only the updater may close
+  // the app. Defer the countdown, sit idle past the 30 s warning point.
+  await page.click('#ubLater').catch(() => {});
+  await sleep(36000);
+  const idle = await page.evaluate(() => { const o = document.getElementById('idleOverlay'); return { visible: !!o && !o.hidden, banner: (document.getElementById('ubMsg') || {}).textContent || '' }; }).catch(() => ({ visible: null }));
+  (idle.visible === false && runningInstances().some((p) => p.pid === aFacts.pid) ? passed : failed)('update.no-inactivity-exit-while-ready', idle.visible === false ? `no hourglass after 36 s idle with the update ready ("${idle.banner}")` : `hourglass visible=${idle.visible}`);
 
   // ---- 4. approve the restart
   const exitPromise = new Promise((resolve) => { app.process().once('exit', (code) => resolve({ code, at: Date.now() })); });

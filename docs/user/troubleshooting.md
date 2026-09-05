@@ -15,6 +15,8 @@
 | 1132 Fixer closed during an update and did not reopen | Open it from the Start Menu or desktop shortcut. It reports whether the update was installed. Versions 6.3.1 to 6.3.3 have a known defect that closes the app without installing; install the newest release once from the Releases page. |
 | After an update the old version opens | Open 1132 Fixer once; it detects that the previous version is still running and offers **Retry update**. If it keeps happening, uninstall from Windows Settings and install the newest release from the Releases page. |
 
+| 1132 Fixer closed by itself | After 30 seconds without use it shows **Closing soon** with a 30-second countdown; after that it closes to free the computer. Move the mouse, press a key, or press **Keep open** to keep it. It never closes while a repair or an update is running. |
+
 ## Where updates are recorded
 
 The update log is `%APPDATA%\1132-fixer\logs\updater.log`. It survives an

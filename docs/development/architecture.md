@@ -31,7 +31,9 @@ main.js + src/main/*         privileged Windows work
 | Cooperative cancel | `src/main/fix-cancel.js` |
 | Update lifecycle: state machine, verification, install handoff, relaunch validation, retry policy | `src/main/updater.js` |
 | Sanitized updater log (`%APPDATA%\1132-fixer\logs\updater.log`) | `src/main/updater-log.js` |
-| Shutdown reasons (`user_exit`, `update_restart`, …) | `src/main/shutdown.js` |
+| Shutdown reasons (`user_exit`, `inactive_exit`, `update_restart`, …) | `src/main/shutdown.js` |
+| Inactivity warning and automatic exit (authoritative main-process timer, monotonic clock) | `src/main/inactivity.js` |
+| Critical-operation registry (what suspends the inactivity exit) | `src/main/critical-ops.js` |
 | Silent-update relaunch (`--fixer-relaunch`) | `build/installer.nsh` |
 | Release metadata finalizer (strips `isAdminRightsRequired`, verifies `latest.yml`) | `scripts/finalize-update-metadata.mjs` |
 | Config / updater feed constants | `src/main/config.js` |
