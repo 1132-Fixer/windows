@@ -540,6 +540,9 @@ function startFeed(pair) {
 })().catch((err) => {
   failed('driver', `threw: ${err && err.stack || err}`);
   finish();
+  // The feed server (and a Playwright connection) can keep the loop alive
+  // after a throw; a lingering driver holds the port for the next run.
+  setTimeout(() => process.exit(process.exitCode || 1), 200).unref();
 });
 
 function finish() {
