@@ -9,7 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.4.0] - 2026-09-05
 
-Verified on this branch's packaged builds by `tools/packaged-update-acceptance.js` on an elevated Windows 11 session (real per-machine A→B update, 6.9.0 → 6.9.1 test pair built from `main` `43e21fa`): 31 cases passed, 2 failed (both from a manual click on the test window and a 20 s soft-close timing, not the product), 4 not run (reboot check is manual). The rebuilt uninstaller exits 0; the previous one exited 2 on every start. `npm test` and the CI packaged acceptance are green on `main`. Releases remain unsigned.
+Verified on this branch's packaged builds by `tools/packaged-update-acceptance.js` on an elevated Windows 11 session: a real per-machine install of a local pre-release build followed by an in-place update to 6.4.0 through a local copy of the update feed. Four full runs on the release candidate passed every check except the handoff-notice check, which found the defect fixed below; a targeted re-check of that fix is recorded in the release notes. The rebuilt uninstaller exits 0 on every run; the 6.3.1–6.3.3 uninstaller exited 2 on every start. `npm test` and the CI packaged acceptance are green on `main`. Releases remain unsigned.
+### Fixed — the "Installing update" notice was not on screen before the handoff
+
+- After **Restart now** the app sent the *Installing update* notice to the
+  window and immediately started the installer. Starting a 118 MB unsigned
+  installer blocks the main process for several seconds while Windows scans
+  it, so the notice was often never painted: the window simply went quiet
+  and closed. The main process now waits (up to 1.5 s) until the renderer
+  confirms the notice is visible, logs `install.notice` with the wait, and
+  only then starts the installer. A renderer that cannot confirm never
+  blocks the update. Found by the packaged update acceptance's window
+  sampler (`tools/packaged-update-acceptance.js`), which now records the
+  notice through the app log and window captures instead of a remote probe
+  that the busy main process could stall.
 
 ### Fixed — uninstaller integrity
 

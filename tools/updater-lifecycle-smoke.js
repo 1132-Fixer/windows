@@ -90,6 +90,7 @@ function makeEnv(opts = {}) {
     hasUpdateConfig: opts.hasUpdateConfig || (() => opts.label !== 'nocfg'),
     spawnInstaller: opts.spawnInstaller || (async (file, args) => { spawnCalls.push({ file, args }); return { ok: true, pid: 4242 }; }),
     spawnInstallerSync: opts.spawnInstallerSync || ((file, args) => { spawnCalls.push({ file, args, sync: true }); return { ok: true, pid: 4343 }; }),
+    confirmNotice: opts.confirmNotice,
     readRegisteredInstallDir: opts.readRegisteredInstallDir || (async () => INSTALL_DIR),
     now: () => clock,
     setTimer: (fn, ms) => { const t = { fn, ms, cleared: false }; timers.push(t); return t; },
@@ -234,6 +235,35 @@ async function driveToReady(env, inst, info) {
     env.au.emit('update-available', { version: 'banana', files: [] });
     check(env.ctl.getState() === 'failed' && env.last().stage === 'metadata', 'live flow: bad metadata → failed(metadata)');
     check(env.shutdowns.length === 0, 'no shutdown on bad metadata');
+  }
+
+  console.log('updater-lifecycle-smoke: 5b. the handoff notice is confirmed on screen before the installer starts');
+  {
+    const order = [];
+    const env = makeEnv({
+      label: 'notice',
+      confirmNotice: async (ms) => { order.push('notice:' + ms); await new Promise((r) => setTimeout(r, 5)); return { shown: true, ms: 120 }; },
+      spawnInstaller: async (file, args) => { order.push('spawn'); return { ok: true, pid: 4242 }; }
+    });
+    const inst = makeInstaller(env.dir, `1132-Fixer-Setup-${TARGET}.exe`);
+    await driveToReady(env, inst);
+    const stateAtNotice = [];
+    env.ctl.on && env.ctl.on('state', (s) => stateAtNotice.push(s));
+    const r = await env.ctl.installNow('user');
+    check(r.ok === true, 'install proceeds');
+    check(order[0] === 'notice:1500' && order[1] === 'spawn', `renderer confirmation (1.5 s budget) is awaited before the installer spawn: ${order.join(' -> ')}`);
+    const logText = fs.readFileSync(env.log.file, 'utf8');
+    check(/"event":"install.notice".*"shown":true.*"ms":120/.test(logText), 'log records that the notice was shown and how long it took');
+    const envT = makeEnv({ label: 'notice-timeout', confirmNotice: async () => ({ shown: false, ms: 1500, reason: 'timeout' }) });
+    const instT = makeInstaller(envT.dir, `1132-Fixer-Setup-${TARGET}.exe`);
+    await driveToReady(envT, instT);
+    const rT = await envT.ctl.installNow('user');
+    check(rT.ok === true && envT.spawnCalls.length === 1, 'a renderer that never confirms does not block the install (timeout, then proceed)');
+    const envE = makeEnv({ label: 'notice-throws', confirmNotice: async () => { throw new Error('renderer gone'); } });
+    const instE = makeInstaller(envE.dir, `1132-Fixer-Setup-${TARGET}.exe`);
+    await driveToReady(envE, instE);
+    const rE = await envE.ctl.installNow('user');
+    check(rE.ok === true, 'a confirmation error is logged, never fatal');
   }
 
   console.log('updater-lifecycle-smoke: 6. checksum / integrity verification fails');
