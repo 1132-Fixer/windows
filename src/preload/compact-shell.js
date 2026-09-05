@@ -192,6 +192,10 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
 
     document.body.classList.add('compact-shell-enabled');
     appMark.src = 'assets/brand/app-mark.png';
+    // 96px export at 100%, 256px export at 125%/150% (same artwork), so the
+    // 80px mark stays sharp at every supported scale.
+    appMark.srcset = 'assets/brand/app-mark.png 96w, assets/logo-transparent.png 256w';
+    appMark.sizes = '80px';
     appMark.alt = '1132 Fixer';
 
     const style = document.createElement('style');

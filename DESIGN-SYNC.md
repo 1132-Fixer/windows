@@ -220,7 +220,7 @@ still govern macOS, the Chrome extension and the website.
 | Border | `border` `#2B3D57`, `border-strong` `#3B5578` | `--border`, `--border-strong` | recorded |
 | Radii | control 10 / card 14 / modal 18 / pill 999 | `--r-sm` / `--r-md` / `--r-lg` / `--r-pill` | recorded |
 | Spacing | 4 8 12 16 20 24 32 40 (`20`/`40` Explore + feedback dialogs only) | `--s-1` … `--s-8` | recorded |
-| Window | default 520×600, min 440×520, header 56, footer 48, content max 420 | `main.js` `compactWindowBounds`, `index.html` APP SHELL | recorded |
+| Window | default 520×600, min 440×520, header 56, footer 48, content max 420 | `main.js` `compactWindowBounds`, `index.html` APP SHELL — **header is 104 with an 80px mark since the landing rebalance (2026-09-05)**; `tokens/windows.json` still records 56 | divergence (design-system update pending) |
 | Typography | Segoe UI Variable stack, 14/400 body; screen title 24/32/700 | same | match |
 | Motion | 150–250 ms, reduced-motion honoured | transitions ≤ 250 ms, `prefers-reduced-motion` in `index.html` and the compact shell | match |
 
@@ -247,7 +247,7 @@ block in `index.html`, recorded in the design system as the Windows overlay
 ### Screen structure
 
 ```text
-┌ header 56px ── [Back]        ( mark )              [Exit] ─┐
+┌ header 104px ─ [Back]        ( mark 80px )         [Exit] ─┐
 │                                                            │
 │  main — one column, max 420px, optically centered          │
 │      Ready to fix Zoom                 24/32/700           │
@@ -260,9 +260,13 @@ block in `index.html`, recorded in the design system as the Windows overlay
 └ footer 48px ── v6.3.2  Independent project. …   Support Feedback About ┘
 ```
 
-- Header: `grid-template-columns: 1fr auto 1fr`, the product mark absolutely
-  centered against the full width, so Back (Details view only) and Exit never
-  move it. Header actions are quiet text (13/600 `--muted`, 32px min height,
+- Header (landing rebalance 2026-09-05): a 104px band on `--panel` with a
+  hairline divider; `grid-template-columns: 1fr auto 1fr` with
+  `place-items: center`, the product mark in the middle track (`grid-column: 2`,
+  `--mark-size` 80px, `object-fit: contain`, artwork ~78px tall) so it is
+  mathematically centered against the full width whatever Back (Details view
+  only) and Exit occupy — no absolute positioning or transforms. `srcset`
+  serves the 96px export at 100% and the 256px export at 125%/150%. Header actions are quiet text (13/600 `--muted`, 32px min height,
   hover fill, pressed `--surface-pressed`, `--focus-ring`).
 - Main: `.main` flex → `.workspace` column (`max-width: 420px`,
   `justify-content: center`, `padding-bottom: --s-6` for the optical lift).
@@ -278,8 +282,8 @@ block in `index.html`, recorded in the design system as the Windows overlay
   32px, 1px transparent border; hover fill + `--border`; pressed
   `--surface-pressed`; Lucide `chevron-right` 16px that rotates 90° while
   `aria-expanded="true"`. Never a filled button, never a bare link.
-- Footer: `min-height: 48px`, `border-top: 1px solid --border`, padding
-  `--s-1 --s-4`. Left group (`--s-2` gap): version 12/600 `--muted` + the exact
+- Footer: `min-height: 48px` (`--footer-h`), `--panel` surface,
+  `border-top: 1px solid --border`, padding `--s-1 --s-4`. Left group (`--s-2` gap): version 12/600 `--muted` + the exact
   independence line 12/16 `--muted` (contrast raised from `--dim`). Right group:
   Support · Feedback · About as `.footer-link` (12/600, 32px, hover fill,
   pressed, ring). The line stays on one row at 520px and may wrap to two rows
