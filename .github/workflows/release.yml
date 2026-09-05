@@ -139,7 +139,12 @@ jobs:
             $checksums += "$hash  $($file.Name)"
             Write-Host "$hash  $($file.Name)"
           }
-          $checksums | Out-File -FilePath dist/checksums-sha256.txt -Encoding utf8
+          # LF line endings, no BOM: Out-File writes CRLF on Windows, which makes
+          # `sha256sum -c checksums-sha256.txt` fail with "No such file" on every
+          # line (the filename carries a trailing \r). Format is the coreutils one:
+          # "<hex>  <name>\n". validate-release-assets.mjs checks the published file.
+          $text = ($checksums -join "`n") + "`n"
+          [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'dist/checksums-sha256.txt'), $text, [System.Text.UTF8Encoding]::new($false))
 
       # What actually ships, enumerated and checked against
       # build/package-allowlist.json. Fails on an unexpected executable,

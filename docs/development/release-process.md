@@ -130,7 +130,17 @@ notice. That is the current, documented state.
 ### 7. Checksums
 
 SHA-256 of every `dist/*.exe`, written to `checksums-sha256.txt` and attached to
-the release.
+the release, in coreutils format (`<hex>  <name>`, LF line endings, UTF-8
+without BOM) so it verifies as published:
+
+```bash
+sha256sum -c checksums-sha256.txt
+```
+
+`scripts/validate-release-assets.mjs` fails the release when the published
+file has a BOM, CRLF endings, a malformed line, or no line for a shipped
+`.exe`. Releases up to 6.3.3 were written CRLF by `Out-File`; verify those
+with `tr -d '\r' < checksums-sha256.txt | sha256sum -c -`.
 
 Scope of the guarantee: this detects corruption and truncation. It is **not**
 proof of origin. The checksum file is published on the same release as the
