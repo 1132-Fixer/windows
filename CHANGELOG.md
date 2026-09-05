@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — the "Installing update" notice was not on screen before the handoff
+
+- After **Restart now** the app sent the *Installing update* notice to the
+  window and immediately started the installer. Starting a 118 MB unsigned
+  installer blocks the main process for several seconds while Windows scans
+  it, so the notice was often never painted: the window simply went quiet
+  and closed. The main process now waits (up to 1.5 s) until the renderer
+  confirms the notice is visible, logs `install.notice` with the wait, and
+  only then starts the installer. A renderer that cannot confirm never
+  blocks the update. Found by the packaged update acceptance's window
+  sampler (`tools/packaged-update-acceptance.js`), which now records the
+  notice through the app log and window captures instead of a remote probe
+  that the busy main process could stall.
+
 ### Fixed — uninstaller integrity
 
 - **The uninstaller shipped in 6.3.1–6.3.3 fails its own integrity check.**

@@ -84,6 +84,12 @@ const MAX_AUTO_INSTALL_ATTEMPTS = 2;   // automatic countdown allowed below this
 const MAX_TOTAL_INSTALL_ATTEMPTS = 4;  // after this only the manual download remains
 const BACKOFF_MS = [0, 15 * 60 * 1000, 60 * 60 * 1000, 4 * 60 * 60 * 1000];
 const SPAWN_CONFIRM_MS = 5000;
+// How long the install waits for the renderer to confirm the blocking
+// "Installing update" notice is on screen before the main process starts
+// the installer. Starting a 118 MB unsigned installer blocks the main
+// process for several seconds (Windows scans it in CreateProcess); without
+// this wait the notice could be sent but never painted before the app exits.
+const NOTICE_CONFIRM_MS = 1500;
 const CHECK_TIMEOUT_MS = 30 * 1000;   // a check never sits in "Checking for updates" longer than this
 const PRODUCT_EXE = '1132 Fixer.exe';
 // Installer artifact: 1132-Fixer-Setup-<semver>[-<arch>].exe. The arch
@@ -322,6 +328,7 @@ function createUpdaterController(deps) {
     isBusy = () => false,
     hasUpdateConfig = () => true,
     spawnInstaller,
+    confirmNotice = async () => ({ shown: null, ms: 0 }),
     readRegisteredInstallDir = async () => null,
     hashFile = hashFileSha512,
     fs: fsImpl = fs,
@@ -691,6 +698,10 @@ function createUpdaterController(deps) {
     cancelCountdown();
     setState(STATES.INSTALLING, { stage: STAGES.PREPARE, reason: null });
     log.info('install.begin', { origin, target: target.version, relaunch, artifact: target.file.name, execPath, installDir, executionMode });
+    // The user must see the handoff notice before the process goes quiet.
+    let notice = { shown: null, ms: 0 };
+    try { notice = await confirmNotice(NOTICE_CONFIRM_MS); } catch (err) { notice = { shown: false, ms: 0, error: err && err.message }; }
+    log.info('install.notice', notice);
 
     if (executionMode !== 'installed') {
       handoffStarted = false;
