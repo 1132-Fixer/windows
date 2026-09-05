@@ -97,6 +97,30 @@ jobs:
       - name: Generate provenance
         run: node scripts/generate-provenance.mjs --dist dist
 
+      # The release checksum manifest, produced by the same generator and on
+      # the same runner image release.yml uses, then read back as bytes and
+      # verified with the standard tool without any preprocessing. Uploaded
+      # with the two executables so the published-shape file can be checked
+      # from a download, not only from the workspace. See
+      # scripts/generate-checksums.mjs and tools/release-checksums-smoke.js.
+      - name: Generate release checksum manifest
+        run: |
+          node scripts/generate-checksums.mjs --dist dist
+          node scripts/generate-checksums.mjs --verify --dist dist
+
+      - name: Verify checksum manifest with sha256sum
+        shell: bash
+        working-directory: dist
+        run: sha256sum -c checksums-sha256.txt
+
+      - name: Upload release checksum manifest
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: release-checksums
+          path: dist/checksums-sha256.txt
+          retention-days: 7
+
       - name: List build artifacts
         run: |
           echo "=== Build Output ==="

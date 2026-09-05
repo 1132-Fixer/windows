@@ -96,8 +96,8 @@ check(!relYml.includes(LEGACY_FEED_REPO), 'release.yml does not publish to the l
 // it. Out-File writes CRLF on Windows; 6.3.3 shipped that way.
 check(!/checksums-sha256\.txt[^\n]*\n?[^\n]*Out-File/.test(relYml) && !/Out-File[^\n]*checksums-sha256\.txt/.test(relYml),
   'release.yml does not write checksums-sha256.txt with Out-File (CRLF)');
-check(/WriteAllText\([^\n]*checksums-sha256\.txt[^\n]*UTF8Encoding\]::new\(\$false\)/.test(relYml),
-  'release.yml writes checksums-sha256.txt as LF UTF-8 without BOM');
+check(relYml.includes('node scripts/generate-checksums.mjs --dist dist') && relYml.includes('node scripts/generate-checksums.mjs --verify --dist dist'),
+  'release.yml writes checksums-sha256.txt through scripts/generate-checksums.mjs (LF, UTF-8, no BOM) and verifies it');
 const validator = fs.readFileSync(path.join(ROOT, 'scripts', 'validate-release-assets.mjs'), 'utf8');
 check(validator.includes("text.includes('\\r')") && validator.includes('checksums-sha256.txt uses CRLF'),
   'validate-release-assets.mjs rejects a CRLF checksums file on the published release');

@@ -11,8 +11,11 @@ node feedback-proxy/test.js
 `npm test` is the unit and integration smoke chain in `package.json`. It covers
 copy, identity, independence wording, brand placement, Fix-now routing,
 cancellation, profile safety, Electron isolation, the updater channel, the
-screen action map (`tools/screen-actions-smoke.js`) and the plain-English
-Details model (`tools/details-view-smoke.js`).
+screen action map (`tools/screen-actions-smoke.js`), the plain-English
+Details model (`tools/details-view-smoke.js`) and the release checksum
+manifest bytes (`tools/release-checksums-smoke.js`: no CR, no BOM, final LF,
+sorted, hashes match, `sha256sum -c` passes unmodified; needs `sha256sum` —
+coreutils or Git for Windows).
 
 ## Rendered screens (headless Chromium)
 
