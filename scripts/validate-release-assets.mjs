@@ -123,6 +123,39 @@ function extractReferencedFiles(yamlText) {
     }
   }
 
+  // checksums-sha256.txt must be usable as published: coreutils format
+  // ("<64 hex>  <name>", LF line endings, no BOM) and one line per shipped
+  // .exe, each naming an attached asset. A CRLF file (6.3.3 and earlier)
+  // fails `sha256sum -c` on every line because the filename carries a \r.
+  {
+    const a = assetByName.get('checksums-sha256.txt');
+    if (!a) {
+      fail('Missing checksums-sha256.txt');
+    } else {
+      let text = '';
+      try { text = await fetchText(a.url); } catch (e) { fail(`Could not download checksums-sha256.txt: ${e.message}`); }
+      if (text) {
+        if (text.charCodeAt(0) === 0xFEFF) fail('checksums-sha256.txt starts with a UTF-8 BOM');
+        else ok('checksums-sha256.txt has no BOM');
+        if (text.includes('\r')) fail('checksums-sha256.txt uses CRLF line endings (sha256sum -c cannot read it)');
+        else ok('checksums-sha256.txt uses LF line endings');
+        if (!text.endsWith('\n')) fail('checksums-sha256.txt does not end with a newline');
+        const lines = text.split('\n').filter(Boolean);
+        const named = new Set();
+        for (const line of lines) {
+          const m = /^([0-9a-f]{64})  (\S.*)$/.exec(line);
+          if (!m) { fail(`checksums-sha256.txt line is not "<sha256>  <name>": ${JSON.stringify(line)}`); continue; }
+          named.add(m[2]);
+          if (assetByName.has(m[2])) ok(`checksums-sha256.txt -> ${m[2]} resolves to a release asset`);
+          else fail(`checksums-sha256.txt names "${m[2]}" but no such asset is attached to ${tag}`);
+        }
+        for (const name of assetByName.keys()) {
+          if (name.endsWith('.exe') && !named.has(name)) fail(`checksums-sha256.txt has no line for ${name}`);
+        }
+      }
+    }
+  }
+
   if (errors.length) {
     console.error(`\n${errors.length} check(s) failed.`);
     process.exitCode = 1;

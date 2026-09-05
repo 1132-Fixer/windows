@@ -92,6 +92,15 @@ check(!/migrate by manual reinstall|manually reinstall/i.test(mig) || /not an ac
 check(/pinned/i.test(mig) && mig.includes('6.0.0') && /not[^.]*mirror|one-time|do not mirror/i.test(mig), 'migration doc describes v6.0.0 as a one-time pinned transition (not an every-release mirror)');
 const relYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
 check(!relYml.includes(LEGACY_FEED_REPO), 'release.yml does not publish to the legacy feed (docs must not claim it does)');
+// checksums-sha256.txt must be written LF / no BOM so `sha256sum -c` accepts
+// it. Out-File writes CRLF on Windows; 6.3.3 shipped that way.
+check(!/checksums-sha256\.txt[^\n]*\n?[^\n]*Out-File/.test(relYml) && !/Out-File[^\n]*checksums-sha256\.txt/.test(relYml),
+  'release.yml does not write checksums-sha256.txt with Out-File (CRLF)');
+check(relYml.includes('node scripts/generate-checksums.mjs --dist dist') && relYml.includes('node scripts/generate-checksums.mjs --verify --dist dist'),
+  'release.yml writes checksums-sha256.txt through scripts/generate-checksums.mjs (LF, UTF-8, no BOM) and verifies it');
+const validator = fs.readFileSync(path.join(ROOT, 'scripts', 'validate-release-assets.mjs'), 'utf8');
+check(validator.includes("text.includes('\\r')") && validator.includes('checksums-sha256.txt uses CRLF'),
+  'validate-release-assets.mjs rejects a CRLF checksums file on the published release');
 
 if (failures) { console.error(`release-identity-smoke: ${failures} FAIL`); process.exit(1); }
 console.log('release-identity-smoke: PASS');

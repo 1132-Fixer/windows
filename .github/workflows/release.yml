@@ -129,17 +129,23 @@ jobs:
 
           Write-Host "Build verification passed"
 
+      # checksums-sha256.txt in coreutils format — LF, UTF-8 without BOM,
+      # sorted, final LF — written by the repository's own generator and then
+      # read back as bytes. The former PowerShell step piped the list through a
+      # cmdlet that writes CRLF on Windows, so `sha256sum -c` failed on every
+      # line of the published manifest (releases up to 6.3.3). The same script
+      # runs in ci.yml on every push, and validate-release-assets.mjs checks
+      # the file as attached to the release.
       - name: Generate checksums
         shell: pwsh
         run: |
-          $files = Get-ChildItem -Path dist -Filter "*.exe"
-          $checksums = @()
-          foreach ($file in $files) {
-            $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash.ToLower()
-            $checksums += "$hash  $($file.Name)"
-            Write-Host "$hash  $($file.Name)"
-          }
-          $checksums | Out-File -FilePath dist/checksums-sha256.txt -Encoding utf8
+          node scripts/generate-checksums.mjs --dist dist
+          node scripts/generate-checksums.mjs --verify --dist dist
+
+      - name: Verify checksums with sha256sum
+        shell: bash
+        working-directory: dist
+        run: sha256sum -c checksums-sha256.txt
 
       # What actually ships, enumerated and checked against
       # build/package-allowlist.json. Fails on an unexpected executable,

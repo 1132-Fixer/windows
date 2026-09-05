@@ -31,6 +31,7 @@ main.js + src/main/*         privileged Windows work
 | Cooperative cancel | `src/main/fix-cancel.js` |
 | Config / updater feed constants | `src/main/config.js` |
 | Support HTTP client | `src/main/support-client.js` |
+| Release checksum manifest (generate + byte-level verify) | `scripts/generate-checksums.mjs` |
 | Compact presentation shell (state derivation, cancel, exit confirm, applies the screen gate) | `src/preload/compact-shell.js` |
 | Screen action map (which controls each screen may show) | `screen-actions.js` |
 | Details view model (plain-English checks, four status words) | `details-view.js` |

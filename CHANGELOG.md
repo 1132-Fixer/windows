@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `checksums-sha256.txt` on GitHub Releases was written with CRLF line endings (PowerShell `Out-File`), so `sha256sum -c checksums-sha256.txt` reported "No such file or directory" for every entry — the filename carried a trailing `\r`. Releases 6.3.3 and earlier are affected; verify those with `tr -d '\r' < checksums-sha256.txt | sha256sum -c -`. The manifest is now produced by a repository-owned generator, `scripts/generate-checksums.mjs` (coreutils format, LF, UTF-8 without BOM, sorted, final LF), read back as bytes by its `--verify` mode, and checked with `sha256sum -c` in both `ci.yml` and `release.yml`; `scripts/validate-release-assets.mjs` fails the release if the published file has a BOM, CRLF, a malformed line, or is missing a line for any shipped `.exe`. `tools/release-checksums-smoke.js` is the byte-level regression test with negative controls; `tools/release-identity-smoke.js` pins the workflow wiring.
+
 ## [6.3.3] - 2026-09-04
 
 Verified on the packaged build by `tools/packaged-acceptance.js` on the Windows CI runner at `main` `4d48efc` (85 cases passed, 0 failed, 0 not-run: launch, states, only each state's controls visible, the Details round trip, focus rings, target sizes, no scrollbars at 100/125/150 % scaling, second-instance guard, real **Fix now** run). Releases remain unsigned; Smart App Control in enforcement still blocks the app (see `docs/security/code-signing.md` §11).
