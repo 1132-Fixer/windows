@@ -56,6 +56,10 @@ const PORT = Number(argOf('--port', 47831));
 const KEEP = has('--keep');
 const DRY = has('--dry-run');
 const SCALE = Number(argOf('--scale', 1));
+// --quick-handoff: a short targeted confirmation of the install handoff only:
+// 5 s idle window instead of 66 s, and the run stops once the handoff
+// record and the notice evidence are in (no relaunch/reopen/exit checks).
+const QUICK = has('--quick-handoff');
 const PRODUCT_EXE = '1132 Fixer.exe';
 const USER_DATA = path.join(process.env.APPDATA || '', '1132-fixer');
 const UPDATER_LOG = path.join(USER_DATA, 'logs', 'updater.log');
@@ -494,14 +498,14 @@ function startFeed(pair) {
   let earlyExit = null;
   let pageClicks = [];
   { let done = false; exitPromise.then((e) => { earlyExit = e; done = true; });
-    while (!done && Date.now() - idleStart < 66000) { await sleep(1000); const c = await readClickLog(page); if (c) pageClicks = c; } }
+    while (!done && Date.now() - idleStart < (QUICK ? 5000 : 66000)) { await sleep(1000); const c = await readClickLog(page); if (c) pageClicks = c; } }
   const idle = earlyExit ? { visible: null } : await page.evaluate(() => { const o = document.getElementById('idleOverlay'); return { visible: !!o && !o.hidden, banner: (document.getElementById('ubMsg') || {}).textContent || '' }; }).catch(() => ({ visible: null }));
   const idleEvents = logEvents(logSince);
   const idleInstall = idleEvents.find((e) => e.event === 'install.begin');
   const foreign = pageClicks.filter((c) => !(report.driverClicks || []).some((d) => Math.abs(new Date(d.at) - new Date(c.at)) < 1500 && ('#' + c.id) === d.selector));
   report.pageClicks = pageClicks;
   (idle.visible === false && !earlyExit && runningInstances().some((p) => p.pid === aFacts.pid) ? passed : failed)('update.no-inactivity-exit-while-ready',
-    idle.visible === false && !earlyExit ? `no hourglass after 66 s idle with the update ready ("${idle.banner}"); ${pageClicks.length} page clicks, all from the driver`
+    idle.visible === false && !earlyExit ? `no hourglass after ${QUICK ? 5 : 66} s idle with the update ready ("${idle.banner}"); ${pageClicks.length} page clicks, all from the driver`
       : earlyExit ? `A exited ${earlyExit.at - idleStart} ms into the idle window (code ${earlyExit.code})${idleInstall ? `; install.begin origin=${idleInstall.origin}` : '; no install.begin logged'}; clicks not made by the driver: ${foreign.length ? foreign.map((c) => `${c.at} #${c.id} "${c.text}" trusted=${c.trusted} at ${c.x},${c.y}`).join('; ') : 'none recorded'}`
       : `hourglass visible=${idle.visible}`);
   (foreign.length === 0 ? passed : failed)('update.no-foreign-clicks', foreign.length ? `${foreign.length} click(s) reached the window that the driver did not make` : `every click on A came from the driver (${(report.driverClicks || []).length} synthetic clicks logged)`);
@@ -553,6 +557,12 @@ function startFeed(pair) {
   try { handoff = JSON.parse(fs.readFileSync(HANDOFF, 'utf8')); } catch (_) {}
   const handoffOk = handoff && (handoff.state === 'installer-started' || handoff.state === 'updated-pending-ready') && handoff.targetVersion === pair.b.version && handoff.installerPid;
   (handoffOk ? passed : failed)('update.handoff-record', handoff ? `state=${handoff.state} target=${handoff.targetVersion} installerPid=${handoff.installerPid} installDir=${handoff.installDir}` : 'no handoff record');
+
+  if (QUICK) {
+    notRun('quick-handoff', 'stopped after the handoff by --quick-handoff; relaunch, reopen, exit and record checks not run in this mode');
+    server.close();
+    return finish();
+  }
 
   // ---- 5. the installer applies B and relaunches it
   const relaunch = await waitFor(() => {
