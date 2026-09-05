@@ -68,7 +68,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // NSIS installers/uninstallers run taskkill through nsExec, which ends by
 // sending Ctrl+C to the console it inherited. Run them detached (no console)
 // and ignore a stray console break so the driver is not killed mid-step.
-process.on('SIGINT', () => console.log('  (ignoring console Ctrl+C event from a child installer)'));
+process.on('SIGINT', () => console.log('  (ignoring console Ctrl+C event from a child process)'));
+process.on('SIGBREAK', () => console.log('  (ignoring console Ctrl+Break event from a child process)'));
+process.on('SIGHUP', () => console.log('  (ignoring console close event)'));
 function runDetached(exe, args, timeoutMs) {
   return new Promise((resolve) => {
     let child;
@@ -311,6 +313,11 @@ function startFeed(pair) {
     passed('prep.uninstall-existing', 'no existing install');
   }
   for (const p of runningInstances()) { try { process.kill(p.pid); } catch (_) {} }
+  // Updater bookkeeping from a previous run must not leak into this one:
+  // update-state.json carries the per-target retry backoff (a successful
+  // 6.9.1 handoff would make a freshly installed 6.9.0 skip its check for
+  // an hour) and a stale handoff record would put A straight into recovery.
+  for (const f of [path.join(USER_DATA, 'update-state.json'), HANDOFF]) { try { fs.unlinkSync(f); console.log(`  cleared ${path.basename(f)}`); } catch (_) {} }
   // An interrupted uninstall can leave files behind with no Add/Remove
   // record; a fresh install would land on top of them. Clear them first.
   for (const dir of otherInstallDirs(null)) {
@@ -374,7 +381,10 @@ function startFeed(pair) {
   }).catch(() => '');
   const seen = [];
   let downloadClicked = false;
+  let aGone = null;
+  app.process().once('exit', (code) => { aGone = { code, at: Date.now() }; });
   const readyWait = await waitFor(async () => {
+    if (aGone) return null;
     const t = await bannerText();
     if (t && seen[seen.length - 1] !== t) { seen.push(t); console.log(`    banner: ${t}`); }
     if (/^Update available/.test(t) && !downloadClicked) {
@@ -385,7 +395,12 @@ function startFeed(pair) {
     if (/^Downloading update/.test(t) && !report.downloadShot) { report.downloadShot = true; await page.screenshot({ path: path.join(OUT, '02-A-downloading.png') }).catch(() => {}); }
     return /^Ready to restart/.test(t) ? t : null;
   }, 240000, 300);
-  (readyWait.ok ? passed : failed)('update.ready', readyWait.ok ? `"${readyWait.value}" after ${readyWait.ms} ms` : `never reached Ready to restart (last: "${seen[seen.length - 1] || ''}") after ${readyWait.ms} ms`, { bannerSequence: seen });
+  const aExitReason = aGone ? (logEvents(logSince).filter((e) => e.event === 'shutdown.start').pop() || {}).reason : null;
+  (readyWait.ok ? passed : failed)('update.ready', readyWait.ok ? `"${readyWait.value}" after ${readyWait.ms} ms` : aGone ? `A exited (code ${aGone.code}, shutdown reason ${aExitReason || 'unknown'}) before Ready to restart; last banner "${seen[seen.length - 1] || ''}"` : `never reached Ready to restart (last: "${seen[seen.length - 1] || ''}") after ${readyWait.ms} ms`, { bannerSequence: seen });
+  if (!readyWait.ok) {
+    const chk = logEvents(logSince).filter((e) => /^check\./.test(e.event)).map((e) => `${e.event}${e.waitMs ? ` wait ${e.waitMs} ms` : ''}${e.reason ? ` ${e.reason}` : ''}`);
+    failed('update.check-observed', chk.length ? chk.join(' | ') : 'A never logged an update check');
+  }
   (seen.some((t) => /^Update available/.test(t)) && downloadClicked && seen.some((t) => /^Downloading update/.test(t)) && seen.some((t) => /^Verifying update/.test(t)) ? passed : failed)('update.download-and-verify-observed', `download chosen by the user; ${seen.join(' | ')}`);
   const feedHits = report.feedRequests.map((r) => r.url);
   (feedHits.includes('/latest.yml') && feedHits.some((u) => u.endsWith(path.basename(pair.b.setup))) ? passed : failed)('feed.requested', feedHits.join(', '));
@@ -413,10 +428,12 @@ function startFeed(pair) {
   const approvedAt = Date.now();
   if (!earlyExit) {
     await page.click('#ubRestart').catch(() => {});
-    overlay = await waitFor(() => page.evaluate(() => { const o = document.getElementById('updateInstallOverlay'); return o && !o.hidden ? (document.getElementById('updateInstallBody') || {}).textContent : null; }), 15000, 200).catch(() => ({ ok: false }));
+    let lastProbe = 'no probe ran';
+    overlay = await waitFor(() => page.evaluate(() => { const o = document.getElementById('updateInstallOverlay'); const t = (document.getElementById('ubTitle') || {}).textContent || ''; return { hidden: !o || o.hidden, body: (document.getElementById('updateInstallBody') || {}).textContent || '', banner: t }; }).then((r) => { lastProbe = `overlay hidden=${r.hidden} banner="${r.banner}"`; return !r.hidden ? (r.body || '(no body text)') : null; }, (err) => { lastProbe = `evaluate failed: ${err.message.split('\n')[0]}`; return null; }), 15000, 200).catch(() => ({ ok: false }));
+    overlay.lastProbe = lastProbe;
     if (overlay.ok) await page.screenshot({ path: path.join(OUT, '04-A-install-handoff.png') }).catch(() => {});
   }
-  (overlay.ok ? passed : earlyExit ? notRun : failed)('update.handoff-notice', overlay.ok ? overlay.value : earlyExit ? 'A had already exited before the driver approved the restart' : 'installing notice not shown before exit');
+  (overlay.ok ? passed : earlyExit ? notRun : failed)('update.handoff-notice', overlay.ok ? overlay.value : earlyExit ? 'A had already exited before the driver approved the restart' : `installing notice not shown before exit (last probe: ${overlay.lastProbe})`);
   const exit = earlyExit || await Promise.race([exitPromise, sleep(90000).then(() => null)]);
   (exit ? passed : failed)('update.A-exits', exit ? `A exited ${exit.at - approvedAt} ms after approval (code ${exit.code})` : 'A did not exit within 90 s');
   // The handoff record must say installer-started before A is gone.
@@ -428,7 +445,9 @@ function startFeed(pair) {
   // ---- 5. the installer applies B and relaunches it
   const relaunch = await waitFor(() => {
     const procs = runningInstances().filter((p) => p.pid !== aFacts.pid && p.path && p.path.toLowerCase() === installedExe.toLowerCase());
-    return procs.length ? procs[0] : null;
+    if (procs.length) return procs[0];
+    const started = logEvents(logSince).find((e) => e.event === 'startup' && e.app === pair.b.version && e.execPath && e.execPath.toLowerCase() === installedExe.toLowerCase());
+    return started ? { pid: started.pid || 0, path: started.execPath, start: started.ts, fromLog: true } : null;
   }, 240000, 1000);
   if (!relaunch.ok) {
     // A stalled installer usually means a dialog. Read its text (UI Automation
@@ -470,6 +489,8 @@ function startFeed(pair) {
     (closed.ok ? passed : failed)('reopen.B-closed-gracefully', closed.ok ? `B closed in ${closed.ms} ms via its window` : 'B did not close in 20 s');
     if (!closed.ok) { try { process.kill(relaunch.value.pid); } catch (_) {} }
   }
+  for (const p of runningInstances()) { try { process.kill(p.pid); } catch (_) {} }
+  await sleep(2000);
   try {
     const app2 = await electron.launch({ executablePath: installedExe, args: launchArgs, timeout: 60000 });
     const page2 = await app2.firstWindow({ timeout: 60000 });
