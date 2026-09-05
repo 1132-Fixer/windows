@@ -245,16 +245,31 @@ function startFeed(pair) {
   const { _electron: electron } = playwright;
 
   // ---- 0. clean slate: remove any existing install (state recorded first)
+  // Order matters: kill running instances first, then run the uninstaller
+  // *synchronously*. Without `_?=<dir>` an NSIS uninstaller copies itself
+  // to %TEMP%, starts the copy and returns at once — a registry check two
+  // seconds later would still see the old record, and the next installer
+  // would collide with the uninstall still in progress ("Failed to
+  // uninstall old application files ... : 2").
   const before = installRecord();
   report.before = before;
+  for (const p of runningInstances()) { try { process.kill(p.pid); } catch (_) {} }
   if (before.quietUninstall) {
     console.log(`  existing install ${before.displayVersion} at ${before.installLocation} — uninstalling`);
     const m = /^"([^"]+)"\s*(.*)$/.exec(before.quietUninstall);
     if (m) {
-      const r = spawnSync(m[1], m[2].split(' ').filter(Boolean), { windowsHide: true, timeout: 180000 });
-      await sleep(2000);
-      const gone = !installRecord().displayVersion;
-      (gone ? passed : failed)('prep.uninstall-existing', gone ? `removed ${before.displayVersion} (exit ${r.status})` : `still registered after uninstall (exit ${r.status})`);
+      const uninstDir = path.dirname(m[1]);
+      const uargs = m[2].split(' ').filter(Boolean).concat([`_?=${uninstDir}`]);
+      const r = spawnSync(m[1], uargs, { windowsHide: true, timeout: 300000, windowsVerbatimArguments: false });
+      let gone = false;
+      for (let i = 0; i < 60 && !gone; i++) { await sleep(2000); gone = !installRecord().displayVersion; }
+      let locked = '';
+      if (!gone) {
+        const probe = ps(`Get-ChildItem -LiteralPath '${uninstDir.replace(/'/g, "''")}' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { try { $s=[IO.File]::Open($_.FullName,'Open','Read','None'); $s.Close() } catch { $_.FullName } }`);
+        locked = (probe.out || '').split(/\r?\n/).filter(Boolean).join('; ');
+      }
+      (gone ? passed : failed)('prep.uninstall-existing', gone ? `removed ${before.displayVersion} (uninstaller exit ${r.status})` : `still registered after uninstall (exit ${r.status})${locked ? `; locked: ${locked}` : ''}`);
+      if (!gone) { server.close(); return finish(); }
     }
   } else {
     passed('prep.uninstall-existing', 'no existing install');
@@ -305,16 +320,29 @@ function startFeed(pair) {
   await page.screenshot({ path: path.join(OUT, '01-A-before-update.png') });
 
   // ---- 3. observe check → download → verify → ready
-  const bannerText = () => page.evaluate(() => (document.getElementById('ubMsg') || {}).textContent || '').catch(() => '');
+  // The banner title carries the state ("Update available", "Downloading
+  // update", ...); the message carries the version / progress. Downloads
+  // start only when the user chooses Download update (autoDownload is off).
+  const bannerText = () => page.evaluate(() => {
+    const t = (document.getElementById('ubTitle') || {}).textContent || '';
+    const m = (document.getElementById('ubMsg') || {}).textContent || '';
+    return t ? `${t} — ${m}`.trim() : m;
+  }).catch(() => '');
   const seen = [];
+  let downloadClicked = false;
   const readyWait = await waitFor(async () => {
     const t = await bannerText();
     if (t && seen[seen.length - 1] !== t) { seen.push(t); console.log(`    banner: ${t}`); }
+    if (/^Update available/.test(t) && !downloadClicked) {
+      downloadClicked = true;
+      await page.screenshot({ path: path.join(OUT, '02a-A-update-available.png') }).catch(() => {});
+      await page.click('#ubDownload').catch(() => {});
+    }
     if (/^Downloading update/.test(t) && !report.downloadShot) { report.downloadShot = true; await page.screenshot({ path: path.join(OUT, '02-A-downloading.png') }).catch(() => {}); }
     return /^Ready to restart/.test(t) ? t : null;
   }, 240000, 300);
   (readyWait.ok ? passed : failed)('update.ready', readyWait.ok ? `"${readyWait.value}" after ${readyWait.ms} ms` : `never reached Ready to restart (last: "${seen[seen.length - 1] || ''}") after ${readyWait.ms} ms`, { bannerSequence: seen });
-  (seen.some((t) => /^Downloading update/.test(t)) && seen.some((t) => /^Verifying update/.test(t)) ? passed : failed)('update.download-and-verify-observed', seen.join(' | '));
+  (seen.some((t) => /^Update available/.test(t)) && downloadClicked && seen.some((t) => /^Downloading update/.test(t)) && seen.some((t) => /^Verifying update/.test(t)) ? passed : failed)('update.download-and-verify-observed', `download chosen by the user; ${seen.join(' | ')}`);
   const feedHits = report.feedRequests.map((r) => r.url);
   (feedHits.includes('/latest.yml') && feedHits.some((u) => u.endsWith(path.basename(pair.b.setup))) ? passed : failed)('feed.requested', feedHits.join(', '));
   await page.screenshot({ path: path.join(OUT, '03-A-ready-to-restart.png') });
@@ -388,7 +416,7 @@ function startFeed(pair) {
     const f2 = await app2.evaluate(({ app: a }) => ({ version: a.getVersion(), execPath: process.execPath }));
     await waitFor(() => page2.evaluate(() => { const s = document.body.dataset.compactState; return s && s !== 'checking' ? s : null; }), 30000);
     await sleep(800);
-    const banner = await page2.evaluate(() => ({ visible: document.getElementById('updateBanner').classList.contains('visible'), text: (document.getElementById('ubMsg') || {}).textContent }));
+    const banner = await page2.evaluate(() => ({ visible: document.getElementById('updateBanner').classList.contains('visible'), text: [(document.getElementById('ubTitle') || {}).textContent, (document.getElementById('ubMsg') || {}).textContent].join(' — ') }));
     await page2.screenshot({ path: path.join(OUT, '06-B-manual-reopen.png') });
     (f2.version === pair.b.version && f2.execPath.toLowerCase() === installedExe.toLowerCase() ? passed : failed)('reopen.manual', `runtime ${f2.version} at ${f2.execPath}`);
     (!banner.visible || !/could not be completed|previous version/i.test(banner.text) ? passed : failed)('reopen.no-stale-warning', banner.visible ? `banner: ${banner.text}` : 'no update banner');
