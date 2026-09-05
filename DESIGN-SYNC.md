@@ -193,32 +193,35 @@ build host, so running the shipped `.exe` remains Windows-only verification.
 
 ---
 
-## Compact repair panel — token reconciliation (2026-09-04)
+## Compact repair panel — token reconciliation (2026-09-04, closed 2026-09-05)
 
-Pinned design source: `design-system` @ `7f3ddaf402f1456b10911264886719de62776b83`.
-Its `docs/platforms/windows.md` states "No shipped Windows UI exists yet — this
-page defines the target spec, derived from the macOS reference". The shipped
+Pinned design source: `design-system` @ `133fd766b1f53f34c63de1941e9aedeefde48516`
+([1132-Fixer/design-system#4](https://github.com/1132-Fixer/design-system/pull/4),
+closes [#196](https://github.com/1132-Fixer/windows/issues/196)). The shipped
 Windows panel (6.2.0 onward) follows the **operator acceptance spec of
 2026-08-23 (§4–§9)**, whose values are the single `:root` block in
-`index.html`. Where the two disagree, the acceptance spec governs the app and
-the design-system repository is the one that is stale. This table is the
-recorded divergence; the design-system update is tracked separately (issue
-linked from the PR that added this section) and the pin is not advanced until
-that source PR is reviewed.
+`index.html`. The design system now records those values as the Windows
+platform overlay — `tokens/windows.json`, `docs/platforms/windows.md`,
+`docs/02-colors.md` § "Windows shipped palette" — instead of describing a
+Windows app that "ships later". Every row below is therefore a **recorded**
+platform value, not a divergence; the cross-platform tokens are unchanged and
+still govern macOS, the Chrome extension and the website.
 
-| Role | design-system token | Shipped app token | Status |
+| Role | design-system Windows overlay | Shipped app token | Status |
 |---|---|---|---|
 | App background | `background` `#0F1724` | `--bg` `#0F1724` | match |
-| Surface | `surface` `#202B3D` | `--panel` `#172235`, `--panel-2` `#1D2A3F` | divergent (two elevation tiers) |
-| Modal surface | `surface-modal` `#2A2530` (warm plum) | `--panel-3` `#1D2A3F` | divergent — one navy theme, no purple drift (spec §4) |
-| Primary / accent | `primary` `#2E78D6` | `--accent` `#337FDB`, hover `#3B8AE8`, pressed `#286BC2` | divergent |
-| Focus ring | 2px `primary`, offset 2px | `--focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus)` (`#71AFFF`) | equivalent (2px ring on 2px gap) |
-| Success / warning / error | `#3CCF6E` / `#FFB547` / `#EF5350` | `#2BC66D` / `#F3B84A` / `#F05D67` | divergent (same hue family) |
-| Text primary / secondary | `#F5F7FA` / `#9AA5B4` | `#F5F7FB` / `#A8B5C7` | near-identical / divergent |
-| Border | `#33415A` | `#2B3D57` subtle, `#3B5578` strong | divergent |
-| Radii | sm 10 / md 16 / lg 24 / xl 28 | control 10 / card 14 / modal 18 / pill 999 | divergent (restrained radii, spec §7) |
-| Spacing | 4 8 12 16 24 32 48 64 | 4 8 12 16 20 24 32 40 | `20` and `40` are not on the design-system scale |
-| Typography | Segoe UI Variable stack, 14/400 body | same stack; body 14 | match |
+| Surface | `surface` `#172235`, `surface-2` `#1D2A3F` | `--panel`, `--panel-2` | recorded |
+| Modal surface | `surface-2` (one navy theme, no plum tier) | `--panel-3` `#1D2A3F` | recorded |
+| Hover / pressed fill | `surface-hover` `#243550`, `surface-pressed` `#293D5B` | `--surface-hover`, `--surface-pressed` | recorded |
+| Primary / hover / pressed | `primary` `#337FDB`, `primary-hover` `#3B8AE8`, `primary-pressed` `#286BC2` | `--accent`, `--accent-2`, `--accent-pressed` | recorded |
+| Focus ring | `focus` `#71AFFF`, 2px ring on a 2px `background` gap | `--focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus)` | recorded |
+| Success / warning / error | `#2BC66D` / `#F3B84A` / `#F05D67` | `--success` / `--warning` / `--danger` | recorded |
+| Text primary / secondary / muted | `#F5F7FB` / `#A8B5C7` / `#7F8DA1` | `--text` / `--muted` / `--dim` | recorded |
+| Border | `border` `#2B3D57`, `border-strong` `#3B5578` | `--border`, `--border-strong` | recorded |
+| Radii | control 10 / card 14 / modal 18 / pill 999 | `--r-sm` / `--r-md` / `--r-lg` / `--r-pill` | recorded |
+| Spacing | 4 8 12 16 20 24 32 40 (`20`/`40` Explore + feedback dialogs only) | `--s-1` … `--s-8` | recorded |
+| Window | default 520×600, min 440×520, header 56, footer 48, content max 420 | `main.js` `compactWindowBounds`, `index.html` APP SHELL | recorded |
+| Typography | Segoe UI Variable stack, 14/400 body; screen title 24/32/700 | same | match |
 | Motion | 150–250 ms, reduced-motion honoured | transitions ≤ 250 ms, `prefers-reduced-motion` in `index.html` and the compact shell | match |
 
 Rules that follow from this:
@@ -235,10 +238,11 @@ Rules that follow from this:
 
 ## Ready screen and Details view (2026-09-04)
 
-Pinned design source: `design-system` @ `7f3ddaf402f1456b10911264886719de62776b83`
-(`docs/08-components.md`, `04-spacing.md`, `05-layout.md`, `09-accessibility.md`,
-`07-motion.md`). Tokens are the `:root` block in `index.html` (recorded
-divergence above; issue #196 tracks the source-first reconciliation).
+Pinned design source: `design-system` @ `133fd766b1f53f34c63de1941e9aedeefde48516`
+(`docs/platforms/windows.md`, `docs/08-components.md`, `04-spacing.md`,
+`05-layout.md`, `09-accessibility.md`, `07-motion.md`). Tokens are the `:root`
+block in `index.html`, recorded in the design system as the Windows overlay
+(section above; #196 closed by that pin).
 
 ### Screen structure
 

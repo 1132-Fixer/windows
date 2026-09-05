@@ -18,8 +18,13 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      # submodules: true — tools/design-sync-pin-smoke.js proves the pinned
+      # design-system commit is fetchable from a clean checkout and that the
+      # app's tokens match the recorded Windows overlay at that pin.
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          submodules: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
