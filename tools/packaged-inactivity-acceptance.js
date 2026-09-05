@@ -79,9 +79,14 @@ async function prepareTestCopy() {
   const exe = path.join(dstDir, path.basename(SHIPPED_EXE));
   const { stampExecutionLevel } = require('../scripts/stamp-exe-manifest');
   const how = await stampExecutionLevel(exe, 'asInvoker');
+  const cfg = path.join(dstDir, 'resources', 'app-update.yml');
   if (!SKIP_UPDATE) {
     // Point this copy's updater at the local feed (the shipped copy is untouched).
-    fs.writeFileSync(path.join(dstDir, 'resources', 'app-update.yml'), `provider: generic\nurl: http://127.0.0.1:${PORT}/\nupdaterCacheDirName: 1132-fixer-updater\n`);
+    fs.writeFileSync(cfg, `provider: generic\nurl: http://127.0.0.1:${PORT}/\nupdaterCacheDirName: 1132-fixer-updater\n`);
+  } else if (!fs.existsSync(cfg)) {
+    // An `electron-builder --dir` build carries no app-update.yml; the
+    // installed app does. Mirror production so the copy behaves like it.
+    fs.writeFileSync(cfg, 'owner: 1132-Fixer\nrepo: windows\nprovider: github\nupdaterCacheDirName: 1132-fixer-updater\n');
   }
   return { exe, how };
 }
