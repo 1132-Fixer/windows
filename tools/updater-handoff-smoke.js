@@ -135,7 +135,7 @@ console.log('updater-handoff-smoke: finalize-update-metadata.mjs fixture');
   const out = fs.readFileSync(path.join(dist, 'latest.yml'), 'utf8');
   check(!/isAdminRightsRequired/.test(out), 'flag removed');
   check(!out.includes('\r') && !out.startsWith('﻿') && out.endsWith('\n'), 'LF, no BOM, final newline');
-  check(new RegExp(`^version: ${pkg.version.replace(/\./g, '\\.')}$`, 'm').test(out) && out.includes(`sha512: ${sha}`), 'version and sha512 preserved');
+  check(out.split('\n').includes(`version: ${pkg.version}`) && out.includes(`sha512: ${sha}`), 'version and sha512 preserved');
   const check2 = spawnSync(process.execPath, [script, '--dist', dist, '--check'], { encoding: 'utf8' });
   check(check2.status === 0, '--check passes after finalize');
   fs.writeFileSync(path.join(dist, name), crypto.randomBytes(4096));

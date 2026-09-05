@@ -86,6 +86,7 @@ function makeEnv(opts = {}) {
     isPortable: !!opts.isPortable,
     isElevated: opts.isElevated || (async () => true),
     isBusy: opts.isBusy || (() => false),
+    hasUpdateConfig: opts.hasUpdateConfig || (() => opts.label !== 'nocfg'),
     spawnInstaller: opts.spawnInstaller || (async (file, args) => { spawnCalls.push({ file, args }); return { ok: true, pid: 4242 }; }),
     spawnInstallerSync: opts.spawnInstallerSync || ((file, args) => { spawnCalls.push({ file, args, sync: true }); return { ok: true, pid: 4343 }; }),
     readRegisteredInstallDir: opts.readRegisteredInstallDir || (async () => INSTALL_DIR),
@@ -484,6 +485,12 @@ async function driveToReady(env, inst, info) {
     const envPortable = makeEnv({ label: 'portable', isPortable: true });
     const c2 = await envPortable.ctl.check('startup');
     check(c2.ok === false && c2.reason === 'not-installed-build', 'portable run never checks or installs through this path');
+    let checks = 0;
+    const envNoCfg = makeEnv({ label: 'nocfg', onCheck: () => { checks++; } });
+    envNoCfg.ctl.start();
+    const c3 = await envNoCfg.ctl.check('startup');
+    check(c3.ok === false && c3.reason === 'no-update-config' && checks === 0 && envNoCfg.ctl.getState() === 'idle', 'a build without app-update.yml (electron-builder --dir) is idle, not failed');
+    check(!envNoCfg.states().includes('failed') && !envNoCfg.states().includes('checking'), 'no failure banner without update configuration');
   }
 
   console.log('updater-lifecycle-smoke: 21. interrupted installation');
