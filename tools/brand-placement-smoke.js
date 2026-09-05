@@ -143,6 +143,13 @@ check((html.match(/class="app-mark"/g) || []).length === 1,
 check((html.match(/<img class="app-mark"/g) || []).length === 1 && !shell.includes('appendChild(appMark)'),
   'the single mark is static markup; the shell never appends a second one');
 
+console.log('brand-placement-smoke: header side controls do not sit under the mark');
+// The mark is absolutely positioned, so it is not a grid item. Without
+// explicit columns the right side auto-placed into the middle (auto) column
+// and Exit rendered underneath the mark (6.3.3).
+check(/\.app-header-left\s*\{[^}]*grid-column:\s*1/.test(html), 'left header side is pinned to column 1');
+check(/\.app-header-right\s*\{[^}]*grid-column:\s*3/.test(html), 'right header side (Exit) is pinned to column 3');
+
 if (failures) {
   console.error(`brand-placement-smoke: ${failures} failure(s)`);
   process.exit(1);

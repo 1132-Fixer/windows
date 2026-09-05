@@ -1128,8 +1128,11 @@
       z-index: 20;
     }
     .app-header-side { display: flex; align-items: center; min-width: 0; }
-    .app-header-left { justify-content: flex-start; }
-    .app-header-right { justify-content: flex-end; }
+    /* Explicit columns: the mark below is absolutely positioned, so it is
+       not a grid item. Without these, the right side auto-placed into the
+       middle (auto) column and Exit rendered underneath the mark. */
+    .app-header-left { grid-column: 1; justify-content: flex-start; }
+    .app-header-right { grid-column: 3; justify-content: flex-end; }
     /* Canonical product mark, centered against the full window width so a
        Back or Exit control can never move it. Same box in every state. */
     .app-mark {
