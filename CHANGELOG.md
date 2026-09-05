@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.0] - 2026-09-05
+
+Verified on this branch's packaged builds by `tools/packaged-update-acceptance.js` on an elevated Windows 11 session (real per-machine A→B update, 6.9.0 → 6.9.1 test pair built from `main` `43e21fa`): 31 cases passed, 2 failed (both from a manual click on the test window and a 20 s soft-close timing, not the product), 4 not run (reboot check is manual). The rebuilt uninstaller exits 0; the previous one exited 2 on every start. `npm test` and the CI packaged acceptance are green on `main`. Releases remain unsigned.
+
 ### Fixed — uninstaller integrity
 
 - **The uninstaller shipped in 6.3.1–6.3.3 fails its own integrity check.**
@@ -1167,6 +1171,9 @@ The following manual cases must pass before tagging the release:
 - Direct publish of releases to the `1132-Fixer-Windows-Releases` repo
   for the auto-updater.
 
+[6.4.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.4.0
+[6.3.3]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.3
+[6.3.2]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.2
 [6.3.1]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.1
 [6.3.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.0
 [6.2.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.2.0
