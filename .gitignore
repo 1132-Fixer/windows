@@ -51,3 +51,6 @@ tmpclaude-*
 
 # Test scripts
 test-clean-user.js
+
+# Discovery-section evidence (scratch probe)
+discovery-evidence/

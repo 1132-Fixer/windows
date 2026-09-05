@@ -215,6 +215,23 @@ ipcMain.handle('open-explore-destination', async (_event, key) => {
   return electronSecurity.openExternalSafe(shell.openExternal.bind(shell), url);
 });
 
+// "Explore Our Products" on the completed-repair screen. The destination
+// is config.PRODUCTS_URL (src/main/config.js), never an IPC argument; the
+// renderer hides the section unless this reports it available, and every
+// open goes through the https allowlist. A browser failure is reported as
+// { success: false } — no dialog, and the repair result is untouched.
+ipcMain.handle('products-page-available', () => electronSecurity.productsPageAvailability(config.PRODUCTS_URL));
+ipcMain.handle('open-products-page', async () => {
+  const check = electronSecurity.productsPageAvailability(config.PRODUCTS_URL);
+  if (!check.available) return { success: false, reason: check.reason };
+  try {
+    return await electronSecurity.openExternalSafe(shell.openExternal.bind(shell), config.PRODUCTS_URL);
+  } catch (err) {
+    console.warn(`[discovery] openExternal failed: ${(err && err.message) || err}`);
+    return { success: false, reason: 'browser did not open' };
+  }
+});
+
 const FIX_USER = 'user1';
 // There is NO static password (security design, option A — SEC-A6, #33/#76).
 // Every fix run mints a fresh CSPRNG password (helper-credential.js) at
