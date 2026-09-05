@@ -151,6 +151,7 @@ function getUpdater() {
     isPortable,
     isElevated: () => isElevatedSync(),
     isBusy: () => fixInProgress,
+    hasUpdateConfig: () => fs.existsSync(path.join(process.resourcesPath, 'app-update.yml')),
     spawnInstaller: spawnInstallerDetached,
     spawnInstallerSync,
     readRegisteredInstallDir,

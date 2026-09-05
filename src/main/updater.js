@@ -319,6 +319,7 @@ function createUpdaterController(deps) {
     isPortable = false,
     isElevated = async () => true,
     isBusy = () => false,
+    hasUpdateConfig = () => true,
     spawnInstaller,
     readRegisteredInstallDir = async () => null,
     hashFile = hashFileSha512,
@@ -817,6 +818,16 @@ function createUpdaterController(deps) {
     if (executionMode !== 'installed') {
       log.info('check.skipped', { origin, executionMode });
       return { ok: false, reason: 'not-installed-build' };
+    }
+    let configured = true;
+    try { configured = !!hasUpdateConfig(); } catch (_) { configured = false; }
+    if (!configured) {
+      // An unpacked directory build (electron-builder --dir) or a copy made
+      // without resources/app-update.yml: nothing to check against. Not a
+      // failure the user can act on, so it is logged, never shown.
+      log.info('check.skipped', { origin, reason: 'no-update-config' });
+      if (state === STATES.CHECKING || state === STATES.FAILED) setState(STATES.IDLE, { stage: null, reason: null });
+      return { ok: false, reason: 'no-update-config' };
     }
     if (checkInFlight || CRITICAL_STATES.has(state) || state === STATES.READY) {
       log.info('check.skipped', { origin, state, checkInFlight });

@@ -79,8 +79,8 @@ const failed = (id, d, x) => record(id, 'failed', d, x);
 const notRun = (id, d, x) => record(id, 'not-run', d, x);
 
 // ---------------------------------------------------------------- helpers
-function ps(script, timeoutMs = 60000) {
-  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], { encoding: 'utf8', timeout: timeoutMs, windowsHide: true });
+function ps(script, timeoutMs = 60000, env = {}) {
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], { encoding: 'utf8', timeout: timeoutMs, windowsHide: true, env: Object.assign({}, process.env, env) });
   return { code: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
 }
 function regValue(key, name) {
@@ -94,7 +94,7 @@ function isElevated() {
   return /S-1-16-12288|S-1-16-16384/.test(r.stdout || '');
 }
 function exeVersion(file) {
-  const r = ps(`(Get-Item -LiteralPath '${file.replace(/'/g, "''")}').VersionInfo.ProductVersion`);
+  const r = ps('(Get-Item -LiteralPath $env:FIXER_FILE).VersionInfo.ProductVersion', 60000, { FIXER_FILE: file });
   return r.out || null;
 }
 function runningInstances() {
@@ -111,7 +111,7 @@ function shortcutTargets() {
   const out = [];
   for (const l of links) {
     if (!fs.existsSync(l)) continue;
-    const r = ps(`$s=(New-Object -ComObject WScript.Shell).CreateShortcut('${l.replace(/'/g, "''")}'); $s.TargetPath`);
+    const r = ps('$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:FIXER_LINK); $s.TargetPath', 60000, { FIXER_LINK: l });
     out.push({ link: l, target: r.out });
   }
   return out;
@@ -176,10 +176,10 @@ if ($w -le 0 -or $hh -le 0) { Write-Output 'NORECT'; exit 1 }
 $bmp = New-Object System.Drawing.Bitmap $w, $hh
 $g = [System.Drawing.Graphics]::FromImage($bmp)
 $g.CopyFromScreen($r.L, $r.T, 0, 0, $bmp.Size)
-$bmp.Save('${file.replace(/'/g, "''")}', [System.Drawing.Imaging.ImageFormat]::Png)
+$bmp.Save($env:FIXER_CAPTURE, [System.Drawing.Imaging.ImageFormat]::Png)
 Write-Output "OK ${'$'}w x ${'$'}hh"
 `;
-  return ps(script, 30000);
+  return ps(script, 30000, { FIXER_CAPTURE: file });
 }
 
 // ---------------------------------------------------------------- feed server
