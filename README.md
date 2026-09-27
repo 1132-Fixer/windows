@@ -1,3 +1,5 @@
+<img width="2086" height="216" alt="image" src="https://github.com/user-attachments/assets/38695966-1478-4f69-b182-1af2165d0759" />
+
 <p align="center">
   <img src="assets/social-preview.png" alt="1132 Fixer for Windows — one-click fix for Zoom Error 1132" width="960">
 </p>
