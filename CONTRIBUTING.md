@@ -72,6 +72,21 @@ Changes to account create/delete, credentials, elevation, the updater, or
 `build/package-allowlist.json` must say so on the pull request template
 **Safety impact** section. They need a real code-owner review.
 
+### Branch protection and the review exception
+
+`main` has two rulesets. `default-branch` requires these checks on every pull
+request and has no bypass: Build & Test, Code Quality, Support Service,
+Dependency audit, Licence and binary inventory, CodeQL and brand-assets. It also
+blocks branch deletion. `default-branch-review` requires an approving review,
+a code-owner review and approval of the last push.
+
+A repository admin may merge without the second review only through a pull
+request, only when every required check is green, and only after writing the
+reason in the **Review exception** section of the pull request template. The
+exception is never allowed for a change that ticks a **Safety impact** box;
+those changes keep a real code-owner review. Nobody has a permanent bypass, and
+the rulesets and required checks must not be disabled to merge a change.
+
 ### What must not change casually
 
 - Product name **1132 Fixer**
