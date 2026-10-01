@@ -37,6 +37,12 @@ a DPAPI-sealed credential. Tick every area this PR touches:
 - [ ] I exercised the relevant Windows flow (or explained why it could not be tested)
 - [ ] Documentation is updated (README / CONTRIBUTING / docs), or no docs change is needed
 
+## Review exception
+
+<!-- Leave empty for a normal reviewed merge. If an admin merges without a second
+  review, write why no reviewer is available and confirm every required check is
+  green. Not allowed when any Safety impact box above is ticked. -->
+
 <!--
   Do not commit secrets, certificates, .env files, or unpacked release binaries.
   Do not open a PR that rewrites git history.
