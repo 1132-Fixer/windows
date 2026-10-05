@@ -245,9 +245,13 @@ if (process.platform === 'win32') {
     Object.assign(forgedEnv, { SystemRoot: fakeRoot, WINDIR: fakeRoot, PATH: '', PROCESSOR_ARCHITEW6432: 'FORGED' });
     // Public, read-only fixture source. It is not the PowerShell transport.
     const childSource = `
+      const write = value => require('fs').writeSync(1, value + '\\n');
+      const phase = value => write('FIXER_PHASE:' + value);
+      phase('script-start');
       const receipt = { stage: 'started', arch: process.arch, reportAvailable: typeof process.report?.getReport === 'function' };
       try {
         receipt.stage = 'load-module';
+        phase(receipt.stage);
         const tools = require(process.argv[1]);
         receipt.root = tools.resolveSystemRoot();
         if (!receipt.root && receipt.reportAvailable) {
@@ -269,8 +273,10 @@ if (process.platform === 'win32') {
           }
         }
         receipt.stage = 'resolve-executable';
+        phase(receipt.stage);
         receipt.exe = tools.resolveTool('powershell.exe');
         receipt.stage = 'run-powershell';
+        phase(receipt.stage);
         const result = require('child_process').spawnSync(receipt.exe, tools.PS_STDIN_ARGS, {
           input: Buffer.from(tools.prepareScript("& (Resolve-FixerTool 'cmd.exe') /d /c 'echo FIXER_TRUSTED'; [Environment]::SystemDirectory"), 'utf8'),
           windowsHide: true, timeout: 15000, encoding: 'utf8'
@@ -286,18 +292,25 @@ if (process.platform === 'win32') {
       } catch (error) {
         receipt.errorCode = typeof error.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code) ? error.code : 'UNKNOWN';
       }
-      console.log(JSON.stringify(receipt));
+      phase(receipt.stage);
+      write(JSON.stringify(receipt));
     `;
     const childProof = (env, label) => {
       const realChild = spawnSync(process.execPath, ['-e', childSource, require.resolve('../src/main/windows-tools')], {
         cwd: temp, env, windowsHide: true, timeout: 30000, encoding: 'utf8'
       });
       let proof;
-      try { proof = JSON.parse((realChild.stdout || '').trim()); } catch (_) {}
+      const lines = (realChild.stdout || '').trim().split(/\r?\n/);
+      const phases = lines.filter(value => /^FIXER_PHASE:(?:script-start|load-module|resolve-executable|run-powershell|complete)$/.test(value)).map(value => value.slice('FIXER_PHASE:'.length));
+      try { proof = JSON.parse(lines[lines.length - 1]); } catch (_) {}
       // Child errors can include source or inherited metadata. Log only
       // explicit stage/status fields, fixed markers and verified path fields.
       const stderrClass = ['SyntaxError', 'MODULE_NOT_FOUND', 'ERR_INVALID_ARG', 'WINDOWS_SYSTEM_ROOT_UNAVAILABLE'].find(value => (realChild.stderr || '').includes(value)) || null;
-      console.log(`  diagnostic ${label}: ${JSON.stringify({ status: realChild.status, signal: realChild.signal, stderrClass,
+      // Native assertion text is compile-time source, not a report. Keep
+      // identifiers only; discard quoted literals, paths and stack output.
+      const assertion = (realChild.stderr || '').split(/\r?\n/).find(value => /Assertion failed:/i.test(value));
+      const assertionIdentifiers = assertion ? [...new Set(assertion.split(/,\s*file\b/i)[0].replace(/"[^"\r\n]*"|'[^'\r\n]*'/g, '').match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g) || [])].slice(0, 20) : [];
+      console.log(`  diagnostic ${label}: ${JSON.stringify({ status: realChild.status, signal: realChild.signal, stderrClass, phases, assertionIdentifiers,
         errorCode: realChild.error?.code || null, stdoutBytes: Buffer.byteLength(realChild.stdout || ''),
         stderrBytes: Buffer.byteLength(realChild.stderr || ''), proof: proof || null })}`);
       return { realChild, proof };
