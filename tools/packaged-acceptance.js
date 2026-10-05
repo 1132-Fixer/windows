@@ -31,10 +31,12 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const screenActions = require(path.join(ROOT, 'screen-actions.js'));
+const windowsTools = require(path.join(ROOT, 'src', 'main', 'windows-tools.js'));
 const args = process.argv.slice(2);
 const argOf = (flag, dflt) => {
   const i = args.indexOf(flag);
@@ -179,14 +181,76 @@ async function keyboardFacts(page) {
   });
 }
 
-async function launch(scale) {
+async function runtimeAuthority(app, tag, fakeRoot) {
+  // This callback executes in the actual packaged Electron main process.
+  // Return narrow runtime evidence only, never a diagnostic report.
+  const proof = await app.evaluate(({ app }, fakeRoot) => {
+    const facts = { packaged: app.isPackaged, electron: process.versions.electron,
+      node: process.versions.node, arch: process.arch,
+      reportAvailable: !!(process.report && typeof process.report.getReport === 'function') };
+    if (!facts.reportAvailable) return { ...facts, stage: 'report-unavailable' };
+    if (typeof process.getBuiltinModule !== 'function') return { ...facts, stage: 'builtin-api-unavailable' };
+    const path = process.getBuiltinModule('path');
+    const load = process.getBuiltinModule('module').createRequire(path.join(app.getAppPath(), 'package.json'));
+    try {
+      const tools = load('./src/main/windows-tools.js');
+      const api = process.report;
+      const changed = [];
+      let sharedObjects;
+      try {
+        for (const flag of ['excludeEnv', 'excludeNetwork']) {
+          if (flag in api) { changed.push([flag, api[flag]]); api[flag] = true; }
+        }
+        let diagnostic = api.getReport();
+        sharedObjects = diagnostic && diagnostic.sharedObjects;
+        diagnostic = null;
+      } finally {
+        for (const [flag, value] of changed.reverse()) api[flag] = value;
+      }
+      const root = tools.resolveSystemRoot();
+      const freshRoot = tools.createToolResolver({ getReport: () => ({ sharedObjects }), arch: process.arch }).resolveSystemRoot();
+      if (!root || !freshRoot || root.toLowerCase() !== freshRoot.toLowerCase()) return { ...facts, stage: 'root-unverified' };
+      const powershell = tools.resolveTool('powershell.exe');
+      const cmd = tools.resolveTool('cmd.exe');
+      const coreDlls = sharedObjects.filter(value => /^(?:ntdll|kernel32|kernelbase)\.dll$/i.test(path.basename(value)));
+      const result = process.getBuiltinModule('child_process').spawnSync(powershell, tools.PS_STDIN_ARGS, {
+        input: Buffer.from(tools.prepareScript("$r = @{ systemDir = [Environment]::SystemDirectory; marker = & (Resolve-FixerTool 'cmd.exe') /d /c 'echo FIXER_TRUSTED_RUNTIME' }; $r | ConvertTo-Json -Compress"), 'utf8'),
+        windowsHide: true, timeout: 15000, encoding: 'utf8'
+      });
+      let command;
+      try { command = JSON.parse((result.stdout || '').trim()); } catch (_) {}
+      const nativeSystemDir = command && typeof command.systemDir === 'string' ? command.systemDir : '';
+      const nativeMarker = !!(command && command.marker === 'FIXER_TRUSTED_RUNTIME');
+      // Sysnative is the caller's WOW64 alias; native PowerShell reports the
+      // same physical directory as System32.
+      const expectedDir = path.join(root, 'System32');
+      const trusted = !fakeRoot || ![root, powershell, cmd, ...coreDlls].some(value => value.toLowerCase().startsWith(fakeRoot.toLowerCase()));
+      return { ...facts, stage: 'checked', appPath: app.getAppPath(), root, powershell, cmd, coreDlls,
+        nativeSystemDir, exitCode: result.status, trusted,
+        commandMatches: result.status === 0 && !result.error && nativeMarker && nativeSystemDir.toLowerCase() === expectedDir.toLowerCase() };
+    } catch (_) { return { ...facts, stage: 'proof-error' }; }
+  }, fakeRoot || null);
+  const expectedElectron = require('electron/package.json').version;
+  const expectedArchive = path.join(path.dirname(EXE), 'resources', 'app.asar');
+  const ok = proof.packaged && proof.electron === expectedElectron && proof.reportAvailable &&
+    proof.stage === 'checked' && proof.trusted && proof.commandMatches &&
+    path.resolve(proof.appPath || '').toLowerCase() === expectedArchive.toLowerCase();
+  (ok ? passed : failed)(`${tag}.os-tool-authority`,
+    `actual main: Electron ${proof.electron}, Node ${proof.node}, stage=${proof.stage}, report=${proof.reportAvailable}, trusted command=${!!proof.commandMatches}`,
+    { runtime: proof });
+  return ok;
+}
+
+async function launch(scale, env) {
   const launchArgs = [];
   if (scale && scale !== 1) launchArgs.push(`--force-device-scale-factor=${scale}`);
   const t0 = Date.now();
-  const app = await electron.launch({ executablePath: EXE, args: launchArgs, timeout: WINDOW_DEADLINE_MS });
-  const page = await app.firstWindow({ timeout: WINDOW_DEADLINE_MS });
-  await page.waitForLoadState('domcontentloaded', { timeout: WINDOW_DEADLINE_MS }).catch(() => {});
-  return { app, page, ms: Date.now() - t0 };
+  const app = await electron.launch({ executablePath: EXE, args: launchArgs, env, timeout: WINDOW_DEADLINE_MS });
+  try {
+    const page = await app.firstWindow({ timeout: WINDOW_DEADLINE_MS });
+    await page.waitForLoadState('domcontentloaded', { timeout: WINDOW_DEADLINE_MS }).catch(() => {});
+    return { app, page, ms: Date.now() - t0 };
+  } catch (err) { await app.close().catch(() => {}); throw err; }
 }
 
 async function runLanding(scale, tag) {
@@ -195,6 +259,7 @@ async function runLanding(scale, tag) {
     const l = await launch(scale);
     app = l.app;
     const page = l.page;
+    await runtimeAuthority(app, tag);
     passed(`${tag}.window-visible`, `first window in ${l.ms} ms`);
     const first = await stateOf(page);
     const firstShot = await shot(page, `${tag}-01-first-paint-${first || 'unknown'}`);
@@ -235,6 +300,26 @@ async function runLanding(scale, tag) {
     if (app) await app.close().catch(() => {});
     return null;
   }
+}
+
+async function runForgedRoot() {
+  const fakeRoot = fs.mkdtempSync(path.join(require('os').tmpdir(), 'fixer-fake-windows-'));
+  let app;
+  try {
+    const system32 = path.join(fakeRoot, 'System32');
+    const psHome = path.join(system32, 'WindowsPowerShell', 'v1.0');
+    fs.mkdirSync(psHome, { recursive: true });
+    const names = windowsTools.WINDOWS_TOOLS;
+    for (const name of names) fs.writeFileSync(path.join(name === 'powershell.exe' ? psHome : system32, name), 'invalid fake executable; must never run');
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:systemroot|windir|path|processor_architew6432)$/i.test(key)));
+    Object.assign(env, { SystemRoot: fakeRoot, WINDIR: fakeRoot, PATH: '', PROCESSOR_ARCHITEW6432: 'FORGED' });
+    const launched = await launch(1, env);
+    app = launched.app;
+    await runtimeAuthority(app, 'forged-root', fakeRoot);
+    const left = await waitForState(launched.page, state => state && state !== 'checking', CHECKING_DEADLINE_MS, 'forged-root startup');
+    (left.ok ? passed : failed)('forged-root.leaves-checking', `state=${left.state || 'checking'} after ${left.ms} ms`);
+  } catch (_) { failed('forged-root.os-tool-authority', 'could not verify the actual packaged main process with forged root variables and empty PATH'); }
+  finally { if (app) await app.close().catch(() => {}); fs.rmSync(fakeRoot, { recursive: true, force: true }); }
 }
 
 // View details opens the in-place Details view (Back in the header, plain
@@ -400,7 +485,7 @@ async function runFixJourney(page) {
 
 function readEnableLua() {
   try {
-    const r = require('child_process').spawnSync('reg.exe', ['query', 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System', '/v', 'EnableLUA'], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    const r = require('child_process').spawnSync(windowsTools.resolveTool('reg.exe'), ['query', 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System', '/v', 'EnableLUA'], { encoding: 'utf8', timeout: 5000, windowsHide: true });
     const m = /EnableLUA\s+REG_DWORD\s+0x([0-9a-f]+)/i.exec(r.stdout || '');
     return m ? parseInt(m[1], 16) : null;
   } catch (_) { return null; }
@@ -425,7 +510,7 @@ async function rawLaunchProbe(exe) {
     let out = '';
     const child = spawn(exe, ['--enable-logging=stderr'], { windowsHide: true });
     const done = (why) => {
-      try { require('child_process').spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
+      try { require('child_process').spawnSync(windowsTools.resolveTool('taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
       resolve({ why, out: out.slice(-4000) });
     };
     const timer = setTimeout(() => done('timeout'), 12000);
@@ -453,6 +538,19 @@ async function rawLaunchProbe(exe) {
       return;
     }
   }
+  const shippedArchive = path.join(path.dirname(SHIPPED_EXE), 'resources', 'app.asar');
+  const drivenArchive = path.join(path.dirname(EXE), 'resources', 'app.asar');
+  const digest = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  if (!fs.existsSync(shippedArchive) || !fs.existsSync(drivenArchive)) {
+    failed('shipped-archive', 'the shipped and driven app.asar archives are required for runtime proof');
+    finish(); return;
+  }
+  const archiveSha256 = digest(shippedArchive);
+  if (digest(drivenArchive) !== archiveSha256) {
+    failed('shipped-archive', 'the driven archive differs from the shipped archive');
+    finish(); return;
+  }
+  passed('shipped-archive', 'actual main process will load the byte-identical shipped app.asar', { archiveSha256 });
   const raw = await rawLaunchProbe(EXE);
   const rawFatal = /render-process-gone|GPU process launch failed|FATAL/.test(raw.out);
   (!rawFatal ? passed : failed)('raw-launch', `${raw.why}; ${rawFatal ? 'renderer/GPU launch failure in stderr' : 'no fatal child-launch error in 12 s'}`, { stderrTail: raw.out.split(/\r?\n/).filter(Boolean).slice(-12) });
@@ -468,6 +566,7 @@ async function rawLaunchProbe(exe) {
     const r = await runLanding(s, tag);
     if (r) await r.app.close().catch(() => {});
   }
+  await runForgedRoot();
   finish();
 })().catch((err) => {
   failed('driver', `crashed: ${err && err.stack || err}`);

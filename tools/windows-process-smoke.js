@@ -62,7 +62,8 @@ function harness(options = {}) {
       resolveTool: name => windowsTools.resolveTool(name, {
         env: options.env || { SystemRoot: 'D:\\Windows', PATH: 'C:\\Fake tools' },
         arch: 'x64',
-        existsSync: options.existsSync || (value => ['D:\\Windows', 'D:\\Windows\\System32'].includes(value))
+        getReport: Object.prototype.hasOwnProperty.call(options, 'getReport') ? options.getReport :
+          () => ({ sharedObjects: ['ntdll.dll', 'kernel32.dll', 'kernelbase.dll'].map(name => `D:\\Windows\\System32\\${name}`) })
       })
     },
     spawn: (exe, args, opts) => {
@@ -175,7 +176,7 @@ function check(condition, name) {
       'synchronous launch failure leaves no timer, child custody or stdin write');
   }
   {
-    const h = harness({ env: { PATH: 'C:\\Fake tools' }, existsSync: () => false });
+    const h = harness({ env: { SystemRoot: 'C:\\Fake tools', PATH: 'C:\\Fake tools' }, getReport: null });
     const result = await h.script('Write-Output 1');
     check(result.code === -1 && result.errorCode === 'WINDOWS_SYSTEM_ROOT_UNAVAILABLE' && h.calls.length === 0,
       'missing Windows root returns a diagnostic without searching attacker-controlled PATH');

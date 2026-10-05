@@ -96,7 +96,8 @@ this file.
 ```bash
 npm ci
 npm test                       # all tools/*-smoke.js, node only, no Electron needed
-node feedback-proxy/test.js
+node tools/support-submission-smoke.js # desktop's stateless support boundary
+node tools/support-release-smoke.js    # public endpoint readiness contract
 npm run build                  # portable exe   (electron-builder)
 npm run build:installer        # NSIS installer
 node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out acceptance-evidence   # add --test-copy where UAC is disabled

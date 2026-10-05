@@ -6,6 +6,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const vm = require('vm');
 const { spawnSync } = require('child_process');
 const windowsTools = require('../src/main/windows-tools');
 
@@ -15,61 +16,105 @@ function check(condition, name) {
   checks++;
   console.log(`  ok  ${name}`);
 }
-function existsIn(...values) {
-  const known = new Set(values.map(value => path.win32.normalize(value).toLowerCase()));
-  return value => known.has(path.win32.normalize(value).toLowerCase());
+function loadedReport(root, folder = 'System32') {
+  return { sharedObjects: ['ntdll.dll', 'kernel32.dll', 'kernelbase.dll'].map(name => path.win32.join(root, folder, name)) };
 }
 const ROOT = 'D:\\Windows';
 const SYSTEM32 = path.win32.join(ROOT, 'System32');
-const installed = existsIn(ROOT, SYSTEM32);
-const fallback = existsIn('C:\\Windows', 'C:\\Windows\\System32');
-const options = { env: { SystemRoot: ROOT, PATH: '' }, arch: 'x64', existsSync: installed };
+const options = { getReport: () => loadedReport(ROOT), arch: 'x64' };
 
-console.log('windows-tools-smoke: system executable resolution');
+console.log('windows-tools-smoke: OS-loaded system executable resolution');
 for (const name of windowsTools.WINDOWS_TOOLS) {
   const expected = name === 'powershell.exe'
     ? path.win32.join(SYSTEM32, 'WindowsPowerShell', 'v1.0', name)
     : path.win32.join(SYSTEM32, name);
   check(windowsTools.resolveTool(name, options) === expected,
-    `${name} resolves without PATH and without requiring executable existence`);
+    `${name} resolves from loaded OS libraries without PATH or disk-shape guesses`);
 }
 {
-  const fake = { ...options, env: { SystemRoot: ROOT, PATH: 'C:\\Fake tools', CWD: 'C:\\Fake tools' } };
+  const fake = { ...options, env: { SystemRoot: 'C:\\Fake tools', WINDIR: 'C:\\Fake tools', PATH: 'C:\\Fake tools', PROCESSOR_ARCHITEW6432: 'AMD64' }, existsSync: () => true };
   check(windowsTools.resolveTool('net.exe', fake) === `${SYSTEM32}\\net.exe`,
-    'fake CWD and PATH executables cannot replace a Windows tool');
-  check(windowsTools.resolveTool('reg.exe', { ...options, env: { systemroot: ROOT } }) === `${SYSTEM32}\\reg.exe`,
-    'SystemRoot keys are case insensitive');
-  check(windowsTools.resolveTool('reg.exe', { ...options, env: { windir: ROOT } }) === `${SYSTEM32}\\reg.exe`,
-    'WINDIR supports a stripped SystemRoot environment');
-  check(windowsTools.resolveTool('cmd.exe', { ...options, env: { SystemRoot: ROOT, processor_architew6432: 'AMD64' }, arch: 'ia32' }) === `${ROOT}\\Sysnative\\cmd.exe`,
-    'WOW64 ia32 process resolves Sysnative regardless of environment-key case');
-  check(windowsTools.resolveTool('cmd.exe', { ...options, env: { SystemRoot: ROOT, PROCESSOR_ARCHITEW6432: 'AMD64' } }) === `${SYSTEM32}\\cmd.exe`,
-    'shipped x64 process never uses Sysnative');
+    'forged environment and an existing fake System32 cannot replace OS-loaded authority');
+  check(windowsTools.resolveTool('cmd.exe', { ...fake, arch: 'x64' }) === `${SYSTEM32}\\cmd.exe`,
+    'a forged WOW64 variable cannot redirect a native process to Sysnative');
+  const wow64 = { getReport: () => loadedReport(ROOT, 'SysWOW64'), arch: 'ia32' };
+  check(windowsTools.resolveTool('cmd.exe', wow64) === `${ROOT}\\Sysnative\\cmd.exe`,
+    'WOW64 comes from loaded SysWOW64 core libraries without environment metadata');
   check(windowsTools.resolveTool('cmd.exe', { ...options, arch: 'ia32' }) === `${SYSTEM32}\\cmd.exe`,
-    '32-bit Windows uses System32');
+    'native 32-bit Windows core libraries use System32');
   const unicodeRoot = 'E:\\Windows installations\\Fenêtres 日本語';
-  const unicode = { env: { SystemRoot: unicodeRoot }, arch: 'x64',
-    existsSync: existsIn(unicodeRoot, `${unicodeRoot}\\System32`) };
-  check(windowsTools.resolveTool('powershell.exe', unicode) === `${unicodeRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
-    'spaces and Unicode Windows roots remain one executable path');
+  check(windowsTools.resolveTool('powershell.exe', { getReport: () => loadedReport(unicodeRoot), arch: 'x64' }) ===
+    `${unicodeRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`, 'spaces and Unicode loaded-library roots remain intact');
 }
-for (const root of ['Windows', '\\Windows', '/Windows', 'C:Windows', 'C:\\Temp\\..\\Windows', '\\\\server\\Windows', '\\\\?\\C:\\Windows', 'C:\\Windows\u0000']) {
-  check(windowsTools.resolveSystemRoot({ SystemRoot: root }, fallback) === 'C:\\Windows',
-    `unsafe Windows root ${JSON.stringify(root)} is ignored`);
+const goodObjects = loadedReport(ROOT).sharedObjects;
+const badReports = [
+  ['no report API', null],
+  ['throwing report API', () => { throw new Error('report unavailable'); }],
+  ['empty report', () => ({})],
+  ['empty module list', () => ({ sharedObjects: [] })],
+  ['string module list', () => ({ sharedObjects: goodObjects.join(',') })],
+  ['nonstring module entry', () => ({ sharedObjects: [...goodObjects, 42] })],
+  ['missing kernelbase', () => ({ sharedObjects: goodObjects.slice(0, 2) })],
+  ['mismatching OS roots', () => ({ sharedObjects: [goodObjects[0], goodObjects[1], 'C:\\Fake\\System32\\kernelbase.dll'] })],
+  ['mismatching system folders', () => ({ sharedObjects: [goodObjects[0], goodObjects[1], `${ROOT}\\SysWOW64\\kernelbase.dll`] })],
+  ['conflicting duplicate core DLL', () => ({ sharedObjects: [...goodObjects, 'C:\\Fake\\System32\\ntdll.dll'] })],
+  ['core DLL outside system folder', () => ({ sharedObjects: [goodObjects[0], goodObjects[1], `${ROOT}\\kernelbase.dll`] })]
+];
+for (const value of ['Windows', '\\Windows', '/Windows', 'C:Windows', 'C:\\Temp\\..\\Windows', '\\\\server\\Windows', '\\\\?\\C:\\Windows', 'C:\\Windows\u0000', 'C:\\Windows:stream']) {
+  badReports.push([`malformed loaded path ${JSON.stringify(value)}`, () => ({ sharedObjects: ['ntdll.dll', 'kernel32.dll', 'kernelbase.dll'].map(name => `${value}\\System32\\${name}`) })]);
 }
-check(windowsTools.resolveSystemRoot({ SystemRoot: 'D:\\Fake' }, existsIn('D:\\Fake')) === null,
-  'an arbitrary existing folder without System32 is rejected');
-check(windowsTools.resolveSystemRoot({}, fallback) === 'C:\\Windows',
-  'known Windows installation is used for missing root metadata');
-check(windowsTools.resolveSystemRoot({}, () => { throw new Error('filesystem unavailable'); }) === null,
-  'filesystem failure has no PATH fallback');
+for (const [name, getReport] of badReports) {
+  const resolver = windowsTools.createToolResolver({ getReport, arch: 'x64' });
+  check(resolver.resolveSystemRoot() === null, `${name}: no root is fabricated`);
+  assert.throws(() => resolver.resolveTool('powershell.exe'), { code: 'WINDOWS_SYSTEM_ROOT_UNAVAILABLE' });
+  checks++;
+}
+{
+  let reads = 0;
+  let report = loadedReport(ROOT);
+  const resolver = windowsTools.createToolResolver({ getReport: () => { reads++; return report; }, arch: 'x64' });
+  check(resolver.resolveSystemRoot() === ROOT, 'all three OS DLL identities establish one root');
+  report = loadedReport('C:\\Fake');
+  check(resolver.resolveTool('net.exe') === `${SYSTEM32}\\net.exe` && resolver.resolveTool('reg.exe') === `${SYSTEM32}\\reg.exe` && reads === 1,
+    'only vetted root metadata is cached; subsequent reports cannot replace startup authority');
+  let failedReads = 0;
+  const unavailable = windowsTools.createToolResolver({ getReport: () => { failedReads++; return null; }, arch: 'x64' });
+  check(unavailable.resolveSystemRoot() === null && unavailable.resolveSystemRoot() === null && failedReads === 1,
+    'failed authority is cached once rather than rescanned or replaced by environment guesses');
+  const duplicates = windowsTools.createToolResolver({ getReport: () => ({ sharedObjects: [...goodObjects, goodObjects[0].toUpperCase()] }), arch: 'x64' });
+  check(duplicates.resolveSystemRoot()?.toLowerCase() === ROOT.toLowerCase(), 'identical case-insensitive core DLL duplicates preserve consensus');
+  check(windowsTools.createToolResolver({ getReport: () => loadedReport(ROOT, 'SysWOW64'), arch: 'x64' }).resolveSystemRoot() === null,
+    'native 64-bit process rejects a contradictory SysWOW64 report');
+}
+{
+  const source = fs.readFileSync(require.resolve('../src/main/windows-tools'), 'utf8');
+  const evaluate = report => {
+    const module = { exports: {} };
+    vm.runInNewContext(source, { require, module, process: { arch: 'x64', report } });
+    return module.exports;
+  };
+  let reads = 0;
+  const report = { excludeEnv: false, excludeNetwork: false, getReport() {
+    reads++;
+    assert.equal(this.excludeEnv, true);
+    assert.equal(this.excludeNetwork, true);
+    return { ...loadedReport(ROOT), environmentVariables: { PRIVATE: 'must-not-retain' } };
+  } };
+  const runtime = evaluate(report);
+  check(runtime.resolveSystemRoot() === ROOT && runtime.resolveTool('net.exe') === `${SYSTEM32}\\net.exe` && reads === 1,
+    'production module establishes OS authority at initialization and reads the report once');
+  check(report.excludeEnv === false && report.excludeNetwork === false,
+    'diagnostic report privacy flags are restored after collection');
+  const throwing = { excludeEnv: false, excludeNetwork: false, getReport() { throw new Error('private diagnostic failure'); } };
+  check(evaluate(throwing).resolveSystemRoot() === null && !throwing.excludeEnv && !throwing.excludeNetwork,
+    'report exceptions fail closed and restore process-wide privacy flags');
+  check(evaluate(undefined).resolveSystemRoot() === null,
+    'a runtime without the diagnostic report API cannot fabricate OS authority');
+}
 for (const name of ['net', 'NET.EXE', 'calc.exe', '..\\net.exe', 'C:\\Fake\\net.exe']) {
   assert.throws(() => windowsTools.resolveTool(name, options), { code: 'WINDOWS_TOOL_NOT_ALLOWED' });
   checks++;
 }
-assert.throws(() => windowsTools.resolveTool('net.exe', { env: {}, existsSync: () => false }),
-  { code: 'WINDOWS_SYSTEM_ROOT_UNAVAILABLE' });
-checks++;
 
 console.log('windows-tools-smoke: secret-safe transport');
 const SECRET = 'smoke-password-\u65e5\u672c\u8a9e-quote\'-$`-!';
@@ -177,7 +222,8 @@ if (process.platform === 'win32') {
     const paths = run("$r = @{}; foreach ($name in @('powershell.exe','cmd.exe')) { $r[$name] = Resolve-FixerTool $name }; $r | ConvertTo-Json -Compress");
     let realPaths = null;
     try { realPaths = JSON.parse(paths.stdout.toString('utf8').trim()); } catch (_) {}
-    check(paths.status === 0 && realPaths && realPaths['powershell.exe'].toLowerCase() === exe.toLowerCase() &&
+    const nativePs = path.win32.join(windowsTools.resolveSystemRoot(), 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    check(paths.status === 0 && realPaths && realPaths['powershell.exe'].toLowerCase() === nativePs.toLowerCase() &&
       !Object.values(realPaths).some(value => value.includes(temp)),
       'PowerShell and Node select the same system tools');
     const finalLine = run("Write-Output 'FINAL_LINE'");
@@ -189,6 +235,36 @@ if (process.platform === 'win32') {
       'parser failures never echo credential-bearing script source');
     const explicitFailure = run('exit 7');
     check(explicitFailure.status === 7, 'explicit script failure keeps its nonzero exit code');
+
+    const fakeRoot = path.join(temp, 'Fake Windows 日本語');
+    const fakeSystem = path.join(fakeRoot, 'System32');
+    const fakePs = path.join(fakeSystem, 'WindowsPowerShell', 'v1.0');
+    fs.mkdirSync(fakePs, { recursive: true });
+    for (const name of windowsTools.WINDOWS_TOOLS) fs.writeFileSync(path.join(name === 'powershell.exe' ? fakePs : fakeSystem, name), 'invalid fake executable; must never run');
+    const forgedEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:systemroot|windir|path|processor_architew6432)$/i.test(key)));
+    Object.assign(forgedEnv, { SystemRoot: fakeRoot, WINDIR: fakeRoot, PATH: '', PROCESSOR_ARCHITEW6432: 'FORGED' });
+    // Public, read-only fixture source. It is not the PowerShell transport.
+    const childSource = `
+      const tools = require(process.argv[1]);
+      const root = tools.resolveSystemRoot();
+      const exe = tools.resolveTool('powershell.exe');
+      const result = require('child_process').spawnSync(exe, tools.PS_STDIN_ARGS, {
+        input: Buffer.from(tools.prepareScript("& (Resolve-FixerTool 'cmd.exe') /d /c 'echo FIXER_TRUSTED'; [Environment]::SystemDirectory"), 'utf8'),
+        windowsHide: true, timeout: 15000, encoding: 'utf8'
+      });
+      console.log(JSON.stringify({ root, exe, exitCode: result.status, stdout: result.stdout, reportAvailable: typeof process.report?.getReport === 'function' }));
+    `;
+    const realChild = spawnSync(process.execPath, ['-e', childSource, require.resolve('../src/main/windows-tools')], {
+      cwd: temp, env: forgedEnv, windowsHide: true, timeout: 30000, encoding: 'utf8'
+    });
+    let proof;
+    try { proof = JSON.parse(realChild.stdout.trim()); } catch (_) {}
+    check(realChild.status === 0 && proof && proof.reportAvailable && proof.root.toLowerCase() === windowsTools.resolveSystemRoot().toLowerCase() &&
+      proof.exe.toLowerCase() === exe.toLowerCase() && !proof.exe.toLowerCase().startsWith(fakeRoot.toLowerCase()),
+      'actual Windows Node child ignores forged roots and real fake executable folders');
+    check(proof.exitCode === 0 && proof.stdout.trim().split(/\r?\n/)[0] === 'FIXER_TRUSTED' &&
+      proof.stdout.trim().split(/\r?\n/)[1].toLowerCase() === path.win32.join(windowsTools.resolveSystemRoot(), 'System32').toLowerCase(),
+      'real PowerShell and embedded native command run with forged roots and empty PATH');
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

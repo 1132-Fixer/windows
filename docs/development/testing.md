@@ -23,9 +23,11 @@ tool's acceptance does not replace the repository's strict LF gate.
 
 These Node-only checks run in `npm test`:
 
-- `tools/windows-tools-smoke.js`: allowlisted absolute system-folder
-  resolution, paths containing spaces, missing executables, optional tools,
-  hostile working-folder/PATH candidates, and probe-result validation.
+- `tools/windows-tools-smoke.js`: OS-loaded DLL consensus, forged environment
+  and folder candidates, mismatching roots, missing DLLs, malformed paths,
+  unavailable reports, caching, spaces and Unicode, and probe-result validation.
+  On Windows it also starts a real Node child with forged `SystemRoot`/`WINDIR`
+  and an empty PATH, then runs read-only commands through the trusted executable.
 - `tools/preflight-regression-smoke.js`: the real preflight function with
   controlled process results. Empty output, malformed or incomplete JSON,
   nonzero exit, timeout and launch failure each produce one check blocker;
@@ -34,6 +36,9 @@ These Node-only checks run in `npm test`:
 - `tools/windows-process-smoke.js`: actual production process functions with
   controlled children, deadline and single completion checks, UTF-8 chunk
   decoding, and stdin failures.
+- `tools/packaged-runtime-smoke.js`: the actual acceptance gate with controlled
+  main-process facts. Missing APIs, wrong archives, conflicting DLLs and failed
+  child commands cannot produce a passing runtime result.
 - `tools/ps-encoding-smoke.js`: fixed UTF-8 standard-input transport, no
   dynamic script or helper secret in arguments or a temporary script file,
   and the PowerShell preparation contract.
@@ -50,6 +55,14 @@ changing the real system tools: use the controlled fixtures, then confirm
 their renderer outcomes in the capture harness. A failed check must show one
 plain-English explanation with retry and support actions. Report unavailable
 Windows runtime or packaged cases as `not-run`.
+
+`tools/packaged-acceptance.js` has mandatory actual Electron main-process
+checks for the shipped archive hash, diagnostic-report availability, all three
+loaded OS DLLs, resolved system tools and a read-only PowerShell command. A
+separate launch supplies fake Windows tool folders, forged root variables and
+an empty PATH. These cases fail if the packaged runtime cannot establish OS
+authority or execute the trusted command; a Node-only pass cannot replace them.
+The driver records only narrow runtime metadata, never the diagnostic report.
 
 ## Rendered screens (headless Chromium)
 

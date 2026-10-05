@@ -234,7 +234,7 @@ console.log('profile-safety-smoke: credential redaction and PowerShell stdin');
 
   const exe = windowsTools.resolveTool('powershell.exe', {
     env: { SystemRoot: 'D:\\Windows', PATH: '' }, arch: 'x64',
-    existsSync: value => ['D:\\Windows', 'D:\\Windows\\System32'].includes(value)
+    getReport: () => ({ sharedObjects: ['ntdll.dll', 'kernel32.dll', 'kernelbase.dll'].map(name => `D:\\Windows\\System32\\${name}`) })
   });
   const argv = [exe, ...windowsTools.PS_STDIN_ARGS];
   check(!ps.argvContainsSecret(argv, [pw]) && !argv.includes('-File'),

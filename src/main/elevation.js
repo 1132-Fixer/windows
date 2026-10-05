@@ -19,7 +19,6 @@
  * with the script passed in memory.
  */
 
-const fs = require('fs');
 const { spawn, spawnSync } = require('child_process');
 const windowsTools = require('./windows-tools');
 
@@ -89,13 +88,13 @@ function killTree(pid) {
 // Windows root is a launch error, never a reason to search PATH or the CWD.
 const resolveSystemRoot = windowsTools.resolveSystemRoot;
 
-function systemPowerShell(env = process.env, existsSync = fs.existsSync, arch = process.arch) {
-  try { return windowsTools.resolveTool('powershell.exe', { env, existsSync, arch }); }
+function systemPowerShell(options) {
+  try { return windowsTools.resolveTool('powershell.exe', options); }
   catch (_) { return null; }
 }
 
-function systemWhoami(env = process.env, existsSync = fs.existsSync, arch = process.arch) {
-  try { return windowsTools.resolveTool('whoami.exe', { env, existsSync, arch }); }
+function systemWhoami(options) {
+  try { return windowsTools.resolveTool('whoami.exe', options); }
   catch (_) { return null; }
 }
 
@@ -103,7 +102,7 @@ function systemWhoami(env = process.env, existsSync = fs.existsSync, arch = proc
 // entry: Node quotes it for CreateProcess and PowerShell reads the whole
 // argument as the command text, so no shell ever re-parses it.
 function runPsCommand(script, timeoutMs, spawnImpl, toolOptions = {}) {
-  const exe = systemPowerShell(toolOptions.env, toolOptions.existsSync, toolOptions.arch);
+  const exe = systemPowerShell(toolOptions);
   if (!exe) {
     return Promise.resolve({
       outcome: 'launch-error', timedOut: false, code: -1,
@@ -227,9 +226,8 @@ function createElevationController(deps = {}) {
   const probeMs = deps.probeMs || ELEVATION_PROBE_MS;
   const relaunchMs = deps.relaunchMs || UAC_RELAUNCH_MS;
   const toolOptions = {
-    env: deps.env || process.env,
-    existsSync: deps.existsSync || fs.existsSync,
-    arch: deps.arch || process.arch
+    arch: deps.arch || process.arch,
+    ...(Object.prototype.hasOwnProperty.call(deps, 'getReport') ? { getReport: deps.getReport } : {})
   };
   let memo = null;
 
@@ -239,13 +237,13 @@ function createElevationController(deps = {}) {
   function probeWhoamiSync() {
     const t0 = Date.now();
     try {
-      const whoami = systemWhoami(toolOptions.env, toolOptions.existsSync, toolOptions.arch);
+      const whoami = systemWhoami(toolOptions);
       if (!whoami) return null;
       const r = spawnSyncImpl(whoami, ['/groups'], {
         encoding: 'utf8',
         timeout: Math.min(probeMs, 2500),
         windowsHide: true,
-        env: toolOptions.env
+        env: deps.env || process.env
       });
       // Output is evidence only after the process completed successfully.
       // Timed-out or failed probes can contain stale, partial valid-looking

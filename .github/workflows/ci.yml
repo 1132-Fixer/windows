@@ -13,6 +13,32 @@ on:
   pull_request:
 
 jobs:
+  support:
+    # This name is required by the Windows repository ruleset. Keep the
+    # desktop/service contract gate after the backend moved to its own repo.
+    name: Support Service
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - name: Install desktop test dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm ci
+      - name: Verify stateless support submission boundary
+        run: node tools/support-submission-smoke.js
+      - name: Verify support release readiness contract
+        run: node tools/support-release-smoke.js
+
   build:
     name: Build & Test
     runs-on: windows-latest

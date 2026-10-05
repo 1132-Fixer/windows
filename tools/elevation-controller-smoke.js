@@ -58,10 +58,11 @@ function controller(opts) {
     runTimed: opts.runner,
     probeMs: opts.probeMs || 50,
     relaunchMs: opts.relaunchMs || 50,
-    // Process mocks still use the real resolver. Model an actual Windows
-    // layout explicitly so these behaviour cases run on every CI host.
+    // Process mocks still use the real resolver. Model loaded Windows DLL
+    // evidence explicitly so these behaviour cases run on every CI host.
     env: opts.env || { SystemRoot: 'C:\\Windows', PATH: '' },
-    existsSync: opts.existsSync || ((value) => ['C:\\Windows', 'C:\\Windows\\System32'].includes(value)),
+    getReport: Object.prototype.hasOwnProperty.call(opts, 'getReport') ? opts.getReport :
+      () => ({ sharedObjects: ['ntdll.dll', 'kernel32.dll', 'kernelbase.dll'].map(name => `C:\\Windows\\System32\\${name}`) }),
     arch: opts.arch || 'x64'
   });
 }
@@ -251,31 +252,25 @@ const RELAUNCH_OPTS = {
     check(elev.parseRelaunchOutput('') === null && elev.parseRelaunchOutput(null) === null, 'empty output parses to null');
   }
 
-  console.log('elevation-controller-smoke: SystemRoot resolution');
+  console.log('elevation-controller-smoke: OS-loaded root authority');
   {
-    const exists = (p) => ['D:\\Win', 'D:\\Win\\System32', 'C:\\Windows', 'C:\\Windows\\System32'].includes(p);
-    check(elev.resolveSystemRoot({ SystemRoot: 'D:\\Win' }, exists) === 'D:\\Win', 'absolute existing SystemRoot is used');
-    check(elev.resolveSystemRoot({ SystemRoot: 'Win' }, exists) === 'C:\\Windows', 'relative SystemRoot is ignored');
-    check(elev.resolveSystemRoot({}, exists) === 'C:\\Windows', 'missing SystemRoot falls back to C:\\Windows');
-    check(elev.resolveSystemRoot({ SystemRoot: 'D:\\Nope' }, exists) === 'C:\\Windows', 'nonexistent SystemRoot falls back');
-    check(elev.resolveSystemRoot({}, () => false) === null, 'no Windows directory at all resolves to null');
-    check(elev.systemPowerShell({ SystemRoot: 'D:\\Win' }, exists) === 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'PowerShell path is absolute under SystemRoot');
-    check(elev.systemPowerShell({}, () => false) === null, 'PowerShell path is null without a Windows directory');
-    for (const root of ['\\Windows', '/Windows', 'C:Windows', '\\\\server\\Windows', 'C:\\Temp\\..\\Windows']) {
-      check(elev.resolveSystemRoot({ SystemRoot: root }, exists) === 'C:\\Windows',
-        `unsafe SystemRoot ${JSON.stringify(root)} is ignored`);
-    }
-    check(elev.resolveSystemRoot({ SystemRoot: 'D:\\Existing folder' }, p => p === 'D:\\Existing folder') === null,
-      'an existing folder without System32 is not a Windows root');
-    check(elev.systemWhoami({ systemroot: 'D:\\Win', PATH: 'C:\\Fake' }, exists, 'x64') === 'D:\\Win\\System32\\whoami.exe',
-      'whoami uses the shared absolute path with case-insensitive metadata');
-    check(elev.systemPowerShell({ SystemRoot: 'D:\\Win', PROCESSOR_ARCHITEW6432: 'AMD64' }, exists, 'ia32') ===
-      'D:\\Win\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe', 'elevation uses native PowerShell for a WOW64 process');
+    const opts = { arch: 'x64', getReport: () => ({ sharedObjects: ['ntdll.dll', 'kernel32.dll', 'kernelbase.dll'].map(name => `D:\\Win\\System32\\${name}`) }),
+      env: { SystemRoot: 'C:\\Fake', WINDIR: 'C:\\Fake', PATH: 'C:\\Fake' }, existsSync: () => true };
+    check(elev.resolveSystemRoot(opts) === 'D:\\Win', 'elevation root comes from loaded OS libraries');
+    check(elev.systemPowerShell(opts) === 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      'forged environment and matching disk shape cannot replace elevation PowerShell');
+    check(elev.systemWhoami(opts) === 'D:\\Win\\System32\\whoami.exe', 'whoami uses the same loaded-library root');
+    const absent = { ...opts, getReport: null };
+    check(elev.systemPowerShell(absent) === null && elev.systemWhoami(absent) === null,
+      'no report means no privileged executable, even with existing forged folders');
+    const wow64 = { arch: 'ia32', getReport: () => ({ sharedObjects: ['ntdll.dll', 'kernel32.dll', 'kernelbase.dll'].map(name => `D:\\Win\\SysWOW64\\${name}`) }) };
+    check(elev.systemPowerShell(wow64) === 'D:\\Win\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe',
+      'loaded WOW64 libraries select native PowerShell without an environment flag');
     const runner = recordingRunner({ stdout: `${elev.RELAUNCH_STARTED}\r\n` });
-    const missing = controller({ sync: fakeSync(HIGH), runner, env: { PATH: 'C:\\Fake' }, existsSync: () => false });
+    const missing = controller({ sync: fakeSync(HIGH), runner, env: { SystemRoot: 'C:\\Fake', PATH: 'C:\\Fake' }, getReport: null });
     const missingResult = await missing.relaunchElevated(RELAUNCH_OPTS);
     check(missingResult.outcome === 'launch-error' && runner.calls.length === 0,
-      'missing Windows root reports launch error without executing a fake PATH PowerShell');
+      'missing OS authority reports launch error without a fixed-drive or PATH fallback');
   }
 
   console.log('elevation-controller-smoke: no temporary script file');

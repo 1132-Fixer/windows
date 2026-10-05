@@ -61,11 +61,16 @@ cut. This map is the auditor index until a dedicated, reviewed move lands.
 ## Windows repair process boundary
 
 `src/main/windows-tools.js` owns the allowlisted Windows executable names
-and absolute system-folder candidates. The Node resolver accepts validated,
-drive-absolute `SystemRoot` and `windir` roots, then the standard Windows
-root as a fallback. The shipped app is x64; the resolver also handles
-`Sysnative` for a 32-bit process on 64-bit Windows. It never searches the
-working folder or PATH for a privileged repair executable. PowerShell repair
+and absolute system-folder paths. At module initialization, the Node resolver
+reads `process.report.getReport().sharedObjects`, which Node obtains from
+Windows' loaded-module APIs. It requires `ntdll.dll`, `kernel32.dll` and
+`kernelbase.dll` to agree on one local drive root and one `System32` or
+`SysWOW64` directory. Only that vetted root and directory are cached; no
+diagnostic report is written or retained. Conflicting, incomplete or unavailable
+reports fail closed. Environment variables, folder shapes, the working folder,
+PATH and a fixed drive are never executable authorities. The shipped app is
+x64; `SysWOW64` DLLs in an ia32 process establish the need for `Sysnative`.
+PowerShell repair
 scripts resolve native tools through Windows' system directory and
 `$PSHOME`; they use the same tool allowlist.
 

@@ -33,8 +33,8 @@ check(main.includes('if (!elevated)') && main.includes('relaunchElevated()'),
 {
   const elevSrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'elevation.js'), 'utf8');
   check(/Start-Process[\s\S]*-Verb RunAs/.test(elevSrc), 'relaunch uses Windows runas');
-  const exists = value => ['D:\\Windows', 'D:\\Windows\\System32'].includes(value);
-  const resolvedPowerShell = elev.systemPowerShell({ SystemRoot: 'D:\\Windows', PATH: 'C:\\Fake' }, exists, 'x64');
+  const resolvedPowerShell = elev.systemPowerShell({ arch: 'x64',
+    getReport: () => ({ sharedObjects: ['ntdll.dll', 'kernel32.dll', 'kernelbase.dll'].map(name => `D:\\Windows\\System32\\${name}`) }) });
   check(elevSrc.includes("-Command") && elevSrc.includes("windowsTools.resolveTool('powershell.exe'") &&
     resolvedPowerShell === 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     'relaunch uses System32 PowerShell -Command');

@@ -1,6 +1,5 @@
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
 
 // These tools belong to Windows. Neither an app directory nor PATH is an
@@ -20,50 +19,108 @@ function isWindowsRoot(value) {
     !value.split(/[\\/]/).some(part => part === '.' || part === '..');
 }
 
-function envValue(env, name) {
-  const key = Object.keys(env).find(value => value.toLowerCase() === name.toLowerCase());
-  return key === undefined ? undefined : env[key];
+const CORE_DLLS = new Set(['ntdll.dll', 'kernel32.dll', 'kernelbase.dll']);
+
+function loadedSystemIdentity(report, arch) {
+  if (!report || !Array.isArray(report.sharedObjects) ||
+      report.sharedObjects.some(value => typeof value !== 'string')) return null;
+  const identities = new Map();
+  let identity = null;
+  for (const value of report.sharedObjects) {
+    const name = path.win32.basename(value).toLowerCase();
+    if (!CORE_DLLS.has(name)) continue;
+    if (!isWindowsRoot(value) || /[<>|"*?]/.test(value) || value.slice(2).includes(':')) return null;
+    const normalized = path.win32.normalize(value);
+    const directory = path.win32.dirname(normalized);
+    const systemFolder = path.win32.basename(directory).toLowerCase();
+    if (systemFolder !== 'system32' && systemFolder !== 'syswow64') return null;
+    const root = path.win32.dirname(directory);
+    if (!isWindowsRoot(root)) return null;
+    const key = `${root.toLowerCase()}\\${systemFolder}`;
+    if ((identity && identity.key !== key) ||
+        (identities.has(name) && identities.get(name) !== normalized.toLowerCase())) return null;
+    identity = { root, systemFolder, key };
+    identities.set(name, normalized.toLowerCase());
+  }
+  if (identities.size !== CORE_DLLS.size || !identity) return null;
+  if (!['ia32', 'x64', 'arm64'].includes(arch) ||
+      (arch !== 'ia32' && identity.systemFolder !== 'system32')) return null;
+  return Object.freeze({ root: identity.root, systemFolder: identity.systemFolder });
 }
 
-function resolveSystemRoot(env = process.env, existsSync = fs.existsSync) {
-  const candidates = ['SystemRoot', 'WINDIR'].map(name => {
-    const value = envValue(env, name);
-    return typeof value === 'string' ? value.trim() : '';
+function readLoadedLibraries() {
+  const api = process.report;
+  if (!api || typeof api.getReport !== 'function') return null;
+  // Never write a diagnostic report or retain its environment, stack or
+  // network sections. Newer Node versions can omit private sections at
+  // collection time as well. Restore the process-wide flags immediately.
+  const flags = ['excludeEnv', 'excludeNetwork'];
+  const changed = [];
+  try {
+    for (const flag of flags) {
+      if (flag in api) {
+        changed.push([flag, api[flag]]);
+        api[flag] = true;
+      }
+    }
+    const report = api.getReport();
+    return { sharedObjects: report && report.sharedObjects };
+  } finally {
+    for (const [flag, value] of changed.reverse()) api[flag] = value;
+  }
+}
+
+function createToolResolver({ getReport = readLoadedLibraries, arch = process.arch } = {}) {
+  let checked = false;
+  let identity = null;
+  function systemIdentity() {
+    if (!checked) {
+      checked = true;
+      try { identity = typeof getReport === 'function' ? loadedSystemIdentity(getReport(), arch) : null; }
+      catch (_) { identity = null; }
+    }
+    return identity;
+  }
+  return Object.freeze({
+    resolveSystemRoot() { return systemIdentity()?.root || null; },
+    resolveTool(name) {
+      if (!TOOL_NAMES.has(name)) {
+        const error = new Error('Windows tool is not supported.');
+        error.code = 'WINDOWS_TOOL_NOT_ALLOWED';
+        throw error;
+      }
+      const system = systemIdentity();
+      if (!system) {
+        const error = new Error('Windows system directory could not be verified from OS-loaded libraries.');
+        error.code = 'WINDOWS_SYSTEM_ROOT_UNAVAILABLE';
+        throw error;
+      }
+      // WOW64 is established by the loaded DLL directory, never an
+      // environment variable. Native x64/arm64 processes use System32.
+      const systemDir = arch === 'ia32' && system.systemFolder === 'syswow64' ? 'Sysnative' : 'System32';
+      return name === 'powershell.exe'
+        ? path.win32.join(system.root, systemDir, 'WindowsPowerShell', 'v1.0', name)
+        : path.win32.join(system.root, systemDir, name);
+    }
   });
-  candidates.push('C:\\Windows');
-  for (const candidate of candidates) {
-    if (!isWindowsRoot(candidate)) continue;
-    const root = path.win32.normalize(candidate);
-    try {
-      // An arbitrary existing directory is not a Windows installation root.
-      if (existsSync(root) && existsSync(path.win32.join(root, 'System32'))) return root;
-    } catch (_) { /* Try the known fallback instead of trusting this root. */ }
-  }
-  return null;
 }
 
-function resolveTool(name, options = {}) {
-  if (!TOOL_NAMES.has(name)) {
-    const error = new Error('Windows tool is not supported.');
-    error.code = 'WINDOWS_TOOL_NOT_ALLOWED';
-    throw error;
-  }
-  const env = options.env || process.env;
+const defaultResolver = createToolResolver();
+// Establish authority during module initialization, before repair creates
+// an account credential. Only the vetted root/folder pair survives.
+defaultResolver.resolveSystemRoot();
+const injectedResolvers = new WeakMap();
+function resolverFor(options) {
+  if (!options || !Object.prototype.hasOwnProperty.call(options, 'getReport')) return defaultResolver;
+  if (typeof options.getReport !== 'function') return createToolResolver(options);
+  let architectures = injectedResolvers.get(options.getReport);
+  if (!architectures) { architectures = new Map(); injectedResolvers.set(options.getReport, architectures); }
   const arch = options.arch || process.arch;
-  const root = resolveSystemRoot(env, options.existsSync || fs.existsSync);
-  if (!root) {
-    const error = new Error('Windows system directory could not be found.');
-    error.code = 'WINDOWS_SYSTEM_ROOT_UNAVAILABLE';
-    throw error;
-  }
-  // Only a 32-bit process on 64-bit Windows needs the Sysnative alias. The
-  // shipped x64 app must use System32; Sysnative does not exist for it.
-  const systemDir = arch === 'ia32' && envValue(env, 'PROCESSOR_ARCHITEW6432')
-    ? 'Sysnative' : 'System32';
-  return name === 'powershell.exe'
-    ? path.win32.join(root, systemDir, 'WindowsPowerShell', 'v1.0', name)
-    : path.win32.join(root, systemDir, name);
+  if (!architectures.has(arch)) architectures.set(arch, createToolResolver({ getReport: options.getReport, arch }));
+  return architectures.get(arch);
 }
+function resolveSystemRoot(options) { return resolverFor(options).resolveSystemRoot(); }
+function resolveTool(name, options) { return resolverFor(options).resolveTool(name); }
 
 const PS_UTF8_OUTPUT_PREAMBLE =
   'try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) } catch {\r\n' +
@@ -168,6 +225,6 @@ function parseProbe(result, allTools) {
 }
 
 module.exports = {
-  WINDOWS_TOOLS, resolveSystemRoot, resolveTool,
+  WINDOWS_TOOLS, createToolResolver, resolveSystemRoot, resolveTool,
   PS_UTF8_OUTPUT_PREAMBLE, PS_STDIN_ARGS, prepareScript, parseProbe
 };
