@@ -245,25 +245,74 @@ if (process.platform === 'win32') {
     Object.assign(forgedEnv, { SystemRoot: fakeRoot, WINDIR: fakeRoot, PATH: '', PROCESSOR_ARCHITEW6432: 'FORGED' });
     // Public, read-only fixture source. It is not the PowerShell transport.
     const childSource = `
-      const tools = require(process.argv[1]);
-      const root = tools.resolveSystemRoot();
-      const exe = tools.resolveTool('powershell.exe');
-      const result = require('child_process').spawnSync(exe, tools.PS_STDIN_ARGS, {
-        input: Buffer.from(tools.prepareScript("& (Resolve-FixerTool 'cmd.exe') /d /c 'echo FIXER_TRUSTED'; [Environment]::SystemDirectory"), 'utf8'),
-        windowsHide: true, timeout: 15000, encoding: 'utf8'
-      });
-      console.log(JSON.stringify({ root, exe, exitCode: result.status, stdout: result.stdout, reportAvailable: typeof process.report?.getReport === 'function' }));
+      const receipt = { stage: 'started', arch: process.arch, reportAvailable: typeof process.report?.getReport === 'function' };
+      try {
+        receipt.stage = 'load-module';
+        const tools = require(process.argv[1]);
+        receipt.root = tools.resolveSystemRoot();
+        if (!receipt.root && receipt.reportAvailable) {
+          const reportApi = process.report;
+          const changed = [];
+          try {
+            for (const flag of ['excludeEnv', 'excludeNetwork']) {
+              if (flag in reportApi) { changed.push([flag, reportApi[flag]]); reportApi[flag] = true; }
+            }
+            const objects = reportApi.getReport()?.sharedObjects;
+            receipt.libraryListAvailable = Array.isArray(objects);
+            receipt.coreLibraries = Array.isArray(objects) ? objects.filter(value => typeof value === 'string' && /^(?:ntdll|kernel32|kernelbase)\\.dll$/i.test(require('path').win32.basename(value))).slice(0, 6).map(value => ({
+              name: require('path').win32.basename(value).toLowerCase(),
+              folder: require('path').win32.basename(require('path').win32.dirname(value)).toLowerCase(),
+              driveAbsolute: /^[A-Za-z]:[\\\\/]/.test(value)
+            })) : [];
+          } finally {
+            for (const [flag, value] of changed.reverse()) reportApi[flag] = value;
+          }
+        }
+        receipt.stage = 'resolve-executable';
+        receipt.exe = tools.resolveTool('powershell.exe');
+        receipt.stage = 'run-powershell';
+        const result = require('child_process').spawnSync(receipt.exe, tools.PS_STDIN_ARGS, {
+          input: Buffer.from(tools.prepareScript("& (Resolve-FixerTool 'cmd.exe') /d /c 'echo FIXER_TRUSTED'; [Environment]::SystemDirectory"), 'utf8'),
+          windowsHide: true, timeout: 15000, encoding: 'utf8'
+        });
+        const lines = (result.stdout || '').trim().split(/\\r?\\n/);
+        receipt.exitCode = result.status;
+        receipt.signal = result.signal;
+        receipt.markerMatches = lines[0] === 'FIXER_TRUSTED';
+        receipt.systemDirMatches = lines[1]?.toLowerCase() === require('path').win32.join(receipt.root, 'System32').toLowerCase();
+        receipt.stderrBytes = Buffer.byteLength(result.stderr || '');
+        receipt.errorCode = typeof result.error?.code === 'string' ? result.error.code : null;
+        receipt.stage = 'complete';
+      } catch (error) {
+        receipt.errorCode = typeof error.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code) ? error.code : 'UNKNOWN';
+      }
+      console.log(JSON.stringify(receipt));
     `;
-    const realChild = spawnSync(process.execPath, ['-e', childSource, require.resolve('../src/main/windows-tools')], {
-      cwd: temp, env: forgedEnv, windowsHide: true, timeout: 30000, encoding: 'utf8'
-    });
-    let proof;
-    try { proof = JSON.parse(realChild.stdout.trim()); } catch (_) {}
-    check(realChild.status === 0 && proof && proof.reportAvailable && proof.root.toLowerCase() === windowsTools.resolveSystemRoot().toLowerCase() &&
+    const childProof = (env, label) => {
+      const realChild = spawnSync(process.execPath, ['-e', childSource, require.resolve('../src/main/windows-tools')], {
+        cwd: temp, env, windowsHide: true, timeout: 30000, encoding: 'utf8'
+      });
+      let proof;
+      try { proof = JSON.parse((realChild.stdout || '').trim()); } catch (_) {}
+      // Child errors can include source or inherited metadata. Log only
+      // explicit stage/status fields, fixed markers and verified path fields.
+      const stderrClass = ['SyntaxError', 'MODULE_NOT_FOUND', 'ERR_INVALID_ARG', 'WINDOWS_SYSTEM_ROOT_UNAVAILABLE'].find(value => (realChild.stderr || '').includes(value)) || null;
+      console.log(`  diagnostic ${label}: ${JSON.stringify({ status: realChild.status, signal: realChild.signal, stderrClass,
+        errorCode: realChild.error?.code || null, stdoutBytes: Buffer.byteLength(realChild.stdout || ''),
+        stderrBytes: Buffer.byteLength(realChild.stderr || ''), proof: proof || null })}`);
+      return { realChild, proof };
+    };
+    const baselineEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^path$/i.test(key)));
+    baselineEnv.PATH = '';
+    const baseline = childProof(baselineEnv, 'native-child-baseline');
+    const { realChild, proof } = childProof(forgedEnv, 'native-child-forged-root');
+    check(baseline.realChild.status === 0 && baseline.proof?.stage === 'complete' && baseline.proof.reportAvailable &&
+      baseline.proof.markerMatches && baseline.proof.systemDirMatches && baseline.proof.exitCode === 0,
+      'actual Windows Node child baseline executes the shared tool transport');
+    check(realChild.status === 0 && proof?.stage === 'complete' && proof.reportAvailable && proof.root.toLowerCase() === windowsTools.resolveSystemRoot().toLowerCase() &&
       proof.exe.toLowerCase() === exe.toLowerCase() && !proof.exe.toLowerCase().startsWith(fakeRoot.toLowerCase()),
       'actual Windows Node child ignores forged roots and real fake executable folders');
-    check(proof.exitCode === 0 && proof.stdout.trim().split(/\r?\n/)[0] === 'FIXER_TRUSTED' &&
-      proof.stdout.trim().split(/\r?\n/)[1].toLowerCase() === path.win32.join(windowsTools.resolveSystemRoot(), 'System32').toLowerCase(),
+    check(proof.exitCode === 0 && proof.markerMatches && proof.systemDirMatches,
       'real PowerShell and embedded native command run with forged roots and empty PATH');
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
