@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed Windows tool check no longer becomes several false missing-tool
+  errors after **Fix now**. Preflight validates process status and the complete
+  inventory before accepting it; actual missing required tools share one
+  blocker. Copy gives retry and Support Report steps without blaming PATH or
+  asking users to disable security software.
+- Privileged repair tools resolve from allowlisted Windows system-folder
+  paths. PowerShell reads UTF-8 script source through standard input; dynamic
+  scripts and helper passwords stay out of PowerShell arguments and temporary
+  script files. Setup and Portable use the same repair path.
+- Secondary Logon must be running or successfully started and verified before
+  repair continues. Failed or timed-out checks cannot pass on output alone.
+- Administrator checks and elevated relaunches reject failed process results,
+  even when their output contains a success marker. Process output preserves
+  Unicode across arbitrary pipe chunks and ignores events after completion.
+
+### Changed
+
+- Feedback, Rate us and Report a bug use one anonymous HTTPS submission to
+  1132 Fixer Support. The app shows **Sent** after a valid response and keeps
+  drafts on failure. Support credentials, Discord destinations and support
+  server code belong to the separate service repository.
+
 ## [6.4.0] - 2026-09-05
 
 Verified on this branch's packaged builds by `tools/packaged-update-acceptance.js` on an elevated Windows 11 session: a real per-machine install of a local pre-release build followed by an in-place update to 6.4.0 through a local copy of the update feed. Four full runs on the release candidate passed every check except the handoff-notice check, which found the defect fixed below; a targeted re-check of that fix is recorded in the release notes. The rebuilt uninstaller exits 0 on every run; the 6.3.1–6.3.3 uninstaller exited 2 on every start. `npm test` and the CI packaged acceptance are green on `main`. Releases remain unsigned.

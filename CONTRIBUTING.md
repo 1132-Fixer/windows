@@ -32,7 +32,7 @@ Public docs live under [docs/README.md](docs/README.md).
 
 ## What is testable without Zoom
 
-`npm test` and `node feedback-proxy/test.js` do not need a Zoom install.
+`npm test` does not need a Zoom install. The separate support service has its own test suite.
 
 ## What needs Windows
 

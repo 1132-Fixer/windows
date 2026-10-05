@@ -139,6 +139,7 @@ Common fixes are in [docs/user/troubleshooting.md](docs/user/troubleshooting.md)
 | The app says permission is missing | Close it, then approve the Windows prompt. |
 | Zoom is not found | Install Zoom Workplace with the machine-wide installer. |
 | **Fix now** stays unavailable | Open **View details** and fix the marked item. |
+| The Windows tool check fails, or 6.4.0 lists several missing tools after **Fix now** | Try again, then use **Support Report** if it repeats. Version 6.4.0 can turn a failed check into misleading missing-tool messages. See [troubleshooting](docs/user/troubleshooting.md). |
 | Camera or microphone is missing | Set camera and microphone access for desktop apps while signed in as `user1`. |
 | SmartScreen warns, or Smart App Control blocks the app | Releases are unsigned. SmartScreen lets you continue; Smart App Control does not, and has no per-app exception. Do not turn it off for this. See [troubleshooting](docs/user/troubleshooting.md) and [code signing](docs/security/code-signing.md). |
 

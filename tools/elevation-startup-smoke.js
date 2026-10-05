@@ -33,7 +33,10 @@ check(main.includes('if (!elevated)') && main.includes('relaunchElevated()'),
 {
   const elevSrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'elevation.js'), 'utf8');
   check(/Start-Process[\s\S]*-Verb RunAs/.test(elevSrc), 'relaunch uses Windows runas');
-  check(elevSrc.includes("-Command") && elevSrc.includes('WindowsPowerShell'),
+  const exists = value => ['D:\\Windows', 'D:\\Windows\\System32'].includes(value);
+  const resolvedPowerShell = elev.systemPowerShell({ SystemRoot: 'D:\\Windows', PATH: 'C:\\Fake' }, exists, 'x64');
+  check(elevSrc.includes("-Command") && elevSrc.includes("windowsTools.resolveTool('powershell.exe'") &&
+    resolvedPowerShell === 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     'relaunch uses System32 PowerShell -Command');
   check(!elevSrc.includes('fixer-elev-') && !/['"]-File['"]/.test(elevSrc) && !/writeFileSync|os\.tmpdir/.test(elevSrc),
     'relaunch does not write a temp .ps1 (SAC blocks unknown scripts)');

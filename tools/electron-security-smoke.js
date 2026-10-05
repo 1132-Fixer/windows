@@ -56,6 +56,16 @@ console.log('electron-security-smoke: IPC allowlist rejects');
   const longText = es.validateInvoke('submit-feedback', ['Contact', 'x'.repeat(100 * 1024 + 1)]);
   check(longText.ok === false && /too long/.test(longText.reason), 'submit-feedback rejects oversized text');
 
+  const unicodeText = es.validateInvoke('submit-feedback', ['Contact', 'é'.repeat(60 * 1024)]);
+  check(unicodeText.ok === false && /too long/.test(unicodeText.reason), 'submit-feedback bounds UTF-8 bytes, not character count');
+
+  check(!es.validateInvoke('submit-feedback', ['User Rating', 'rating', undefined]).ok, 'User Rating requires an explicit score');
+  for (const score of [0, 6, 2.5, '5']) {
+    check(!es.validateInvoke('submit-feedback', ['User Rating', 'rating', undefined, score]).ok, `User Rating rejects invalid score ${score}`);
+  }
+  check(es.validateInvoke('submit-feedback', ['User Rating', 'rating', undefined, 5]).ok, 'User Rating accepts selected overall score');
+  check(!es.validateInvoke('submit-feedback', ['Contact', 'message', undefined, 5]).ok, 'Contact cannot masquerade as a rating');
+
   const okFeedback = es.validateInvoke('submit-feedback', ['Bug Report', 'camera is black', undefined]);
   check(okFeedback.ok === true && okFeedback.args[0] === 'Bug Report', 'submit-feedback accepts catalog type');
 

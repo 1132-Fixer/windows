@@ -57,7 +57,12 @@ function controller(opts) {
     spawnSync: opts.sync,
     runTimed: opts.runner,
     probeMs: opts.probeMs || 50,
-    relaunchMs: opts.relaunchMs || 50
+    relaunchMs: opts.relaunchMs || 50,
+    // Process mocks still use the real resolver. Model an actual Windows
+    // layout explicitly so these behaviour cases run on every CI host.
+    env: opts.env || { SystemRoot: 'C:\\Windows', PATH: '' },
+    existsSync: opts.existsSync || ((value) => ['C:\\Windows', 'C:\\Windows\\System32'].includes(value)),
+    arch: opts.arch || 'x64'
   });
 }
 const RELAUNCH_OPTS = {
@@ -111,6 +116,29 @@ const RELAUNCH_OPTS = {
     const c = controller({ sync: fakeSync(''), runner: recordingRunner({ outcome: 'ok', code: 1, stdout: '' }) });
     const r = await c.isElevated();
     check(r.elevated === false && r.method === 'failed', 'nonzero exit without a sentinel fails closed');
+  }
+  for (const [name, reply] of [
+    ['nonzero exit', { code: 1 }],
+    ['missing exit code', { code: null }],
+    ['timeout', { outcome: 'timeout', timedOut: true, code: -1 }],
+    ['spawn error', { outcome: 'launch-error', code: -1, error: 'spawn denied' }],
+    ['error with zero exit', { code: 0, error: 'probe failed' }],
+    ['unknown outcome', { outcome: 'unknown', code: 0 }]
+  ]) {
+    const c = controller({ sync: fakeSync(''), runner: recordingRunner({ stdout: 'TOKEN_ELEVATED=1\r\n', ...reply }) });
+    const r = await c.isElevated();
+    check(r.elevated === false && r.method === 'failed', `${name} with a valid token sentinel never grants elevation`);
+  }
+  for (const [name, reply] of [
+    ['nonzero whoami exit', { status: 1 }],
+    ['whoami process error', { status: 0, error: new Error('probe denied') }],
+    ['whoami timeout signal', { status: null, signal: 'SIGTERM' }]
+  ]) {
+    const runner = recordingRunner({ stdout: 'TOKEN_ELEVATED=0\r\n' });
+    const c = controller({ sync: () => ({ stdout: HIGH, ...reply }), runner });
+    const r = await c.isElevated();
+    check(r.elevated === false && r.method === 'token-elevation' && runner.calls.length === 1,
+      `${name} with a valid integrity SID requires a successful independent token probe`);
   }
   {
     const c = controller({ sync: fakeSync(''), runner: recordingRunner({ outcome: 'launch-error', code: -1, error: 'spawn ENOENT' }) });
@@ -174,6 +202,18 @@ const RELAUNCH_OPTS = {
     const r = await c.relaunchElevated(RELAUNCH_OPTS);
     check(r.started === false && r.outcome === 'failed', 'child exits before emitting a result: failed, not started');
   }
+  for (const [name, reply, expected] of [
+    ['nonzero exit', { code: 1 }, 'failed'],
+    ['missing exit code', { code: null }, 'failed'],
+    ['timeout', { outcome: 'timeout', timedOut: true, code: -1 }, 'timeout'],
+    ['spawn error', { outcome: 'launch-error', code: -1, error: 'spawn denied' }, 'launch-error'],
+    ['error with zero exit', { code: 0, error: 'relaunch failed' }, 'failed'],
+    ['unknown outcome', { outcome: 'unknown', code: 0 }, 'failed']
+  ]) {
+    const c = controller({ sync: fakeSync(MEDIUM), runner: recordingRunner({ stdout: `${elev.RELAUNCH_STARTED}\r\n`, ...reply }) });
+    const r = await c.relaunchElevated(RELAUNCH_OPTS);
+    check(!r.started && r.outcome === expected, `${name} cannot promote a valid relaunch sentinel to success`);
+  }
   {
     const c = controller({ sync: fakeSync(MEDIUM), runner: recordingRunner({ outcome: 'ok', code: 1, stdout: 'At line:1 char:1 STARTED is not recognized' }) });
     const r = await c.relaunchElevated(RELAUNCH_OPTS);
@@ -213,7 +253,7 @@ const RELAUNCH_OPTS = {
 
   console.log('elevation-controller-smoke: SystemRoot resolution');
   {
-    const exists = (p) => p === 'D:\\Win' || p === 'C:\\Windows';
+    const exists = (p) => ['D:\\Win', 'D:\\Win\\System32', 'C:\\Windows', 'C:\\Windows\\System32'].includes(p);
     check(elev.resolveSystemRoot({ SystemRoot: 'D:\\Win' }, exists) === 'D:\\Win', 'absolute existing SystemRoot is used');
     check(elev.resolveSystemRoot({ SystemRoot: 'Win' }, exists) === 'C:\\Windows', 'relative SystemRoot is ignored');
     check(elev.resolveSystemRoot({}, exists) === 'C:\\Windows', 'missing SystemRoot falls back to C:\\Windows');
@@ -221,6 +261,21 @@ const RELAUNCH_OPTS = {
     check(elev.resolveSystemRoot({}, () => false) === null, 'no Windows directory at all resolves to null');
     check(elev.systemPowerShell({ SystemRoot: 'D:\\Win' }, exists) === 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'PowerShell path is absolute under SystemRoot');
     check(elev.systemPowerShell({}, () => false) === null, 'PowerShell path is null without a Windows directory');
+    for (const root of ['\\Windows', '/Windows', 'C:Windows', '\\\\server\\Windows', 'C:\\Temp\\..\\Windows']) {
+      check(elev.resolveSystemRoot({ SystemRoot: root }, exists) === 'C:\\Windows',
+        `unsafe SystemRoot ${JSON.stringify(root)} is ignored`);
+    }
+    check(elev.resolveSystemRoot({ SystemRoot: 'D:\\Existing folder' }, p => p === 'D:\\Existing folder') === null,
+      'an existing folder without System32 is not a Windows root');
+    check(elev.systemWhoami({ systemroot: 'D:\\Win', PATH: 'C:\\Fake' }, exists, 'x64') === 'D:\\Win\\System32\\whoami.exe',
+      'whoami uses the shared absolute path with case-insensitive metadata');
+    check(elev.systemPowerShell({ SystemRoot: 'D:\\Win', PROCESSOR_ARCHITEW6432: 'AMD64' }, exists, 'ia32') ===
+      'D:\\Win\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe', 'elevation uses native PowerShell for a WOW64 process');
+    const runner = recordingRunner({ stdout: `${elev.RELAUNCH_STARTED}\r\n` });
+    const missing = controller({ sync: fakeSync(HIGH), runner, env: { PATH: 'C:\\Fake' }, existsSync: () => false });
+    const missingResult = await missing.relaunchElevated(RELAUNCH_OPTS);
+    check(missingResult.outcome === 'launch-error' && runner.calls.length === 0,
+      'missing Windows root reports launch error without executing a fake PATH PowerShell');
   }
 
   console.log('elevation-controller-smoke: no temporary script file');

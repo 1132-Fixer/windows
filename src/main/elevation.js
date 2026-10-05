@@ -20,8 +20,8 @@
  */
 
 const fs = require('fs');
-const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const windowsTools = require('./windows-tools');
 
 const ELEVATE_RETRY_FLAG = '--self-elevate-attempted';
 const ELEVATION_PROBE_MS = 5000;
@@ -81,44 +81,29 @@ function logStage(name, extra) {
 function killTree(pid) {
   if (!pid) return;
   try {
-    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 8000 });
+    spawnSync(windowsTools.resolveTool('taskkill.exe'), ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 8000 });
   } catch (_) { /* already gone */ }
 }
 
-// %SystemRoot% is trusted only when it is an absolute directory that exists.
-// A missing or relative value (a stripped launcher environment) falls back to
-// C:\Windows. Returns null when no Windows directory can be found at all so
-// the caller reports a launch error instead of spawning a nonexistent path.
-function resolveSystemRoot(env = process.env, existsSync = fs.existsSync) {
-  const candidates = [];
-  const raw = typeof env.SystemRoot === 'string' ? env.SystemRoot.trim() : '';
-  if (raw && path.win32.isAbsolute(raw)) candidates.push(raw);
-  candidates.push('C:\\Windows');
-  for (const dir of candidates) {
-    try {
-      if (existsSync(dir)) return dir;
-    } catch (_) { /* treat as missing */ }
-  }
-  return null;
+// Elevation and repair share one trusted system-directory contract. A missing
+// Windows root is a launch error, never a reason to search PATH or the CWD.
+const resolveSystemRoot = windowsTools.resolveSystemRoot;
+
+function systemPowerShell(env = process.env, existsSync = fs.existsSync, arch = process.arch) {
+  try { return windowsTools.resolveTool('powershell.exe', { env, existsSync, arch }); }
+  catch (_) { return null; }
 }
 
-function systemPowerShell(env = process.env, existsSync = fs.existsSync) {
-  const root = resolveSystemRoot(env, existsSync);
-  if (!root) return null;
-  return path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-}
-
-function systemWhoami(env = process.env, existsSync = fs.existsSync) {
-  const root = resolveSystemRoot(env, existsSync);
-  if (!root) return null;
-  return path.win32.join(root, 'System32', 'whoami.exe');
+function systemWhoami(env = process.env, existsSync = fs.existsSync, arch = process.arch) {
+  try { return windowsTools.resolveTool('whoami.exe', { env, existsSync, arch }); }
+  catch (_) { return null; }
 }
 
 // In-memory -Command only (see the module header). The script is one argv
 // entry: Node quotes it for CreateProcess and PowerShell reads the whole
 // argument as the command text, so no shell ever re-parses it.
-function runPsCommand(script, timeoutMs, spawnImpl) {
-  const exe = systemPowerShell();
+function runPsCommand(script, timeoutMs, spawnImpl, toolOptions = {}) {
+  const exe = systemPowerShell(toolOptions.env, toolOptions.existsSync, toolOptions.arch);
   if (!exe) {
     return Promise.resolve({
       outcome: 'launch-error', timedOut: false, code: -1,
@@ -241,6 +226,11 @@ function createElevationController(deps = {}) {
   const retryFlag = deps.retryFlag || ELEVATE_RETRY_FLAG;
   const probeMs = deps.probeMs || ELEVATION_PROBE_MS;
   const relaunchMs = deps.relaunchMs || UAC_RELAUNCH_MS;
+  const toolOptions = {
+    env: deps.env || process.env,
+    existsSync: deps.existsSync || fs.existsSync,
+    arch: deps.arch || process.arch
+  };
   let memo = null;
 
   // Fast path: whoami /groups prints the process token's integrity SID. It
@@ -249,14 +239,18 @@ function createElevationController(deps = {}) {
   function probeWhoamiSync() {
     const t0 = Date.now();
     try {
-      const whoami = systemWhoami();
+      const whoami = systemWhoami(toolOptions.env, toolOptions.existsSync, toolOptions.arch);
       if (!whoami) return null;
       const r = spawnSyncImpl(whoami, ['/groups'], {
         encoding: 'utf8',
         timeout: Math.min(probeMs, 2500),
         windowsHide: true,
-        env: process.env
+        env: toolOptions.env
       });
+      // Output is evidence only after the process completed successfully.
+      // Timed-out or failed probes can contain stale, partial valid-looking
+      // SIDs; those must not grant elevation authority.
+      if (!r || r.status !== 0 || r.error || r.signal) return null;
       const il = parseWhoamiIntegrity((r && r.stdout) || '');
       if (il.ok) {
         logStage('elevation.whoami', `sync elevated=${il.elevated} ${Date.now() - t0}ms`);
@@ -279,15 +273,16 @@ function createElevationController(deps = {}) {
     logStage('elevation.token', 'begin');
     const fast = probeWhoamiSync();
     if (fast) return fast;
-    const ps = await runPsCommand(TOKEN_PROBE_PS, probeMs, spawnImpl);
-    const parsed = parseTokenProbe(ps.stdout);
+    const ps = await runPsCommand(TOKEN_PROBE_PS, probeMs, spawnImpl, toolOptions);
+    const completed = ps && ps.outcome === 'ok' && ps.code === 0 && !ps.timedOut && !ps.error;
+    const parsed = completed ? parseTokenProbe(ps.stdout) : { ok: false, elevated: null };
     if (parsed.ok) {
       logStage('elevation.token', `ok elevated=${parsed.elevated} ${Date.now() - t0}ms`);
       return { elevated: parsed.elevated, method: 'token-elevation', ms: Date.now() - t0, error: null };
     }
-    const err = ps.timedOut
+    const err = ps && (ps.timedOut || ps.outcome === 'timeout')
       ? 'elevation probe timed out'
-      : (ps.error || 'elevation probe returned no usable result');
+      : ((ps && ps.error) || 'elevation probe returned no usable result');
     logStage('elevation.fail', err);
     return { elevated: false, method: 'failed', ms: Date.now() - t0, error: err };
   }
@@ -331,10 +326,11 @@ function createElevationController(deps = {}) {
     });
     const script = buildRelaunchScript(exe, args);
     logStage('elevation.relaunch', 'Start-Process -Verb RunAs (no script file)');
-    const r = await runPsCommand(script, relaunchMs, spawnImpl);
+    const r = await runPsCommand(script, relaunchMs, spawnImpl, toolOptions);
     let outcome;
     if (r.outcome === 'timeout' || r.timedOut) outcome = 'timeout';
     else if (r.outcome === 'launch-error') outcome = 'launch-error';
+    else if (r.outcome !== 'ok' || r.code !== 0 || r.error) outcome = 'failed';
     else outcome = parseRelaunchOutput(r.stdout) || 'failed';
     const started = outcome === 'started';
     const declined = outcome === 'declined' || outcome === 'timeout';
@@ -379,6 +375,7 @@ module.exports = {
   buildRelaunchScript,
   resolveSystemRoot,
   systemPowerShell,
+  systemWhoami,
   runTimed,
   createElevationController,
   logStage

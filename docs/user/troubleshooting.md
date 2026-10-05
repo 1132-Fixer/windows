@@ -5,6 +5,9 @@
 | The app says permission is missing | Close it, then run 1132 Fixer and approve the Windows prompt. |
 | Zoom is not found | Install Zoom Workplace with the **machine-wide** installer, not a per-user copy. |
 | **Fix now** stays unavailable | Open **View details** and fix the item that needs attention. |
+| The Windows tool check fails or takes too long | Press **Try again**. If it repeats, use **Support Report**. A failed check does not prove that Windows tools are missing. |
+| Version 6.4.0 lists several missing Windows tools after **Fix now**, in Setup or Portable | That version can turn one failed check into several missing-tool messages. Use **Support Report** and include the version and build type. Those messages do not prove that PATH is damaged. |
+| The app could not find a required tool in the Windows system folder | Use **Support Report** for the checked paths. Do not download replacement Windows tools from an unofficial site. |
 | Security software blocks the fix | Allow the app to create the local helper account and start Zoom. |
 | Camera or microphone is missing in Zoom | Check Windows privacy settings **as user1**, the hardware shutter, the camera driver, and any antivirus webcam shield. |
 | The app says the helper profile is temporary | Run **Fix now** again. Do not use Zoom from a TEMP profile. |
@@ -44,6 +47,12 @@ organization policy.
 Use **Support** or **Feedback** in the app. Review the redacted report before
 you send it. Do not paste unredacted SIDs, passwords, or profile dumps into a
 public issue.
+
+For a Windows tool-check problem, include whether you used Setup or Portable,
+the app version, and whether the message appeared before or after **Fix now**.
+The check result and checked system-folder paths help identify the failure.
+You do not need to edit PATH or turn off Windows security based only on a
+failed check.
 
 Security problems go to private vulnerability reporting, not a public issue.
 See [SECURITY.md](../../SECURITY.md).

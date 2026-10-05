@@ -25,11 +25,21 @@ const CHECK_ORDER = [
   { key: 'frameServer', label: 'Camera Frame Server', group: 'Camera service' }
 ];
 
+// Tool-check failures do not prove that tools are missing. Keep process
+// diagnostics in Support Report; do not infer a Windows policy or PATH cause.
+const WINDOWS_TOOLS = {
+  CHECKING:      'Checking the Windows tools needed to start the repair.',
+  READY:         'Windows tools are ready.',
+  PROBE_FAILED:  'The app could not check the Windows tools needed to start the repair. Try again. If this repeats, use Support Report.',
+  PROBE_TIMEOUT: 'The check for Windows tools took too long. Try again. If this repeats, use Support Report.',
+  MISSING:       'The app could not find a required tool in the Windows system folder. Use Support Report for the checked paths.'
+};
+
 const FRIENDLY_ERRORS = {
   not_elevated:             'Process is not running as Administrator. Re-launch the app elevated (right-click → Run as administrator).',
   running_as_target:        'You are currently signed in as user1. Sign in as a different administrator and try again.',
-  preflight_failed:         'Environment check found one or more blockers. Look at the highlighted lines above — each one tells you what to fix before retrying.',
-  missing_tool:             'A required Windows tool is missing from PATH (powershell/taskkill/robocopy/icacls/takeown/net/reg). See preflight output above.',
+  preflight_failed:         'The repair could not start because a required check did not pass. Try again. If this repeats, use Support Report.',
+  missing_tool:             WINDOWS_TOOLS.MISSING,
   create_user_failed:       'Could not create the user1 account. Make sure the app is running as Administrator and that password policy allows the password.',
   delete_user_failed:       'Could not delete the existing user1 account. Make sure the app is running as Administrator.',
   delete_profile_failed:    'The user1 profile folder could not be removed — a file handle is still open. Reboot once and run the fix again.',
@@ -41,7 +51,8 @@ const FRIENDLY_ERRORS = {
   temp_or_suffixed_profile: 'Windows did not land Zoom in the real C:\\Users\\user1 profile — it fell back to a TEMP or suffixed profile. The 1132 identity may not be clean. Reboot once, then run the fix again. 1132 Fixer does not delete TEMP folders by name guessing.',
   temp_profile_fallback:    'Windows gave user1 a temporary profile instead of C:\\Users\\user1. The 1132 identity may not be clean. Reboot once, then run the fix again.',
   suffixed_profile:         'Windows created a suffixed profile (user1.MACHINE) instead of C:\\Users\\user1. Reboot once, then run the fix again.',
-  tool_probe_failed:        'The PowerShell tool probe failed. PowerShell itself may be missing or restricted by AppLocker/policy. The fix cannot continue.'
+  tool_probe_failed:        WINDOWS_TOOLS.PROBE_FAILED,
+  tool_probe_timeout:       WINDOWS_TOOLS.PROBE_TIMEOUT
 };
 
 function friendlyError(code) {
@@ -394,9 +405,29 @@ const DISCLOSURE = {
   ARIA: 'Open Source. Independent project. Not affiliated with Zoom.'
 };
 
-// Feedback submit fallbacks (renderer side; main.js maps HTTP statuses).
-const FEEDBACK_FALLBACK = 'Could not send right now. Check your internet connection and try again in a minute.';
-const FEEDBACK_NETWORK  = 'Network error — the message was not sent. Check your internet connection and try again.';
+// Public support submission copy. No response text or raw error reaches the UI.
+const FEEDBACK = Object.freeze({
+  SENT: 'Sent',
+  SENDING: 'Sending…',
+  NOT_CONFIGURED: 'Support is unavailable in this build. Keep your message and try an updated version.',
+  FAILED: 'Could not confirm the request. Your draft is kept. You can try again.',
+  NETWORK: 'Could not confirm the request. Check your connection. Your draft is kept.',
+  TIMEOUT: 'The request timed out. Your draft is kept. You can try again.',
+  RATE_LIMITED: 'Too many requests. Your draft is kept. Try again later.',
+  UNAVAILABLE: 'Support is unavailable right now. Your draft is kept. Try again later.',
+  REJECTED: 'Check your message and try again. Your draft is kept.',
+  TOO_LARGE: 'The request is too large. Shorten the message or remove the screenshot. Your draft is kept.',
+  TEXT_TOO_LARGE: 'The message exceeds 100 KB. Shorten it and try again. Your draft is kept.',
+  ATTACH_TOO_LARGE: 'This report would exceed 100 KB. Your draft is unchanged. Copy the report or shorten your message.',
+  SCREENSHOT_INVALID: 'Attach a PNG, JPEG, WebP or GIF screenshot of 5 MB or less. Your draft is kept.',
+  BUSY: 'This request is still sending. Wait before trying again.',
+  RATING_REQUIRED: 'Choose your overall rating from 1 to 5 before sending.',
+  NOT_ANSWERED: 'Not answered',
+  VERSION_PREFIX: 'Version: ',
+  VERSION_UNAVAILABLE: 'The app version could not be shown. Close this window and try again.',
+});
+const FEEDBACK_FALLBACK = FEEDBACK.FAILED;
+const FEEDBACK_NETWORK = FEEDBACK.NETWORK;
 
 // Support-report modal failure.
 function reportBuildFailure(err) {
@@ -546,12 +577,13 @@ if (typeof module !== 'undefined' && module.exports) {
     INACTIVITY,
     DISCOVERY,
     CHECK_ORDER,
+    WINDOWS_TOOLS,
     FRIENDLY_ERRORS, friendlyError, unexpectedFixFailure, scanFailureMessage,
     shortcutFailureMessage, HKU_STATES, FRAME_SERVER_STATES, describeHku,
     describeFrameServer, receiptStatusFor, describeUnrecognized,
     ZOOM_RECOVERY, zoomRecoveryTechDetails, zoomInstallerRefusal,
     WIZARD_GROUPS, WIZARD, wizardFixFoundTitle, wizardFixFoundSub, wizardBlockedSub,
     EXPLORE_COPY, EXPLORE_CATEGORIES, EXPLORE_VIEW, DISCLOSURE,
-    FEEDBACK_FALLBACK, FEEDBACK_NETWORK, reportBuildFailure
+    FEEDBACK, FEEDBACK_FALLBACK, FEEDBACK_NETWORK, reportBuildFailure
   };
 }

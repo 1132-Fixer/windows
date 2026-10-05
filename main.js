@@ -1,11 +1,16 @@
-const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage, screen, powerMonitor } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, screen, powerMonitor } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const https = require('https');
 const crypto = require('crypto');
+const { StringDecoder } = require('string_decoder');
 const { spawn, spawnSync } = require('child_process');
+const windowsTools = require('./src/main/windows-tools');
+// System tools never use the app directory, current directory or PATH.
+const spawnWindowsTool = (name, args, opts) => spawn(windowsTools.resolveTool(name), args, opts);
+const spawnWindowsToolSync = (name, args, opts) => spawnSync(windowsTools.resolveTool(name), args, opts);
 const electronSecurity = require('./src/main/electron-security');
 electronSecurity.installIpcAllowlist(ipcMain);
 const elevation = require('./src/main/elevation');
@@ -164,7 +169,7 @@ function sendUpdateStatus(payload) {
 // Bounded registry read of the location the NSIS installer will update.
 function readRegistryValue(key, name) {
   try {
-    const r = spawnSync('reg.exe', ['query', key, '/v', name], { windowsHide: true, timeout: 5000, encoding: 'utf8' });
+    const r = spawnWindowsToolSync('reg.exe', ['query', key, '/v', name], { windowsHide: true, timeout: 5000, encoding: 'utf8' });
     if (r.status !== 0) return null;
     const m = new RegExp(`^\\s*${name}\\s+REG_\\w+\\s+(.+?)\\s*$`, 'mi').exec(r.stdout || '');
     return m ? m[1] : null;
@@ -684,7 +689,7 @@ ipcMain.handle('zoom-run-installer', async () => {
   try {
     // Deliberately NOT added to activeChildren: quitting 1132 Fixer must
     // never kill a Windows Installer transaction mid-flight.
-    const child = spawn('msiexec.exe', ['/i', file], { windowsHide: false });
+    const child = spawnWindowsTool('msiexec.exe', ['/i', file], { windowsHide: false });
     child.on('error', () => { notifyDone(-1); releaseInstaller(); });
     child.on('exit', (code) => { notifyDone(code); releaseInstaller(); });
     return { started: true };
@@ -694,10 +699,11 @@ ipcMain.handle('zoom-run-installer', async () => {
   }
 });
 
-// Tools that must exist on PATH; the destructive flow can't run without them.
+// Tools that must exist in the Windows system folder before repair starts.
 const REQUIRED_TOOLS = [
   'powershell.exe', 'taskkill.exe', 'robocopy.exe',
-  'icacls.exe', 'takeown.exe', 'net.exe', 'reg.exe'
+  'icacls.exe', 'takeown.exe', 'net.exe', 'reg.exe',
+  'sc.exe', 'attrib.exe', 'cmd.exe'
 ];
 // Tools we'd like but can survive without — surfaced as warnings.
 const OPTIONAL_TOOLS = ['quser.exe', 'logoff.exe'];
@@ -971,7 +977,7 @@ function killActiveChildren() {
   for (const child of activeChildren) {
     if (!child.pid) continue;
     try {
-      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 });
+      spawnWindowsToolSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 });
       console.warn(`fatal-path: killed child tree pid=${child.pid}`);
     } catch (err) {
       console.warn(`fatal-path: could not kill child pid=${child.pid}: ${err && err.message}`);
@@ -1062,16 +1068,27 @@ function sleep(ms) {
 }
 
 function runProcess(exe, args, onLine, opts = {}) {
-  const { heartbeatMs = 0, heartbeatLabel = '', timeoutMs = 0 } = opts;
+  const { heartbeatMs = 0, heartbeatLabel = '', timeoutMs = 60000, stdin = null } = opts;
   return new Promise((resolve) => {
     let stdoutBuf = '';
     let stderrBuf = '';
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
+    let settled = false;
     let lastOutputAt = Date.now();
     const started = Date.now();
-    const child = spawn(exe, args, { windowsHide: true });
+    let child;
+    try {
+      child = spawnWindowsTool(exe, args, { windowsHide: true });
+    } catch (err) {
+      onLine(`Failed to launch ${exe}: ${err.message}`, 'err');
+      resolve({ code: -1, stdout: '', stderr: err.message, timedOut: false, errorCode: err.code || 'launch_error' });
+      return;
+    }
     activeChildren.add(child);
     const emit = (buf, kind) => {
-      const text = buf.toString();
+      if (settled) return;
+      const text = (kind === 'err' ? stderrDecoder : stdoutDecoder).write(buf);
       if (kind === 'err') stderrBuf += text; else stdoutBuf += text;
       lastOutputAt = Date.now();
       text.split(/\r?\n/).forEach(line => {
@@ -1085,6 +1102,7 @@ function runProcess(exe, args, onLine, opts = {}) {
     let hbTimer = null;
     if (heartbeatMs > 0) {
       hbTimer = setInterval(() => {
+        if (settled) return;
         const idleSec = Math.round((Date.now() - lastOutputAt) / 1000);
         const elapsedSec = Math.round((Date.now() - started) / 1000);
         if (idleSec >= Math.round(heartbeatMs / 1000)) {
@@ -1098,6 +1116,7 @@ function runProcess(exe, args, onLine, opts = {}) {
     let timedOut = false;
     if (timeoutMs > 0) {
       killTimer = setTimeout(() => {
+        if (settled) return;
         timedOut = true;
         onLine(`  TIMEOUT after ${Math.round(timeoutMs / 1000)}s — killing ${exe}`, 'err');
         // Kill the TREE, not just the direct child: the profile
@@ -1105,8 +1124,9 @@ function runProcess(exe, args, onLine, opts = {}) {
         // powershell.exe, and killing only PS orphans a recursive tool
         // mid-cycle — it keeps grinding (and holding profile handles)
         // invisibly. Same idiom as killActiveChildren.
-        try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }); } catch (_) {}
+        try { spawnWindowsToolSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }); } catch (_) {}
         try { child.kill('SIGKILL'); } catch (_) {}
+        finish(-1, 'ETIMEDOUT');
       }, timeoutMs);
     }
 
@@ -1116,19 +1136,33 @@ function runProcess(exe, args, onLine, opts = {}) {
       activeChildren.delete(child);
     };
 
+    const finish = (code, errorCode = null) => {
+      if (settled) return;
+      stdoutBuf += stdoutDecoder.end();
+      stderrBuf += stderrDecoder.end();
+      settled = true;
+      cleanup();
+      resolve({ code, stdout: stdoutBuf, stderr: stderrBuf, timedOut, errorCode });
+    };
     child.on('error', err => {
-      cleanup();
+      if (settled) return;
+      stderrBuf += err.message;
       onLine(`Failed to launch ${exe}: ${err.message}`, 'err');
-      resolve({ code: -1, stdout: stdoutBuf, stderr: stderrBuf, timedOut });
+      finish(-1, err.code || 'launch_error');
     });
-    child.on('close', code => {
-      cleanup();
-      resolve({ code, stdout: stdoutBuf, stderr: stderrBuf, timedOut });
+    child.on('close', code => finish(code));
+    // Caller source can contain a helper credential. It is sent through a
+    // private pipe, never embedded in PowerShell argv or a temporary script.
+    child.stdin.on('error', () => {
+      if (settled) return;
+      try { child.kill('SIGKILL'); } catch (_) {}
+      finish(-1, 'stdin_failed');
     });
+    child.stdin.end(stdin === null ? undefined : stdin, 'utf8');
   });
 }
 
-// Output-side twin of the UTF-8 BOM fix below (#93 #111).
+// Keep UTF-8 input and output together in the shared transport (#93 #111).
 // Windows PowerShell 5.1 writes REDIRECTED stdout/stderr in the legacy OEM
 // codepage while runProcess decodes the pipes as UTF-8, so any non-ASCII
 // character in captured output arrived corrupted \u2014 most damagingly the
@@ -1137,25 +1171,11 @@ function runProcess(exe, args, onLine, opts = {}) {
 // \u0441\u0442\u043e\u043b", accented user names), which then fed shortcut creation a folder
 // that does not exist. Forcing the console output encoding to UTF-8 as the
 // script's first statement makes PS emit what Node decodes. try/catch: the
-// setter needs a console handle; if it ever fails we degrade to today's
-// behavior instead of breaking the script.
-const PS_UTF8_OUTPUT_PREAMBLE =
-  'try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}\r\n';
-
+// setter needs a console handle; the shared preamble falls back to UTF-8
+// stream writers when PowerShell starts without a console.
 async function runPSScript(scriptContent, onLine, opts = {}) {
-  const tmp = path.join(os.tmpdir(),
-    `fixer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
-  // UTF-8 BOM: Windows PowerShell 5.1 reads BOM-less files in the legacy
-  // system codepage, which corrupts non-ASCII install paths interpolated
-  // into the script (review P2 on custom Unicode Zoom dirs).
-  await fs.promises.writeFile(tmp, '\ufeff' + PS_UTF8_OUTPUT_PREAMBLE + scriptContent, 'utf8');
-  try {
-    return await runProcess('powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp],
-      onLine, opts);
-  } finally {
-    fs.promises.unlink(tmp).catch(() => {});
-  }
+  return runProcess('powershell.exe', windowsTools.PS_STDIN_ARGS,
+    onLine, { ...opts, stdin: windowsTools.prepareScript(scriptContent) });
 }
 
 // Zoom-launch runner. Start-Process -Credential
@@ -1179,31 +1199,29 @@ async function runPSScript(scriptContent, onLine, opts = {}) {
 // success out-of-band by polling Win32_Process — capture is evidence, the
 // poll stays the authority.
 async function runPSScriptLaunchCapture(scriptContent) {
-  const tmp = path.join(os.tmpdir(),
-    `fixer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
-  // UTF-8 BOM: Windows PowerShell 5.1 reads BOM-less files in the legacy
-  // system codepage, which corrupts non-ASCII install paths interpolated
-  // into the script (review P2 on custom Unicode Zoom dirs). The output
-  // preamble keeps the captured launch-failure lines (localized exception
-  // text) decodable \u2014 same OEM-vs-UTF-8 mismatch as runPSScript.
-  await fs.promises.writeFile(tmp, '\ufeff' + PS_UTF8_OUTPUT_PREAMBLE + scriptContent, 'utf8');
   return new Promise((resolve) => {
     let stdoutBuf = '';
+    const outputDecoder = new StringDecoder('utf8');
+    const errorDecoder = new StringDecoder('utf8');
     let settled = false;
     let killTimer = null;
     let timedOut = false;
-    const child = spawn('powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp],
-      { windowsHide: true });
-    child.stdout.on('data', d => { stdoutBuf += d.toString(); });
-    child.stderr.on('data', d => { stdoutBuf += d.toString(); });
+    let child;
+    try {
+      child = spawnWindowsTool('powershell.exe', windowsTools.PS_STDIN_ARGS, { windowsHide: true });
+    } catch (err) {
+      resolve({ code: -1, stdout: '', timedOut: false, errorCode: err.code || 'launch_error' });
+      return;
+    }
+    child.stdout.on('data', d => { if (!settled) stdoutBuf += outputDecoder.write(d); });
+    child.stderr.on('data', d => { if (!settled) stdoutBuf += errorDecoder.write(d); });
     const settle = (code) => {
       if (settled) return;
+      stdoutBuf += outputDecoder.end() + errorDecoder.end();
       settled = true;
       if (killTimer) clearTimeout(killTimer);
       try { child.stdout.destroy(); } catch (_) {}
       try { child.stderr.destroy(); } catch (_) {}
-      fs.promises.unlink(tmp).catch(() => {});
       resolve({ code, stdout: stdoutBuf, timedOut });
     };
     killTimer = setTimeout(() => {
@@ -1212,6 +1230,8 @@ async function runPSScriptLaunchCapture(scriptContent) {
       settle(-1);
     }, 30000);
     child.on('error', () => settle(-1));
+    child.stdin.on('error', () => { try { child.kill('SIGKILL'); } catch (_) {} settle(-1); });
+    child.stdin.end(windowsTools.prepareScript(scriptContent), 'utf8');
     child.on('exit', (code) => {
       // PS has exited; give any tail output one short drain race, then
       // stop waiting on pipes Zoom may hold open forever.
@@ -1241,9 +1261,9 @@ function userExists(username) {
   return new Promise(resolve => {
     let settled = false;
     const done = (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
-    const child = spawn('net.exe', ['user', username], { windowsHide: true });
+    const child = spawnWindowsTool('net.exe', ['user', username], { windowsHide: true });
     const timer = setTimeout(() => {
-      try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
+      try { spawnWindowsToolSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
       done(false);
     }, USER_EXISTS_TIMEOUT_MS);
     child.stdout.on('data', () => {});
@@ -1269,9 +1289,12 @@ async function preflightCheck() {
   const probePromise = runPSCapture(`
     $tools = @(${allTools.map(t => `'${t}'`).join(',')})
     $r = @{}
+    $paths = @{}
     foreach ($t in $tools) {
-      try { $r[$t] = [bool](Get-Command $t -EA SilentlyContinue) } catch { $r[$t] = $false }
+      $paths[$t] = Resolve-FixerTool $t
+      $r[$t] = [bool](Test-Path -LiteralPath $paths[$t] -PathType Leaf -ErrorAction Stop)
     }
+    $r['tool_paths'] = $paths
     $svc = Get-Service seclogon -EA SilentlyContinue
     if ($svc) {
       $r['seclogon_status']    = [string]$svc.Status
@@ -1327,36 +1350,29 @@ async function preflightCheck() {
 
   // Required + optional tools + Secondary Logon service (Start-Process -Credential needs it)
   const probe = await probePromise;
-  let presence = null;
-  try {
-    const parsed = JSON.parse((probe.stdout || '').trim() || '{}');
-    if (parsed && typeof parsed === 'object') presence = parsed;
-  } catch (_) { /* presence stays null */ }
-  if (presence === null) {
-    // PS probe failed (or timed out). Treat all required tools as missing.
-    blockers.push({
-      code: probe.timedOut ? 'tool_probe_timeout' : 'tool_probe_failed',
-      message: probe.timedOut
-        ? 'PowerShell probe timed out after 20s — Windows tool inventory unavailable. Antivirus or Defender may be blocking powershell.exe. Add 1132 Fixer to your antivirus exclusions (or pause its script shield), then reopen the app to re-check.'
-        : 'PowerShell probe failed — could not verify Windows tools. Treating powershell.exe as unavailable. Restart the app once; if this repeats, check that Windows PowerShell is installed and not blocked by AppLocker or antivirus, then re-check.'
-    });
-    presence = {};
-    for (const t of REQUIRED_TOOLS) presence[t] = false;
-    for (const t of OPTIONAL_TOOLS) presence[t] = false;
-  }
-  info.tools = presence;
+  const inventory = windowsTools.parseProbe(probe, allTools);
+  info.tools = inventory.tools;
+  info.toolPaths = inventory.tool_paths || {};
+  info.toolProbe = { exitCode: probe.code, errorCode: probe.errorCode || null, timedOut: !!probe.timedOut };
   info.seclogon = {
-    status: presence.seclogon_status || 'not checked',
-    startType: presence.seclogon_starttype || 'not checked',
+    ...inventory.seclogon,
     selfHeal: 'none'
   };
-  for (const t of REQUIRED_TOOLS) {
-    if (!presence[t]) {
-      blockers.push({
-        code: 'missing_tool',
-        message: `Required Windows tool not on PATH: ${t}. It ships with Windows — an aggressive cleanup tool or a broken PATH removed it. Restore ${t} (or repair PATH under System Properties > Environment Variables), then reopen the app to re-check.`
-      });
-    }
+  if (!inventory.ok) {
+    blockers.push({
+      code: inventory.diagnostic.code,
+      message: inventory.diagnostic.code === 'tool_probe_timeout'
+        ? messages.WINDOWS_TOOLS.PROBE_TIMEOUT : messages.WINDOWS_TOOLS.PROBE_FAILED
+    });
+    // No valid inventory means unknown, not absent. Never infer service or
+    // per-tool failures from a failed process or incomplete response.
+    return { ok: false, blockers, warnings, info };
+  }
+  const missingTools = REQUIRED_TOOLS.filter(t => inventory.tools[t] === false);
+  if (missingTools.length) {
+    blockers.push({ code: 'missing_tool', tools: missingTools, message: messages.WINDOWS_TOOLS.MISSING });
+    // A missing dependency cannot be repaired by starting another tool.
+    return { ok: false, blockers, warnings, info };
   }
   // OPTIONAL_TOOLS (quser.exe, logoff.exe) ship on Windows Pro/Enterprise only;
   // absent by design on Home. tryLogoffUser gates on info.tools and falls back
@@ -1369,7 +1385,7 @@ async function preflightCheck() {
   // actually Running: a Stopped-but-startable service gets ONE bounded start
   // attempt right here, and a failed attempt is a blocker, not a warning.
   if (info.seclogon.status === 'MISSING') {
-    warnings.push({
+    blockers.push({
       code: 'seclogon_missing',
       message: 'Secondary Logon service (seclogon) not found. Launching Zoom as user1 will likely fail.'
     });
@@ -1381,7 +1397,7 @@ async function preflightCheck() {
   } else if (info.seclogon.status !== 'Running' && elevated &&
              (info.seclogon.startType === 'Manual' || info.seclogon.startType === 'Automatic')) {
     const heal = await runPSCapture(`
-      $null = & sc.exe start seclogon 2>&1
+      $null = & (Resolve-FixerTool 'sc.exe') start seclogon 2>&1
       $deadline = [DateTime]::UtcNow.AddSeconds(8)
       do {
         try { if ((Get-Service seclogon -EA Stop).Status -eq 'Running') { Write-Output 'SECLOGON_HEAL=RUNNING'; exit 0 } } catch {}
@@ -1391,7 +1407,7 @@ async function preflightCheck() {
       try { $st = [string](Get-Service seclogon -EA Stop).Status } catch { $st = 'unreadable' }
       Write-Output ('SECLOGON_HEAL=FAILED=' + $st)
     `, { timeoutMs: 10000 });
-    if (/SECLOGON_HEAL=RUNNING/.test(heal.stdout || '')) {
+    if (heal.code === 0 && !heal.timedOut && /^SECLOGON_HEAL=RUNNING\s*$/m.test(heal.stdout || '')) {
       info.seclogon.status = 'Running';
       info.seclogon.selfHeal = 'started';
     } else {
@@ -1406,7 +1422,7 @@ async function preflightCheck() {
   } else if (info.seclogon.status !== 'Running') {
     // Residual states only: not elevated (the not_elevated blocker already
     // gates the fix) or an unexpected StartType we cannot self-heal.
-    warnings.push({
+    blockers.push({
       code: 'seclogon_not_running',
       message: `Secondary Logon service is ${info.seclogon.status}/${info.seclogon.startType} and was not started. Launching Zoom as ${FIX_USER} may fail until it runs.`
     });
@@ -1432,7 +1448,7 @@ async function tryLogoffUser(username, toolPresence, send) {
     $u = '${username}'
     $sessions = @()
     try {
-      $raw = quser 2>$null
+      $raw = & (Resolve-FixerTool 'quser.exe') 2>$null
       $lec = $LASTEXITCODE
       if ($lec -ne 0 -and -not $raw) {
         Write-Output ("QUSER_EXIT=" + $lec)
@@ -1454,7 +1470,7 @@ async function tryLogoffUser(username, toolPresence, send) {
     $loggedOff = 0
     foreach ($sid in $sessions) {
       try {
-        logoff $sid 2>&1 | Out-Null
+        & (Resolve-FixerTool 'logoff.exe') $sid 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) { $loggedOff += 1 }
         else { Write-Output ("LOGOFF_FAIL=" + $sid + ":" + $LASTEXITCODE) }
       } catch {
@@ -1655,7 +1671,7 @@ function Unload-UserHive {
         Write-Host ("    Unloading HKU\\" + $Sid + " (NTUSER.DAT)")
         # GC + collect to release any RegistryKey handles PS may still hold.
         [GC]::Collect(); [GC]::WaitForPendingFinalizers()
-        $rc = Start-Process reg.exe -ArgumentList @('unload', ('HKU\\' + $Sid)) -Wait -WindowStyle Hidden -PassThru
+        $rc = Start-Process -FilePath (Resolve-FixerTool 'reg.exe') -ArgumentList @('unload', ('HKU\\' + $Sid)) -Wait -WindowStyle Hidden -PassThru
         Write-Host ("    reg unload exit: " + $rc.ExitCode)
     }
 }
@@ -1681,8 +1697,8 @@ function Remove-NestedReparsePoints {
         try { $kids = @(Get-ChildItem -LiteralPath $dir -Force -EA Stop) } catch {
             # Enumeration denied: open up THIS directory only (no /R, no /T —
             # nothing recursive that could chase a junction), then retry once.
-            Start-Process takeown.exe -ArgumentList @('/F',$dir,'/A','/D','Y') -Wait -WindowStyle Hidden | Out-Null
-            Start-Process icacls.exe -ArgumentList @($dir,'/grant','*S-1-5-32-544:F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
+            Start-Process -FilePath (Resolve-FixerTool 'takeown.exe') -ArgumentList @('/F',$dir,'/A','/D','Y') -Wait -WindowStyle Hidden | Out-Null
+            Start-Process -FilePath (Resolve-FixerTool 'icacls.exe') -ArgumentList @($dir,'/grant','*S-1-5-32-544:F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
             try { $kids = @(Get-ChildItem -LiteralPath $dir -Force -EA Stop) } catch {
                 Write-Host ("    cannot enumerate " + $dir + " - leaving it for the rd retry")
                 $clean = $false
@@ -1730,7 +1746,7 @@ function Remove-ProfileFolder {
     # them. Running takeown /R or icacls /T from the profile root FIRST
     # makes both tools chase those junctions back into AppData and stall
     # for many minutes — that was the "hung on delete user1" symptom.
-    $cmdExe = Join-Path $env:SystemRoot 'System32\\cmd.exe'
+    $cmdExe = Resolve-FixerTool 'cmd.exe'
     $rdArgs = '/c rd /s /q "' + $Path + '"'
     Write-Host "    Pass 1: rd /s /q ..."
     $rc1 = Start-Process -FilePath $cmdExe -ArgumentList $rdArgs -Wait -WindowStyle Hidden -PassThru
@@ -1746,9 +1762,9 @@ function Remove-ProfileFolder {
     # points. This fixes ACL/ownership on real residue without chasing
     # junctions.
     Write-Host "    Pass 1 left residue; running targeted takeown/icacls/attrib (no junction chase)..."
-    Start-Process takeown.exe -ArgumentList @('/F',$Path,'/A','/D','Y') -Wait -WindowStyle Hidden | Out-Null
-    Start-Process icacls.exe -ArgumentList @($Path,'/grant','*S-1-5-32-544:(OI)(CI)F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
-    Start-Process attrib.exe -ArgumentList @('-r','-h','-s',$Path,'/D') -Wait -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath (Resolve-FixerTool 'takeown.exe') -ArgumentList @('/F',$Path,'/A','/D','Y') -Wait -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath (Resolve-FixerTool 'icacls.exe') -ArgumentList @($Path,'/grant','*S-1-5-32-544:(OI)(CI)F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath (Resolve-FixerTool 'attrib.exe') -ArgumentList @('-r','-h','-s',$Path,'/D') -Wait -WindowStyle Hidden | Out-Null
 
     $kids = @()
     try {
@@ -1772,16 +1788,16 @@ function Remove-ProfileFolder {
                 # run them once the subtree is confirmed junction-free
                 # (hang guard); otherwise leave the child to the rd retry.
                 if (Remove-NestedReparsePoints -Root $k.FullName) {
-                    Start-Process takeown.exe -ArgumentList @('/F',$k.FullName,'/A','/R','/D','Y') -Wait -WindowStyle Hidden | Out-Null
-                    Start-Process icacls.exe -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:(OI)(CI)F','/T','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
-                    Start-Process attrib.exe -ArgumentList @('-r','-h','-s',$k.FullName,'/S','/D') -Wait -WindowStyle Hidden | Out-Null
+                    Start-Process -FilePath (Resolve-FixerTool 'takeown.exe') -ArgumentList @('/F',$k.FullName,'/A','/R','/D','Y') -Wait -WindowStyle Hidden | Out-Null
+                    Start-Process -FilePath (Resolve-FixerTool 'icacls.exe') -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:(OI)(CI)F','/T','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
+                    Start-Process -FilePath (Resolve-FixerTool 'attrib.exe') -ArgumentList @('-r','-h','-s',$k.FullName,'/S','/D') -Wait -WindowStyle Hidden | Out-Null
                 } else {
                     Write-Host ("    not junction-free; skipping recursive ACL fix for " + $k.Name + " (rd retry still runs)")
                 }
             } else {
-                Start-Process takeown.exe -ArgumentList @('/F',$k.FullName,'/A') -Wait -WindowStyle Hidden | Out-Null
-                Start-Process icacls.exe -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
-                Start-Process attrib.exe -ArgumentList @('-r','-h','-s',$k.FullName) -Wait -WindowStyle Hidden | Out-Null
+                Start-Process -FilePath (Resolve-FixerTool 'takeown.exe') -ArgumentList @('/F',$k.FullName,'/A') -Wait -WindowStyle Hidden | Out-Null
+                Start-Process -FilePath (Resolve-FixerTool 'icacls.exe') -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
+                Start-Process -FilePath (Resolve-FixerTool 'attrib.exe') -ArgumentList @('-r','-h','-s',$k.FullName) -Wait -WindowStyle Hidden | Out-Null
             }
         } catch {}
     }
@@ -1835,7 +1851,7 @@ ipcMain.handle('run-fix', async (event) => {
 async function runFixFlow(event) {
   // Secrets minted mid-run (helper password) are pushed here so every log
   // line is redacted. Presence assertions live in profile-safety-smoke.js;
-  // never print the secret, never put it on CreateProcess argv.
+  // never print the secret or put it in PowerShell's command line.
   const secrets = [];
   const send = (line, kind = 'out') => event.sender.send('fix-log', {
     line: profileSafety.redactSecrets(line, secrets),
@@ -1872,7 +1888,7 @@ async function runFixFlow(event) {
   const pre = await preflightCheck();
   for (const t of REQUIRED_TOOLS) {
     const ok = pre.info.tools && pre.info.tools[t];
-    send(`  ${ok ? 'OK ' : 'MISS'}  ${t}`, ok ? 'out' : 'err');
+    send(`  ${ok === null ? '?  ' : ok ? 'OK ' : 'MISS'}  ${t}`, ok ? 'out' : 'err');
   }
   for (const t of OPTIONAL_TOOLS) {
     const ok = pre.info.tools && pre.info.tools[t];
@@ -2010,7 +2026,7 @@ async function runFixFlow(event) {
         try { Remove-LocalGroupMember -SID 'S-1-5-32-544' -Member '${FIX_USER}' -EA Stop; Write-Host '  Remove-LocalGroupMember OK.' }
         catch {
           Write-Host ('  Remove-LocalGroupMember failed: ' + $_.Exception.Message)
-          $r = net localgroup Administrators '${FIX_USER}' /delete 2>&1
+          $r = & (Resolve-FixerTool 'net.exe') localgroup Administrators '${FIX_USER}' /delete 2>&1
           Write-Host ('  net localgroup fallback: ' + ($r | Out-String).Trim())
         }
       `, send, { heartbeatMs: 5000, heartbeatLabel: 'admin-rights removal', timeoutMs: 60000 });
@@ -2166,9 +2182,9 @@ async function runFixFlow(event) {
           $refreshOk = $true
         } catch {
           Write-Host ('  Restart-Service failed: ' + $_.Exception.Message)
-          $stop  = & sc.exe stop  ProfSvc 2>&1
+          $stop  = & (Resolve-FixerTool 'sc.exe') stop  ProfSvc 2>&1
           Start-Sleep -Seconds 2
-          $start = & sc.exe start ProfSvc 2>&1
+          $start = & (Resolve-FixerTool 'sc.exe') start ProfSvc 2>&1
           Write-Host ('  sc.exe stop output:  ' + (($stop  | Out-String).Trim()))
           Write-Host ('  sc.exe start output: ' + (($start | Out-String).Trim()))
           # sc.exe start reports START_PENDING immediately; poll the actual
@@ -2189,7 +2205,7 @@ async function runFixFlow(event) {
     }
     # Belt-and-suspenders: flush HKLM hive writes so the next logon
     # reads fresh ProfileList data, not cached.
-    & reg.exe flush HKLM 2>&1 | Out-Null
+    & (Resolve-FixerTool 'reg.exe') flush HKLM 2>&1 | Out-Null
     Write-Host '  HKLM flushed.'
     Write-Output ($(if ($refreshOk) { 'PROFSVC_REFRESH=OK' } else { 'PROFSVC_REFRESH=FAILED' }))
   `, send, { heartbeatMs: 5000, heartbeatLabel: 'profsvc flush', timeoutMs: 60000 });
@@ -2231,9 +2247,10 @@ async function runFixFlow(event) {
   // plain text.
   const fixPass = helperCred.generateHelperPassword();
   secrets.push(fixPass);
-  // Password rides in a tmp PowerShell file (same residual as Zoom launch)
-  // — never as a net.exe CreateProcess argument, which Win32_Process would
-  // enumerate. /y auto-answers net.exe's ">14 characters" DOS-compat prompt.
+  // Password reaches PowerShell through stdin (same as Zoom launch), without
+  // a temporary script or a PowerShell command-line secret. The native net.exe
+  // account API still receives it in its arguments. /y answers the long-password
+  // DOS compatibility prompt; the log sanitizer removes the generated secret.
   const create = await runPSScript(
     profileSafety.accountCreateScript(FIX_USER, fixPass),
     send,
@@ -2504,7 +2521,7 @@ async function runFixFlow(event) {
       )
       foreach ($f in $targets) {
         if (Test-Path $f) {
-          $out = & icacls.exe $f /grant ('*' + $sid + ':(F)') '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' 2>&1
+          $out = & (Resolve-FixerTool 'icacls.exe') $f /grant ('*' + $sid + ':(F)') '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' 2>&1
           Write-Host ('  icacls ' + $f + ': ' + (($out | Out-String).Trim()))
         } else {
           Write-Host ('  (skipped, not yet present: ' + $f + ')')
@@ -2540,7 +2557,7 @@ async function runFixFlow(event) {
       const shortcutPs = `
         $ws = New-Object -ComObject WScript.Shell
         $lnk = $ws.CreateShortcut('${esc(shortcutPath)}')
-        $lnk.TargetPath = 'powershell.exe'
+        $lnk.TargetPath = Resolve-FixerTool 'powershell.exe'
         $lnk.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "${firstRunDst}"'
         $lnk.WorkingDirectory = '${esc(path.join(newUserProfile, 'Documents'))}'
         $lnk.IconLocation = '${esc(iconForShortcut)},0'
@@ -2588,11 +2605,11 @@ async function runFixFlow(event) {
   if (userSID) {
     await runPSScript(`
       $sid = '${userSID}'
-      $null = reg query "HKU\\$sid" 2>$null
+      $null = & (Resolve-FixerTool 'reg.exe') query "HKU\\$sid" 2>$null
       if ($LASTEXITCODE -eq 0) {
         Write-Host "  Setting Windows dark mode for '${FIX_USER}'..."
-        reg add "HKU\\$sid\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize" /v AppsUseLightTheme   /t REG_DWORD /d 0 /f | Out-Null
-        reg add "HKU\\$sid\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize" /v SystemUsesLightTheme /t REG_DWORD /d 0 /f | Out-Null
+        & (Resolve-FixerTool 'reg.exe') add "HKU\\$sid\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize" /v AppsUseLightTheme   /t REG_DWORD /d 0 /f | Out-Null
+        & (Resolve-FixerTool 'reg.exe') add "HKU\\$sid\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize" /v SystemUsesLightTheme /t REG_DWORD /d 0 /f | Out-Null
         Write-Host "  Dark mode set."
       } else {
         Write-Host "  WARNING: HKU\\$sid not loaded; skipping Windows dark mode."
@@ -2865,7 +2882,7 @@ async function runFixFlow(event) {
     }
     $hkuLoaded = $false
     if ($sid) {
-      $null = reg query "HKU\\$sid" 2>$null
+      $null = & (Resolve-FixerTool 'reg.exe') query "HKU\\$sid" 2>$null
       if ($LASTEXITCODE -eq 0) { $hkuLoaded = $true }
     }
     Write-Output ('VERIFY_HKU_LOADED=' + $(if ($hkuLoaded) { 'YES' } else { 'NO' }))
@@ -3278,7 +3295,7 @@ ipcMain.handle('create-shortcut', async () => {
   const ps = [
     "$s = New-Object -ComObject WScript.Shell",
     `$sc = $s.CreateShortcut('${escape(shortcutPath)}')`,
-    "$sc.TargetPath = 'powershell.exe'",
+    "$sc.TargetPath = Resolve-FixerTool 'powershell.exe'",
     `$sc.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${escape(scriptPath)}"'`,
     `$sc.IconLocation = '${escape(iconPath)}'`,
     `$sc.WorkingDirectory = [Environment]::GetFolderPath('UserProfile')`,
@@ -3287,8 +3304,8 @@ ipcMain.handle('create-shortcut', async () => {
   ].join('; ');
 
   return new Promise((resolve) => {
-    const child = spawn('powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps],
+    const child = spawnWindowsTool('powershell.exe',
+      windowsTools.PS_STDIN_ARGS,
       { windowsHide: true }
     );
     let stderr = '';
@@ -3296,9 +3313,11 @@ ipcMain.handle('create-shortcut', async () => {
     const settle = (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
     // Bounded: WScript.Shell COM can hang behind a stuck Explorer session.
     const timer = setTimeout(() => {
-      try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
+      try { spawnWindowsToolSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
       settle({ success: false, error: 'Creating the shortcut took too long. Try again.' });
     }, 30000);
+    child.stdin.on('error', () => { try { child.kill('SIGKILL'); } catch (_) {} settle({ success: false, error: 'Shortcut command input failed.' }); });
+    child.stdin.end(windowsTools.prepareScript(ps), 'utf8');
     child.stderr.on('data', d => { stderr += d.toString(); });
     child.on('error', err => settle({ success: false, error: err.message }));
     child.on('close', async code => {
@@ -3345,7 +3364,7 @@ ipcMain.handle('launch-zoom-helper', async () => {
     return { success: true, alreadyRunning: true };
   }
   try {
-    const child = spawn('powershell.exe',
+    const child = spawnWindowsTool('powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', scriptPath],
       { windowsHide: true, detached: true, stdio: 'ignore' });
     child.unref();
@@ -3449,104 +3468,20 @@ ipcMain.handle('get-system-info', async () => {
   };
 });
 
-// Feedback is relayed through feedback-proxy/, which holds the GitHub token
-// server-side. The app ships NO credential: it posts plain JSON to a public
-// url. Anything embedded here would be extractable from app.asar in the
-// shipped installer, which is exactly how the old hardcoded token leaked.
-// The proxy builds the issue title/body/labels itself, so a tampered client
-// can't forge labels or issue content.
-// Attach-screenshot UI gate (#141): the renderer shows the control ONLY when
-// the proxy advertises the capability — anything else would be a dead button
-// while the support platform is dark.
+// Local feature gate only: opening the form never contacts the service.
 ipcMain.handle('feedback-capabilities', () => supportClient.capabilities(config));
 
-ipcMain.handle('submit-feedback', async (event, type, text, screenshot) => {
-  try {
-    const version = app.getVersion();
-    const endpoint = config.FEEDBACK_PROXY_URL;
-    if (!endpoint) {
-      return { success: false, error: 'Feedback service not configured' };
-    }
-
-    // A report carrying a screenshot goes through the /v1 support API — the
-    // legacy /feedback contract caps bodies at 8 KB and cannot carry an
-    // image. Screenshot bytes are never logged.
-    if (screenshot && screenshot.bytes && screenshot.bytes.length) {
-      return supportClient.submitBugWithScreenshot({
-        config,
-        userDataDir: app.getPath('userData'),
-        safeStorage,
-        version,
-        osLabel: `Windows ${os.release()}`,
-        text,
-        screenshot: {
-          bytes: Buffer.from(screenshot.bytes),
-          mediaType: String(screenshot.mediaType || ''),
-        },
-      });
-    }
-
-    let url;
-    try {
-      url = new URL('/feedback', endpoint);
-    } catch (_) {
-      return { success: false, error: 'Feedback service misconfigured' };
-    }
-    // Refuse to send user text over plaintext http (localhost aside, for dev).
-    if (url.protocol !== 'https:' && url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') {
-      return { success: false, error: 'Feedback service must use https' };
-    }
-
-    const postData = JSON.stringify({
-      type,
-      text,
-      version,
-      os: `Windows ${os.release()}`
-    });
-
-    return new Promise((resolve) => {
-      const transport = url.protocol === 'https:' ? https : require('http');
-      const req = transport.request({
-        hostname: url.hostname,
-        port: url.port || (url.protocol === 'https:' ? 443 : 80),
-        path: url.pathname,
-        method: 'POST',
-        timeout: 15000,
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': `1132Fixer/${version}`,
-          'Content-Length': Buffer.byteLength(postData)
-        }
-      }, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          if (res.statusCode === 201) return resolve({ success: true });
-          if (res.statusCode === 429) return resolve({ success: false, error: 'Too many submissions — try again later.' });
-          if (res.statusCode === 503) return resolve({ success: false, error: 'Feedback service not configured' });
-          if (res.statusCode === 413) return resolve({ success: false, error: 'Message too large — shorten it and try again.' });
-          if (res.statusCode === 502) return resolve({ success: false, error: 'Feedback service could not reach GitHub — try again later.' });
-          if (res.statusCode === 400) {
-            let code = '';
-            try { code = JSON.parse(data).error || ''; } catch (_) { /* generic below */ }
-            if (code === 'bad_type') return resolve({ success: false, error: 'The support service can\'t accept this message type yet — please try again later.' });
-            if (code === 'empty_text') return resolve({ success: false, error: 'Message is empty — write something first.' });
-            return resolve({ success: false, error: 'Submission rejected — check the message and try again.' });
-          }
-          resolve({ success: false, error: 'Submission failed' });
-        });
-      });
-      req.on('timeout', () => { req.destroy(); resolve({ success: false, error: 'Feedback service timed out' }); });
-      req.on('error', () => resolve({ success: false, error: 'Network error' }));
-      req.write(postData);
-      req.end();
-    });
-  } catch (err) {
-    // Never surface a raw exception as the whole message — the renderer shows
-    // this string verbatim in the feedback modal.
-    console.warn('submit-feedback failed before the request was sent:', err && err.message);
-    return { success: false, error: 'Could not send right now. Check your internet connection and try again in a minute.' };
-  }
+// User-triggered submissions use one neutral, credential-free adapter.
+// Version is the only automatic metadata; optional diagnostics are user chosen.
+ipcMain.handle('submit-feedback', async (event, type, text, screenshot, rating) => {
+  return supportClient.submitFeedback({
+    config,
+    type,
+    text,
+    version: app.getVersion(),
+    screenshot,
+    rating,
+  });
 });
 
 // ============================================================
@@ -3587,7 +3522,7 @@ ipcMain.handle('preflight-scan', async () => {
     $sid = $null
     try { $sid = (New-Object Security.Principal.NTAccount('${FIX_USER}')).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
     if ($sid) {
-      $null = reg query "HKU\\$sid" 2>$null
+      $null = & (Resolve-FixerTool 'reg.exe') query "HKU\\$sid" 2>$null
       $out['hku_loaded'] = ($LASTEXITCODE -eq 0)
       $out['hku_sid']    = $sid
     } else {
@@ -3744,7 +3679,7 @@ ipcMain.handle('preflight-scan', async () => {
       };
     } else if (sl.status === 'MISSING') {
       cards.seclogon = {
-        status: 'warning', label: 'Secondary Logon',
+        status: 'blocked', label: 'Secondary Logon',
         message: 'Service not found on this Windows build — launching Zoom as user1 will likely fail.'
       };
     } else if (sl.status === 'not checked') {
@@ -3897,6 +3832,14 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
     md.push(`- Warnings: ${preflight.warnings.length} — ${preflight.warnings.map(w => w.code).join(', ') || 'none'}`);
     if (preflight.info && preflight.info.seclogon) {
       md.push(`- Secondary Logon: ${preflight.info.seclogon.status} / ${preflight.info.seclogon.startType}`);
+    }
+    const probe = preflight.info && preflight.info.toolProbe;
+    if (probe) {
+      md.push(`- Windows tool check: exit ${probe.exitCode === null ? 'unknown' : probe.exitCode}; timeout ${probe.timedOut === true}; error ${probe.errorCode || 'none'}`);
+      md.push(`- App architecture: ${process.arch}`);
+      for (const [name, toolPath] of Object.entries(preflight.info.toolPaths || {})) {
+        md.push(`- ${name}: ${sanitize(toolPath)}`);
+      }
     }
     md.push('');
   }
