@@ -1833,91 +1833,190 @@ async function verifyAdminMembership(expectedSid) {
   return { inGroup: verified && result === 'YES', method, sid, verified };
 }
 
-// ============================================================
-// Profile resolution: registry ProfileImagePath first, folder scan fallback.
-// Polls up to maxWaitSec. One consolidated PS call per iteration to keep
-// total wall-clock close to the target wait.
-// Returns { path, source, checkedPaths, checkedKeys, sid }.
-// ============================================================
-async function resolveUserProfilePath(username, maxWaitSec, send, expectedSid = '') {
-  const checkedPaths = [];
-  const checkedKeys = [];
-  const literal = `C:\\Users\\${username}`;
+// Select only ProfileList records that are bound to one exact local-account
+// SID. Folder names are never identity evidence. The same selector gates old
+// profile cleanup and resolution of the newly-created helper profile.
+function selectSidBoundProfileEntries(entries, expectedSid, purpose = 'resolve') {
+  const sid = String(expectedSid || '');
+  const empty = reason => ({ ok: false, reason, entries: [], keys: [], paths: [], entry: null });
+  if (purpose !== 'resolve' && purpose !== 'cleanup') return empty('invalid_purpose');
+  if (!sid) {
+    return purpose === 'cleanup'
+      ? { ok: true, reason: 'no_trusted_sid', entries: [], keys: [], paths: [], entry: null }
+      : empty('missing_sid');
+  }
+  if (!/^S-1-5-21-(?:[0-9]+-){3}[0-9]+$/i.test(sid) || !Array.isArray(entries)) {
+    return empty('invalid_inventory');
+  }
 
-  // The whole poll loop runs INSIDE one PowerShell process. The old
-  // spawn-per-tick design paid ~0.5-1s of powershell.exe startup per second
-  // of wait, roughly doubling the effective interval and burning up to 30
-  // spawns. Internal loop: one spawn, 500ms ticks, same output protocol.
-  //
-  // Use [System.IO.File]::Exists instead of Test-Path: Test-Path throws on
-  // access-denied NTFS ACLs (which the freshly-created user1 profile commonly
-  // has against the calling admin account), whereas File.Exists returns false.
-  const script = `
-    $u = '${username}'
-    $literal = '${literal.replace(/'/g, "''")}'
-    $deadline = [DateTime]::UtcNow.AddSeconds(${Math.max(1, maxWaitSec)})
-    $sid = '${String(expectedSid || '').replace(/'/g, "''")}'
-    $key = if ($sid) { 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\' + $sid } else { '' }
-    $lastReg = ''; $match = ''
-
-    function Profile-Has-NTUserDat([string]$dir) {
-      if (-not $dir) { return $false }
-      try { return [System.IO.File]::Exists((Join-Path $dir 'NTUSER.DAT')) } catch { return $false }
+  const trustedProfilePath = (value) => {
+    if (typeof value !== 'string' || !value || value !== value.trim() || /[\x00-\x1f]/.test(value) || value.includes('/')) return '';
+    const withoutTrailingSlash = value.replace(/\\+$/, '');
+    if (!withoutTrailingSlash || /^(?:\\\\[?.]\\|\\\\)/.test(withoutTrailingSlash)) return '';
+    const normalized = path.win32.normalize(withoutTrailingSlash);
+    if (normalized.toLowerCase() !== withoutTrailingSlash.toLowerCase() ||
+        path.win32.dirname(normalized).toLowerCase() !== 'c:\\users') return '';
+    const leaf = path.win32.basename(normalized);
+    const leafLower = leaf.toLowerCase();
+    const protectedLeaves = new Set(['public', 'default', 'default user', 'all users', 'desktop.ini']);
+    if (!leaf || leaf === '.' || leaf === '..' || /[. ]$/.test(leaf) || /[:*?"<>|]/.test(leaf) ||
+        protectedLeaves.has(leafLower) || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(leaf)) return '';
+    return normalized;
+  };
+  const comparisonPath = (value) => {
+    if (typeof value !== 'string' || !value || /[\x00-\x1f]/.test(value) || /^(?:\\\\[?.]\\|\\\\)/.test(value)) return '';
+    try {
+      const normalized = path.win32.normalize(value.replace(/\//g, '\\')).replace(/\\+$/, '');
+      return path.win32.isAbsolute(normalized) ? normalized.toLowerCase() : '';
+    } catch (_) {
+      return '';
     }
+  };
 
-    do {
-      if (-not $sid) {
-        try { $sid = (New-Object System.Security.Principal.NTAccount($u)).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}
-        if ($sid) { $key = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\' + $sid }
-      }
-      $regPath = ''
-      if ($key) {
-        try {
-          $rp = (Get-ItemProperty -Path $key -EA SilentlyContinue).ProfileImagePath
-          if ($rp) { $regPath = $rp; $lastReg = $rp }
-        } catch {}
-      }
-      if ($regPath -and (Profile-Has-NTUserDat $regPath)) { $match = 'registry|' + $regPath; break }
-      if (Profile-Has-NTUserDat $literal) { $match = 'folder|' + $literal; break }
-      try {
-        $suf = Get-ChildItem 'C:\\Users' -Directory -Force -EA 0 |
-          Where-Object { $_.Name -match ('^' + [Regex]::Escape($u) + '\\.') -and (Profile-Has-NTUserDat $_.FullName) } |
-          Select-Object -First 1 -ExpandProperty FullName
-        if ($suf) { $match = 'folder-suffixed|' + $suf; break }
-      } catch {}
-      Start-Sleep -Milliseconds 500
-    } while ([DateTime]::UtcNow -lt $deadline)
+  const sidLower = sid.toLowerCase();
+  const records = [];
+  for (const raw of entries) {
+    if (!raw || typeof raw !== 'object' || raw.readable !== true || typeof raw.keyName !== 'string') {
+      return empty('unreadable_inventory');
+    }
+    const keyName = raw.keyName;
+    const keyLower = keyName.toLowerCase();
+    const target = keyLower === sidLower || keyLower === `${sidLower}.bak`;
+    const rawPath = typeof raw.profileImagePath === 'string' ? raw.profileImagePath : '';
+    const profilePath = target && rawPath ? trustedProfilePath(rawPath) : '';
+    if (target && rawPath && !profilePath) return empty('unsafe_target_path');
+    if (target && rawPath &&
+        (typeof raw.pathExists !== 'boolean' || typeof raw.isReparsePoint !== 'boolean' ||
+         (raw.pathExists === false && raw.isReparsePoint === true) || raw.isReparsePoint === true)) {
+      return empty('unsafe_target_directory');
+    }
+    records.push({
+      keyName,
+      keyLower,
+      target,
+      profilePath,
+      comparisonPath: comparisonPath(rawPath),
+      hasNtUserDat: raw.hasNtUserDat === true,
+      pathExists: raw.pathExists === true
+    });
+  }
 
-    Write-Output ("SID=" + $sid)
-    Write-Output ("KEY=" + $key)
-    Write-Output ("REG=" + $lastReg)
-    Write-Output ("MATCH=" + $match)
+  const live = records.filter(record => record.keyLower === sidLower);
+  const backup = records.filter(record => record.keyLower === `${sidLower}.bak`);
+  if (live.length > 1 || backup.length > 1) return empty('ambiguous_keys');
+  if (purpose === 'resolve' && (live.length !== 1 || backup.length !== 0)) return empty('missing_or_ambiguous_live_key');
+
+  const targets = purpose === 'resolve' ? live : [...live, ...backup];
+  if (purpose === 'resolve' && (!targets[0].profilePath || !targets[0].pathExists || !targets[0].hasNtUserDat)) {
+    return empty('profile_not_ready');
+  }
+  const targetPaths = [...new Set(targets.map(record => record.profilePath).filter(Boolean))];
+  for (const targetPath of targetPaths) {
+    const shared = records.some(record => !record.target && record.comparisonPath === targetPath.toLowerCase());
+    if (shared) return empty('path_owned_by_unrelated_sid');
+  }
+  return {
+    ok: true,
+    reason: '',
+    entries: targets.map(record => ({
+      keyName: record.keyName,
+      profileImagePath: record.profilePath,
+      pathExists: record.pathExists
+    })),
+    keys: targets.map(record => record.keyName),
+    paths: targetPaths,
+    entry: purpose === 'resolve' ? { keyName: live[0].keyName, profileImagePath: live[0].profilePath } : null
+  };
+}
+
+// Resolve the recreated helper profile only through the exact helper SID's
+// live ProfileList key. A .bak key, shared path, malformed path, missing hive,
+// or any name-only folder is a closed failure.
+async function resolveUserProfilePath(username, maxWaitSec, send, expectedSid = '') {
+  const sid = String(expectedSid || '');
+  const baseKey = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\';
+  const checkedKeys = sid ? [baseKey + sid, baseKey + sid + '.bak'] : [];
+  if (!/^S-1-5-21-(?:[0-9]+-){3}[0-9]+$/i.test(sid)) {
+    return { path: null, source: 'not_found', checkedPaths: [], checkedKeys, sid: '', reason: 'missing_sid' };
+  }
+
+  const sidLiteral = sid.replace(/'/g, "''");
+  const script = `
+    $ErrorActionPreference = 'Stop'
+    $sid = '${sidLiteral}'
+    $base = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList'
+    $liveKey = Join-Path $base $sid
+    $bakKey = $liveKey + '.bak'
+    $deadline = [DateTime]::UtcNow.AddSeconds(${Math.max(1, maxWaitSec)})
+    try {
+      do {
+        if (Test-Path -LiteralPath $bakKey) { break }
+        if (Test-Path -LiteralPath $liveKey) {
+          $item = Get-ItemProperty -LiteralPath $liveKey -EA Stop
+          $candidate = [Environment]::ExpandEnvironmentVariables([string]$item.ProfileImagePath)
+          if ($candidate -and [System.IO.File]::Exists((Join-Path $candidate 'NTUSER.DAT'))) { break }
+        }
+        Start-Sleep -Milliseconds 500
+      } while ([DateTime]::UtcNow -lt $deadline)
+
+      $entries = @(Get-ChildItem -LiteralPath $base -EA Stop | ForEach-Object {
+        $item = Get-ItemProperty -LiteralPath $_.PSPath -EA Stop
+        $profilePath = [Environment]::ExpandEnvironmentVariables([string]$item.ProfileImagePath)
+        $pathExists = $false
+        $isReparsePoint = $false
+        if ($profilePath) {
+          try {
+            $profileDirectory = Get-Item -LiteralPath $profilePath -Force -EA Stop
+            if (-not $profileDirectory.PSIsContainer) { throw 'profile path is not a directory' }
+            $pathExists = $true
+            $isReparsePoint = (($profileDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+          } catch [System.Management.Automation.ItemNotFoundException] {}
+        }
+        [pscustomobject]@{
+          keyName = [string]$_.PSChildName
+          profileImagePath = $profilePath
+          hasNtUserDat = [bool]($profilePath -and [System.IO.File]::Exists((Join-Path $profilePath 'NTUSER.DAT')))
+          pathExists = $pathExists
+          isReparsePoint = $isReparsePoint
+          readable = $true
+        }
+      })
+      [pscustomobject]@{
+        marker = 'FIXER_PROFILELIST_V1'
+        sid = $sid
+        entries = @($entries)
+      } | ConvertTo-Json -Compress -Depth 4
+    } catch { exit 1 }
   `;
 
   const r = await runPSCapture(script, { timeoutMs: (maxWaitSec + 20) * 1000 });
-  let lastSid = '', key = '', regPath = '', matchSrc = '', matchPath = '';
-  for (const line of (r.stdout || '').split(/\r?\n/)) {
-    const t = line.trim();
-    if (t.startsWith('SID=')) lastSid = t.slice(4);
-    else if (t.startsWith('KEY=')) key = t.slice(4);
-    else if (t.startsWith('REG=')) regPath = t.slice(4);
-    else if (t.startsWith('MATCH=')) {
-      const pipe = t.indexOf('|', 6);
-      if (pipe > 0) { matchSrc = t.slice(6, pipe); matchPath = t.slice(pipe + 1); }
+  if (!r || r.timedOut || r.code !== 0) {
+    return { path: null, source: 'not_found', checkedPaths: [], checkedKeys, sid, reason: 'inventory_failed' };
+  }
+  try {
+    const payload = JSON.parse(String(r.stdout || '').trim());
+    if (!payload || payload.marker !== 'FIXER_PROFILELIST_V1' ||
+        String(payload.sid || '').toLowerCase() !== sid.toLowerCase()) throw new Error('invalid receipt');
+    const entries = Array.isArray(payload.entries) ? payload.entries : (payload.entries ? [payload.entries] : []);
+    const selection = selectSidBoundProfileEntries(entries, sid, 'resolve');
+    const checkedPaths = entries
+      .filter(entry => entry && typeof entry.keyName === 'string' &&
+        (entry.keyName.toLowerCase() === sid.toLowerCase() || entry.keyName.toLowerCase() === `${sid.toLowerCase()}.bak`))
+      .map(entry => String(entry.profileImagePath || '')).filter(Boolean);
+    if (!selection.ok || !selection.entry) {
+      return { path: null, source: 'not_found', checkedPaths, checkedKeys, sid, reason: selection.reason };
     }
+    send(`  Resolved exact SID profile via registry: ${selection.entry.profileImagePath}`, 'out');
+    return {
+      path: selection.entry.profileImagePath,
+      source: 'registry',
+      checkedPaths,
+      checkedKeys,
+      sid
+    };
+  } catch (_) {
+    return { path: null, source: 'not_found', checkedPaths: [], checkedKeys, sid, reason: 'invalid_inventory_receipt' };
   }
-  if (key) checkedKeys.push(key);
-  if (regPath) checkedPaths.push(regPath);
-  checkedPaths.push(literal);
-
-  if (matchPath) {
-    if (!checkedPaths.includes(matchPath)) checkedPaths.push(matchPath);
-    if (matchSrc === 'registry')         send(`  Resolved via registry: ${matchPath}`, 'out');
-    else if (matchSrc === 'folder')      send(`  Resolved via folder scan: ${matchPath}`, 'out');
-    else                                 send(`  WARNING: Windows created suffixed profile '${matchPath}'.`, 'out');
-    return { path: matchPath, source: matchSrc, checkedPaths, checkedKeys, sid: lastSid };
-  }
-  return { path: null, source: 'not_found', checkedPaths, checkedKeys, sid: lastSid };
 }
 
 // ============================================================
@@ -2227,21 +2326,72 @@ async function runFixFlow(event) {
   step('close-sessions', `Close ${FIX_USER} programs and sessions`, 'ok', '');
 
   // ============================================================
-  // STEP 2: Pre-clean any leftover suffixed profile folders
-  //         (e.g. user1.MACHINENAME) from earlier botched resets.
+  // STEP 2: Bind all later profile cleanup to the exact prior local SID.
+  // A folder named user1 (or user1.*) is not proof of ownership.
   // ============================================================
-  send('[2/8] Removing leftover suffixed profile folders...', 'header');
-  const suffixSweep = await runPSScript(`
-    ${PS_REMOVE_PROFILE_HELPER}
-    $u = '${FIX_USER}'
-    $folders = Get-ChildItem 'C:\\Users' -Directory -Force -EA 0 | Where-Object { $_.Name -match ('^' + [Regex]::Escape($u) + '\\.') }
-    if (-not $folders) { Write-Host '  None found.'; return }
-    foreach ($f in $folders) {
-      Write-Host "  Found: $($f.FullName)"
-      Remove-ProfileFolder -Path $f.FullName
+  send('[2/8] Binding old profile cleanup to the prior local account identity...', 'header');
+  if (preDeleteSid) {
+    send('  Prior local SID verified. Only its ProfileList records may be removed.', 'out');
+  } else {
+    send('  No prior local SID exists. No profile key or folder will be removed by name.', 'out');
+  }
+
+  let profileCleanupPlan = selectSidBoundProfileEntries([], preDeleteSid, 'cleanup');
+  if (preDeleteSid) {
+    const profileInventory = await runPSCapture(`
+      $ErrorActionPreference = 'Stop'
+      $base = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList'
+      try {
+        $entries = @(Get-ChildItem -LiteralPath $base -EA Stop | ForEach-Object {
+          $item = Get-ItemProperty -LiteralPath $_.PSPath -EA Stop
+          $profilePath = [Environment]::ExpandEnvironmentVariables([string]$item.ProfileImagePath)
+          $pathExists = $false
+          $isReparsePoint = $false
+          if ($profilePath) {
+            try {
+              $profileDirectory = Get-Item -LiteralPath $profilePath -Force -EA Stop
+              if (-not $profileDirectory.PSIsContainer) { throw 'profile path is not a directory' }
+              $pathExists = $true
+              $isReparsePoint = (($profileDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+            } catch [System.Management.Automation.ItemNotFoundException] {}
+          }
+          [pscustomobject]@{
+            keyName = [string]$_.PSChildName
+            profileImagePath = $profilePath
+            hasNtUserDat = [bool]($profilePath -and [System.IO.File]::Exists((Join-Path $profilePath 'NTUSER.DAT')))
+            pathExists = $pathExists
+            isReparsePoint = $isReparsePoint
+            readable = $true
+          }
+        })
+        [pscustomobject]@{
+          marker = 'FIXER_PROFILELIST_V1'
+          sid = '${preDeleteSid}'
+          entries = @($entries)
+        } | ConvertTo-Json -Compress -Depth 4
+      } catch { exit 1 }
+    `, { timeoutMs: 30000 });
+
+    profileCleanupPlan = null;
+    if (!profileInventory.timedOut && profileInventory.code === 0) {
+      try {
+        const payload = JSON.parse(String(profileInventory.stdout || '').trim());
+        const entries = Array.isArray(payload && payload.entries)
+          ? payload.entries
+          : (payload && payload.entries ? [payload.entries] : []);
+        if (payload && payload.marker === 'FIXER_PROFILELIST_V1' &&
+            String(payload.sid || '').toLowerCase() === preDeleteSid.toLowerCase()) {
+          profileCleanupPlan = selectSidBoundProfileEntries(entries, preDeleteSid, 'cleanup');
+        }
+      } catch (_) { /* fail closed below */ }
     }
-  `, send, { heartbeatMs: 5000, heartbeatLabel: 'suffixed-profile cleanup', timeoutMs: 300000 });
-  tallyRemovals(suffixSweep);
+    if (!profileCleanupPlan || !profileCleanupPlan.ok) {
+      send('ERROR: old profile ownership could not be proved from the exact prior SID.', 'err');
+      step('data-clear', `Clear old ${FIX_USER} profile data`, 'fail',
+        'ProfileList ownership was missing, ambiguous, unreadable, redirected, or unsafe. No account, profile key, or folder was removed.');
+      return { success: false, error: 'profile_cleanup_identity_unresolved', warnings, steps };
+    }
+  }
 
   // ============================================================
   // STEP 3: Delete the existing user1 account, profile folder,
@@ -2302,80 +2452,95 @@ async function runFixFlow(event) {
     send('  Account does not exist - skipping account delete.', 'out');
   }
 
-  const sourceProfile = `C:\\Users\\${FIX_USER}`;
-  const profileFolderExisted = fs.existsSync(sourceProfile);
-  if (profileFolderExisted) {
-    send(`  Removing profile folder ${sourceProfile} (rd /s /q first; ACL fix only on residue)...`, 'out');
-    const delProfile = await runPSScript(`
-      ${PS_REMOVE_PROFILE_HELPER}
-      $p = '${sourceProfile}'
-      $sid = '${preDeleteSid}'
-      Remove-ProfileFolder -Path $p -Sid $sid
-      if (Test-Path $p) {
-        Write-Host "  ERROR: $p still exists - a handle may still be open."
-        Write-Host "         Reboot once and re-run."
-        exit 1
-      }
-      Write-Host "  Profile folder deleted."
-    `, send, { heartbeatMs: 5000, heartbeatLabel: 'profile delete', timeoutMs: 480000 });
-    if (delProfile.timedOut) {
-      send('ERROR: profile delete timed out after 8 minutes. A handle is likely still open (Zoom, antivirus, search indexer).', 'err');
-      send('  Try: reboot, then re-run the fix.', 'err');
+  // The complete ProfileList was validated before account deletion. Re-read
+  // it in the mutation process and refuse any identity or path drift.
+  let plSweep = { code: 0, timedOut: false, stdout: '' };
+  if (preDeleteSid) {
+    const cleanupPlanJson = JSON.stringify(profileCleanupPlan.entries).replace(/'/g, "''");
+    plSweep = await runPSScript(`
+        ${PS_REMOVE_PROFILE_HELPER}
+        $ErrorActionPreference = 'Stop'
+        $expectedSid = '${preDeleteSid}'
+        $base = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList'
+        $plan = @(ConvertFrom-Json -InputObject '${cleanupPlanJson}')
+        try {
+          $currentTargets = @()
+          $plannedPaths = @($plan | Where-Object { [bool]$_.pathExists } |
+            ForEach-Object { [string]$_.profileImagePath } | Where-Object { $_ } | Sort-Object -Unique)
+          foreach ($key in @(Get-ChildItem -LiteralPath $base -EA Stop)) {
+            $name = [string]$key.PSChildName
+            $item = Get-ItemProperty -LiteralPath $key.PSPath -EA Stop
+            $profilePath = [Environment]::ExpandEnvironmentVariables([string]$item.ProfileImagePath)
+            $isTarget = $name -ieq $expectedSid -or $name -ieq ($expectedSid + '.bak')
+            if ($isTarget) {
+              $expected = @($plan | Where-Object { [string]$_.keyName -ieq $name })
+              if ($expected.Count -ne 1 -or [string]$expected[0].profileImagePath -ine $profilePath) {
+                throw 'profile identity changed after validation'
+              }
+              $currentPathExists = $false
+              if ($profilePath) {
+                try {
+                  $currentProfileDirectory = Get-Item -LiteralPath $profilePath -Force -EA Stop
+                  $currentPathExists = $true
+                  if (-not $currentProfileDirectory.PSIsContainer -or
+                      (($currentProfileDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+                    throw 'profile folder became unsafe after validation'
+                  }
+                } catch [System.Management.Automation.ItemNotFoundException] {}
+              }
+              if (-not [bool]$expected[0].pathExists -and $currentPathExists) {
+                throw 'previously absent profile folder appeared after validation'
+              }
+              $currentTargets += $key
+              continue
+            }
+            if ($profilePath) {
+              $otherPath = [IO.Path]::GetFullPath($profilePath).TrimEnd('\\')
+              foreach ($plannedPath in $plannedPaths) {
+                if ($otherPath -ieq $plannedPath) { throw 'profile path is shared by an unrelated SID' }
+              }
+            }
+          }
+          if ($currentTargets.Count -ne $plan.Count) { throw 'profile identity changed after validation' }
+          foreach ($profilePath in $plannedPaths) {
+            $profileDirectory = $null
+            try {
+              $profileDirectory = Get-Item -LiteralPath $profilePath -Force -EA Stop
+            } catch [System.Management.Automation.ItemNotFoundException] {}
+            if ($profileDirectory) {
+              if (-not $profileDirectory.PSIsContainer -or
+                  (($profileDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+                throw 'profile folder became unsafe after validation'
+              }
+              Write-Host "  Removing exact-SID profile folder: $profilePath"
+              Remove-ProfileFolder -Path $profilePath -Sid $expectedSid
+              try {
+                $null = Get-Item -LiteralPath $profilePath -Force -EA Stop
+                throw 'profile folder remains after cleanup'
+              } catch [System.Management.Automation.ItemNotFoundException] {}
+            }
+          }
+          # Keep the exact SID keys as ownership evidence until every planned
+          # folder is proved absent. A residue failure therefore stays retryable.
+          foreach ($key in $currentTargets) {
+            Write-Host ("  Removing exact-SID ProfileList entry: " + $key.PSChildName)
+            Remove-Item -LiteralPath $key.PSPath -Recurse -Force -EA Stop
+          }
+        } catch { exit 1 }
+    `, send, { heartbeatMs: 5000, heartbeatLabel: 'exact-SID profile cleanup', timeoutMs: 480000 });
+    tallyRemovals(plSweep);
+    if (plSweep.timedOut) {
+      send('ERROR: exact-SID profile cleanup timed out. Reboot and try again.', 'err');
       return { success: false, error: 'delete_profile_timeout', warnings, steps };
     }
-    if (delProfile.code !== 0) {
-      send('ERROR: profile folder could not be removed. Reboot and try again.', 'err');
+    if (plSweep.code !== 0) {
+      send('ERROR: exact-SID profile cleanup did not complete safely. No name-only fallback was attempted.', 'err');
       return { success: false, error: 'delete_profile_failed', warnings, steps };
     }
-    tallyRemovals(delProfile);
-  } else {
-    send(`  ${sourceProfile} did not exist - nothing to delete.`, 'out');
+    if (profileCleanupPlan.entries.length === 0) {
+      send('  No ProfileList entry belongs to the prior local SID. Name-only folders were preserved.', 'out');
+    }
   }
-
-  // Wider ProfileList sweep. Match entries TWO ways:
-  //   1. ProfileImagePath points at C:\Users\user1 (or user1.SOMETHING).
-  //   2. PSChildName == preDeleteSid OR preDeleteSid + ".bak".
-  //
-  // The second match catches the post-1132-reset failure mode where UPS
-  // renamed the live <sid> key to <sid>.bak (Event 1515) and minted a
-  // fresh <sid> key whose ProfileImagePath now references
-  // C:\Users\TEMP.<machine>.NNN. A path-only match misses the broken
-  // primary key, leaving Windows to keep falling back to TEMP profiles.
-  //
-  // Folder sweep also widened: any ProfileImagePath we removed becomes
-  // an orphan folder candidate, regardless of name shape.
-  const plSweep = await runPSScript(`
-    ${PS_REMOVE_PROFILE_HELPER}
-    $u = '${FIX_USER}'
-    $preDeleteSid = '${preDeleteSid}'
-    $base = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList'
-    $cleaned = 0
-    $orphanPaths = New-Object System.Collections.Generic.HashSet[string]
-    Get-ChildItem $base -EA SilentlyContinue | ForEach-Object {
-      $name = $_.PSChildName
-      $p = (Get-ItemProperty $_.PSPath -EA SilentlyContinue).ProfileImagePath
-      $matchByPath = $p -and ($p -ieq ('C:\\Users\\' + $u) -or $p -like ('C:\\Users\\' + $u + '.*'))
-      $matchBySid  = $preDeleteSid -and ($name -ieq $preDeleteSid -or $name -ieq ($preDeleteSid + '.bak'))
-      if ($matchByPath -or $matchBySid) {
-        if ($p) { [void]$orphanPaths.Add($p) }
-        Write-Host "  Removing ProfileList entry: $name  ->  $p"
-        Remove-Item $_.PSPath -Recurse -Force -EA SilentlyContinue
-        $cleaned += 1
-      }
-    }
-    Write-Host ("  Cleaned $cleaned ProfileList entries.")
-    foreach ($orphan in $orphanPaths) {
-      if (Test-Path $orphan) {
-        Write-Host "  Removing orphan folder (from ProfileList): $orphan"
-        Remove-ProfileFolder -Path $orphan
-      }
-    }
-    Get-ChildItem 'C:\\Users' -Directory -Force -EA 0 | Where-Object { $_.Name -ieq $u -or $_.Name -match ('^' + [Regex]::Escape($u) + '\\.') } | ForEach-Object {
-      Write-Host "  Removing leftover: $($_.FullName)"
-      Remove-ProfileFolder -Path $_.FullName
-    }
-  `, send, { heartbeatMs: 5000, heartbeatLabel: 'leftover cleanup', timeoutMs: 300000 });
-  tallyRemovals(plSweep);
 
   // Aggregate data-clear outcome across every removal pass above. A counted
   // leftover ("app only deleted 1 file" class) fails the step -> partial;
@@ -2385,7 +2550,7 @@ async function runFixFlow(event) {
     const clearRec = deletionOutcome(deletedCount, clearAttempts);
     let clearOutcome = clearRec.outcome;
     let clearDetail = clearRec.detail;
-    if (clearOutcome === 'ok' && (clearTimedOut || suffixSweep.code !== 0 || plSweep.code !== 0)) {
+    if (clearOutcome === 'ok' && (clearTimedOut || plSweep.code !== 0)) {
       clearOutcome = 'warn';
       clearDetail += clearTimedOut
         ? ' — but the cleanup step timed out before it could re-check, so a leftover may remain'
@@ -2735,8 +2900,8 @@ async function runFixFlow(event) {
   }
 
   // ============================================================
-  // STEP 6: Resolve the new user1 profile via registry first,
-  //         folder fallback. Deploy firstrun + desktop shortcut.
+  // STEP 6: Resolve the new user1 profile from the exact helper SID's
+  //         ProfileList key. Deploy firstrun + desktop shortcut.
   // ============================================================
   send('[6/8] Resolving new user1 profile path...', 'header');
   const profile = await resolveUserProfilePath(FIX_USER, 30, send, helperSID);
@@ -2751,12 +2916,10 @@ async function runFixFlow(event) {
       message: `user1 profile did not appear within 30s. Registry keys checked: ${profile.checkedKeys.join('; ') || '(none)'}. Folders checked: ${profile.checkedPaths.join('; ') || '(none)'}.`
     });
     // Everything the fix exists to deliver per-user (consent, dark mode,
-    // helper script) was skipped — that is a partial outcome, not a green run.
+    // helper script) was skipped. Identity is unresolved, so fail closed.
     step('profile-setup', `Set up the ${FIX_USER} profile`, 'fail',
-      `The ${FIX_USER} profile did not appear within 30 seconds, so Zoom settings, camera/microphone consent, and the helper script were skipped. Sign into Zoom once as ${FIX_USER}, then run the fix again.`);
-    send('Fix finished, but some outcomes need attention - see the summary below.', 'err');
-    const earlyVerdict = computeRunVerdict(steps, warnings, []);
-    return { success: true, partial: earlyVerdict.partial, steps, warnings, receipt: null };
+      `The exact ${FIX_USER} SID did not resolve to one trusted local profile, so no per-user file or ACL change was made.`);
+    return { success: false, error: 'profile_identity_unresolved', steps, warnings, receipt: null };
   }
   const newUserProfile = profile.path;
   send(`  Profile source: ${profile.source}, path: ${newUserProfile}`, 'out');
@@ -2809,9 +2972,9 @@ async function runFixFlow(event) {
   // Raw-SID grants (icacls `*` prefix) survive even if the account is
   // later deleted; NTAccount lookup fails for deleted accounts but the
   // ACE itself remains valid for the same SID on recreate.
-  if (profile.sid) {
+  if (profile.sid && profile.sid.toLowerCase() === helperSID.toLowerCase()) {
     await runPSScript(`
-      $sid = '${profile.sid}'
+      $sid = '${helperSID}'
       $base = '${newUserProfile}'
       $targets = @(
         (Join-Path $base 'NTUSER.DAT'),
@@ -3650,7 +3813,7 @@ ipcMain.handle('create-shortcut', async () => {
 // the desktop shortcut points at (it unseals the DPAPI credential blob
 // itself; no secret rides in argv). Refuses honestly when the pair from
 // the last fix run is not on disk.
-ipcMain.handle('launch-zoom-helper', async () => {
+async function launchZoomHelper() {
   const scriptPath = LAUNCHER_SCRIPT_PATH();
   if (!fs.existsSync(scriptPath) || !fs.existsSync(CRED_BLOB_PATH())) {
     return { success: false, reason: 'no stored helper sign-in — run the fix first' };
@@ -3663,16 +3826,28 @@ ipcMain.handle('launch-zoom-helper', async () => {
   const already = await runPSCapture(`
     $sid = '${helperSID}'
     $hit = $false
+    $unknown = $false
     try {
-      $procs = Get-CimInstance Win32_Process -Filter "Name='Zoom.exe'" -EA SilentlyContinue
+      $procs = @(Get-CimInstance Win32_Process -Filter "Name='Zoom.exe'" -EA Stop)
       foreach ($p in $procs) {
-        $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -EA SilentlyContinue
-        if ($o -and $o.ReturnValue -eq 0 -and ([string]$o.Sid -ieq $sid)) { $hit = $true; break }
+        try {
+          $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -EA Stop
+          if (-not $o -or $o.ReturnValue -ne 0 -or -not $o.Sid) { $unknown = $true; continue }
+          if ([string]$o.Sid -ieq $sid) { $hit = $true }
+        } catch { $unknown = $true }
       }
-    } catch {}
-    if ($hit) { Write-Output 'YES' } else { Write-Output 'NO' }
+    } catch { $unknown = $true }
+    if ($unknown) { $result = 'UNKNOWN' }
+    elseif ($hit) { $result = 'YES' }
+    else { $result = 'NO' }
+    Write-Output ('FIXER_ZOOM_DEDUP_V1=' + $result)
   `, { timeoutMs: 15000 });
-  if ((already.stdout || '').includes('YES')) {
+  const lines = String(already && already.stdout || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const marker = lines.length === 1 ? /^FIXER_ZOOM_DEDUP_V1=(YES|NO|UNKNOWN)$/.exec(lines[0]) : null;
+  if (!already || already.timedOut || already.code !== 0 || !marker || marker[1] === 'UNKNOWN') {
+    return { success: false, reason: 'could not verify helper Zoom process ownership — try again' };
+  }
+  if (marker[1] === 'YES') {
     return { success: true, alreadyRunning: true };
   }
   try {
@@ -3684,7 +3859,8 @@ ipcMain.handle('launch-zoom-helper', async () => {
   } catch (err) {
     return { success: false, reason: err.message };
   }
-});
+}
+ipcMain.handle('launch-zoom-helper', launchZoomHelper);
 
 ipcMain.handle('shortcut-exists', async () => {
   const found = await findExistingShortcuts();

@@ -3,6 +3,7 @@
 // Exercise the actual packaged driver's gate with controlled runtime facts.
 // The Windows acceptance run separately proves these facts in real Electron.
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -343,13 +344,276 @@ async function run(options = {}) {
     !verifyAdminSource.includes('net localgroup'),
   'administrator membership accepts only an exact SID result and fails closed on unknown identity');
   checks++;
+
+  const profilePolicyContext = { path: path.win32 };
+  vm.createContext(profilePolicyContext);
+  vm.runInContext(
+    mainProductionFunction('selectSidBoundProfileEntries') +
+      '\nthis.selectSidBoundProfileEntries = selectSidBoundProfileEntries;',
+    profilePolicyContext
+  );
+  const profileEntry = (keyName, profileImagePath = '', hasNtUserDat = true, readable = true,
+    pathExists = profileImagePath !== '', isReparsePoint = false) =>
+    ({ keyName, profileImagePath, hasNtUserDat, readable, pathExists, isReparsePoint });
+  const domainSid = 'S-1-5-21-900-800-700-1001';
+  const staleSid = 'S-1-5-21-400-500-600-1001';
+  const canonicalProfile = 'C:\\Users\\user1';
+  const backupProfile = 'C:\\Users\\user1.OLDPC';
+  const domainProfile = 'C:\\Users\\user1.CONTOSO';
+  const selectProfiles = (entries, sid, purpose) =>
+    profilePolicyContext.selectSidBoundProfileEntries(entries, sid, purpose);
+
+  const noPriorSid = selectProfiles([
+    profileEntry(domainSid, canonicalProfile),
+    profileEntry(staleSid, backupProfile)
+  ], '', 'cleanup');
+  assert.ok(noPriorSid.ok && noPriorSid.keys.length === 0 && noPriorSid.paths.length === 0,
+    'without a trusted prior SID, name-only canonical and suffixed folders are never cleanup targets');
+  const noMatchingKey = selectProfiles([], oldSid, 'cleanup');
+  assert.ok(noMatchingKey.ok && noMatchingKey.keys.length === 0,
+    'a name-only folder without an exact SID key is never deleted');
+  const exactCleanup = selectProfiles([
+    profileEntry(oldSid, canonicalProfile),
+    profileEntry(`${oldSid}.bak`, backupProfile),
+    profileEntry(domainSid, domainProfile),
+    profileEntry(staleSid, 'C:\\Users\\stale-helper')
+  ], oldSid, 'cleanup');
+  assert.ok(exactCleanup.ok);
+  assert.deepEqual(Array.from(exactCleanup.keys).sort(), [oldSid, `${oldSid}.bak`].sort(),
+    'cleanup selects only the exact old SID and its .bak key');
+  assert.deepEqual(Array.from(exactCleanup.paths).sort(), [canonicalProfile, backupProfile].sort(),
+    'cleanup selects only folders resolved from those exact SID keys');
+  assert.ok(!Array.from(exactCleanup.keys).includes(domainSid) && !Array.from(exactCleanup.keys).includes(staleSid),
+    'same-name domain and stale unrelated SID entries remain preserved');
+  const sharedDomainPath = selectProfiles([
+    profileEntry(oldSid, canonicalProfile),
+    profileEntry(domainSid, canonicalProfile)
+  ], oldSid, 'cleanup');
+  assert.equal(sharedDomainPath.ok, false,
+    'a path also referenced by a same-name domain SID blocks cleanup instead of deleting either profile');
+  assert.equal(selectProfiles([
+    profileEntry(oldSid, canonicalProfile, true, true, true, true)
+  ], oldSid, 'cleanup').ok, false, 'a top-level profile junction blocks cleanup');
+  assert.equal(selectProfiles([
+    profileEntry(oldSid, 'C:\\Users\\Public')
+  ], oldSid, 'cleanup').ok, false, 'a protected shared profile root blocks cleanup');
+  const absentFolderPlan = selectProfiles([
+    profileEntry(oldSid, 'C:\\Users\\user1.DOMAIN', false, true, false, false)
+  ], oldSid, 'cleanup');
+  assert.ok(absentFolderPlan.ok && absentFolderPlan.entries.length === 1 &&
+    absentFolderPlan.entries[0].pathExists === false,
+  'cleanup preserves the observed missing-folder state instead of treating a later name match as owned');
+  checks++;
+
+  const exactResolved = selectProfiles([profileEntry(newSid, canonicalProfile)], newSid, 'resolve');
+  assert.ok(exactResolved.ok && exactResolved.entry.profileImagePath === canonicalProfile,
+    'the exact live helper SID with its local profile and hive resolves');
+  for (const [name, entries] of [
+    ['unrelated stale SID only', [profileEntry(staleSid, canonicalProfile)]],
+    ['bak only', [profileEntry(`${newSid}.bak`, canonicalProfile)]],
+    ['live plus bak', [profileEntry(newSid, canonicalProfile), profileEntry(`${newSid}.bak`, backupProfile)]],
+    ['duplicate live key', [profileEntry(newSid, canonicalProfile), profileEntry(newSid, canonicalProfile)]],
+    ['missing path', [profileEntry(newSid, '')]],
+    ['missing NTUSER.DAT', [profileEntry(newSid, canonicalProfile, false)]],
+    ['unreadable inventory', [profileEntry(newSid, canonicalProfile, true, false)]],
+    ['profile root junction', [profileEntry(newSid, canonicalProfile, true, true, true, true)]],
+    ['path shared by unrelated SID', [profileEntry(newSid, canonicalProfile), profileEntry(domainSid, canonicalProfile)]]
+  ]) {
+    assert.equal(selectProfiles(entries, newSid, 'resolve').ok, false, name);
+  }
+  for (const unsafePath of [
+    'D:\\Users\\user1',
+    'C:\\Users\\user1\\nested',
+    'C:\\Users\\other\\..\\user1',
+    '\\\\server\\profiles\\user1',
+    '\\\\?\\C:\\Users\\user1',
+    'C:/Users/user1',
+    'C:\\Users\\user1.',
+    ' C:\\Users\\user1',
+    'C:\\Users\\Public',
+    'C:\\Users\\Default',
+    'C:\\Users\\Default User',
+    'C:\\Users\\CON',
+    'C:\\Users\\LPT1.data'
+  ]) {
+    assert.equal(selectProfiles([profileEntry(newSid, unsafePath)], newSid, 'resolve').ok, false,
+      `unsafe profile path is rejected: ${unsafePath}`);
+  }
+  checks++;
+
+  const resolveProfileSource = mainProductionFunction('resolveUserProfilePath');
+  async function resolveProfile(payload, { code = 0, timedOut = false, stdout } = {}) {
+    const context = { path: path.win32, capturedScript: '', runPSCapture: async script => {
+      context.capturedScript = script;
+      return {
+        code,
+        timedOut,
+        stdout: stdout === undefined ? JSON.stringify(payload) : stdout
+      };
+    } };
+    vm.createContext(context);
+    vm.runInContext([
+      mainProductionFunction('selectSidBoundProfileEntries'),
+      resolveProfileSource,
+      'this.resolveUserProfilePath = resolveUserProfilePath;'
+    ].join('\n'), context);
+    const result = await context.resolveUserProfilePath('user1', 1, () => {}, newSid);
+    return { result, script: context.capturedScript };
+  }
+  const exactProfileReceipt = {
+    marker: 'FIXER_PROFILELIST_V1', sid: newSid,
+    entries: [profileEntry(newSid, canonicalProfile)]
+  };
+  const resolvedProfile = await resolveProfile(exactProfileReceipt);
+  assert.equal(resolvedProfile.result.path, canonicalProfile);
+  assert.equal(resolvedProfile.result.source, 'registry');
+  assert.equal(resolvedProfile.result.sid, newSid);
+  assert.ok(resolvedProfile.script.includes('$liveKey = Join-Path $base $sid') &&
+    resolvedProfile.script.includes("$bakKey = $liveKey + '.bak'") &&
+    resolvedProfile.script.includes('Get-ChildItem -LiteralPath $base -EA Stop') &&
+    !resolveProfileSource.includes('NTAccount') &&
+    !resolveProfileSource.includes('folder-suffixed') &&
+    !resolveProfileSource.includes("Get-ChildItem 'C:\\\\Users'"),
+  'profile resolution inventories only ProfileList and has no account-name or folder fallback');
+  assert.equal((await resolveProfile({ ...exactProfileReceipt, entries: [] })).result.path, null,
+    'a name-only folder cannot replace the exact helper SID key');
+  assert.equal((await resolveProfile(exactProfileReceipt, { code: 1 })).result.path, null,
+    'a nonzero ProfileList inventory fails closed');
+  assert.equal((await resolveProfile(exactProfileReceipt, { timedOut: true })).result.path, null,
+    'a timed-out ProfileList inventory fails closed');
+  assert.equal((await resolveProfile(exactProfileReceipt, { stdout: '{bad-json' })).result.path, null,
+    'a malformed ProfileList receipt fails closed');
+  assert.equal((await resolveProfile(exactProfileReceipt, {
+    stdout: `${JSON.stringify(exactProfileReceipt)}\n${JSON.stringify(exactProfileReceipt)}`
+  })).result.path, null, 'multiple ProfileList receipts fail closed');
+  const cleanupPlanIndex = mainSource.indexOf("profileCleanupPlan = selectSidBoundProfileEntries(entries, preDeleteSid, 'cleanup')");
+  const accountDeleteIndex = mainSource.indexOf("runProcess('net.exe', ['user', FIX_USER, '/delete']");
+  const folderDeleteIndex = mainSource.indexOf('Remove-ProfileFolder -Path $profilePath -Sid $expectedSid');
+  const residueProofIndex = mainSource.indexOf("throw 'profile folder remains after cleanup'", folderDeleteIndex);
+  const keyDeleteIndex = mainSource.indexOf('Remove-Item -LiteralPath $key.PSPath', residueProofIndex);
+  assert.ok(!mainSource.includes('const sourceProfile = `C:\\\\Users\\\\${FIX_USER}`') &&
+    !mainSource.includes('$matchByPath') &&
+    !mainSource.includes("Get-ChildItem 'C:\\\\Users' -Directory") &&
+    mainSource.includes("selectSidBoundProfileEntries(entries, preDeleteSid, 'cleanup')") &&
+    cleanupPlanIndex >= 0 && cleanupPlanIndex < accountDeleteIndex &&
+    folderDeleteIndex >= 0 && folderDeleteIndex < residueProofIndex && residueProofIndex < keyDeleteIndex &&
+    mainSource.includes("(($profileDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)") &&
+    mainSource.includes('$plannedPaths = @($plan | Where-Object { [bool]$_.pathExists }') &&
+    mainSource.includes("throw 'previously absent profile folder appeared after validation'") &&
+    mainSource.includes("if ($expected.Count -ne 1 -or [string]$expected[0].profileImagePath -ine $profilePath)") &&
+    !mainSource.includes('if (profileCleanupPlan.entries.length > 0)'),
+  'cleanup revalidates even an empty plan and never deletes a folder that appeared after the protected snapshot');
+  checks++;
+
+  const launchZoomHelperSource = mainProductionFunction('launchZoomHelper');
+  async function launchZoomProbe(probeResult) {
+    let spawns = 0;
+    let probeScript = '';
+    const context = {
+      fs: { existsSync: () => true },
+      FIX_USER: 'user1',
+      LAUNCHER_SCRIPT_PATH: () => 'C:\\ProgramData\\1132 Fixer\\launch.ps1',
+      CRED_BLOB_PATH: () => 'C:\\ProgramData\\1132 Fixer\\helper.bin',
+      resolveSID: async () => newSid,
+      runPSCapture: async script => { probeScript = script; return probeResult; },
+      spawnWindowsTool: () => { spawns++; return { unref() {} }; }
+    };
+    vm.createContext(context);
+    vm.runInContext(launchZoomHelperSource + '\nthis.launchZoomHelper = launchZoomHelper;', context);
+    return { result: await context.launchZoomHelper(), spawns, probeScript };
+  }
+  const yesProbe = await launchZoomProbe({ code: 0, timedOut: false, stdout: 'FIXER_ZOOM_DEDUP_V1=YES\n' });
+  assert.ok(yesProbe.result.success && yesProbe.result.alreadyRunning && yesProbe.spawns === 0,
+    'the exact helper SID YES receipt suppresses a duplicate launcher');
+  const noProbe = await launchZoomProbe({ code: 0, timedOut: false, stdout: 'FIXER_ZOOM_DEDUP_V1=NO\n' });
+  assert.ok(noProbe.result.success && noProbe.spawns === 1,
+    'one exact successful NO receipt starts one launcher');
+  const domainOnlyProbe = await launchZoomProbe({ code: 0, timedOut: false, stdout: 'FIXER_ZOOM_DEDUP_V1=NO' });
+  assert.equal(domainOnlyProbe.spawns, 1,
+    'a successful scan containing only a different domain SID does not impersonate the helper SID');
+  for (const [name, probeResult] of [
+    ['owner lookup failure', { code: 0, timedOut: false, stdout: 'FIXER_ZOOM_DEDUP_V1=UNKNOWN' }],
+    ['enumeration failure', { code: 0, timedOut: false, stdout: 'FIXER_ZOOM_DEDUP_V1=UNKNOWN\n' }],
+    ['timeout', { code: 0, timedOut: true, stdout: 'FIXER_ZOOM_DEDUP_V1=NO' }],
+    ['nonzero exit', { code: 1, timedOut: false, stdout: 'FIXER_ZOOM_DEDUP_V1=NO' }],
+    ['missing marker', { code: 0, timedOut: false, stdout: '' }],
+    ['malformed marker', { code: 0, timedOut: false, stdout: 'FIXER_ZOOM_DEDUP_V1=MAYBE' }],
+    ['multiple markers', { code: 0, timedOut: false, stdout: 'FIXER_ZOOM_DEDUP_V1=YES\nFIXER_ZOOM_DEDUP_V1=NO' }],
+    ['duplicate markers', { code: 0, timedOut: false, stdout: 'FIXER_ZOOM_DEDUP_V1=NO\nFIXER_ZOOM_DEDUP_V1=NO' }],
+    ['extra output', { code: 0, timedOut: false, stdout: 'noise\nFIXER_ZOOM_DEDUP_V1=NO' }]
+  ]) {
+    const blocked = await launchZoomProbe(probeResult);
+    assert.equal(blocked.result.success, false, name);
+    assert.equal(blocked.spawns, 0, `${name} cannot start the launcher`);
+  }
+  assert.ok(yesProbe.probeScript.includes("Get-CimInstance Win32_Process -Filter \"Name='Zoom.exe'\" -EA Stop") &&
+    yesProbe.probeScript.includes('Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -EA Stop') &&
+    (yesProbe.probeScript.match(/catch \{ \$unknown = \$true \}/g) || []).length === 2 &&
+    yesProbe.probeScript.includes('if (-not $o -or $o.ReturnValue -ne 0 -or -not $o.Sid) { $unknown = $true; continue }') &&
+    yesProbe.probeScript.includes('if ([string]$o.Sid -ieq $sid) { $hit = $true }') &&
+    !/MethodName GetOwner(?!Sid)/.test(yesProbe.probeScript) &&
+    !/\.User\b|\.Domain\b|user1/i.test(yesProbe.probeScript),
+  'the real probe maps both enumeration and owner uncertainty to UNKNOWN and uses no same-name owner fallback');
+
+  const pwshCandidates = process.platform === 'win32'
+    ? ['pwsh.exe', 'pwsh']
+    : ['pwsh', '/mnt/c/Program Files/PowerShell/7/pwsh.exe'];
+  let pwsh = '';
+  for (const candidate of pwshCandidates) {
+    if (candidate.startsWith('/') && !fs.existsSync(candidate)) continue;
+    const version = spawnSync(candidate,
+      ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.Major'],
+      { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    if (!version.error && version.status === 0 && Number(String(version.stdout || '').trim()) >= 7) {
+      pwsh = candidate;
+      break;
+    }
+  }
+  if (pwsh) {
+    const executeOwnerFixture = setup => {
+      const child = spawnSync(pwsh, ['-NoProfile', '-NonInteractive', '-Command', '-'], {
+        input: `${setup}\n${yesProbe.probeScript}`,
+        encoding: 'utf8', windowsHide: true, timeout: 15000
+      });
+      assert.equal(child.status, 0, String(child.stderr || 'PowerShell fixture failed'));
+      return String(child.stdout || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    };
+    const enumerationFailure = executeOwnerFixture(`
+      function Get-CimInstance { [CmdletBinding()] param([Parameter(Position=0)][string]$ClassName,[string]$Filter) throw 'fixture enumeration failure' }
+      function Invoke-CimMethod { [CmdletBinding()] param([object]$InputObject,[string]$MethodName) throw 'must not run' }
+    `);
+    const ownerFailure = executeOwnerFixture(`
+      function Get-CimInstance { [CmdletBinding()] param([Parameter(Position=0)][string]$ClassName,[string]$Filter) [pscustomobject]@{ ProcessId = 10 } }
+      function Invoke-CimMethod { [CmdletBinding()] param([object]$InputObject,[string]$MethodName) throw 'fixture owner failure' }
+    `);
+    const domainOwner = executeOwnerFixture(`
+      function Get-CimInstance { [CmdletBinding()] param([Parameter(Position=0)][string]$ClassName,[string]$Filter) [pscustomobject]@{ ProcessId = 11 } }
+      function Invoke-CimMethod { [CmdletBinding()] param([object]$InputObject,[string]$MethodName) [pscustomobject]@{ ReturnValue = 0; Sid = '${domainSid}' } }
+    `);
+    const exactOwner = executeOwnerFixture(`
+      function Get-CimInstance { [CmdletBinding()] param([Parameter(Position=0)][string]$ClassName,[string]$Filter) [pscustomobject]@{ ProcessId = 12 } }
+      function Invoke-CimMethod { [CmdletBinding()] param([object]$InputObject,[string]$MethodName) [pscustomobject]@{ ReturnValue = 0; Sid = '${newSid}' } }
+    `);
+    assert.deepEqual(enumerationFailure, ['FIXER_ZOOM_DEDUP_V1=UNKNOWN'],
+      'a real PowerShell enumeration failure emits one UNKNOWN marker');
+    assert.deepEqual(ownerFailure, ['FIXER_ZOOM_DEDUP_V1=UNKNOWN'],
+      'a real PowerShell owner lookup failure emits one UNKNOWN marker');
+    assert.deepEqual(domainOwner, ['FIXER_ZOOM_DEDUP_V1=NO'],
+      'a real PowerShell different/domain SID emits one NO marker');
+    assert.deepEqual(exactOwner, ['FIXER_ZOOM_DEDUP_V1=YES'],
+      'a real PowerShell exact helper SID emits one YES marker');
+  } else {
+    console.log('packaged-runtime-smoke: skip PowerShell 7 owner-probe fixtures (pwsh unavailable)');
+  }
+  checks++;
+
   const ownerSidCalls = (mainSource.match(/MethodName GetOwnerSid/g) || []).length;
   const sidAclGrants = (mainSource.match(/`\*\$\{helperSID\}:/g) || []).length;
   const preflightScanSource = mainSource.slice(mainSource.indexOf("ipcMain.handle('preflight-scan'"));
   assert.ok(ownerSidCalls >= 5 && !/MethodName GetOwner(?!Sid)/.test(mainSource) &&
     mainSource.includes("const helperSID = await resolveSID(FIX_USER, preDeleteSid)") &&
     mainSource.includes("$sid = '${helperSID}'") &&
-    mainSource.includes("$key = if ($sid) { 'HKLM:\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\ProfileList\\\\' + $sid }") &&
+    mainSource.includes('$liveKey = Join-Path $base $sid') &&
     mainSource.includes("if (-not $o -or $o.ReturnValue -ne 0 -or -not $o.Sid) { $unknown = $true; continue }") &&
     mainSource.includes("error: 'zoom_process_custody_unresolved'") &&
     mainSource.includes("verifyAdminMembership(preDeleteSid)") &&
