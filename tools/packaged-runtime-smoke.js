@@ -274,14 +274,15 @@ async function run(options = {}) {
   const appendCharacter = launchScript.indexOf('$pw.AppendChar($fixerPasswordChar)');
   const clearCharacters = launchScript.indexOf('[Array]::Clear($fixerPasswordChars, 0, $fixerPasswordChars.Length)');
   const makeReadOnly = launchScript.indexOf('$pw.MakeReadOnly()');
-  const credentialCtor = launchScript.indexOf("$cred = [System.Management.Automation.PSCredential]::new('${FIX_USER}', $pw)");
+  const localUser = launchScript.indexOf("$fixerLocalUser = [System.Environment]::MachineName + '\\\\${FIX_USER}'");
+  const credentialCtor = launchScript.indexOf('$cred = [System.Management.Automation.PSCredential]::new($fixerLocalUser, $pw)');
   const credentialSuccess = launchScript.indexOf('phase=credential outcome=success');
   const startProcessPhase = launchScript.indexOf("$fixerLaunchPhase = 'start_process'");
   const startProcess = launchScript.indexOf('Start-Process -FilePath');
   assert.ok(launchScriptStart >= 0 && launchScriptEnd > launchScriptStart &&
     launchScript.indexOf('try {') < secureStringCtor &&
     secureStringCtor < appendCharacter && appendCharacter < clearCharacters &&
-    clearCharacters < makeReadOnly && makeReadOnly < credentialCtor &&
+    clearCharacters < makeReadOnly && makeReadOnly < localUser && localUser < credentialCtor &&
     credentialCtor < credentialSuccess && credentialSuccess < startProcessPhase &&
     startProcessPhase < startProcess && launchScript.includes('-Credential $cred -EA Stop') &&
     !launchScript.includes('ConvertTo-SecureString') && !launchScript.includes('New-Object') &&
@@ -295,6 +296,73 @@ async function run(options = {}) {
     source.includes('window.__fixerAcceptanceFixLog.length < 32'),
   'main and the bounded receipt capture use the closed launch-diagnostic path');
   checks++;
+
+  const resolveSidSource = mainProductionFunction('resolveSID');
+  async function resolveSid(payload, staleSid = '') {
+    const context = {
+      runPSCapture: async script => {
+        context.script = script;
+        return { code: 0, timedOut: false, stdout: JSON.stringify(payload) };
+      }
+    };
+    vm.createContext(context);
+    vm.runInContext(resolveSidSource + '\nthis.resolveSID = resolveSID;', context);
+    return { sid: await context.resolveSID('user1', staleSid), script: context.script };
+  }
+  const oldSid = 'S-1-5-21-100-200-300-1000';
+  const newSid = 'S-1-5-21-100-200-300-1001';
+  const exactAccount = { name: 'user1', domain: 'LOCALPC', localAccount: true, sid: newSid };
+  const domainAccount = { name: 'user1', domain: 'CONTOSO', localAccount: false, sid: 'S-1-5-21-9-8-7-1001' };
+  const exact = await resolveSid({ machine: 'LOCALPC', accounts: [domainAccount, exactAccount] });
+  assert.equal(exact.sid, newSid, 'exact local-machine SID wins over a domain account with the same name');
+  assert.equal((await resolveSid({ machine: 'LOCALPC', accounts: [domainAccount] })).sid, '',
+    'domain same-name account is never accepted as the local helper');
+  assert.equal((await resolveSid({ machine: 'LOCALPC', accounts: [] })).sid, '',
+    'missing local helper SID fails closed');
+  assert.equal((await resolveSid({ machine: 'LOCALPC', accounts: [exactAccount, { ...exactAccount }] })).sid, '',
+    'ambiguous local helper SID fails closed');
+  assert.equal((await resolveSid({ machine: 'LOCALPC', accounts: [{ ...exactAccount, sid: oldSid }] }, oldSid)).sid, '',
+    'stale SID from the deleted account generation fails closed');
+  assert.ok(exact.script.includes('Get-CimInstance Win32_UserAccount') &&
+    exact.script.includes('[System.Environment]::MachineName'),
+  'SID receipt comes from the local account inventory and machine identity');
+  const verifyAdminSource = mainProductionFunction('verifyAdminMembership');
+  async function verifyAdmin(stdout, code = 0, timedOut = false) {
+    const context = { runPSCapture: async () => ({ stdout, code, timedOut }) };
+    vm.createContext(context);
+    vm.runInContext(verifyAdminSource + '\nthis.verifyAdminMembership = verifyAdminMembership;', context);
+    return context.verifyAdminMembership(newSid);
+  }
+  const exactAdmin = await verifyAdmin(`METHOD=Get-LocalGroupMember\nRESULT=YES\nSID=${newSid}`);
+  const exactStandard = await verifyAdmin(`METHOD=Get-LocalGroupMember\nRESULT=NO\nSID=${newSid}`);
+  const unknownAdmin = await verifyAdmin(`METHOD=failed\nRESULT=UNKNOWN\nSID=${newSid}`, 1);
+  assert.ok(exactAdmin.verified && exactAdmin.inGroup &&
+    exactStandard.verified && !exactStandard.inGroup &&
+    !unknownAdmin.verified && !unknownAdmin.inGroup &&
+    !verifyAdminSource.includes('NTAccount') && !verifyAdminSource.includes('$m.Name') &&
+    !verifyAdminSource.includes('net localgroup'),
+  'administrator membership accepts only an exact SID result and fails closed on unknown identity');
+  checks++;
+  const ownerSidCalls = (mainSource.match(/MethodName GetOwnerSid/g) || []).length;
+  const sidAclGrants = (mainSource.match(/`\*\$\{helperSID\}:/g) || []).length;
+  const preflightScanSource = mainSource.slice(mainSource.indexOf("ipcMain.handle('preflight-scan'"));
+  assert.ok(ownerSidCalls >= 5 && !/MethodName GetOwner(?!Sid)/.test(mainSource) &&
+    mainSource.includes("const helperSID = await resolveSID(FIX_USER, preDeleteSid)") &&
+    mainSource.includes("$sid = '${helperSID}'") &&
+    mainSource.includes("$key = if ($sid) { 'HKLM:\\\\SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\ProfileList\\\\' + $sid }") &&
+    mainSource.includes("if (-not $o -or $o.ReturnValue -ne 0 -or -not $o.Sid) { $unknown = $true; continue }") &&
+    mainSource.includes("error: 'zoom_process_custody_unresolved'") &&
+    mainSource.includes("verifyAdminMembership(preDeleteSid)") &&
+    mainSource.includes("Remove-LocalGroupMember -SID 'S-1-5-32-544' -Member $matches[0]") &&
+    !mainSource.includes("Remove-LocalGroupMember -SID 'S-1-5-32-544' -Member '${FIX_USER}'") &&
+    sidAclGrants === 3 &&
+    preflightScanSource.includes("$out['user1_identity_verified']") &&
+    preflightScanSource.includes("$out['user1_admin_verified']") &&
+    !preflightScanSource.includes("NTAccount('${FIX_USER}')") &&
+    !preflightScanSource.includes("$m.Name -ieq '${FIX_USER}'"),
+  'helper drain, Zoom liveness, close, verification and helper launch use exact SID ownership');
+  checks++;
+
   assert.ok(source.includes("mode: ACCEPTANCE_MODE") && source.includes("acceptanceResult = report.releaseGateEligible"),
     'report declares full-acceptance versus diagnostic non-acceptance');
   checks++;

@@ -1004,7 +1004,7 @@ let fatalDialogShown = false;
 // termination; otherwise this process keeps custody and does not relaunch.
 const activeChildren = new Set();
 const unprovedChildTrees = new WeakSet();
-const CHILD_TREE_KILL_ATTEMPTS = 3;
+const childTreeCustody = new WeakMap();
 function terminateChildTree(child) {
   const result = {
     treeTerminated: false,
@@ -1014,36 +1014,47 @@ function terminateChildTree(child) {
     taskkillAttempts: [],
     parentIdentifiable: false
   };
-  const parentIsIdentifiable = () => !!(child && Number.isInteger(child.pid) && child.pid > 0 &&
-    child.exitCode === null && child.signalCode === null);
-  if (parentIsIdentifiable()) {
-    for (let attempt = 1; attempt <= CHILD_TREE_KILL_ATTEMPTS; attempt++) {
-      if (!parentIsIdentifiable()) break;
-      const evidence = { attempt, status: null, error: null, signal: null };
-      try {
-        const killed = spawnWindowsToolSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
-          windowsHide: true,
-          timeout: 10000
-        });
-        evidence.status = Number.isInteger(killed && killed.status) ? killed.status : null;
-        evidence.error = killed && killed.error
-          ? String(killed.error.code || killed.error.name || 'process-error')
-          : null;
-        evidence.signal = killed && killed.signal ? String(killed.signal) : null;
-      } catch (err) {
-        evidence.error = String((err && (err.code || err.name)) || 'exception');
-      }
-      result.taskkillAttempts.push(evidence);
-      result.taskkillStatus = evidence.status;
-      result.taskkillError = evidence.error;
-      result.taskkillSignal = evidence.signal;
-      result.treeTerminated = evidence.status === 0 && !evidence.error && !evidence.signal;
-      if (result.treeTerminated) break;
-    }
-    result.parentIdentifiable = parentIsIdentifiable();
-  } else {
-    result.taskkillError = child && child.pid ? 'parent-not-live' : 'missing-pid';
+  const custody = child && childTreeCustody.get(child);
+  const parentIsIdentifiable = !!(custody && Number.isInteger(custody.pid) && custody.pid > 0 &&
+    !custody.exitObserved && child.exitCode === null && child.signalCode === null);
+  result.parentIdentifiable = parentIsIdentifiable;
+  if (!custody) {
+    result.taskkillError = 'unregistered-child';
+    return result;
   }
+  if (custody.treeKillAttempted) {
+    result.taskkillError = 'retry-blocked';
+    return result;
+  }
+  if (!parentIsIdentifiable) {
+    result.taskkillError = 'parent-not-live';
+    return result;
+  }
+
+  // spawnSync blocks delivery of the child's exit event. A failed call can
+  // therefore outlive the original process while Windows reuses its numeric
+  // PID. Mark the original ChildProcess identity before the one permitted
+  // tree-kill attempt. No later path may target that PID again.
+  custody.treeKillAttempted = true;
+  const evidence = { attempt: 1, status: null, error: null, signal: null };
+  try {
+    const killed = spawnWindowsToolSync('taskkill.exe', ['/PID', String(custody.pid), '/T', '/F'], {
+      windowsHide: true,
+      timeout: 10000
+    });
+    evidence.status = Number.isInteger(killed && killed.status) ? killed.status : null;
+    evidence.error = killed && killed.error
+      ? String(killed.error.code || killed.error.name || 'process-error')
+      : null;
+    evidence.signal = killed && killed.signal ? String(killed.signal) : null;
+  } catch (err) {
+    evidence.error = String((err && (err.code || err.name)) || 'exception');
+  }
+  result.taskkillAttempts.push(evidence);
+  result.taskkillStatus = evidence.status;
+  result.taskkillError = evidence.error;
+  result.taskkillSignal = evidence.signal;
+  result.treeTerminated = evidence.status === 0 && !evidence.error && !evidence.signal;
   return result;
 }
 
@@ -1182,6 +1193,13 @@ function runProcess(exe, args, onLine, opts = {}) {
       return;
     }
     activeChildren.add(child);
+    const custody = {
+      pid: child.pid,
+      exitObserved: false,
+      treeKillAttempted: false
+    };
+    childTreeCustody.set(child, custody);
+    child.once('exit', () => { custody.exitObserved = true; });
     const emit = (buf, kind) => {
       if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
       const text = (kind === 'err' ? stderrDecoder : stdoutDecoder).write(buf);
@@ -1245,6 +1263,7 @@ function runProcess(exe, args, onLine, opts = {}) {
       stopTimers();
       unprovedChildTrees.delete(child);
       activeChildren.delete(child);
+      childTreeCustody.delete(child);
     };
 
     const finish = (code, errorCode = null) => {
@@ -1726,54 +1745,76 @@ async function tryLogoffUser(username, toolPresence, send) {
 }
 
 // ============================================================
-// Resolve the user's SID via NTAccount translation.
-// Returns '' if not resolvable.
+// Resolve exactly one local-machine account SID. A domain account with the
+// same leaf name is not the helper account. A SID from the deleted account
+// generation is also not valid after recreation.
 // ============================================================
-async function resolveSID(username) {
+async function resolveSID(username, staleSid = '') {
+  const userLiteral = String(username || '').replace(/'/g, "''");
   const r = await runPSCapture(`
-    try { (New-Object System.Security.Principal.NTAccount('${username}')).Translate([System.Security.Principal.SecurityIdentifier]).Value }
-    catch { '' }
-  `);
-  return (r.stdout || '').trim();
+    $u = '${userLiteral}'
+    $accounts = @()
+    try {
+      $filter = "Name='" + $u.Replace("'", "''") + "'"
+      $accounts = @(Get-CimInstance Win32_UserAccount -Filter $filter -EA Stop |
+        ForEach-Object {
+          [pscustomobject]@{
+            name = [string]$_.Name
+            domain = [string]$_.Domain
+            localAccount = [bool]$_.LocalAccount
+            sid = [string]$_.SID
+          }
+        })
+    } catch { exit 1 }
+    [pscustomobject]@{
+      machine = [System.Environment]::MachineName
+      accounts = @($accounts)
+    } | ConvertTo-Json -Compress -Depth 3
+  `, { timeoutMs: 15000 });
+  if (r.timedOut || r.code !== 0) return '';
+  try {
+    const payload = JSON.parse((r.stdout || '').trim());
+    const machine = String(payload && payload.machine || '');
+    const accounts = Array.isArray(payload && payload.accounts)
+      ? payload.accounts
+      : (payload && payload.accounts ? [payload.accounts] : []);
+    const matches = accounts.filter(account => account && account.localAccount === true &&
+      String(account.name || '').toLowerCase() === String(username || '').toLowerCase() &&
+      String(account.domain || '').toLowerCase() === machine.toLowerCase() &&
+      /^S-1-5-21-(?:[0-9]+-){3}[0-9]+$/i.test(String(account.sid || '')));
+    if (!machine || matches.length !== 1) return '';
+    const sid = String(matches[0].sid);
+    if (staleSid && sid.toLowerCase() === String(staleSid).toLowerCase()) return '';
+    return sid;
+  } catch (_) {
+    return '';
+  }
 }
 
 // ============================================================
-// Check whether user is in local Administrators (S-1-5-32-544) by SID.
-// Falls back to `net localgroup` parsing. Returns { inGroup, method, raw }.
+// Check whether the exact local-account SID is in Administrators
+// (S-1-5-32-544). Returns an explicit verification state; a same-name domain
+// principal must never stand in for the helper account.
 // user1 must NOT be a member (SEC-A6) — the fix flow uses this to detect
 // a legacy admin user1 and to confirm the membership removal took.
 // ============================================================
-async function verifyAdminMembership(username) {
-  // SID translation happens INSIDE the same PS process — a separate
-  // resolveSID() round trip costs a full powershell.exe startup.
+async function verifyAdminMembership(expectedSid) {
+  const sidLiteral = String(expectedSid || '').replace(/'/g, "''");
   const r = await runPSCapture(`
-    $user = '${username}'
-    $userSid = ''
-    try { $userSid = (New-Object System.Security.Principal.NTAccount($user)).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}
-    $result = 'NO'
+    $userSid = '${sidLiteral}'
+    $result = 'UNKNOWN'
     $method = 'none'
     try {
       $members = Get-LocalGroupMember -SID 'S-1-5-32-544' -EA Stop
       $method = 'Get-LocalGroupMember'
+      $result = 'NO'
       foreach ($m in $members) {
         $mSid = $null
         try { $mSid = $m.SID.Value } catch {}
         if ($mSid -and $userSid -and ($mSid -eq $userSid)) { $result = 'YES'; break }
-        if ($m.Name -ieq $user) { $result = 'YES'; break }
-        if ($m.Name -like ('*\\' + $user)) { $result = 'YES'; break }
       }
     } catch {
-      try {
-        $out = (net localgroup administrators) 2>&1 | Out-String
-        $method = 'net-localgroup'
-        $lines = $out -split "\`r?\`n"
-        foreach ($l in $lines) {
-          $t = $l.Trim()
-          if ($t -ieq $user -or $t -like ('*\\' + $user)) { $result = 'YES'; break }
-        }
-      } catch {
-        $method = 'failed'
-      }
+      $method = 'failed'
     }
     Write-Output ("METHOD=" + $method)
     Write-Output ("RESULT=" + $result)
@@ -1786,7 +1827,10 @@ async function verifyAdminMembership(username) {
     else if (l.startsWith('RESULT=')) result = l.slice(7);
     else if (l.startsWith('SID=')) sid = l.slice(4);
   }
-  return { inGroup: result === 'YES', method, sid };
+  const verified = !r.timedOut && r.code === 0 && method === 'Get-LocalGroupMember' &&
+    (result === 'YES' || result === 'NO') && !!sid &&
+    sid.toLowerCase() === String(expectedSid || '').toLowerCase();
+  return { inGroup: verified && result === 'YES', method, sid, verified };
 }
 
 // ============================================================
@@ -1795,7 +1839,7 @@ async function verifyAdminMembership(username) {
 // total wall-clock close to the target wait.
 // Returns { path, source, checkedPaths, checkedKeys, sid }.
 // ============================================================
-async function resolveUserProfilePath(username, maxWaitSec, send) {
+async function resolveUserProfilePath(username, maxWaitSec, send, expectedSid = '') {
   const checkedPaths = [];
   const checkedKeys = [];
   const literal = `C:\\Users\\${username}`;
@@ -1812,7 +1856,9 @@ async function resolveUserProfilePath(username, maxWaitSec, send) {
     $u = '${username}'
     $literal = '${literal.replace(/'/g, "''")}'
     $deadline = [DateTime]::UtcNow.AddSeconds(${Math.max(1, maxWaitSec)})
-    $sid = ''; $key = ''; $lastReg = ''; $match = ''
+    $sid = '${String(expectedSid || '').replace(/'/g, "''")}'
+    $key = if ($sid) { 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\' + $sid } else { '' }
+    $lastReg = ''; $match = ''
 
     function Profile-Has-NTUserDat([string]$dir) {
       if (-not $dir) { return $false }
@@ -2047,6 +2093,9 @@ ipcMain.handle('preflight', async () => {
 // IPC: run-fix - the destructive flow
 // ============================================================
 ipcMain.handle('run-fix', async (event) => {
+  if (fixInProgress || activeChildren.size > 0) {
+    return { success: false, error: 'repair_in_progress' };
+  }
   // A fix in progress must never be interrupted by an update restart: a
   // ready update is deferred (its countdown cancelled) and the controller's
   // isBusy() blocks any install until the fix has finished.
@@ -2129,68 +2178,53 @@ async function runFixFlow(event) {
     };
   }
 
+  // Resolve the existing LOCAL helper before any process or profile action.
+  // A domain account with the same leaf name must never be stopped or used as
+  // evidence that the local helper is clear.
+  const accountExisted = await userExists(FIX_USER);
+  const preDeleteSid = accountExisted ? await resolveSID(FIX_USER) : '';
+  if (accountExisted && !preDeleteSid) {
+    send(`ERROR: could not prove the local '${FIX_USER}' account identity.`, 'err');
+    return { success: false, error: 'helper_sid_unresolved', warnings, steps };
+  }
+
   // ============================================================
-  // STEP 1: Kill user1 processes; attempt explicit session logoff
-  //         via quser/logoff (diagnostics surfaced).
+  // STEP 1: Stop only processes owned by the exact local helper SID.
   // ============================================================
   send(`[1/8] Terminating '${FIX_USER}' processes and sessions...`, 'header');
-  await runProcess('taskkill.exe',
-    ['/F', '/FI', `USERNAME eq ${FIX_USER}`], send);
-  const logoff = await tryLogoffUser(FIX_USER, pre.info.tools, send);
-  // quser_missing is the expected path on Windows Home (no quser.exe shipped);
-  // taskkill alone is sufficient, so it should not raise a warning.
-  const realNotes = logoff.notes.filter(n => n !== 'quser_missing');
-  if (realNotes.length) {
-    warnings.push({
-      code: 'logoff_partial',
-      message: `Session logoff issues: ${realNotes.join(', ')}`
-    });
-  }
-  // Poll until no user1-owned processes remain, killing stragglers each tick.
-  // Replaces the old fixed sleep(3s) + second taskkill + sleep(2s): positive
-  // confirmation instead of hoping 5s was enough, and the common case
-  // (nothing was running) clears in well under a second.
+  // Poll until no process with the exact SID remains. GetOwnerSid is the
+  // authority; GetOwner().User and DOMAIN\user leaf-name matches are not.
   const drain = await runPSCapture(`
-    $u = '${FIX_USER}'
+    $sid = '${preDeleteSid}'
+    if (-not $sid) { Write-Output 'CLEAR'; exit 0 }
     $deadline = [DateTime]::UtcNow.AddSeconds(6)
     $clear = $false
+    $unknown = $false
     do {
-      $procs = @()
+      $procs = [System.Collections.Generic.List[object]]::new()
+      $unknown = $false
       try {
-        # -IncludeUserName THROWS (terminating) without elevation; the fix
-        # flow is elevation-gated so this is the hot path, but fall back to
-        # the slower CIM GetOwner walk rather than silently reporting clear.
-        $procs = @(Get-Process -IncludeUserName -EA Stop |
-          Where-Object { $_.UserName -and (($_.UserName -split '\\\\')[-1] -ieq $u) } |
-          ForEach-Object { $_.Id })
-      } catch {
-        $procs = @(Get-CimInstance Win32_Process -EA SilentlyContinue |
-          Where-Object {
-            $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner -EA SilentlyContinue
-            $o -and ($o.User -ieq $u)
-          } |
-          ForEach-Object { $_.ProcessId })
-      }
+        foreach ($p in @(Get-CimInstance Win32_Process -EA Stop)) {
+          $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -EA SilentlyContinue
+          if (-not $o -or $o.ReturnValue -ne 0 -or -not $o.Sid) { $unknown = $true; continue }
+          if ([string]$o.Sid -ieq $sid) { $procs.Add($p) }
+        }
+      } catch { $unknown = $true }
       if ($procs.Count -eq 0) { $clear = $true; break }
-      $procs | ForEach-Object { Stop-Process -Id $_ -Force -EA SilentlyContinue }
+      $procs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
       Start-Sleep -Milliseconds 250
     } while ([DateTime]::UtcNow -lt $deadline)
-    if ($clear) { Write-Output 'CLEAR' } else { Write-Output 'RESIDUAL' }
+    if ($unknown) { Write-Output 'UNKNOWN' }
+    elseif ($clear) { Write-Output 'CLEAR' }
+    else { Write-Output 'RESIDUAL' }
   `, { timeoutMs: 20000 });
-  if ((drain.stdout || '').includes('RESIDUAL')) {
-    send(`  WARNING: some ${FIX_USER} processes survived repeated kills; continuing.`, 'err');
-    warnings.push({ code: 'kill_residual', message: `Some ${FIX_USER} processes were still alive after 6s of kill attempts.` });
+  if (drain.code !== 0 || drain.timedOut || !(drain.stdout || '').includes('CLEAR')) {
+    send(`ERROR: could not prove all local '${FIX_USER}' processes stopped.`, 'err');
+    step('close-sessions', `Close ${FIX_USER} programs and sessions`, 'fail',
+      'Exact SID process ownership or termination could not be proved.');
+    return { success: false, error: 'helper_process_custody_unresolved', warnings, steps };
   }
-  if (drain.timedOut) {
-    // Previously a timed-out drain probe read as "all clear" — fail-loud now.
-    send(`  WARNING: could not confirm all ${FIX_USER} processes exited (check timed out).`, 'err');
-    warnings.push({ code: 'kill_check_timeout', message: `Could not confirm every ${FIX_USER} process exited — the check timed out after 20s.` });
-  }
-  const step1Issues = [];
-  if (realNotes.length) step1Issues.push('session logoff issues');
-  if ((drain.stdout || '').includes('RESIDUAL')) step1Issues.push('some processes survived kill attempts');
-  if (drain.timedOut) step1Issues.push('process check timed out');
-  step('close-sessions', `Close ${FIX_USER} programs and sessions`, step1Issues.length ? 'warn' : 'ok', step1Issues.join('; '));
+  step('close-sessions', `Close ${FIX_USER} programs and sessions`, 'ok', '');
 
   // ============================================================
   // STEP 2: Pre-clean any leftover suffixed profile folders
@@ -2214,47 +2248,44 @@ async function runFixFlow(event) {
   //         and ProfileList registry entries.
   // ============================================================
   send('[3/8] Removing existing account and profile...', 'header');
-  const accountExisted = await userExists(FIX_USER);
-
-  // Resolve SID BEFORE deleting the account. Once `net user /delete` runs,
-  // NTAccount lookup fails. We still need the SID to unload the user's
-  // NTUSER.DAT hive before deleting the profile folder.
-  let preDeleteSid = '';
-  if (accountExisted) {
-    preDeleteSid = await resolveSID(FIX_USER);
-    send(`  Resolved SID: ${preDeleteSid || '(none)'}`, 'out');
-  }
 
   // SECURITY (SEC-A6): the helper account is no longer an administrator —
   // every privileged repair step runs under this app's own elevated token,
   // and user1 only runs Zoom. A user1 left in Administrators by an older
   // version gets the membership removed here, BEFORE the delete→recreate,
-  // so even a failed delete leaves no admin rights behind. Removal is
-  // SID-first with a net-localgroup fallback (same technique the old
-  // add-path used); a failed removal warns — never fails the run — because
-  // the recreate in STEP 4 builds a standard account either way.
+  // so even a failed delete leaves no admin rights behind. Detection,
+  // removal, and readback all use the exact local-account SID. If that proof
+  // is unavailable, stop before touching a same-name principal.
   if (accountExisted) {
-    const legacyAdmin = await verifyAdminMembership(FIX_USER);
+    const legacyAdmin = await verifyAdminMembership(preDeleteSid);
+    if (!legacyAdmin.verified) {
+      send(`ERROR: could not verify administrator membership for the local '${FIX_USER}' SID.`, 'err');
+      step('remove-admin-rights', `Remove administrator rights from ${FIX_USER}`, 'fail',
+        'Exact SID group membership could not be verified.');
+      return { success: false, error: 'helper_admin_membership_unresolved', warnings, steps };
+    }
     if (legacyAdmin.inGroup) {
       send(`  '${FIX_USER}' is in the Administrators group — removing rights it no longer needs...`, 'out');
-      await runPSScript(`
-        try { Remove-LocalGroupMember -SID 'S-1-5-32-544' -Member '${FIX_USER}' -EA Stop; Write-Host '  Remove-LocalGroupMember OK.' }
-        catch {
-          Write-Host ('  Remove-LocalGroupMember failed: ' + $_.Exception.Message)
-          $r = & (Resolve-FixerTool 'net.exe') localgroup Administrators '${FIX_USER}' /delete 2>&1
-          Write-Host ('  net localgroup fallback: ' + ($r | Out-String).Trim())
-        }
+      const adminRemoval = await runPSScript(`
+        $targetSid = '${preDeleteSid}'
+        try {
+          $matches = @(Get-LocalGroupMember -SID 'S-1-5-32-544' -EA Stop |
+            Where-Object { $_.SID -and ([string]$_.SID.Value -ieq $targetSid) })
+          if ($matches.Count -ne 1) { throw 'exact SID membership was not unique' }
+          Remove-LocalGroupMember -SID 'S-1-5-32-544' -Member $matches[0] -EA Stop
+          Write-Host '  Exact SID administrator membership removed.'
+        } catch { exit 1 }
       `, send, { heartbeatMs: 5000, heartbeatLabel: 'admin-rights removal', timeoutMs: 60000 });
-      const adminRecheck = await verifyAdminMembership(FIX_USER);
-      if (!adminRecheck.inGroup) {
+      const adminRecheck = await verifyAdminMembership(preDeleteSid);
+      if (adminRemoval.code === 0 && !adminRemoval.timedOut && adminRecheck.verified && !adminRecheck.inGroup) {
         send('  Removed administrator rights the helper account no longer needs.', 'out');
         step('remove-admin-rights', `Remove administrator rights from ${FIX_USER}`, 'ok',
           'Removed administrator rights the helper account no longer needs');
       } else {
-        send(`  WARNING: could not remove '${FIX_USER}' from the Administrators group.`, 'err');
-        send('  The account is deleted and rebuilt as a standard user below either way.', 'err');
-        step('remove-admin-rights', `Remove administrator rights from ${FIX_USER}`, 'warn',
-          `'${FIX_USER}' was still visible in the Administrators group after the removal attempt — the rebuilt account is created without admin rights regardless`);
+        send(`ERROR: could not prove removal of '${FIX_USER}' from the Administrators group.`, 'err');
+        step('remove-admin-rights', `Remove administrator rights from ${FIX_USER}`, 'fail',
+          'Exact SID membership removal or readback failed.');
+        return { success: false, error: 'helper_admin_removal_unproved', warnings, steps };
       }
     }
   }
@@ -2476,6 +2507,13 @@ async function runFixFlow(event) {
     send('  Common cause: password complexity policy rejected the password.', 'err');
     return { success: false, error: 'create_user_failed', warnings, steps };
   }
+  const helperSID = await resolveSID(FIX_USER, preDeleteSid);
+  if (!helperSID) {
+    send(`ERROR: Windows did not return one fresh local SID for '${FIX_USER}'.`, 'err');
+    step('create-account', `Create fresh ${FIX_USER} account`, 'fail',
+      'The new local account identity was missing, ambiguous, malformed, or unchanged.');
+    return { success: false, error: 'created_helper_sid_unproved', warnings, steps };
+  }
   // Invalidate-at-rotation: the OLD password just died with the recreate, so
   // any blob/launcher from a previous run is unusable from this instant.
   // Delete both NOW — if this run exits before the seal block republishes
@@ -2529,7 +2567,8 @@ async function runFixFlow(event) {
         [Array]::Clear($fixerPasswordChars, 0, $fixerPasswordChars.Length)
       }
       $pw.MakeReadOnly()
-      $cred = [System.Management.Automation.PSCredential]::new('${FIX_USER}', $pw)
+      $fixerLocalUser = [System.Environment]::MachineName + '\\${FIX_USER}'
+      $cred = [System.Management.Automation.PSCredential]::new($fixerLocalUser, $pw)
       Write-Output 'FIXER_LAUNCH_PHASE_V1 phase=credential outcome=success exceptionClass=none hresult=none nativeCode=none'
       $fixerLaunchPhase = 'start_process'
       Start-Process -FilePath '${zi.path}' -WorkingDirectory '${zi.dir}' -Credential $cred -EA Stop
@@ -2590,20 +2629,20 @@ async function runFixFlow(event) {
 
   // Verify Zoom is actually running as user1. With stdio:'ignore' on the
   // launcher we have no other signal. Use Win32_Process via Get-CimInstance
-  // + Invoke-CimMethod GetOwner (CimInstance has NO GetOwner method itself —
-  // earlier code used $_.GetOwner() which always threw and forced a false
-  // negative). Poll up to ~10s INSIDE one PS process — the old spawn-per-tick
+  // + Invoke-CimMethod GetOwnerSid. The SID binds this proof to the exact
+  // recreated local account generation. Poll up to ~10s INSIDE one PS process — the old spawn-per-tick
   // loop paid a powershell.exe startup for each of up to 12 checks, and the
   // 400ms internal tick also spots Zoom sooner.
   const zpoll = await runPSCapture(`
+    $sid = '${helperSID}'
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     $hit = $false
     do {
       try {
         $procs = Get-CimInstance Win32_Process -Filter "Name='Zoom.exe'" -EA SilentlyContinue
         foreach ($p in $procs) {
-          $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwner -EA SilentlyContinue
-          if ($owner -and ($owner.User -ieq '${FIX_USER}')) { $hit = $true; break }
+          $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -EA SilentlyContinue
+          if ($owner -and $owner.ReturnValue -eq 0 -and ([string]$owner.Sid -ieq $sid)) { $hit = $true; break }
         }
       } catch {}
       if ($hit) { break }
@@ -2700,7 +2739,7 @@ async function runFixFlow(event) {
   //         folder fallback. Deploy firstrun + desktop shortcut.
   // ============================================================
   send('[6/8] Resolving new user1 profile path...', 'header');
-  const profile = await resolveUserProfilePath(FIX_USER, 30, send);
+  const profile = await resolveUserProfilePath(FIX_USER, 30, send, helperSID);
   if (!profile.path) {
     send('  Checked registry keys:', 'err');
     profile.checkedKeys.forEach(k => send(`    - ${k}`, 'err'));
@@ -2831,8 +2870,8 @@ async function runFixFlow(event) {
         warnings.push({ code: 'shortcut_failed', message: 'Could not create Apply Zoom Settings shortcut on user1 desktop.' });
       }
       await Promise.all([
-        runProcess('icacls.exe', [firstRunDst, '/grant', `${FIX_USER}:(R)`, '/C'], noop),
-        runProcess('icacls.exe', [shortcutPath, '/grant', `${FIX_USER}:(RX)`, '/C'], noop)
+        runProcess('icacls.exe', [firstRunDst, '/grant', `*${helperSID}:(R)`, '/C'], noop),
+        runProcess('icacls.exe', [shortcutPath, '/grant', `*${helperSID}:(RX)`, '/C'], noop)
       ]);
     } catch (err) {
       send(`    WARNING: firstrun deploy failed: ${err.message}`, 'err');
@@ -2860,7 +2899,7 @@ async function runFixFlow(event) {
   // ============================================================
   send('[7/8] Configuring per-user Zoom preferences...', 'header');
 
-  const userSID = profile.sid || (await resolveSID(FIX_USER));
+  const userSID = helperSID;
   if (userSID) {
     await runPSScript(`
       $sid = '${userSID}'
@@ -3014,33 +3053,41 @@ async function runFixFlow(event) {
   // tree is confirmed gone — positive exit confirmation means file handles
   // (Zoom.us.ini) are released, typically within ~1s instead of always 4s.
   const zoomClose = await runPSCapture(`
-    $u = '${FIX_USER}'
+    $sid = '${helperSID}'
     $names = @('Zoom.exe','CptHost.exe','CptControl.exe','ZoomWebhook.exe',
                'Zoom_launcher.exe','ZoomTeamChat.exe','airhost.exe')
     $deadline = [DateTime]::UtcNow.AddSeconds(8)
+    $clear = $false
+    $unknown = $false
     do {
-      $targets = @(Get-CimInstance Win32_Process -EA SilentlyContinue |
-        Where-Object {
+      $targets = [System.Collections.Generic.List[object]]::new()
+      try {
+        $candidates = @(Get-CimInstance Win32_Process -EA Stop | Where-Object {
           ($names -contains $_.Name) -or
           ($_.ExecutablePath -and $_.ExecutablePath -like '*\\Zoom\\*')
-        } |
-        Where-Object {
-          $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner -EA SilentlyContinue
-          $o -and ($o.User -ieq $u)
         })
-      if ($targets.Count -eq 0) { break }
+        foreach ($candidate in $candidates) {
+          $o = Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid -EA SilentlyContinue
+          if (-not $o -or $o.ReturnValue -ne 0 -or -not $o.Sid) { $unknown = $true; continue }
+          if ([string]$o.Sid -ieq $sid) { $targets.Add($candidate) }
+        }
+      } catch { $unknown = $true }
+      if ($unknown) { break }
+      if ($targets.Count -eq 0) { $clear = $true; break }
       $targets | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
       Start-Sleep -Milliseconds 300
     } while ([DateTime]::UtcNow -lt $deadline)
-    if ($targets.Count -eq 0) { Write-Output 'CLEAR' } else { Write-Output ('RESIDUAL=' + $targets.Count) }
+    if ($unknown) { Write-Output 'UNKNOWN' }
+    elseif ($clear) { Write-Output 'CLEAR' }
+    else { Write-Output ('RESIDUAL=' + $targets.Count) }
   `, { timeoutMs: 30000 });
-  if ((zoomClose.stdout || '').includes('CLEAR')) {
+  if (zoomClose.code === 0 && !zoomClose.timedOut && (zoomClose.stdout || '').trim() === 'CLEAR') {
     send('  Zoom closed.', 'out');
   } else {
-    // Previously "Zoom closed." printed unconditionally — the ini write below
-    // can silently lose against a still-open Zoom.us.ini handle.
-    send('  WARNING: some Zoom processes may still be running for user1.', 'err');
-    warnings.push({ code: 'zoom_close_residual', message: 'Some Zoom processes were still running when preferences were written — the dark-mode setting may not stick.' });
+    send(`ERROR: could not prove every Zoom process for '${FIX_USER}' stopped.`, 'err');
+    step('zoom-config', 'Apply Zoom preferences', 'fail',
+      'Exact SID process ownership or termination could not be proved.');
+    return { success: false, error: 'zoom_process_custody_unresolved', warnings, steps };
   }
 
   if (fs.existsSync(zoomIni)) {
@@ -3091,7 +3138,7 @@ async function runFixFlow(event) {
       send('    NOTE: no preference files were copied (none present in source).', 'out');
     }
     await runProcess('icacls.exe',
-      [newZoomDir, '/grant', `${FIX_USER}:(OI)(CI)F`, '/T', '/C'], noop);
+      [newZoomDir, '/grant', `*${helperSID}:(OI)(CI)F`, '/T', '/C'], noop);
   } else {
     send(`  NOTE: ${srcZoomDir} not found. Skipping prefs copy.`, 'out');
   }
@@ -3132,7 +3179,6 @@ async function runFixFlow(event) {
   send('[V] Verifying fix outcomes...', 'header');
   const verify = await runPSCapture(`
     $sid = '${userSID || ''}'
-    $u = '${FIX_USER}'
     function ConsentVal([string]$p) {
       try { return [string](Get-ItemProperty -Path $p -Name 'Value' -EA Stop).Value } catch { return '' }
     }
@@ -3163,8 +3209,8 @@ async function runFixFlow(event) {
       try {
         $procs = Get-CimInstance Win32_Process -Filter "Name='Zoom.exe'" -EA SilentlyContinue
         foreach ($p in $procs) {
-          $o = Invoke-CimMethod -InputObject $p -MethodName GetOwner -EA SilentlyContinue
-          if ($o -and ($o.User -ieq $u)) { $hit = $true; break }
+          $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -EA SilentlyContinue
+          if ($o -and $o.ReturnValue -eq 0 -and ([string]$o.Sid -ieq $sid)) { $hit = $true; break }
         }
       } catch {}
       if ($hit) { break }
@@ -3609,14 +3655,19 @@ ipcMain.handle('launch-zoom-helper', async () => {
   if (!fs.existsSync(scriptPath) || !fs.existsSync(CRED_BLOB_PATH())) {
     return { success: false, reason: 'no stored helper sign-in — run the fix first' };
   }
+  const helperSID = await resolveSID(FIX_USER);
+  if (!helperSID) {
+    return { success: false, reason: 'local helper identity is unavailable — run the fix first' };
+  }
   // Completion already launched Zoom as user1. Do not start a second copy.
   const already = await runPSCapture(`
+    $sid = '${helperSID}'
     $hit = $false
     try {
       $procs = Get-CimInstance Win32_Process -Filter "Name='Zoom.exe'" -EA SilentlyContinue
       foreach ($p in $procs) {
-        $o = Invoke-CimMethod -InputObject $p -MethodName GetOwner -EA SilentlyContinue
-        if ($o -and ($o.User -ieq '${FIX_USER}')) { $hit = $true; break }
+        $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -EA SilentlyContinue
+        if ($o -and $o.ReturnValue -eq 0 -and ([string]$o.Sid -ieq $sid)) { $hit = $true; break }
       }
     } catch {}
     if ($hit) { Write-Output 'YES' } else { Write-Output 'NO' }
@@ -3779,9 +3830,17 @@ ipcMain.handle('preflight-scan', async () => {
       $out['fs_status']    = 'MISSING'
       $out['fs_starttype'] = 'MISSING'
     }
-    # HKU hive — informational only (renderer maps to 'will load temp' vs 'already loaded')
+    # Bind the read-only inventory to the exact local account. NTAccount(name)
+    # can select a same-name domain principal on joined machines.
     $sid = $null
-    try { $sid = (New-Object Security.Principal.NTAccount('${FIX_USER}')).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
+    $localUser = $null
+    try { $localUser = Get-LocalUser -Name '${FIX_USER}' -EA Stop } catch {}
+    if ($localUser) {
+      try { $sid = [string]$localUser.SID.Value } catch { $sid = $null }
+    }
+    $out['user1_exists'] = [bool]$localUser
+    $out['user1_identity_verified'] = [bool]($localUser -and $sid)
+    # HKU hive — informational only (renderer maps to 'will load temp' vs 'already loaded')
     if ($sid) {
       $null = & (Resolve-FixerTool 'reg.exe') query "HKU\\$sid" 2>$null
       $out['hku_loaded'] = ($LASTEXITCODE -eq 0)
@@ -3790,14 +3849,10 @@ ipcMain.handle('preflight-scan', async () => {
       $out['hku_loaded'] = $false
       $out['hku_sid']    = ''
     }
-    # Helper-account health: existence, plus Administrators membership to
-    # detect a LEGACY admin user1 that FIX NOW must strip (SEC-A6 — membership
-    # is no longer created and no longer healthy). SID-based, same technique
-    # as verifyAdminMembership — Get-LocalGroupMember chokes on orphaned SIDs,
-    # so fall back to net localgroup parsing.
-    $out['user1_exists'] = $false
-    try { if (Get-LocalUser -Name '${FIX_USER}' -EA SilentlyContinue) { $out['user1_exists'] = $true } } catch {}
+    # Helper-account health: existence, plus exact-SID Administrators
+    # membership to detect a LEGACY admin helper that FIX NOW must strip.
     $out['user1_admin'] = $false
+    $out['user1_admin_verified'] = -not $out['user1_exists']
     # Read-only helper-profile inventory (TEMP identification, ProfileList,
     # ownership). Never deletes TEMP folders, the helper profile, or registry keys.
     $out['profile_image_path'] = ''
@@ -3824,19 +3879,12 @@ ipcMain.handle('preflight-scan', async () => {
         foreach ($m in (Get-LocalGroupMember -SID 'S-1-5-32-544' -EA Stop)) {
           $mSid = $null
           try { $mSid = $m.SID.Value } catch {}
-          if (($sid -and $mSid -and ($mSid -eq $sid)) -or ($m.Name -ieq '${FIX_USER}') -or ($m.Name -like ('*\\' + '${FIX_USER}'))) {
+          if ($sid -and $mSid -and ($mSid -eq $sid)) {
             $out['user1_admin'] = $true; break
           }
         }
-      } catch {
-        try {
-          $lg = (net localgroup administrators) 2>&1 | Out-String
-          foreach ($l in ($lg -split "\`r?\`n")) {
-            $t = $l.Trim()
-            if ($t -ieq '${FIX_USER}' -or $t -like ('*\\' + '${FIX_USER}')) { $out['user1_admin'] = $true; break }
-          }
-        } catch {}
-      }
+        $out['user1_admin_verified'] = [bool]$sid
+      } catch {}
     }
     $out | ConvertTo-Json -Compress
   `, { timeoutMs: 20000 });
@@ -3871,6 +3919,10 @@ ipcMain.handle('preflight-scan', async () => {
     } catch (_) {
       probeFailed = true;
     }
+  }
+  if (!probeFailed && probeData.user1_exists &&
+      (probeData.user1_identity_verified !== true || probeData.user1_admin_verified !== true)) {
+    probeFailed = true;
   }
   const probeFailMsg = probe.timedOut
     ? 'Probe timed out after 20s — Windows Defender or another AV may be holding PowerShell. FIX NOW can still run. To clear this, add 1132 Fixer to your antivirus exclusions; the checklist re-scans when you come back to this window.'

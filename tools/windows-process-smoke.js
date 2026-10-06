@@ -85,6 +85,7 @@ function harness(options = {}) {
     },
     spawnSync: (exe, args, opts) => {
       kills.push({ exe, args: Array.from(args), opts });
+      if (typeof options.onTaskkill === 'function') options.onTaskkill({ child, call: kills.length });
       if (options.taskkillThrows) throw options.taskkillThrows;
       if (Array.isArray(options.taskkillResults)) {
         const index = Math.min(taskkillCall++, Math.max(0, options.taskkillResults.length - 1));
@@ -110,7 +111,7 @@ function harness(options = {}) {
   vm.runInContext([
     wrapperSource('spawnWindowsTool'),
     wrapperSource('spawnWindowsToolSync'),
-    wrapperSource('CHILD_TREE_KILL_ATTEMPTS'),
+    wrapperSource('childTreeCustody'),
     functionSource('terminateChildTree'),
     functionSource('terminationEvidence'),
     functionSource('killActiveChildren'),
@@ -238,20 +239,28 @@ function check(condition, name) {
     check(result.code === -1 && h.lines.length === before, 'late timeout events do not report a second outcome');
   }
   {
-    const h = harness({ taskkillResults: [{ status: 5 }, { status: 0 }] });
+    let replacementTargeted = false;
+    const h = harness({
+      taskkillResults: [{ status: 5 }, { status: 0 }],
+      onTaskkill: ({ call }) => { if (call > 1) replacementTargeted = true; }
+    });
     const pending = h.script('Write-Output 1', { timeoutMs: 40, heartbeatMs: 5 });
+    let resolved = false;
+    pending.then(() => { resolved = true; });
     h.fire('timeout', 40);
-    const result = await pending;
-    check(result.code === -1 && result.errorCode === 'ETIMEDOUT' && result.timedOut &&
-      h.kills.length === 2 && h.child.kills.length === 0,
-      'a transient taskkill failure retries the same live parent and settles only after whole-tree proof');
-    check(h.kills.every(item => item.exe === 'D:\\Windows\\System32\\taskkill.exe' &&
-      JSON.stringify(item.args) === JSON.stringify(['/PID', '11320', '/T', '/F'])) &&
-      h.activeChildren.size === 0 && h.unprovedChildTrees.has(h.child) === false,
-      'verified retry uses the trusted tree-kill path and releases custody after proof');
+    h.child.emit('exit', 0);
+    h.child.exitCode = 0;
+    h.child.emit('close', 0);
+    const stoppedAfterReuse = h.killAll();
+    await Promise.resolve();
+    check(!resolved && stoppedAfterReuse === false && h.kills.length === 1 && !replacementTargeted &&
+      h.child.kills.length === 0,
+      'failed tree kill, original exit and PID reuse never target the replacement process');
+    check(h.activeChildren.has(h.child) && h.unprovedChildTrees.has(h.child),
+      'unproved termination retains strong child custody and blocks completion');
   }
   {
-    const h = harness({ taskkillResults: [{ status: 5 }, { status: 5 }, { status: 5 }] });
+    const h = harness({ taskkillResults: [{ status: 5 }] });
     const pending = h.script('Write-Output 1', { timeoutMs: 40, heartbeatMs: 5 });
     let resolved = false;
     pending.then(() => { resolved = true; });
@@ -259,9 +268,9 @@ function check(condition, name) {
     await Promise.resolve();
     check(!resolved && h.activeChildren.has(h.child) && h.unprovedChildTrees.has(h.child),
       'a failed tree kill cannot settle the timed-out child or release custody');
-    check(h.kills.length === 3 && h.child.kills.length === 0 &&
+    check(h.kills.length === 1 && h.child.kills.length === 0 &&
       h.lines.some(item => /termination is unproved/.test(item.line)),
-      'tree termination exhausts the bounded retry count without destroying the identifiable parent');
+      'tree termination makes one attempt without destroying the identifiable parent');
     h.child.exitCode = 0;
     h.child.emit('close', 0);
     await Promise.resolve();
@@ -269,11 +278,7 @@ function check(condition, name) {
       'a later direct-child close cannot hide an unproved surviving tree');
   }
   {
-    const h = harness({ taskkillResults: [
-      { status: 1 },
-      { status: null, error: Object.assign(new Error('access denied'), { code: 'EACCES' }) },
-      { status: null, signal: 'SIGTERM' }
-    ] });
+    const h = harness({ taskkillResults: [{ status: 1 }] });
     const pending = h.run('net.exe', [], { timeoutMs: 0 });
     let resolved = false;
     pending.then(() => { resolved = true; });
@@ -281,9 +286,10 @@ function check(condition, name) {
     h.child.exitCode = 0;
     h.child.emit('close', 0);
     await Promise.resolve();
-    check(stopped === false && !resolved && h.kills.length === 3 && h.child.kills.length === 0 &&
+    const stoppedAgain = h.killAll();
+    check(stopped === false && stoppedAgain === false && !resolved && h.kills.length === 1 && h.child.kills.length === 0 &&
       h.activeChildren.has(h.child) && h.unprovedChildTrees.has(h.child),
-      'fatal cleanup retains custody after bounded status, error and signal failures');
+      'fatal cleanup retains custody and never retries an unproved PID');
   }
   {
     const h = harness();
@@ -342,6 +348,17 @@ function check(condition, name) {
     h.child.emit('close', 2);
     const result = await pending;
     check(result.code === 2 && !result.timedOut, 'native nonzero exit is preserved');
+  }
+  {
+    const handlerStart = source.indexOf("ipcMain.handle('run-fix'");
+    const overlapGuard = source.indexOf('if (fixInProgress || activeChildren.size > 0)', handlerStart);
+    const repairStart = source.indexOf('fixInProgress = true', handlerStart);
+    check(handlerStart >= 0 && overlapGuard > handlerStart && overlapGuard < repairStart,
+      'repair overlap is rejected before a new destructive run takes ownership');
+    check(!source.includes('CHILD_TREE_KILL_ATTEMPTS') &&
+      source.includes("result.taskkillError = 'retry-blocked'") &&
+      source.includes('custody.treeKillAttempted = true'),
+    'production custody permits one tree-kill attempt per ChildProcess identity');
   }
   if (failures) throw new Error(`windows-process-smoke: ${failures} failures in ${checks} checks`);
   console.log(`windows-process-smoke: ${checks} checks passed`);
