@@ -102,26 +102,16 @@ function acceptanceExitCode(cases, releaseGateEligible = true) {
   return 0;
 }
 
-// The main process already redacts the per-run helper credential before it
-// emits fix-log. Keep only the launch boundary needed to diagnose a packaged
-// failure; unrelated repair output never enters the acceptance artifact.
+// Keep only the closed launch marker. Free-form process output, exception
+// messages, account data and unrelated repair output never enter the artifact.
 function selectFixLaunchTrace(entries) {
   if (!Array.isArray(entries)) return [];
-  const allowed = [
-    /^\[5\/8\] Launching Zoom as 'user1'\.\.\.$/,
-    /^Dispatching Zoom launch \(detached\) \.\.\.$/,
-    /^Launch result: code=(?:-?\d+|none) timedOut=(?:true|false) error=[A-Za-z0-9_.-]+ successMarker=(?:true|false) failureMarker=(?:true|false)$/,
-    /^Launch script exited with code -?\d+; verifying via Win32_Process\.\.\.$/,
-    /^ERROR: Zoom\.exe is not running as 'user1' after launch\.$/,
-    /^PowerShell launcher reported: Launch failed: .+$/,
-    /^Confirmed: Zoom\.exe is running as user1\.$/,
-    /^\[8\/8\] Relaunching Zoom as 'user1'\.\.\.$/
-  ];
+  const allowed = /^Launch diagnostic: phase=(?:pre_launch|credential|start_process) outcome=(?:success|failure) exceptionClass=(?:none|[A-Za-z][A-Za-z0-9_.]{0,127}) hresult=(?:none|-?\d{1,12}) nativeCode=(?:none|-?\d{1,12}) exitCode=(?:none|-?\d{1,12}) timeout=(?:true|false) markerPresent=(?:true|false)$/;
   return entries.map((entry) => typeof entry === 'string' ? entry : entry && entry.line)
     .filter((line) => typeof line === 'string')
-    .map((line) => line.trim().slice(0, 1000))
-    .filter((line) => allowed.some((pattern) => pattern.test(line)))
-    .slice(0, 16);
+    .map((line) => line.trim().slice(0, 512))
+    .filter((line) => allowed.test(line))
+    .slice(0, 8);
 }
 
 let playwright;
@@ -557,14 +547,7 @@ async function runFixJourney(page) {
     window.__fixerAcceptanceStopFixLog = window.electronAPI.onFixLog((entry) => {
       if (!entry || typeof entry.line !== 'string') return;
       const line = entry.line.trim();
-      const launchLine = line === "[5/8] Launching Zoom as 'user1'..." ||
-        line === 'Dispatching Zoom launch (detached) ...' ||
-        line.startsWith('Launch result: ') ||
-        line.startsWith('Launch script exited with code ') ||
-        line === "ERROR: Zoom.exe is not running as 'user1' after launch." ||
-        line.startsWith('PowerShell launcher reported: Launch failed: ') ||
-        line === 'Confirmed: Zoom.exe is running as user1.' ||
-        line === '[8/8] Relaunching Zoom as \'user1\'...';
+      const launchLine = /^Launch diagnostic: phase=(?:pre_launch|credential|start_process) outcome=(?:success|failure) exceptionClass=(?:none|[A-Za-z][A-Za-z0-9_.]{0,127}) hresult=(?:none|-?\d{1,12}) nativeCode=(?:none|-?\d{1,12}) exitCode=(?:none|-?\d{1,12}) timeout=(?:true|false) markerPresent=(?:true|false)$/.test(line);
       if (launchLine && window.__fixerAcceptanceFixLog.length < 32) {
         window.__fixerAcceptanceFixLog.push({ line, kind: entry.kind || '' });
       }

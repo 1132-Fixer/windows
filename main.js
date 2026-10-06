@@ -1305,9 +1305,8 @@ async function runPSScript(scriptContent, onLine, opts = {}) {
 // PowerShell's std handles. The old stdio:'ignore' variant existed because
 // with plain runPSScript pipes, Zoom held our stderr pipe open after PS
 // exited, so the 'close' event never fired and run-fix froze at Step 5 —
-// but 'ignore' also threw away the launcher's "Launch failed: <exception>"
-// line, leaving launch_failed diagnoses to a guess-list (#54 #58 #64 #66
-// #70 #72). This variant keeps BOTH properties:
+// but 'ignore' also threw away the launcher's bounded phase diagnostics.
+// This variant keeps BOTH properties:
 //   - detach semantics preserved: Start-Process without -Wait creates a
 //     free-standing process; PS exits right after dispatch, and we resolve
 //     on 'exit' (process ended) instead of 'close' (pipes drained), so a
@@ -1315,11 +1314,80 @@ async function runPSScript(scriptContent, onLine, opts = {}) {
 //     pipes are destroyed after a short drain race; Zoom writing to a
 //     broken pipe is the same do-nothing sink 'ignore' gave it.
 //   - the launcher's own output (written before PS exits) is captured and
-//     returned, so the exact Start-Process exception reaches the log.
+//     returned. Only a closed, non-secret phase marker reaches the log.
 // The 30s guard kills only powershell.exe (never the credential-launched
 // Zoom — child.kill targets the PS pid alone). Callers still verify launch
 // success out-of-band by polling Win32_Process — capture is evidence, the
 // poll stays the authority.
+function normalizeLaunchExceptionClass(value) {
+  const text = typeof value === 'string' ? value : '';
+  return /^[A-Za-z][A-Za-z0-9_.]{0,127}$/.test(text) ? text : 'none';
+}
+
+function normalizeLaunchInteger(value) {
+  if (!Number.isSafeInteger(value) || value < -2147483648 || value > 4294967295) return 'none';
+  return String(value);
+}
+
+function launchCaptureErrorMetadata(error) {
+  const nativeCode = normalizeLaunchInteger(error && error.errno);
+  return {
+    exceptionClass: normalizeLaunchExceptionClass(error && error.name),
+    nativeCode: nativeCode === 'none' ? null : Number(nativeCode)
+  };
+}
+
+function parseLaunchPhaseMarkers(stdout) {
+  const prefix = 'FIXER_LAUNCH_PHASE_V1 ';
+  const pattern = /^FIXER_LAUNCH_PHASE_V1 phase=(pre_launch|credential|start_process) outcome=(success|failure) exceptionClass=(none|[A-Za-z][A-Za-z0-9_.]{0,127}) hresult=(none|-?\d{1,12}) nativeCode=(none|-?\d{1,12})$/;
+  const lines = String(stdout || '').split(/\r?\n/).map(line => line.trim());
+  const candidates = lines.filter(line => line.startsWith(prefix));
+  if (!candidates.length || candidates.length > 2) return [];
+  const markers = [];
+  for (const line of candidates) {
+    const match = pattern.exec(line);
+    if (!match) return [];
+    const marker = { phase: match[1], outcome: match[2], exceptionClass: match[3], hresult: match[4], nativeCode: match[5] };
+    if (marker.outcome === 'success' &&
+        (marker.exceptionClass !== 'none' || marker.hresult !== 'none' || marker.nativeCode !== 'none')) return [];
+    markers.push(marker);
+  }
+  const credential = markers[0];
+  if (credential.phase === 'pre_launch') {
+    return credential.outcome === 'failure' && markers.length === 1 ? markers : [];
+  }
+  if (credential.phase !== 'credential') return [];
+  if (credential.outcome === 'failure') return markers.length === 1 ? markers : [];
+  if (markers.length !== 2 || markers[1].phase !== 'start_process') return [];
+  return markers;
+}
+
+function formatLaunchDiagnostics(launch) {
+  const result = launch && typeof launch === 'object' ? launch : {};
+  let markers = parseLaunchPhaseMarkers(result.stdout);
+  const exitCode = Number.isSafeInteger(result.code) ? String(result.code) : 'none';
+  const timeout = result.timedOut === true;
+  if (markers.length) {
+    const terminal = markers[markers.length - 1];
+    const exitConsistent = terminal.outcome === 'success' ? result.code === 0 : result.code !== 0;
+    if (!exitConsistent || timeout) markers = [];
+  }
+  const markerPresent = markers.length > 0;
+  if (!markerPresent) {
+    markers = [{
+      phase: 'pre_launch',
+      outcome: 'failure',
+      exceptionClass: normalizeLaunchExceptionClass(result.exceptionClass),
+      hresult: normalizeLaunchInteger(result.hresult),
+      nativeCode: normalizeLaunchInteger(result.nativeCode)
+    }];
+  }
+  return markers.map(marker =>
+    `Launch diagnostic: phase=${marker.phase} outcome=${marker.outcome}` +
+    ` exceptionClass=${marker.exceptionClass} hresult=${marker.hresult} nativeCode=${marker.nativeCode}` +
+    ` exitCode=${exitCode} timeout=${timeout} markerPresent=${markerPresent}`);
+}
+
 async function runPSScriptLaunchCapture(scriptContent) {
   return new Promise((resolve) => {
     let stdoutBuf = '';
@@ -1330,11 +1398,14 @@ async function runPSScriptLaunchCapture(scriptContent) {
     let killTimer = null;
     let timedOut = false;
     let processErrorCode = null;
+    let processExceptionClass = 'none';
+    let processNativeCode = null;
     let child;
     try {
       child = spawnWindowsTool('powershell.exe', windowsTools.PS_STDIN_ARGS, { windowsHide: true });
     } catch (err) {
-      resolve({ code: -1, stdout: '', timedOut: false, errorCode: err.code || 'launch_error' });
+      const metadata = launchCaptureErrorMetadata(err);
+      resolve({ code: -1, stdout: '', timedOut: false, errorCode: err.code || 'launch_error', ...metadata });
       return;
     }
     child.stdout.on('data', d => { if (!settled) stdoutBuf += outputDecoder.write(d); });
@@ -1346,7 +1417,8 @@ async function runPSScriptLaunchCapture(scriptContent) {
       if (killTimer) clearTimeout(killTimer);
       try { child.stdout.destroy(); } catch (_) {}
       try { child.stderr.destroy(); } catch (_) {}
-      resolve({ code, stdout: stdoutBuf, timedOut, errorCode: processErrorCode });
+      resolve({ code, stdout: stdoutBuf, timedOut, errorCode: processErrorCode,
+        exceptionClass: processExceptionClass, nativeCode: processNativeCode });
     };
     killTimer = setTimeout(() => {
       if (exitObserved) return;
@@ -1356,10 +1428,16 @@ async function runPSScriptLaunchCapture(scriptContent) {
     }, 30000);
     child.on('error', (err) => {
       processErrorCode = String((err && (err.code || err.name)) || 'process-error');
+      const metadata = launchCaptureErrorMetadata(err);
+      processExceptionClass = metadata.exceptionClass;
+      processNativeCode = metadata.nativeCode;
       settle(-1);
     });
-    child.stdin.on('error', () => {
+    child.stdin.on('error', (err) => {
       processErrorCode = 'stdin-error';
+      const metadata = launchCaptureErrorMetadata(err);
+      processExceptionClass = metadata.exceptionClass;
+      processNativeCode = metadata.nativeCode;
       try { child.kill('SIGKILL'); } catch (_) {}
       settle(-1);
     });
@@ -2434,37 +2512,68 @@ async function runFixFlow(event) {
     send(`ERROR: ${zoomDetect.zoomStatusMessage(zi)}`, 'err');
     return { success: false, error: 'zoom_not_found', warnings };
   }
-  // fixPass is interpolated into a single-quoted PS string inside a tmp
-  // script file (runPSScriptLaunchCapture) — never onto a command line where
-  // Win32_Process could enumerate it. The tmp file is unlinked after the run;
-  // its seconds-long lifetime is the accepted residual (see PR notes).
+  // fixPass is interpolated into a single-quoted PowerShell string and sent
+  // through stdin — never on a command line or in a temporary file.
   const launchPs = `
-    $pw = ConvertTo-SecureString '${fixPass}' -AsPlainText -Force
-    $cred = New-Object System.Management.Automation.PSCredential('${FIX_USER}', $pw)
     try {
+      $ErrorActionPreference = 'Stop'
+      $fixerLaunchPhase = 'credential'
+      $pw = ConvertTo-SecureString '${fixPass}' -AsPlainText -Force -ErrorAction Stop
+      $cred = New-Object System.Management.Automation.PSCredential('${FIX_USER}', $pw) -ErrorAction Stop
+      Write-Output 'FIXER_LAUNCH_PHASE_V1 phase=credential outcome=success exceptionClass=none hresult=none nativeCode=none'
+      $fixerLaunchPhase = 'start_process'
       Start-Process -FilePath '${zi.path}' -WorkingDirectory '${zi.dir}' -Credential $cred -EA Stop
       Write-Host '  Zoom launched as ${FIX_USER}.'
+      Write-Output 'FIXER_LAUNCH_PHASE_V1 phase=start_process outcome=success exceptionClass=none hresult=none nativeCode=none'
+      exit 0
     } catch {
-      Write-Host ('  Launch failed: ' + $_.Exception.Message)
+      $fixerFailurePhase = 'pre_launch'
+      try {
+        if (($fixerLaunchPhase -eq 'credential') -or ($fixerLaunchPhase -eq 'start_process')) {
+          $fixerFailurePhase = [string]$fixerLaunchPhase
+        }
+      } catch {}
+      $fixerExceptionClass = 'unknown'
+      try {
+        $fixerClassCandidate = [string]$_.Exception.GetType().FullName
+        if ($fixerClassCandidate -match '^[A-Za-z][A-Za-z0-9_.]{0,127}$') {
+          $fixerExceptionClass = $fixerClassCandidate
+        }
+      } catch {}
+      $fixerHResult = 'none'
+      try {
+        $fixerHResultValue = [int64]$_.Exception.HResult
+        if (($fixerHResultValue -ge -2147483648) -and ($fixerHResultValue -le 4294967295)) {
+          $fixerHResult = [string]$fixerHResultValue
+        }
+      } catch {}
+      $fixerNativeCode = 'none'
+      try {
+        $fixerErrorObject = $_.Exception
+        for ($fixerDepth = 0; ($fixerDepth -lt 3) -and ($null -ne $fixerErrorObject); $fixerDepth++) {
+          $fixerNativeProperty = $fixerErrorObject.PSObject.Properties['NativeErrorCode']
+          if (($null -ne $fixerNativeProperty) -and ($null -ne $fixerNativeProperty.Value)) {
+            $fixerNativeValue = [int64]$fixerNativeProperty.Value
+            if (($fixerNativeValue -ge -2147483648) -and ($fixerNativeValue -le 4294967295)) {
+              $fixerNativeCode = [string]$fixerNativeValue
+            }
+            break
+          }
+          $fixerErrorObject = $fixerErrorObject.InnerException
+        }
+      } catch {}
+      try {
+        Write-Output ('FIXER_LAUNCH_PHASE_V1 phase={0} outcome=failure exceptionClass={1} hresult={2} nativeCode={3}' -f $fixerFailurePhase, $fixerExceptionClass, $fixerHResult, $fixerNativeCode)
+      } catch {}
       exit 1
     }
   `;
   send(`  Dispatching Zoom launch (detached) ...`, 'out');
   const launch = await runPSScriptLaunchCapture(launchPs);
-  // The launcher writes '  Zoom launched as user1.' on success or
-  // '  Launch failed: <exception>' before exit 1 — captured now,
-  // so the exact Start-Process error reaches the log instead of a guess-list.
-  const launchLines = (launch.stdout || '').split(/\r?\n/).map(s => s.trim());
-  const launchSuccessMarker = launchLines.includes(`Zoom launched as ${FIX_USER}.`);
-  const launchFailLine = launchLines.find(l => l.startsWith('Launch failed: ')) || '';
-  const launchCode = Number.isInteger(launch.code) ? String(launch.code) : 'none';
-  const rawLaunchErrorCode = typeof launch.errorCode === 'string' ? launch.errorCode : '';
-  const launchErrorCode = /^[A-Za-z0-9_.-]{1,40}$/.test(rawLaunchErrorCode)
-    ? rawLaunchErrorCode
-    : (rawLaunchErrorCode ? 'present' : 'none');
-  send(`  Launch result: code=${launchCode} timedOut=${launch.timedOut === true}` +
-    ` error=${launchErrorCode} successMarker=${launchSuccessMarker} failureMarker=${!!launchFailLine}`,
-  launch.code === 0 && launch.timedOut !== true && !rawLaunchErrorCode && launchSuccessMarker ? 'out' : 'err');
+  const launchDiagnostics = formatLaunchDiagnostics(launch);
+  for (const diagnostic of launchDiagnostics) {
+    send(`  ${diagnostic}`, diagnostic.includes(' outcome=success ') ? 'out' : 'err');
+  }
   if (launch.code !== 0 && launch.code !== null) {
     send(`  Launch script exited with code ${launch.code}; verifying via Win32_Process...`, 'err');
   }
@@ -2495,14 +2604,8 @@ async function runFixFlow(event) {
   const zoomSeen = (zpoll.stdout || '').includes('YES');
   if (!zoomSeen) {
     send(`ERROR: Zoom.exe is not running as '${FIX_USER}' after launch.`, 'err');
-    if (launchFailLine) {
-      // The exact exception beats the guess-list; messages.js
-      // launch_failed copy already points the user at this log line.
-      send(`  PowerShell launcher reported: ${launchFailLine}`, 'err');
-    } else {
-      send('  Likely causes: Secondary Logon disabled, password policy mismatch, or Zoom crashed on startup.', 'err');
-      send('  Try: sc.exe config seclogon start= demand && sc.exe start seclogon', 'err');
-    }
+    send('  Likely causes: Secondary Logon disabled, password policy mismatch, or Zoom crashed on startup.', 'err');
+    send('  Try: sc.exe config seclogon start= demand && sc.exe start seclogon', 'err');
     return { success: false, error: 'launch_failed', warnings, steps };
   }
   send(`  Confirmed: Zoom.exe is running as ${FIX_USER}.`, 'out');
@@ -2996,12 +3099,14 @@ async function runFixFlow(event) {
   // ============================================================
   send(`[8/8] Relaunching Zoom as '${FIX_USER}'...`, 'header');
   const relaunch = await runPSScriptLaunchCapture(launchPs);
+  const relaunchDiagnostics = formatLaunchDiagnostics(relaunch);
+  for (const diagnostic of relaunchDiagnostics) {
+    send(`  ${diagnostic}`, diagnostic.includes(' outcome=success ') ? 'out' : 'err');
+  }
   if (relaunch.code !== 0 && relaunch.code !== null) {
-    const relaunchFailLine = (relaunch.stdout || '').split(/\r?\n/)
-      .map(s => s.trim()).find(l => l.startsWith('Launch failed: ')) || '';
     warnings.push({
       code: 'relaunch_failed',
-      message: `Initial launch succeeded but the relaunch ${relaunchFailLine ? `failed — ${relaunchFailLine}` : `exited with code ${relaunch.code}`}. Open Zoom manually.`
+      message: `Initial launch succeeded but the relaunch exited with code ${relaunch.code}. Open Zoom manually.`
     });
   }
 

@@ -17,6 +17,14 @@ function productionFunction(name) {
   assert.notEqual(fnEnd, -1, `production function ${name} closes`);
   return source.slice(fnStart, fnEnd + 2);
 }
+function mainProductionFunction(name) {
+  const asyncStart = mainSource.indexOf(`async function ${name}(`);
+  const fnStart = asyncStart >= 0 ? asyncStart : mainSource.indexOf(`function ${name}(`);
+  assert.notEqual(fnStart, -1, `production main function ${name} exists`);
+  const fnEnd = mainSource.indexOf('\n}\n', fnStart);
+  assert.notEqual(fnEnd, -1, `production main function ${name} closes`);
+  return mainSource.slice(fnStart, fnEnd + 2);
+}
 const start = source.indexOf('async function runtimeAuthority(');
 const end = source.indexOf('\nasync function launch(', start);
 assert.ok(start >= 0 && end > start, 'the production packaged runtime gate is present');
@@ -124,6 +132,15 @@ async function run(options = {}) {
     'this.acceptanceExitCode = acceptanceExitCode;',
     'this.selectFixLaunchTrace = selectFixLaunchTrace;'
   ].join('\n'), acceptanceContract);
+  const launchDiagnosticContract = {};
+  vm.createContext(launchDiagnosticContract);
+  vm.runInContext([
+    mainProductionFunction('normalizeLaunchExceptionClass'),
+    mainProductionFunction('normalizeLaunchInteger'),
+    mainProductionFunction('parseLaunchPhaseMarkers'),
+    mainProductionFunction('formatLaunchDiagnostics'),
+    'this.formatLaunchDiagnostics = formatLaunchDiagnostics;'
+  ].join('\n'), launchDiagnosticContract);
   assert.equal(acceptanceContract.fixJourneySucceeded('success'), true);
   for (const state of ['error', 'notice', 'cancelled']) {
     assert.equal(acceptanceContract.fixJourneySucceeded(state), false, `${state} cannot satisfy the Fix now success assertion`);
@@ -202,34 +219,68 @@ async function run(options = {}) {
   checks++;
 
   const secretMarker = 'DO-NOT-RECORD-SECRET-1132';
-  const launchTrace = acceptanceContract.selectFixLaunchTrace([
-    { line: "[5/8] Launching Zoom as 'user1'...", kind: 'header' },
-    { line: `net user user1 ${secretMarker} /add`, kind: 'out' },
-    { line: '  Dispatching Zoom launch (detached) ...', kind: 'out' },
-    { line: '  Launch result: code=0 timedOut=false error=none successMarker=true failureMarker=false', kind: 'out' },
-    { line: '  Launch script exited with code 1; verifying via Win32_Process...', kind: 'err' },
-    { line: "ERROR: Zoom.exe is not running as 'user1' after launch.", kind: 'err' },
-    { line: '  PowerShell launcher reported: Launch failed: Access is denied.', kind: 'err' },
-    { line: `unrelated ${secretMarker}`, kind: 'err' }
-  ]);
-  assert.deepEqual(Array.from(launchTrace), [
-    "[5/8] Launching Zoom as 'user1'...",
-    'Dispatching Zoom launch (detached) ...',
-    'Launch result: code=0 timedOut=false error=none successMarker=true failureMarker=false',
-    'Launch script exited with code 1; verifying via Win32_Process...',
-    "ERROR: Zoom.exe is not running as 'user1' after launch.",
-    'PowerShell launcher reported: Launch failed: Access is denied.'
-  ], 'diagnostic receipt keeps only the allowlisted launch boundary and exact exception');
-  assert.ok(!JSON.stringify(launchTrace).includes(secretMarker), 'unrelated secret-bearing output is excluded');
-  assert.equal(acceptanceContract.acceptanceExitCode([{ status: 'failed', launchTrace }], true), 1,
-    'capturing the launcher exception never turns an error into success');
+  const credentialRaw = 'FIXER_LAUNCH_PHASE_V1 phase=credential outcome=failure ' +
+    'exceptionClass=System.Management.Automation.MethodInvocationException hresult=-2146233087 nativeCode=1326';
+  const credentialDiagnostics = Array.from(launchDiagnosticContract.formatLaunchDiagnostics({
+    code: 1, stdout: credentialRaw + '\n', timedOut: false
+  }));
+  assert.deepEqual(credentialDiagnostics, [
+    'Launch diagnostic: phase=credential outcome=failure exceptionClass=System.Management.Automation.MethodInvocationException ' +
+      'hresult=-2146233087 nativeCode=1326 exitCode=1 timeout=false markerPresent=true'
+  ], 'forced credential-construction failure preserves only its allowlisted class and numeric codes');
+  const preLaunchDiagnostics = Array.from(launchDiagnosticContract.formatLaunchDiagnostics({
+    code: -1, stdout: '', timedOut: false,
+    exceptionClass: 'System.ComponentModel.Win32Exception', nativeCode: 5
+  }));
+  assert.deepEqual(preLaunchDiagnostics, [
+    'Launch diagnostic: phase=pre_launch outcome=failure exceptionClass=System.ComponentModel.Win32Exception ' +
+      'hresult=none nativeCode=5 exitCode=-1 timeout=false markerPresent=false'
+  ], 'forced pre-launch failure is explicit even when PowerShell emitted no marker');
+  const malformedDiagnostics = Array.from(launchDiagnosticContract.formatLaunchDiagnostics({
+    code: 1, timedOut: false,
+    stdout: credentialRaw + ` exceptionMessage=${secretMarker}\n`
+  }));
+  assert.ok(!JSON.stringify(malformedDiagnostics).includes(secretMarker) &&
+    malformedDiagnostics[0].includes('phase=pre_launch') && malformedDiagnostics[0].includes('markerPresent=false'),
+  'a marker with any extra field is rejected without copying the field value');
   checks++;
-  assert.ok(mainSource.includes('Launch result: code=${launchCode} timedOut=${launch.timedOut === true}') &&
-    mainSource.includes('successMarker=${launchSuccessMarker} failureMarker=${!!launchFailLine}'),
-  'main emits a structured launch outcome even when PowerShell has no exception line');
-  assert.ok(source.includes("line.startsWith('Launch result: ')") &&
+
+  const launchTrace = acceptanceContract.selectFixLaunchTrace([
+    { line: credentialDiagnostics[0], kind: 'err' },
+    { line: preLaunchDiagnostics[0], kind: 'err' },
+    { line: `Launch diagnostic: phase=credential outcome=failure exceptionClass=Error hresult=none nativeCode=none exitCode=1 timeout=false markerPresent=true message=${secretMarker}`, kind: 'err' },
+    { line: `PowerShell launcher reported: Launch failed: ${secretMarker}`, kind: 'err' },
+    { line: `raw stdout ${secretMarker}`, kind: 'out' },
+    { line: "[5/8] Launching Zoom as 'user1'...", kind: 'header' }
+  ]);
+  assert.deepEqual(Array.from(launchTrace), [credentialDiagnostics[0], preLaunchDiagnostics[0]],
+    'diagnostic receipt keeps only exact allowlisted launch markers');
+  const allowedFields = ['phase', 'outcome', 'exceptionClass', 'hresult', 'nativeCode', 'exitCode', 'timeout', 'markerPresent'];
+  for (const line of launchTrace) {
+    const keys = line.slice('Launch diagnostic: '.length).split(' ').map(field => field.split('=')[0]);
+    assert.deepEqual(Array.from(keys), allowedFields, 'receipt marker has exactly the approved fields');
+  }
+  assert.ok(!JSON.stringify(launchTrace).includes(secretMarker) &&
+    !JSON.stringify(launchTrace).includes('username') && !JSON.stringify(launchTrace).includes('stdout'),
+  'secret, account and raw-stream fields are excluded');
+  assert.equal(acceptanceContract.acceptanceExitCode([{ status: 'failed', launchTrace }], true), 1,
+    'capturing safe diagnostics never turns an error into success');
+  checks++;
+
+  const launchScriptStart = mainSource.indexOf('const launchPs = `');
+  const launchScriptEnd = mainSource.indexOf('\n  `;', launchScriptStart);
+  const launchScript = mainSource.slice(launchScriptStart, launchScriptEnd);
+  assert.ok(launchScriptStart >= 0 && launchScriptEnd > launchScriptStart &&
+    launchScript.indexOf('try {') < launchScript.indexOf('ConvertTo-SecureString') &&
+    launchScript.indexOf('ConvertTo-SecureString') < launchScript.indexOf('New-Object System.Management.Automation.PSCredential') &&
+    launchScript.indexOf('New-Object System.Management.Automation.PSCredential') < launchScript.indexOf('Start-Process') &&
+    launchScript.includes("$ErrorActionPreference = 'Stop'") &&
+    !launchScript.includes('Exception.Message'),
+  'one terminating outer boundary covers credential construction and Start-Process without a free-form exception');
+  assert.ok(mainSource.includes('const launchDiagnostics = formatLaunchDiagnostics(launch);') &&
+    source.includes("const launchLine = /^Launch diagnostic: phase=") &&
     source.includes('window.__fixerAcceptanceFixLog.length < 32'),
-  'receipt capture keeps only a bounded set of launch evidence lines');
+  'main and the bounded receipt capture use the closed launch-diagnostic path');
   checks++;
   assert.ok(source.includes("mode: ACCEPTANCE_MODE") && source.includes("acceptanceResult = report.releaseGateEligible"),
     'report declares full-acceptance versus diagnostic non-acceptance');

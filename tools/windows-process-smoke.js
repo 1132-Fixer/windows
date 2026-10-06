@@ -116,6 +116,9 @@ function harness(options = {}) {
     functionSource('killActiveChildren'),
     functionSource('runProcess'),
     functionSource('runPSScript'),
+    functionSource('normalizeLaunchExceptionClass'),
+    functionSource('normalizeLaunchInteger'),
+    functionSource('launchCaptureErrorMetadata'),
     functionSource('runPSScriptLaunchCapture')
   ].join('\n'), context, { filename: 'main.js:windows-process-smoke' });
   return {
@@ -292,6 +295,22 @@ function check(condition, name) {
       'stdin failure returns a safe stage code without exposing private script text');
     check(h.child.kills.length === 0 && h.kills.length === 1 && h.activeChildren.size === 0 && h.timers.size === 0,
       'stdin failure clears process resources only after trusted whole-tree termination');
+  }
+  {
+    const privateDetail = 'PRIVATE PRE-LAUNCH DETAIL';
+    const privateScript = "Write-Output 'PRIVATE CREDENTIAL SENTINEL'";
+    const launchError = Object.assign(new Error(privateDetail), {
+      name: 'System.ComponentModel.Win32Exception', code: 'EACCES', errno: -13
+    });
+    const h = harness({ spawnError: launchError });
+    const result = await h.launchCapture(privateScript);
+    check(result.code === -1 && result.stdout === '' && result.timedOut === false &&
+      result.errorCode === 'EACCES' && result.exceptionClass === 'System.ComponentModel.Win32Exception' &&
+      result.nativeCode === -13,
+    'pre-launch spawn failure returns only the exception class and numeric native code');
+    check(!JSON.stringify(result).includes(privateDetail) && !JSON.stringify(result).includes(privateScript) &&
+      h.child.writes.length === 0,
+    'pre-launch failure cannot expose the private message or credential-bearing script');
   }
   {
     const h = harness();
