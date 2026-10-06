@@ -26,6 +26,18 @@ function mainProductionFunction(name) {
   assert.notEqual(fnEnd, -1, `production main function ${name} closes`);
   return mainSource.slice(fnStart, fnEnd + 2);
 }
+function mainTemplateConstant(name) {
+  const marker = `const ${name} = `;
+  const start = mainSource.indexOf(marker);
+  assert.notEqual(start, -1, `production main template ${name} exists`);
+  const expressionStart = start + marker.length;
+  const contentStart = mainSource.indexOf(String.fromCharCode(96), expressionStart);
+  assert.notEqual(contentStart, -1, `production main template ${name} starts`);
+  const end = mainSource.indexOf(String.fromCharCode(96) + ';', contentStart + 1);
+  assert.notEqual(end, -1, `production main template ${name} closes`);
+  return vm.runInNewContext(mainSource.slice(expressionStart, end + 1));
+}
+const profileIdentityHelper = mainTemplateConstant('PS_PROFILE_PATH_IDENTITY_HELPER');
 const start = source.indexOf('async function runtimeAuthority(');
 const end = source.indexOf('\nasync function launch(', start);
 assert.ok(start >= 0 && end > start, 'the production packaged runtime gate is present');
@@ -298,6 +310,7 @@ async function run(options = {}) {
   'main and the bounded receipt capture use the closed launch-diagnostic path');
   checks++;
 
+  const accountIdentitySource = mainProductionFunction('readLocalAccountIdentity');
   const resolveSidSource = mainProductionFunction('resolveSID');
   async function resolveSid(payload, staleSid = '') {
     const context = {
@@ -307,8 +320,23 @@ async function run(options = {}) {
       }
     };
     vm.createContext(context);
-    vm.runInContext(resolveSidSource + '\nthis.resolveSID = resolveSID;', context);
+    vm.runInContext(accountIdentitySource + '\n' + resolveSidSource +
+      '\nthis.resolveSID = resolveSID;', context);
     return { sid: await context.resolveSID('user1', staleSid), script: context.script };
+  }
+  async function readAccountIdentity(payload, overrides = {}) {
+    const context = {
+      runPSCapture: async () => ({
+        code: 0,
+        timedOut: false,
+        stdout: JSON.stringify(payload),
+        ...overrides
+      })
+    };
+    vm.createContext(context);
+    vm.runInContext(accountIdentitySource +
+      '\nthis.readLocalAccountIdentity = readLocalAccountIdentity;', context);
+    return context.readLocalAccountIdentity('user1');
   }
   const oldSid = 'S-1-5-21-100-200-300-1000';
   const newSid = 'S-1-5-21-100-200-300-1001';
@@ -324,6 +352,15 @@ async function run(options = {}) {
     'ambiguous local helper SID fails closed');
   assert.equal((await resolveSid({ machine: 'LOCALPC', accounts: [{ ...exactAccount, sid: oldSid }] }, oldSid)).sid, '',
     'stale SID from the deleted account generation fails closed');
+  const absentIdentity = await readAccountIdentity({ machine: 'LOCALPC', accounts: [domainAccount] });
+  const invalidIdentity = await readAccountIdentity({
+    machine: 'LOCALPC', accounts: [{ ...exactAccount, sid: 'malformed' }]
+  });
+  const uncertainIdentity = await readAccountIdentity({ machine: 'LOCALPC', accounts: [] }, { code: 1 });
+  assert.ok(absentIdentity.verified && !absentIdentity.exists && !absentIdentity.sid &&
+    !invalidIdentity.verified && !invalidIdentity.exists &&
+    !uncertainIdentity.verified && !uncertainIdentity.exists,
+  'post-delete identity distinguishes proved absence from malformed or failed inventory');
   assert.ok(exact.script.includes('Get-CimInstance Win32_UserAccount') &&
     exact.script.includes('[System.Environment]::MachineName'),
   'SID receipt comes from the local account inventory and machine identity');
@@ -352,9 +389,17 @@ async function run(options = {}) {
       '\nthis.selectSidBoundProfileEntries = selectSidBoundProfileEntries;',
     profilePolicyContext
   );
+  const profileIdentity = value => {
+    let hash = 0;
+    for (const char of String(value).toLowerCase()) hash = ((hash * 33) + char.charCodeAt(0)) >>> 0;
+    return '0000000000000001:' + hash.toString(16).toUpperCase().padStart(32, '0');
+  };
   const profileEntry = (keyName, profileImagePath = '', hasNtUserDat = true, readable = true,
-    pathExists = profileImagePath !== '', isReparsePoint = false) =>
-    ({ keyName, profileImagePath, hasNtUserDat, readable, pathExists, isReparsePoint });
+    pathExists = profileImagePath !== '', isReparsePoint = false,
+    resolvedPath = profileImagePath,
+    stableIdentity = pathExists ? profileIdentity(resolvedPath) : '') =>
+    ({ keyName, profileImagePath, hasNtUserDat, readable, pathExists, isReparsePoint,
+      resolvedPath, stableIdentity });
   const domainSid = 'S-1-5-21-900-800-700-1001';
   const staleSid = 'S-1-5-21-400-500-600-1001';
   const canonicalProfile = 'C:\\Users\\user1';
@@ -391,6 +436,39 @@ async function run(options = {}) {
   ], oldSid, 'cleanup');
   assert.equal(sharedDomainPath.ok, false,
     'a path also referenced by a same-name domain SID blocks cleanup instead of deleting either profile');
+  assert.equal(selectProfiles([
+    profileEntry(oldSid, canonicalProfile),
+    profileEntry(domainSid, domainProfile, true, true, true, false,
+      domainProfile, profileIdentity(canonicalProfile))
+  ], oldSid, 'cleanup').ok, false,
+  'a different same-name domain path with the target file identity blocks cleanup');
+  assert.equal(selectProfiles([
+    profileEntry(oldSid, canonicalProfile),
+    profileEntry(domainSid, domainProfile, true, true, true, true,
+      canonicalProfile, profileIdentity(canonicalProfile))
+  ], oldSid, 'cleanup').ok, false,
+  'a same-name domain junction is unsafe even when its final target is known');
+  assert.equal(selectProfiles([
+    profileEntry(oldSid, canonicalProfile),
+    profileEntry(domainSid, '\\\\?\\C:\\Users\\user1', true, true, true, false,
+      canonicalProfile, profileIdentity(canonicalProfile))
+  ], oldSid, 'cleanup').ok, false,
+  'a device-namespace alias cannot enter the ProfileList inventory');
+  for (const [field, value] of [
+    ['keyName', 42],
+    ['profileImagePath', 42],
+    ['resolvedPath', 42],
+    ['stableIdentity', 42],
+    ['pathExists', 'false'],
+    ['isReparsePoint', 'false'],
+    ['hasNtUserDat', 'false'],
+    ['readable', 'true']
+  ]) {
+    const malformed = profileEntry(oldSid, canonicalProfile);
+    malformed[field] = value;
+    assert.equal(selectProfiles([malformed], oldSid, 'cleanup').ok, false,
+      `non-typed ${field} inventory metadata fails closed`);
+  }
   assert.equal(selectProfiles([
     profileEntry(oldSid, canonicalProfile, true, true, true, true)
   ], oldSid, 'cleanup').ok, false, 'a top-level profile junction blocks cleanup');
@@ -443,7 +521,8 @@ async function run(options = {}) {
 
   const resolveProfileSource = mainProductionFunction('resolveUserProfilePath');
   async function resolveProfile(payload, { code = 0, timedOut = false, stdout } = {}) {
-    const context = { path: path.win32, capturedScript: '', runPSCapture: async script => {
+    const context = { path: path.win32, PS_PROFILE_PATH_IDENTITY_HELPER: profileIdentityHelper,
+      capturedScript: '', runPSCapture: async script => {
       context.capturedScript = script;
       return {
         code,
@@ -496,13 +575,17 @@ async function run(options = {}) {
     !mainSource.includes("Get-ChildItem 'C:\\\\Users' -Directory") &&
     mainSource.includes("selectSidBoundProfileEntries(entries, preDeleteSid, 'cleanup')") &&
     cleanupPlanIndex >= 0 && cleanupPlanIndex < accountDeleteIndex &&
-    folderDeleteIndex >= 0 && folderDeleteIndex < residueProofIndex && residueProofIndex < keyDeleteIndex &&
-    mainSource.includes("(($profileDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)") &&
-    mainSource.includes('$plannedPaths = @($plan | Where-Object { [bool]$_.pathExists }') &&
+    folderDeleteIndex >= 0 && folderDeleteIndex < residueProofIndex &&
+    residueProofIndex < keyDeleteIndex && keyDeleteIndex < accountDeleteIndex &&
+    mainSource.includes('GetFileInformationByHandleEx') &&
+    mainSource.includes('FILE_FLAG_OPEN_REPARSE_POINT') &&
+    mainSource.includes('profile identity is shared by an unrelated SID') &&
+    mainSource.includes('Assert-FixerProfilePathIdentity -Path $profilePath') &&
+    mainSource.includes('$plannedPaths = @($Plan | Where-Object { [bool]$_.pathExists }') &&
     mainSource.includes("throw 'previously absent profile folder appeared after validation'") &&
     mainSource.includes("if ($expected.Count -ne 1 -or [string]$expected[0].profileImagePath -ine $profilePath)") &&
     !mainSource.includes('if (profileCleanupPlan.entries.length > 0)'),
-  'cleanup revalidates even an empty plan and never deletes a folder that appeared after the protected snapshot');
+  'cleanup keeps the account/SID until stable-identity folder and ProfileList absence are proved');
   checks++;
 
   const launchZoomHelperSource = mainProductionFunction('launchZoomHelper');
@@ -602,8 +685,68 @@ async function run(options = {}) {
       'a real PowerShell different/domain SID emits one NO marker');
     assert.deepEqual(exactOwner, ['FIXER_ZOOM_DEDUP_V1=YES'],
       'a real PowerShell exact helper SID emits one YES marker');
+
+    const identityFixture = spawnSync(pwsh, ['-NoProfile', '-NonInteractive', '-Command', '-'], {
+      input: `
+        $ErrorActionPreference = 'Stop'
+        ${profileIdentityHelper}
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('fixer-profile-identity-' + [Guid]::NewGuid().ToString('N'))
+        $target = Join-Path $root 'user1'
+        $moved = Join-Path $root 'user1-original'
+        $junction = Join-Path $root 'user1.CONTOSO'
+        try {
+          $null = New-Item -ItemType Directory -Path $target -Force
+          [IO.File]::WriteAllText((Join-Path $target 'old-sentinel.txt'), 'old')
+          $first = Get-FixerProfilePathIdentity -Path $target
+
+          $null = New-Item -ItemType Junction -Path $junction -Target $target
+          $junctionRejected = $false
+          try { $null = Get-FixerProfilePathIdentity -Path $junction } catch { $junctionRejected = $true }
+          Remove-Item -LiteralPath $junction -Force -EA Stop
+
+          $device = [string]([char]92) + [char]92 + '?' + [char]92 + $target
+          $deviceRejected = $false
+          try { $null = Get-FixerProfilePathIdentity -Path $device } catch { $deviceRejected = $true }
+
+          Move-Item -LiteralPath $target -Destination $moved -EA Stop
+          $null = New-Item -ItemType Directory -Path $target -Force
+          [IO.File]::WriteAllText((Join-Path $target 'new-sentinel.txt'), 'new')
+          $replacement = Get-FixerProfilePathIdentity -Path $target
+          $driftBlocked = $false
+          try {
+            $null = Assert-FixerProfilePathIdentity -Path $target -ExpectedExists $true -ExpectedIdentity $first.stableIdentity -ExpectedResolvedPath $first.resolvedPath
+          } catch { $driftBlocked = $true }
+
+          [pscustomobject]@{
+            exactPresent = [bool]$first.pathExists
+            exactIdentity = [bool]($first.stableIdentity -match '^[0-9A-F]{16}:[0-9A-F]{32}$')
+            junctionRejected = $junctionRejected
+            deviceRejected = $deviceRejected
+            driftBlocked = $driftBlocked
+            identityChanged = [bool]($first.stableIdentity -cne $replacement.stableIdentity)
+            oldSentinelPresent = [IO.File]::Exists((Join-Path $moved 'old-sentinel.txt'))
+            newSentinelPresent = [IO.File]::Exists((Join-Path $target 'new-sentinel.txt'))
+          } | ConvertTo-Json -Compress
+        } finally {
+          if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -EA SilentlyContinue }
+        }
+      `,
+      encoding: 'utf8', windowsHide: true, timeout: 30000
+    });
+    assert.equal(identityFixture.status, 0, String(identityFixture.stderr || 'PowerShell identity fixture failed'));
+    const identityEvidence = JSON.parse(String(identityFixture.stdout || '').trim());
+    assert.deepEqual(identityEvidence, {
+      exactPresent: true,
+      exactIdentity: true,
+      junctionRejected: true,
+      deviceRejected: true,
+      driftBlocked: true,
+      identityChanged: true,
+      oldSentinelPresent: true,
+      newSentinelPresent: true
+    }, 'native handle identity rejects junction/device aliases and blocks same-path replacement without deleting either tree');
   } else {
-    console.log('packaged-runtime-smoke: skip PowerShell 7 owner-probe fixtures (pwsh unavailable)');
+    console.log('packaged-runtime-smoke: skip native PowerShell 7 fixtures (pwsh unavailable)');
   }
   checks++;
 
