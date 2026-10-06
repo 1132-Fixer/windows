@@ -192,7 +192,9 @@ async function runtimeAuthority(app, tag, fakeRoot) {
     if (typeof process.getBuiltinModule !== 'function') return { ...facts, stage: 'builtin-api-unavailable' };
     const path = process.getBuiltinModule('path');
     const load = process.getBuiltinModule('module').createRequire(path.join(app.getAppPath(), 'package.json'));
-    const environmentKey = /^(?:systemroot|windir|path|processor_architew6432)$/i;
+    const environmentKey = /^(?:systemroot|windir|path|processor_architew6432|comspec)$/i;
+    const forgedEnvironment = fakeRoot ? { SystemRoot: fakeRoot, WINDIR: fakeRoot, PATH: '', PROCESSOR_ARCHITEW6432: 'FORGED',
+      ComSpec: path.join(fakeRoot, 'System32', 'cmd.exe') } : null;
     const originalEnvironment = { ...(process.env || {}) };
     const savedEnvironment = Object.entries(originalEnvironment).filter(([key]) => environmentKey.test(key));
     let forgedEnvironmentApplied = !fakeRoot;
@@ -202,9 +204,8 @@ async function runtimeAuthority(app, tag, fakeRoot) {
         for (const key of Object.keys(process.env)) {
           if (environmentKey.test(key)) delete process.env[key];
         }
-        Object.assign(process.env, { SystemRoot: fakeRoot, WINDIR: fakeRoot, PATH: '', PROCESSOR_ARCHITEW6432: 'FORGED' });
-        forgedEnvironmentApplied = process.env.SystemRoot === fakeRoot && process.env.WINDIR === fakeRoot &&
-          process.env.PATH === '' && process.env.PROCESSOR_ARCHITEW6432 === 'FORGED';
+        Object.assign(process.env, forgedEnvironment);
+        forgedEnvironmentApplied = Object.entries(forgedEnvironment).every(([key, value]) => process.env[key] === value);
       }
       const tools = load('./src/main/windows-tools.js');
       const api = process.report;
@@ -236,13 +237,13 @@ async function runtimeAuthority(app, tag, fakeRoot) {
             forgedEnvironmentApplied, nativeEnvironmentApplied: false, nativePathTrusted: false, commandMatches: false };
         } else {
           // PowerShell starts with the untouched host environment. Only after
-          // bootstrap does the proof apply all four hostile values.
+          // bootstrap does the proof apply all five hostile values.
           const powershellEnv = fakeRoot ? {
             ...originalEnvironment,
-            FIXER_TEST_FORGED_ENV: JSON.stringify({ SystemRoot: fakeRoot, WINDIR: fakeRoot, PATH: '', PROCESSOR_ARCHITEW6432: 'FORGED' })
+            FIXER_TEST_FORGED_ENV: JSON.stringify(forgedEnvironment)
           } : process.env;
           const applyForgedEnvironment = fakeRoot
-            ? "$fixerTestEnvironment = $env:FIXER_TEST_FORGED_ENV | ConvertFrom-Json; Remove-Item Env:FIXER_TEST_FORGED_ENV; $fixerTestSystemRoot = [string]$fixerTestEnvironment.SystemRoot; $env:SystemRoot = $fixerTestSystemRoot; $env:WINDIR = [string]$fixerTestEnvironment.WINDIR; $env:PATH = [string]$fixerTestEnvironment.PATH; $env:PROCESSOR_ARCHITEW6432 = [string]$fixerTestEnvironment.PROCESSOR_ARCHITEW6432; $fixerTestForged = ($env:SystemRoot -eq $fixerTestSystemRoot -and $env:WINDIR -eq [string]$fixerTestEnvironment.WINDIR -and [string]::IsNullOrEmpty($env:PATH) -and $env:PROCESSOR_ARCHITEW6432 -eq [string]$fixerTestEnvironment.PROCESSOR_ARCHITEW6432); "
+            ? "$fixerTestEnvironment = $env:FIXER_TEST_FORGED_ENV | ConvertFrom-Json; Remove-Item Env:FIXER_TEST_FORGED_ENV; $fixerTestSystemRoot = [string]$fixerTestEnvironment.SystemRoot; $env:SystemRoot = $fixerTestSystemRoot; $env:WINDIR = [string]$fixerTestEnvironment.WINDIR; $env:PATH = [string]$fixerTestEnvironment.PATH; $env:PROCESSOR_ARCHITEW6432 = [string]$fixerTestEnvironment.PROCESSOR_ARCHITEW6432; $env:ComSpec = [string]$fixerTestEnvironment.ComSpec; $fixerTestForged = ($env:SystemRoot -eq $fixerTestSystemRoot -and $env:WINDIR -eq [string]$fixerTestEnvironment.WINDIR -and [string]::IsNullOrEmpty($env:PATH) -and $env:PROCESSOR_ARCHITEW6432 -eq [string]$fixerTestEnvironment.PROCESSOR_ARCHITEW6432 -and $env:ComSpec -eq [string]$fixerTestEnvironment.ComSpec); "
             : "$fixerTestSystemRoot = ''; $fixerTestForged = $true; ";
           const nativeCommand = "$fixerTestCmd = Resolve-FixerTool 'cmd.exe'; $fixerTestNativePathTrusted = ([string]::IsNullOrEmpty($fixerTestSystemRoot) -or -not $fixerTestCmd.StartsWith($fixerTestSystemRoot, [StringComparison]::OrdinalIgnoreCase)); $fixerTestMarker = if ($fixerTestNativePathTrusted) { & $fixerTestCmd /d /c 'echo FIXER_TRUSTED_RUNTIME' } else { $null }; $r = @{ systemDir = [Environment]::SystemDirectory; marker = $fixerTestMarker; forgedEnvironment = $fixerTestForged; nativePathTrusted = $fixerTestNativePathTrusted }; $r | ConvertTo-Json -Compress";
           const result = process.getBuiltinModule('child_process').spawnSync(powershell, tools.PS_STDIN_ARGS, {
