@@ -44,7 +44,8 @@ async function run(options = {}) {
         assert.equal(exe, `${root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`);
         assert.deepEqual(args, windowsTools.PS_STDIN_ARGS);
         assert.equal(spawnOptions.timeout, 15000);
-        assert.ok(spawnOptions.input.toString().includes("& (Resolve-FixerTool 'cmd.exe')"));
+        assert.ok(spawnOptions.input.toString().includes("$fixerTestCmd = Resolve-FixerTool 'cmd.exe'"));
+        assert.ok(spawnOptions.input.toString().includes('& $fixerTestCmd'));
         assert.ok(spawnOptions.input.toString().endsWith('$r | ConvertTo-Json -Compress'));
         return { status: options.exitCode ?? 0, stdout: options.stdout || JSON.stringify({ systemDir: `${root}\\System32`, marker: 'FIXER_TRUSTED_RUNTIME' }),
           ...(options.spawnError ? { error: new Error('PRIVATE_PROCESS_ERROR') } : {}) };

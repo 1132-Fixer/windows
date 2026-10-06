@@ -192,7 +192,20 @@ async function runtimeAuthority(app, tag, fakeRoot) {
     if (typeof process.getBuiltinModule !== 'function') return { ...facts, stage: 'builtin-api-unavailable' };
     const path = process.getBuiltinModule('path');
     const load = process.getBuiltinModule('module').createRequire(path.join(app.getAppPath(), 'package.json'));
+    const environmentKey = /^(?:systemroot|windir|path|processor_architew6432)$/i;
+    const originalEnvironment = { ...(process.env || {}) };
+    const savedEnvironment = Object.entries(originalEnvironment).filter(([key]) => environmentKey.test(key));
+    let forgedEnvironmentApplied = !fakeRoot;
+    let proof;
     try {
+      if (fakeRoot) {
+        for (const key of Object.keys(process.env)) {
+          if (environmentKey.test(key)) delete process.env[key];
+        }
+        Object.assign(process.env, { SystemRoot: fakeRoot, WINDIR: fakeRoot, PATH: '', PROCESSOR_ARCHITEW6432: 'FORGED' });
+        forgedEnvironmentApplied = process.env.SystemRoot === fakeRoot && process.env.WINDIR === fakeRoot &&
+          process.env.PATH === '' && process.env.PROCESSOR_ARCHITEW6432 === 'FORGED';
+      }
       const tools = load('./src/main/windows-tools.js');
       const api = process.report;
       const changed = [];
@@ -209,31 +222,72 @@ async function runtimeAuthority(app, tag, fakeRoot) {
       }
       const root = tools.resolveSystemRoot();
       const freshRoot = tools.createToolResolver({ getReport: () => ({ sharedObjects }), arch: process.arch }).resolveSystemRoot();
-      if (!root || !freshRoot || root.toLowerCase() !== freshRoot.toLowerCase()) return { ...facts, stage: 'root-unverified' };
-      const powershell = tools.resolveTool('powershell.exe');
-      const cmd = tools.resolveTool('cmd.exe');
-      const coreDlls = sharedObjects.filter(value => /^(?:ntdll|kernel32|kernelbase)\.dll$/i.test(path.basename(value)));
-      const result = process.getBuiltinModule('child_process').spawnSync(powershell, tools.PS_STDIN_ARGS, {
-        input: Buffer.from(tools.prepareScript("$r = @{ systemDir = [Environment]::SystemDirectory; marker = & (Resolve-FixerTool 'cmd.exe') /d /c 'echo FIXER_TRUSTED_RUNTIME' }; $r | ConvertTo-Json -Compress"), 'utf8'),
-        windowsHide: true, timeout: 15000, encoding: 'utf8'
-      });
-      let command;
-      try { command = JSON.parse((result.stdout || '').trim()); } catch (_) {}
-      const nativeSystemDir = command && typeof command.systemDir === 'string' ? command.systemDir : '';
-      const nativeMarker = !!(command && command.marker === 'FIXER_TRUSTED_RUNTIME');
-      // Sysnative is the caller's WOW64 alias; native PowerShell reports the
-      // same physical directory as System32.
-      const expectedDir = path.join(root, 'System32');
-      const trusted = !fakeRoot || ![root, powershell, cmd, ...coreDlls].some(value => value.toLowerCase().startsWith(fakeRoot.toLowerCase()));
-      return { ...facts, stage: 'checked', appPath: app.getAppPath(), root, powershell, cmd, coreDlls,
-        nativeSystemDir, exitCode: result.status, trusted,
-        commandMatches: result.status === 0 && !result.error && nativeMarker && nativeSystemDir.toLowerCase() === expectedDir.toLowerCase() };
-    } catch (_) { return { ...facts, stage: 'proof-error' }; }
+      if (!root || !freshRoot || root.toLowerCase() !== freshRoot.toLowerCase()) {
+        proof = { ...facts, stage: 'root-unverified', forgedEnvironmentApplied };
+      } else {
+        const powershell = tools.resolveTool('powershell.exe');
+        const cmd = tools.resolveTool('cmd.exe');
+        const coreDlls = sharedObjects.filter(value => /^(?:ntdll|kernel32|kernelbase)\.dll$/i.test(path.basename(value)));
+        const resolvedPathsTrusted = !fakeRoot || ![root, powershell, cmd].some(value => value.toLowerCase().startsWith(fakeRoot.toLowerCase()));
+        const coreLibrariesTrusted = !fakeRoot || (coreDlls.length >= 3 && !coreDlls.some(value => value.toLowerCase().startsWith(fakeRoot.toLowerCase())));
+        if (!resolvedPathsTrusted || !coreLibrariesTrusted) {
+          proof = { ...facts, stage: 'untrusted-paths', appPath: app.getAppPath(), root, powershell, cmd, coreDlls,
+            exitCode: null, trusted: false, resolvedPathsTrusted, coreLibrariesTrusted,
+            forgedEnvironmentApplied, nativeEnvironmentApplied: false, nativePathTrusted: false, commandMatches: false };
+        } else {
+          // PowerShell starts with the untouched host environment. Only after
+          // bootstrap does the proof apply all four hostile values.
+          const powershellEnv = fakeRoot ? {
+            ...originalEnvironment,
+            FIXER_TEST_FORGED_ENV: JSON.stringify({ SystemRoot: fakeRoot, WINDIR: fakeRoot, PATH: '', PROCESSOR_ARCHITEW6432: 'FORGED' })
+          } : process.env;
+          const applyForgedEnvironment = fakeRoot
+            ? "$fixerTestEnvironment = $env:FIXER_TEST_FORGED_ENV | ConvertFrom-Json; Remove-Item Env:FIXER_TEST_FORGED_ENV; $fixerTestSystemRoot = [string]$fixerTestEnvironment.SystemRoot; $env:SystemRoot = $fixerTestSystemRoot; $env:WINDIR = [string]$fixerTestEnvironment.WINDIR; $env:PATH = [string]$fixerTestEnvironment.PATH; $env:PROCESSOR_ARCHITEW6432 = [string]$fixerTestEnvironment.PROCESSOR_ARCHITEW6432; $fixerTestForged = ($env:SystemRoot -eq $fixerTestSystemRoot -and $env:WINDIR -eq [string]$fixerTestEnvironment.WINDIR -and [string]::IsNullOrEmpty($env:PATH) -and $env:PROCESSOR_ARCHITEW6432 -eq [string]$fixerTestEnvironment.PROCESSOR_ARCHITEW6432); "
+            : "$fixerTestSystemRoot = ''; $fixerTestForged = $true; ";
+          const nativeCommand = "$fixerTestCmd = Resolve-FixerTool 'cmd.exe'; $fixerTestNativePathTrusted = ([string]::IsNullOrEmpty($fixerTestSystemRoot) -or -not $fixerTestCmd.StartsWith($fixerTestSystemRoot, [StringComparison]::OrdinalIgnoreCase)); $fixerTestMarker = if ($fixerTestNativePathTrusted) { & $fixerTestCmd /d /c 'echo FIXER_TRUSTED_RUNTIME' } else { $null }; $r = @{ systemDir = [Environment]::SystemDirectory; marker = $fixerTestMarker; forgedEnvironment = $fixerTestForged; nativePathTrusted = $fixerTestNativePathTrusted }; $r | ConvertTo-Json -Compress";
+          const result = process.getBuiltinModule('child_process').spawnSync(powershell, tools.PS_STDIN_ARGS, {
+            input: Buffer.from(tools.prepareScript(applyForgedEnvironment + nativeCommand), 'utf8'),
+            env: powershellEnv, windowsHide: true, timeout: 15000, encoding: 'utf8'
+          });
+          let command;
+          try { command = JSON.parse((result.stdout || '').trim()); } catch (_) {}
+          const nativeSystemDir = command && typeof command.systemDir === 'string' ? command.systemDir : '';
+          const nativeMarker = !!(command && command.marker === 'FIXER_TRUSTED_RUNTIME');
+          const nativeEnvironmentApplied = !fakeRoot || !!(command && command.forgedEnvironment === true);
+          const nativePathTrusted = !fakeRoot || !!(command && command.nativePathTrusted === true);
+          // Sysnative is the caller's WOW64 alias; native PowerShell reports
+          // the same physical directory as System32.
+          const expectedDir = path.join(root, 'System32');
+          proof = { ...facts, stage: 'checked', appPath: app.getAppPath(), root, powershell, cmd, coreDlls,
+            nativeSystemDir, exitCode: result.status, trusted: true, resolvedPathsTrusted, coreLibrariesTrusted,
+            forgedEnvironmentApplied, nativeEnvironmentApplied, nativePathTrusted,
+            commandMatches: result.status === 0 && !result.error && nativeMarker && nativeEnvironmentApplied &&
+              nativePathTrusted && nativeSystemDir.toLowerCase() === expectedDir.toLowerCase() };
+        }
+      }
+    } catch (_) {
+      proof = { ...facts, stage: 'proof-error', forgedEnvironmentApplied };
+    } finally {
+      if (fakeRoot && process.env) {
+        for (const key of Object.keys(process.env)) {
+          if (environmentKey.test(key)) delete process.env[key];
+        }
+        for (const [key, value] of savedEnvironment) process.env[key] = value;
+        const restoredKeys = Object.keys(process.env).filter(key => environmentKey.test(key));
+        proof.environmentRestored = restoredKeys.length === savedEnvironment.length &&
+          savedEnvironment.every(([key, value]) => process.env[key] === value);
+      } else if (fakeRoot) {
+        proof.environmentRestored = false;
+      }
+    }
+    return proof;
   }, fakeRoot || null);
   const expectedElectron = require('electron/package.json').version;
   const expectedArchive = path.join(path.dirname(EXE), 'resources', 'app.asar');
+  const forgedProof = !fakeRoot || (proof.forgedEnvironmentApplied && proof.environmentRestored &&
+    proof.resolvedPathsTrusted && proof.coreLibrariesTrusted && proof.nativeEnvironmentApplied && proof.nativePathTrusted);
   const ok = proof.packaged && proof.electron === expectedElectron && proof.reportAvailable &&
-    proof.stage === 'checked' && proof.trusted && proof.commandMatches &&
+    proof.stage === 'checked' && proof.trusted && proof.commandMatches && forgedProof &&
     path.resolve(proof.appPath || '').toLowerCase() === expectedArchive.toLowerCase();
   (ok ? passed : failed)(`${tag}.os-tool-authority`,
     `actual main: Electron ${proof.electron}, Node ${proof.node}, stage=${proof.stage}, report=${proof.reportAvailable}, trusted command=${!!proof.commandMatches}`,
@@ -311,9 +365,9 @@ async function runForgedRoot() {
     fs.mkdirSync(psHome, { recursive: true });
     const names = windowsTools.WINDOWS_TOOLS;
     for (const name of names) fs.writeFileSync(path.join(name === 'powershell.exe' ? psHome : system32, name), 'invalid fake executable; must never run');
-    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:systemroot|windir|path|processor_architew6432)$/i.test(key)));
-    Object.assign(env, { SystemRoot: fakeRoot, WINDIR: fakeRoot, PATH: '', PROCESSOR_ARCHITEW6432: 'FORGED' });
-    const launched = await launch(1, env);
+    // Bootstrap Electron with the real host environment. runtimeAuthority
+    // applies the hostile fixture only inside the packaged main-process proof.
+    const launched = await launch(1);
     app = launched.app;
     await runtimeAuthority(app, 'forged-root', fakeRoot);
     const left = await waitForState(launched.page, state => state && state !== 'checking', CHECKING_DEADLINE_MS, 'forged-root startup');
