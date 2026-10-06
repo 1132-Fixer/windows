@@ -125,6 +125,7 @@ function runTimed(command, args, timeoutMs) {
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let exitObserved = false;
     let timer = null;
     let graceTimer = null;
     const started = Date.now();
@@ -143,6 +144,7 @@ function runTimed(command, args, timeoutMs) {
       return;
     }
     timer = setTimeout(() => {
+      if (exitObserved) return;
       killTree(child.pid);
       try { child.kill('SIGKILL'); } catch (_) {}
       finish({ outcome: 'timeout', timedOut: true, code: -1, error: `timeout after ${timeoutMs}ms` });
@@ -156,6 +158,11 @@ function runTimed(command, args, timeoutMs) {
     // reported a real relaunch as failed. If a grandchild holds the pipes
     // open, the grace timer settles instead of waiting forever.
     child.on('exit', (code) => {
+      exitObserved = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
       graceTimer = setTimeout(() => finish({ outcome: 'ok', timedOut: false, code, error: null }), EXIT_CLOSE_GRACE_MS);
     });
     child.on('close', (code) => finish({ outcome: 'ok', timedOut: false, code, error: null }));
@@ -230,6 +237,7 @@ function createElevationController(deps = {}) {
     ...(Object.prototype.hasOwnProperty.call(deps, 'getReport') ? { getReport: deps.getReport } : {})
   };
   let memo = null;
+  let memoResult = null;
 
   // Fast path: whoami /groups prints the process token's integrity SID. It
   // is synchronous, bounded, and cannot stall on Add-Type. Packaged 6.3.0
@@ -287,8 +295,13 @@ function createElevationController(deps = {}) {
 
   // Synchronous answer for the startup-status IPC. Never elevated on doubt.
   function snapshot() {
+    if (memoResult) return memoResult;
+    if (memo) {
+      return { elevated: false, method: 'failed', ms: 0, error: 'elevation probe still running' };
+    }
     const fast = probeWhoamiSync();
     if (fast) {
+      memoResult = fast;
       memo = Promise.resolve(fast);
       return fast;
     }
@@ -297,14 +310,21 @@ function createElevationController(deps = {}) {
 
   function isElevated() {
     if (memo) return memo;
-    memo = probeToken().catch((err) => ({
-      elevated: false, method: 'failed', ms: 0, error: String((err && err.message) || err)
-    }));
+    memo = probeToken().then((result) => {
+      memoResult = result;
+      return result;
+    }, (err) => {
+      memoResult = {
+        elevated: false, method: 'failed', ms: 0, error: String((err && err.message) || err)
+      };
+      return memoResult;
+    });
     return memo;
   }
 
   function resetMemoForTests() {
     memo = null;
+    memoResult = null;
   }
 
   // Asks Windows for approval and reports exactly one outcome:

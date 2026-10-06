@@ -131,6 +131,7 @@ async function run() {
       FEEDBACK, FEEDBACK_FALLBACK: FEEDBACK.FAILED, FEEDBACK_NETWORK: FEEDBACK.NETWORK,
       FEEDBACK_TEXT_MAX_BYTES: support.TEXT_MAX_BYTES, TextEncoder, feedbackGen: 1,
       feedbackSending: new Set(),
+      feedbackEditorLocks: new WeakMap(),
       SUBMIT_BTN_FOR_STATUS: { fbBugStatus: 'fbBugSubmit', fbRatingStatus: 'fbRatingSubmit', fbContactStatus: 'fbContactSubmit' },
       document: { getElementById: id => elements[id] },
       window: { electronAPI: { submitFeedback: (type, text, screenshot, rating) => submit({ type, text, screenshot, rating }) } },
@@ -157,6 +158,67 @@ async function run() {
     elements.fbContactStatus.textContent = '';
     await olderForm;
     check(elements.fbContactStatus.textContent === '' && !elements.fbContactSubmit.disabled && elements.fbContactText.value.startsWith('New draft'), 'an older request cannot change or leave a reopened draft locked');
+
+    console.log('support-submission-smoke: Back invalidates the submitted form instance');
+    const sectionStart = renderer.indexOf('function showSection(');
+    const sectionEnd = renderer.indexOf('function openFeedback(', sectionStart);
+    check(sectionStart >= 0 && sectionEnd > sectionStart && renderer.includes("addEventListener('click', returnToFeedbackChooser)"),
+      'every feedback Back control uses the production generation invalidator');
+    for (const targetId of ['fbContact', 'fbRating']) {
+      const classSet = initial => {
+        const values = new Set(initial);
+        return { add: value => values.add(value), remove: value => values.delete(value), contains: value => values.has(value) };
+      };
+      const sections = Object.fromEntries(['fbChoose', 'fbBug', 'fbContact', 'fbRating']
+        .map(id => [id, { classList: classSet(id === 'fbBug' ? ['active'] : []) }]));
+      const bugEditor = { id: 'fbBugText', disabled: false };
+      const bugSubmit = {
+        disabled: false,
+        closest: () => ({ querySelectorAll: () => [bugEditor] })
+      };
+      const status = { textContent: '', className: '' };
+      const localElements = {
+        ...sections,
+        fbBugStatus: status,
+        fbBugSubmit: bugSubmit,
+        fbContactText: { value: 'A different contact form draft with enough text to submit.' },
+        fbContactSubmit: { disabled: false },
+        fbRatingSubmit: { disabled: false }
+      };
+      let resolveSubmission;
+      let closeCalls = 0;
+      const staleTimers = [];
+      const formContext = {
+        FEEDBACK, FEEDBACK_FALLBACK: FEEDBACK.FAILED, FEEDBACK_NETWORK: FEEDBACK.NETWORK,
+        FEEDBACK_TEXT_MAX_BYTES: support.TEXT_MAX_BYTES, TextEncoder, feedbackGen: 1, feedbackMode: 'bug',
+        feedbackSending: new Set(), feedbackEditorLocks: new WeakMap(), ratings: { overall: 5 },
+        SUBMIT_BTN_FOR_STATUS: { fbBugStatus: 'fbBugSubmit' },
+        document: {
+          getElementById: id => localElements[id],
+          querySelectorAll: selector => selector === '.fb-section' ? Object.values(sections) : []
+        },
+        window: { electronAPI: { submitFeedback: () => new Promise(resolve => { resolveSubmission = resolve; }) } },
+        setTimeout: callback => { staleTimers.push(callback); return staleTimers.length; },
+        closeFeedback: () => { closeCalls++; },
+        refreshBugSubmit: () => { bugSubmit.disabled = false; }
+      };
+      vm.createContext(formContext);
+      vm.runInContext([
+        renderer.slice(sectionStart, sectionEnd),
+        renderer.slice(fnStart, fnEnd)
+      ].join('\n'), formContext);
+      const pendingBug = formContext.submitFeedback('Bug Report', 'Pending bug report', 'fbBugStatus');
+      await Promise.resolve();
+      formContext.returnToFeedbackChooser();
+      formContext.showSection(targetId);
+      resolveSubmission({ success: true });
+      await pendingBug;
+      check(sections[targetId].classList.contains('active') && !sections.fbBug.classList.contains('active') &&
+        status.textContent !== FEEDBACK.SENT && closeCalls === 0 && staleTimers.length === 0,
+      `Bug acknowledgement cannot overwrite or close the ${targetId === 'fbContact' ? 'Contact' : 'Rating'} form after Back`);
+      check(formContext.feedbackGen === 2 && !bugEditor.disabled && !bugSubmit.disabled,
+        `stale Bug completion releases only its own controls after switching to ${targetId === 'fbContact' ? 'Contact' : 'Rating'}`);
+    }
 
     // Run the real radio-group handlers without reproducing their selection
     // rules in the test. Check screen-reader state and keyboard interaction.

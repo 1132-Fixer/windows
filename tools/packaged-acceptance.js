@@ -20,8 +20,8 @@
  *                                         [--fix-timeout-ms 360000]
  *                                         [--skip-fix]
  *
- * Exit code 1 when any case fails. Cases that do not run do not fail the
- * driver by themselves; the report says so and the release gate reads it.
+ * Exit code 1 when any case fails or a mandatory case does not run. Optional
+ * not-run cases remain explicit in the report without changing the exit code.
  *
  * Host expectations: Windows, an elevated (administrator) session, no Smart
  * App Control enforcement (it blocks the unsigned host binary before
@@ -77,6 +77,18 @@ const passed = (id, detail, extra) => record(id, 'passed', detail, extra);
 const failed = (id, detail, extra) => record(id, 'failed', detail, extra);
 const notRun = (id, detail, extra) => record(id, 'not-run', detail, extra);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function fixJourneySucceeded(state) {
+  return state === 'success';
+}
+
+function acceptanceExitCode(cases) {
+  for (const testCase of cases) {
+    if (testCase.status === 'failed') return 1;
+    if (testCase.status === 'not-run' && testCase.mandatory === true) return 1;
+  }
+  return 0;
+}
 
 let playwright;
 try {
@@ -457,7 +469,7 @@ async function runSecondInstance(page) {
 async function runFixJourney(page) {
   const state = await stateOf(page);
   if (state !== 'ready') {
-    notRun('fix.journey', `landing state is "${state}", not ready (Zoom Workplace not detected on this host?) — Fix now cannot be exercised here`);
+    notRun('fix.journey', `landing state is "${state}", not ready (Zoom Workplace not detected on this host?) — Fix now cannot be exercised here`, { mandatory: true });
     await page.click('#detailsBtn').catch(() => {});
     await sleep(300);
     await shot(page, '03-details-' + state);
@@ -516,6 +528,11 @@ async function runFixJourney(page) {
   const endShot = await shot(page, `05-end-${done.state || 'timeout'}`);
   if (!done.ok) { failed('fix.reaches-terminal-state', `still "${done.state}" after ${done.ms} ms — no terminal state`, { screenshot: endShot }); return; }
   passed('fix.reaches-terminal-state', `state=${done.state} after ${done.ms} ms`, { screenshot: endShot });
+  (fixJourneySucceeded(done.state) ? passed : failed)(
+    'fix.completes-successfully',
+    `state=${done.state}`,
+    { screenshot: endShot }
+  );
   const endFacts = await page.evaluate(() => {
     const launch = document.getElementById('launchBtn');
     const title = document.querySelector('.wiz-pane.active h2, .wiz-pane.active h1');
@@ -633,13 +650,14 @@ function finish() {
   const counts = { passed: 0, failed: 0, 'not-run': 0 };
   for (const c of report.cases) counts[c.status]++;
   report.counts = counts;
+  report.blockingNotRun = report.cases.filter(c => c.status === 'not-run' && c.mandatory === true).length;
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
   const lines = ['# Packaged acceptance', '', `Executable driven: \`${report.exe}\``, `Shipped executable: \`${report.shippedExe}\` (${report.testCopy ? 'driven through an asInvoker-stamped copy because the host has UAC disabled' : 'driven directly'})`, `Host: ${report.host.platform} ${report.host.release}, EnableLUA=${report.host.enableLUA}`, `Run: ${report.startedAt} → ${report.finishedAt}`, '',
-    `Passed ${counts.passed} · Failed ${counts.failed} · Not run ${counts['not-run']}`, '',
+    `Passed ${counts.passed} · Failed ${counts.failed} · Not run ${counts['not-run']} · Mandatory not run ${report.blockingNotRun}`, '',
     '| Case | Result | Detail | Evidence |', '|---|---|---|---|'];
   const cell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
   for (const c of report.cases) lines.push(`| ${c.id} | ${c.status} | ${cell(c.detail)} | ${c.screenshot ? c.screenshot : ''} |`);
   fs.writeFileSync(path.join(OUT, 'report.md'), lines.join('\n') + '\n');
   console.log(`packaged-acceptance: passed=${counts.passed} failed=${counts.failed} not-run=${counts['not-run']} → ${OUT}`);
-  process.exit(counts.failed ? 1 : 0);
+  process.exit(acceptanceExitCode(report.cases));
 }

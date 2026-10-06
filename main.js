@@ -783,8 +783,11 @@ function createWindow() {
       if (inactivityCtl) inactivityCtl.activity('dialog', 'unresponsive-dialog');
     }
     if (choice === 1) {
+      if (!killActiveChildren()) {
+        console.error('fatal-path: restart blocked because child-tree termination is unproved');
+        return;
+      }
       fatalDialogShown = true;
-      killActiveChildren();
       app.relaunch();
       app.exit(1);
     }
@@ -810,13 +813,20 @@ const ELEVATE_RETRY_FLAG = elevCtl.retryFlag;
 // (launch → UAC accepted → nothing opens). A child carrying
 // ELEVATE_RETRY_FLAG retries briefly instead; every other second instance
 // still quits immediately.
+let singleInstanceLockOwned = false;
 const singleInstanceReady = (async () => {
-  if (app.requestSingleInstanceLock()) return true;
+  if (app.requestSingleInstanceLock()) {
+    singleInstanceLockOwned = true;
+    return true;
+  }
   if (!process.argv.includes(ELEVATE_RETRY_FLAG)) return false;
   const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 250));
-    if (app.requestSingleInstanceLock()) return true;
+    if (app.requestSingleInstanceLock()) {
+      singleInstanceLockOwned = true;
+      return true;
+    }
   }
   return false;
 })();
@@ -844,13 +854,27 @@ singleInstanceReady.then(got => {
 // Last relaunch outcome, reported to the renderer so "View details" can say
 // whether Windows approval was cancelled, timed out, or never asked
 // (PowerShell missing). One of: started | declined | timeout |
-// launch-error | failed | already-elevated | null.
+// launch-error | failed | already-elevated | lock-lost | null.
 let lastRelaunchOutcome = null;
+
+function reacquireSingleInstanceLock() {
+  try {
+    singleInstanceLockOwned = app.requestSingleInstanceLock() === true;
+  } catch (_) {
+    singleInstanceLockOwned = false;
+  }
+  if (!singleInstanceLockOwned) {
+    lastRelaunchOutcome = 'lock-lost';
+    shutdown.request(shutdown.REASONS.SECOND_INSTANCE);
+  }
+  return singleInstanceLockOwned;
+}
 
 async function relaunchElevated() {
   if (await isElevatedSync()) { lastRelaunchOutcome = 'already-elevated'; return false; }
   const exe = process.execPath;
   app.releaseSingleInstanceLock();
+  singleInstanceLockOwned = false;
   let started = false;
   try {
     const r = await elevCtl.relaunchElevated({
@@ -866,7 +890,7 @@ async function relaunchElevated() {
     lastRelaunchOutcome = 'failed';
     console.warn(`[startup] elevation.relaunch threw: ${(err && err.message) || err}`);
   }
-  if (!started) app.requestSingleInstanceLock();
+  if (!started) reacquireSingleInstanceLock();
   return started;
 }
 
@@ -885,6 +909,7 @@ app.whenReady().then(async () => {
       let started = false;
       try { started = await relaunchElevated(); } catch (_) { /* stay un-elevated */ }
       if (started) { shutdown.request(shutdown.REASONS.ELEVATED_RELAUNCH); return; }
+      if (!singleInstanceLockOwned) return;
     }
   }
   createWindow();
@@ -941,14 +966,18 @@ app.on('window-all-closed', () => {
   app.quit();
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   // A quit that nothing in this process asked for (OS session end, a
   // Windows-initiated close) is recorded as such; the first named reason
   // wins so an update restart is never mislabelled.
   const reason = shutdown.note(shutdown.REASONS.SYSTEM_SHUTDOWN);
   // No warning can reopen and no countdown can fire once shutdown began.
   if (inactivityCtl) inactivityCtl.dispose();
-  killActiveChildren();
+  if (!killActiveChildren()) {
+    event.preventDefault();
+    console.error('fatal-path: quit blocked because child-tree termination is unproved');
+    return;
+  }
   // A verified update the user deferred installs silently as the app exits
   // (no relaunch — the user chose to leave). Excluded for an update restart
   // (the installer is already running) and for fatal / relaunch exits.
@@ -971,37 +1000,89 @@ let fatalDialogShown = false;
 // reliably end them on Windows, and an orphaned fix child mutating accounts/
 // registry while a relaunched instance starts a second fix would mean two
 // concurrent writers on system state. Every fatal exit path kills the tracked
-// child TREE first; the fix is safe to re-run and repairs the interrupted run.
+// child TREE first. A fatal exit proceeds only after Windows confirms that
+// termination; otherwise this process keeps custody and does not relaunch.
 const activeChildren = new Set();
-function killActiveChildren() {
-  for (const child of activeChildren) {
-    if (!child.pid) continue;
+const unprovedChildTrees = new WeakSet();
+function terminateChildTree(child) {
+  const result = {
+    treeTerminated: false,
+    taskkillStatus: null,
+    taskkillError: null,
+    taskkillSignal: null,
+    childKillSent: false,
+    childKillError: null
+  };
+  if (child && child.pid) {
     try {
-      spawnWindowsToolSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 });
-      console.warn(`fatal-path: killed child tree pid=${child.pid}`);
+      const killed = spawnWindowsToolSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+        windowsHide: true,
+        timeout: 10000
+      });
+      result.taskkillStatus = Number.isInteger(killed && killed.status) ? killed.status : null;
+      result.taskkillError = killed && killed.error
+        ? String(killed.error.code || killed.error.name || 'process-error')
+        : null;
+      result.taskkillSignal = killed && killed.signal ? String(killed.signal) : null;
+      result.treeTerminated = result.taskkillStatus === 0 && !result.taskkillError && !result.taskkillSignal;
     } catch (err) {
-      console.warn(`fatal-path: could not kill child pid=${child.pid}: ${err && err.message}`);
+      result.taskkillError = String((err && (err.code || err.name)) || 'exception');
+    }
+  } else {
+    result.taskkillError = 'missing-pid';
+  }
+  try {
+    result.childKillSent = !!(child && typeof child.kill === 'function' && child.kill('SIGKILL') === true);
+  } catch (err) {
+    result.childKillError = String((err && (err.code || err.name)) || 'exception');
+  }
+  return result;
+}
+
+function terminationEvidence(result) {
+  return `taskkillStatus=${result.taskkillStatus === null ? 'none' : result.taskkillStatus}` +
+    ` taskkillError=${result.taskkillError || 'none'}` +
+    ` taskkillSignal=${result.taskkillSignal || 'none'}` +
+    ` childKillSent=${result.childKillSent}` +
+    ` childKillError=${result.childKillError || 'none'}`;
+}
+
+function killActiveChildren() {
+  let allTerminated = true;
+  for (const child of activeChildren) {
+    const result = terminateChildTree(child);
+    if (result.treeTerminated) {
+      unprovedChildTrees.delete(child);
+      activeChildren.delete(child);
+      console.warn(`fatal-path: killed child tree pid=${child.pid} ${terminationEvidence(result)}`);
+    } else {
+      unprovedChildTrees.add(child);
+      allTerminated = false;
+      console.warn(`fatal-path: retained child custody pid=${child && child.pid || 'none'} ${terminationEvidence(result)}`);
     }
   }
-  activeChildren.clear();
+  return allTerminated;
 }
 
 process.on('uncaughtException', (err) => {
   console.error('FATAL uncaughtException:', (err && err.stack) || err);
-  killActiveChildren(); // before the blocking dialog — never leave a writer running
+  const childrenStopped = killActiveChildren();
   if (!fatalDialogShown) {
     fatalDialogShown = true;
     try {
       dialog.showErrorBox(
         '1132 Fixer hit a problem it could not recover from',
-        'The app has to close. If a fix was running, run it again after ' +
-        'restarting — the fix is safe to repeat and repairs partial runs.\n\n' +
+        (childrenStopped
+          ? 'The app has to close. If a fix was running, run it again after restarting — the fix is safe to repeat and repairs partial runs.\n\n'
+          : 'Windows did not confirm that the active repair process tree stopped. ' +
+            'The app will stay open and will not start another repair. After Windows confirms the process has ended, close the app and restart it.\n\n') +
         'Start 1132 Fixer again. If this keeps happening, report it at\n' +
         'https://github.com/1132-Fixer/windows/issues\n\n' +
         `Detail for support: ${(err && err.message) || err}`
       );
     } catch (_) { /* dialog itself failed — the console line above remains */ }
   }
+  if (!childrenStopped) return;
   app.exit(1);
 });
 
@@ -1011,9 +1092,11 @@ app.on('render-process-gone', (_event, _webContents, details) => {
   if (fatalDialogShown) return;
   fatalDialogShown = true;
   const hadFix = fixInProgress;
-  killActiveChildren(); // before the blocking dialog — never leave a writer running
+  const childrenStopped = killActiveChildren();
   const fixNote = hadFix
-    ? '\n\nA fix was running — it has been stopped. Run it again after restarting; the fix is safe to repeat and repairs partial runs.'
+    ? (childrenStopped
+      ? '\n\nA fix was running — it has been stopped. Run it again after restarting; the fix is safe to repeat and repairs partial runs.'
+      : '\n\nWindows did not confirm that the repair process tree stopped. The app will stay open and will not start another repair.')
     : '';
   const choice = dialog.showMessageBoxSync({
     type: 'error',
@@ -1026,6 +1109,7 @@ app.on('render-process-gone', (_event, _webContents, details) => {
     cancelId: 1,
     noLink: true
   });
+  if (!childrenStopped) return;
   if (choice === 0) app.relaunch();
   app.exit(1);
 });
@@ -1075,6 +1159,7 @@ function runProcess(exe, args, onLine, opts = {}) {
     const stdoutDecoder = new StringDecoder('utf8');
     const stderrDecoder = new StringDecoder('utf8');
     let settled = false;
+    let terminationUnproved = false;
     let lastOutputAt = Date.now();
     const started = Date.now();
     let child;
@@ -1087,7 +1172,7 @@ function runProcess(exe, args, onLine, opts = {}) {
     }
     activeChildren.add(child);
     const emit = (buf, kind) => {
-      if (settled) return;
+      if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
       const text = (kind === 'err' ? stderrDecoder : stdoutDecoder).write(buf);
       if (kind === 'err') stderrBuf += text; else stdoutBuf += text;
       lastOutputAt = Date.now();
@@ -1102,7 +1187,7 @@ function runProcess(exe, args, onLine, opts = {}) {
     let hbTimer = null;
     if (heartbeatMs > 0) {
       hbTimer = setInterval(() => {
-        if (settled) return;
+        if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
         const idleSec = Math.round((Date.now() - lastOutputAt) / 1000);
         const elapsedSec = Math.round((Date.now() - started) / 1000);
         if (idleSec >= Math.round(heartbeatMs / 1000)) {
@@ -1124,20 +1209,35 @@ function runProcess(exe, args, onLine, opts = {}) {
         // powershell.exe, and killing only PS orphans a recursive tool
         // mid-cycle — it keeps grinding (and holding profile handles)
         // invisibly. Same idiom as killActiveChildren.
-        try { spawnWindowsToolSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }); } catch (_) {}
-        try { child.kill('SIGKILL'); } catch (_) {}
+        terminationUnproved = true;
+        const termination = terminateChildTree(child);
+        if (!termination.treeTerminated) {
+          unprovedChildTrees.add(child);
+          stopTimers();
+          onLine(`  BLOCKED: child-tree termination is unproved; retaining custody (${terminationEvidence(termination)})`, 'err');
+          return;
+        }
+        unprovedChildTrees.delete(child);
+        terminationUnproved = false;
         finish(-1, 'ETIMEDOUT');
       }, timeoutMs);
     }
 
-    const cleanup = () => {
+    const stopTimers = () => {
       if (hbTimer) clearInterval(hbTimer);
       if (killTimer) clearTimeout(killTimer);
+      hbTimer = null;
+      killTimer = null;
+    };
+
+    const cleanup = () => {
+      stopTimers();
+      unprovedChildTrees.delete(child);
       activeChildren.delete(child);
     };
 
     const finish = (code, errorCode = null) => {
-      if (settled) return;
+      if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
       stdoutBuf += stdoutDecoder.end();
       stderrBuf += stderrDecoder.end();
       settled = true;
@@ -1145,17 +1245,28 @@ function runProcess(exe, args, onLine, opts = {}) {
       resolve({ code, stdout: stdoutBuf, stderr: stderrBuf, timedOut, errorCode });
     };
     child.on('error', err => {
-      if (settled) return;
+      if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
       stderrBuf += err.message;
       onLine(`Failed to launch ${exe}: ${err.message}`, 'err');
       finish(-1, err.code || 'launch_error');
     });
-    child.on('close', code => finish(code));
+    child.on('close', code => {
+      if (!terminationUnproved && !unprovedChildTrees.has(child)) finish(code);
+    });
     // Caller source can contain a helper credential. It is sent through a
     // private pipe, never embedded in PowerShell argv or a temporary script.
     child.stdin.on('error', () => {
       if (settled) return;
-      try { child.kill('SIGKILL'); } catch (_) {}
+      terminationUnproved = true;
+      const termination = terminateChildTree(child);
+      if (!termination.treeTerminated) {
+        unprovedChildTrees.add(child);
+        stopTimers();
+        onLine(`Failed to stop child after stdin failure; retaining custody (${terminationEvidence(termination)})`, 'err');
+        return;
+      }
+      unprovedChildTrees.delete(child);
+      terminationUnproved = false;
       finish(-1, 'stdin_failed');
     });
     child.stdin.end(stdin === null ? undefined : stdin, 'utf8');
@@ -1204,6 +1315,7 @@ async function runPSScriptLaunchCapture(scriptContent) {
     const outputDecoder = new StringDecoder('utf8');
     const errorDecoder = new StringDecoder('utf8');
     let settled = false;
+    let exitObserved = false;
     let killTimer = null;
     let timedOut = false;
     let child;
@@ -1225,6 +1337,7 @@ async function runPSScriptLaunchCapture(scriptContent) {
       resolve({ code, stdout: stdoutBuf, timedOut });
     };
     killTimer = setTimeout(() => {
+      if (exitObserved) return;
       timedOut = true;
       try { child.kill('SIGKILL'); } catch (_) {}
       settle(-1);
@@ -1233,6 +1346,11 @@ async function runPSScriptLaunchCapture(scriptContent) {
     child.stdin.on('error', () => { try { child.kill('SIGKILL'); } catch (_) {} settle(-1); });
     child.stdin.end(windowsTools.prepareScript(scriptContent), 'utf8');
     child.on('exit', (code) => {
+      exitObserved = true;
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
       // PS has exited; give any tail output one short drain race, then
       // stop waiting on pipes Zoom may hold open forever.
       const grace = setTimeout(() => settle(code), 500);

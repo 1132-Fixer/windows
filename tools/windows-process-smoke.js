@@ -24,22 +24,31 @@ function wrapperSource(name) {
   return declaration[0];
 }
 
-function fakeChild() {
+function fakeChild(options = {}) {
   const child = new EventEmitter();
   child.pid = 11320;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
+  child.stdout.destroyedByTest = false;
+  child.stderr.destroyedByTest = false;
+  child.stdout.destroy = () => { child.stdout.destroyedByTest = true; };
+  child.stderr.destroy = () => { child.stderr.destroyedByTest = true; };
   child.stdin = new EventEmitter();
   child.writes = [];
   child.kills = [];
   child.stdin.end = (data, encoding) => child.writes.push({ data, encoding });
-  child.kill = signal => { child.kills.push(signal); return true; };
+  child.kill = signal => {
+    child.kills.push(signal);
+    if (options.childKillThrows) throw options.childKillThrows;
+    return Object.prototype.hasOwnProperty.call(options, 'childKillResult') ? options.childKillResult : true;
+  };
   return child;
 }
 
 function harness(options = {}) {
-  const child = fakeChild();
+  const child = fakeChild(options);
   const activeChildren = new Set();
+  const unprovedChildTrees = new WeakSet();
   const timers = new Map();
   const cancelledTimers = [];
   const calls = [];
@@ -71,27 +80,39 @@ function harness(options = {}) {
       if (options.spawnError) throw options.spawnError;
       return child;
     },
-    spawnSync: (exe, args, opts) => { kills.push({ exe, args: Array.from(args), opts }); return { status: 0 }; },
+    spawnSync: (exe, args, opts) => {
+      kills.push({ exe, args: Array.from(args), opts });
+      if (options.taskkillThrows) throw options.taskkillThrows;
+      return options.taskkillResult || { status: 0 };
+    },
     activeChildren,
+    unprovedChildTrees,
     setTimeout: startTimer('timeout'),
     clearTimeout: clearTimer,
     setInterval: startTimer('interval'),
     clearInterval: clearTimer,
     Date: { now: () => clock },
     StringDecoder,
-    Buffer
+    Buffer,
+    console: { warn: message => lines.push({ line: String(message), kind: 'warn' }) }
   };
   vm.createContext(context);
   vm.runInContext([
     wrapperSource('spawnWindowsTool'),
     wrapperSource('spawnWindowsToolSync'),
+    functionSource('terminateChildTree'),
+    functionSource('terminationEvidence'),
+    functionSource('killActiveChildren'),
     functionSource('runProcess'),
-    functionSource('runPSScript')
+    functionSource('runPSScript'),
+    functionSource('runPSScriptLaunchCapture')
   ].join('\n'), context, { filename: 'main.js:windows-process-smoke' });
   return {
-    child, timers, cancelledTimers, calls, kills, lines, activeChildren,
+    child, timers, cancelledTimers, calls, kills, lines, activeChildren, unprovedChildTrees,
     run: (name, args = [], opts = {}) => context.runProcess(name, args, (line, kind) => lines.push({ line, kind }), opts),
     script: (script, opts = {}) => context.runPSScript(script, (line, kind) => lines.push({ line, kind }), opts),
+    launchCapture: script => context.runPSScriptLaunchCapture(script),
+    killAll: () => context.killActiveChildren(),
     fire: (kind, ms) => {
       const item = Array.from(timers.entries()).find(([, timer]) => timer.kind === kind && timer.ms === ms);
       assert.ok(item, `${kind} timer ${ms}ms exists`);
@@ -191,7 +212,7 @@ function check(condition, name) {
     h.fire('timeout', 40);
     const result = await pending;
     check(result.code === -1 && result.errorCode === 'ETIMEDOUT' && result.timedOut,
-      'deadline settles without waiting for child close');
+      'deadline settles after whole-tree termination is proved');
     check(h.kills.length === 1 && h.kills[0].exe === 'D:\\Windows\\System32\\taskkill.exe' &&
       JSON.stringify(h.kills[0].args) === JSON.stringify(['/PID', '11320', '/T', '/F']) && h.child.kills[0] === 'SIGKILL',
       'deadline uses trusted taskkill for the entire process tree and direct-child fallback');
@@ -203,6 +224,33 @@ function check(condition, name) {
     check(result.code === -1 && h.lines.length === before, 'late timeout events do not report a second outcome');
   }
   {
+    const h = harness({ taskkillResult: { status: 5 }, childKillResult: true });
+    const pending = h.script('Write-Output 1', { timeoutMs: 40, heartbeatMs: 5 });
+    let resolved = false;
+    pending.then(() => { resolved = true; });
+    h.fire('timeout', 40);
+    await Promise.resolve();
+    check(!resolved && h.activeChildren.has(h.child) && h.unprovedChildTrees.has(h.child),
+      'a failed tree kill cannot settle the timed-out child or release custody');
+    check(h.child.kills[0] === 'SIGKILL' && h.lines.some(item => /termination is unproved/.test(item.line)),
+      'direct-child kill is checked but cannot substitute for whole-tree proof');
+    h.child.emit('close', 0);
+    await Promise.resolve();
+    check(!resolved && h.activeChildren.has(h.child),
+      'a later direct-child close cannot hide an unproved surviving tree');
+  }
+  {
+    const h = harness({ taskkillResult: { status: 1 }, childKillResult: false });
+    const pending = h.run('net.exe', [], { timeoutMs: 0 });
+    let resolved = false;
+    pending.then(() => { resolved = true; });
+    const stopped = h.killAll();
+    h.child.emit('close', 0);
+    await Promise.resolve();
+    check(stopped === false && !resolved && h.activeChildren.has(h.child) && h.unprovedChildTrees.has(h.child),
+      'fatal cleanup retains custody when both tree and direct-child termination fail');
+  }
+  {
     const h = harness();
     const pending = h.script('Write-Output 1', { timeoutMs: 40 });
     h.child.stdin.emit('error', Object.assign(new Error('private source must not be logged'), { code: 'EPIPE' }));
@@ -212,6 +260,19 @@ function check(condition, name) {
       'stdin failure returns a safe stage code without exposing private script text');
     check(h.child.kills.length === 1 && h.activeChildren.size === 0 && h.timers.size === 0,
       'stdin failure kills the child and clears process resources');
+  }
+  {
+    const h = harness();
+    const pending = h.launchCapture("Write-Output 'STARTED'");
+    h.child.stdout.emit('data', Buffer.from('STARTED\n'));
+    h.child.emit('exit', 7);
+    check(!Array.from(h.timers.values()).some(timer => timer.ms === 30000) &&
+      Array.from(h.timers.values()).some(timer => timer.ms === 500),
+    'observed launch-process exit clears the main deadline before close grace');
+    h.fire('timeout', 500);
+    const result = await pending;
+    check(result.code === 7 && result.stdout === 'STARTED\n' && result.timedOut === false && h.child.kills.length === 0,
+      'inherited handles cannot overwrite a completed launch outcome at the old deadline');
   }
   {
     const h = harness();

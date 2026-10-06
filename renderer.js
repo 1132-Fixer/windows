@@ -1899,14 +1899,23 @@ let feedbackMode = '';
 let releaseFeedbackTrap = null;
 let feedbackGen = 0;
 const feedbackSending = new Set();
+const feedbackEditorLocks = new WeakMap();
 
 function showSection(id) {
   document.querySelectorAll('.fb-section').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
 }
+function returnToFeedbackChooser() {
+  feedbackGen++;
+  feedbackMode = '';
+  showSection('fbChoose');
+}
 function openFeedback() {
   feedbackGen++;
-  document.querySelectorAll('.fb-section textarea, .fb-section input, .fb-section button').forEach(el => { el.disabled = false; });
+  document.querySelectorAll('.fb-section textarea, .fb-section input, .fb-section button').forEach(el => {
+    feedbackEditorLocks.delete(el);
+    el.disabled = false;
+  });
   document.getElementById('fbRatingSubmit').disabled = true;
   document.getElementById('fbContactSubmit').disabled = true;
   const overlay = document.getElementById('fbOverlay');
@@ -2194,7 +2203,7 @@ exploreOverlay.addEventListener('keydown', (e) => {
   document.getElementById(id).addEventListener('click', closeFeedback);
 });
 ['fbBugBack', 'fbRatingBack', 'fbContactBack'].forEach(id => {
-  document.getElementById(id).addEventListener('click', () => showSection('fbChoose'));
+  document.getElementById(id).addEventListener('click', returnToFeedbackChooser);
 });
 document.querySelectorAll('.fb-choice').forEach(el => {
   const activate = () => {
@@ -2536,14 +2545,25 @@ async function submitFeedback(type, text, statusId, screenshot, rating) {
   const editors = [...submitBtn.closest('.fb-section').querySelectorAll('textarea, input, button')]
     .filter(el => el !== submitBtn && !/(Cancel|Back)$/.test(el.id));
   const snapshots = editors.map(el => ({ el, disabled: el.disabled }));
-  editors.forEach(el => { el.disabled = true; });
+  editors.forEach(el => {
+    feedbackEditorLocks.set(el, gen);
+    el.disabled = true;
+  });
   const restoreEditors = () => {
-    if (gen === feedbackGen) snapshots.forEach(({ el, disabled }) => { el.disabled = disabled; });
+    snapshots.forEach(({ el, disabled }) => {
+      if (feedbackEditorLocks.get(el) !== gen) return;
+      feedbackEditorLocks.delete(el);
+      el.disabled = disabled;
+    });
   };
   const releaseBusy = () => {
     feedbackSending.delete(statusId);
     restoreEditors();
     if (gen !== feedbackGen) {
+      if (statusEl.textContent === FEEDBACK.SENDING) {
+        statusEl.textContent = '';
+        statusEl.className = 'fb-status';
+      }
       if (statusId === 'fbBugStatus') refreshBugSubmit();
       else if (statusId === 'fbRatingStatus') submitBtn.disabled = ratings.overall === 0;
       else submitBtn.disabled = document.getElementById('fbContactText').value.trim().length < 50;

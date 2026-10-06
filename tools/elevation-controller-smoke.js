@@ -19,6 +19,8 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const vm = require('vm');
+const { EventEmitter } = require('events');
 const { spawnSync } = require('child_process');
 const elev = require('../src/main/elevation');
 
@@ -97,6 +99,12 @@ const RELAUNCH_OPTS = {
     check(runner.calls.length === 1 && /powershell\.exe$/i.test(runner.calls[0].cmd), 'fallback runs System32 PowerShell');
     check(runner.calls[0].args.includes('-Command') && !runner.calls[0].args.includes('-File'), 'fallback is -Command, never -File');
     check(runner.calls[0].timeoutMs === 50, 'token probe carries the probe deadline');
+    const snap = c.snapshot();
+    const retry = await c.isElevated();
+    check(snap.elevated === true && snap.method === 'token-elevation',
+      'startup snapshot preserves a successful TOKEN_ELEVATION fallback');
+    check(retry.elevated === true && retry.method === 'token-elevation' && runner.calls.length === 1,
+      'retry reuses the successful fallback instead of dead-ending as already elevated');
   }
   {
     const c = controller({ sync: fakeSync(''), runner: recordingRunner({ stdout: '' }) });
@@ -301,6 +309,45 @@ const RELAUNCH_OPTS = {
       "const {spawn}=require('child_process');process.stdout.write('EARLY\\n');const g=spawn(process.execPath,['-e','setTimeout(()=>{},4000)'],{stdio:'inherit',detached:true});g.unref();"
     ], 10000);
     check(grand.outcome === 'ok' && /EARLY/.test(grand.stdout) && grand.ms < 3000, 'inherited handles do not hold runTimed open past the grace period');
+  }
+
+  console.log('elevation-controller-smoke: exit fences the main deadline during close grace');
+  {
+    const moduleSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'elevation.js'), 'utf8');
+    const start = moduleSource.indexOf('function runTimed(');
+    const end = moduleSource.indexOf('\n}\n', start);
+    const child = new EventEmitter();
+    child.pid = 1132;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => true;
+    const timers = new Map();
+    let nextTimer = 1;
+    let now = 0;
+    const context = {
+      spawn: () => child,
+      killTree: () => {},
+      EXIT_CLOSE_GRACE_MS: elev.EXIT_CLOSE_GRACE_MS,
+      Date: { now: () => now },
+      setTimeout: (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, ms }); return id; },
+      clearTimeout: id => timers.delete(id)
+    };
+    vm.createContext(context);
+    vm.runInContext(moduleSource.slice(start, end + 2) + '\nthis.runTimed = runTimed;', context);
+    const pending = context.runTimed('fixture.exe', [], 1000);
+    child.stdout.emit('data', Buffer.from('NEAR\n'));
+    now = 999;
+    child.emit('exit', 7);
+    check(!Array.from(timers.values()).some(timer => timer.ms === 1000) &&
+      Array.from(timers.values()).some(timer => timer.ms === elev.EXIT_CLOSE_GRACE_MS),
+    'exit observed just before the deadline clears the deadline and starts only close grace');
+    const grace = Array.from(timers.entries()).find(([, timer]) => timer.ms === elev.EXIT_CLOSE_GRACE_MS);
+    timers.delete(grace[0]);
+    now += elev.EXIT_CLOSE_GRACE_MS;
+    grace[1].fn();
+    const result = await pending;
+    check(result.outcome === 'ok' && result.code === 7 && result.timedOut === false && result.stdout === 'NEAR\n',
+      'inherited handles cannot overwrite the completed child outcome after exit');
   }
 
   console.log('elevation-controller-smoke: -Command transport through real PowerShell');

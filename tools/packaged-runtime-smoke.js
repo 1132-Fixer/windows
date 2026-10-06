@@ -8,6 +8,13 @@ const path = require('node:path');
 const vm = require('node:vm');
 const windowsTools = require('../src/main/windows-tools');
 const source = fs.readFileSync(path.join(__dirname, 'packaged-acceptance.js'), 'utf8');
+function productionFunction(name) {
+  const fnStart = source.indexOf(`function ${name}(`);
+  assert.notEqual(fnStart, -1, `production function ${name} exists`);
+  const fnEnd = source.indexOf('\n}\n', fnStart);
+  assert.notEqual(fnEnd, -1, `production function ${name} closes`);
+  return source.slice(fnStart, fnEnd + 2);
+}
 const start = source.indexOf('async function runtimeAuthority(');
 const end = source.indexOf('\nasync function launch(', start);
 assert.ok(start >= 0 && end > start, 'the production packaged runtime gate is present');
@@ -105,6 +112,32 @@ async function run(options = {}) {
 }
 
 (async () => {
+  const acceptanceContract = {};
+  vm.createContext(acceptanceContract);
+  vm.runInContext([
+    productionFunction('fixJourneySucceeded'),
+    productionFunction('acceptanceExitCode'),
+    'this.fixJourneySucceeded = fixJourneySucceeded;',
+    'this.acceptanceExitCode = acceptanceExitCode;'
+  ].join('\n'), acceptanceContract);
+  assert.equal(acceptanceContract.fixJourneySucceeded('success'), true);
+  for (const state of ['error', 'notice', 'cancelled']) {
+    assert.equal(acceptanceContract.fixJourneySucceeded(state), false, `${state} cannot satisfy the Fix now success assertion`);
+  }
+  checks++;
+  assert.equal(acceptanceContract.acceptanceExitCode([{ status: 'not-run', mandatory: true }]), 1,
+    'a mandatory not-run case makes packaged acceptance nonzero');
+  assert.equal(acceptanceContract.acceptanceExitCode([{ status: 'not-run' }]), 0,
+    'an explicitly optional not-run case stays report-only');
+  assert.equal(acceptanceContract.acceptanceExitCode([{ status: 'failed' }]), 1,
+    'a failed case makes packaged acceptance nonzero');
+  checks++;
+  assert.ok(source.includes("'fix.completes-successfully'") && source.includes('fixJourneySucceeded(done.state)'),
+    'the terminal Fix now result uses the strict success predicate');
+  assert.ok(/notRun\('fix\.journey',[\s\S]*?mandatory:\s*true/.test(source),
+    'an unavailable mandatory Fix now journey is blocking');
+  checks++;
+
   const good = await run();
   assert.equal(good.ok, true);
   assert.equal(good.commands, 1);
