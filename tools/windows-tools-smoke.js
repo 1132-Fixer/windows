@@ -241,13 +241,27 @@ if (process.platform === 'win32') {
     const fakePs = path.join(fakeSystem, 'WindowsPowerShell', 'v1.0');
     fs.mkdirSync(fakePs, { recursive: true });
     for (const name of windowsTools.WINDOWS_TOOLS) fs.writeFileSync(path.join(name === 'powershell.exe' ? fakePs : fakeSystem, name), 'invalid fake executable; must never run');
-    const forgedEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:systemroot|windir|path|processor_architew6432)$/i.test(key)));
-    Object.assign(forgedEnv, { SystemRoot: fakeRoot, WINDIR: fakeRoot, PATH: '', PROCESSOR_ARCHITEW6432: 'FORGED' });
+    const forgedEnv = {
+      ...process.env,
+      FIXER_TEST_FORGED_ENV: JSON.stringify({ SystemRoot: fakeRoot, WINDIR: fakeRoot, PATH: '', PROCESSOR_ARCHITEW6432: 'FORGED' })
+    };
     // Public, read-only fixture source. It is not the PowerShell transport.
     const childSource = `
       const write = value => require('fs').writeSync(1, value + '\\n');
       const phase = value => write('FIXER_PHASE:' + value);
       phase('script-start');
+      const forgedFixture = process.env.FIXER_TEST_FORGED_ENV;
+      let forged = null;
+      if (forgedFixture !== undefined) {
+        forged = JSON.parse(forgedFixture);
+        const keys = ['SystemRoot', 'WINDIR', 'PATH', 'PROCESSOR_ARCHITEW6432'];
+        if (!keys.every(key => typeof forged[key] === 'string')) throw new TypeError('invalid forged environment fixture');
+        for (const key of Object.keys(process.env)) {
+          if (/^(?:systemroot|windir|path|processor_architew6432)$/i.test(key)) delete process.env[key];
+        }
+        for (const key of keys) process.env[key] = forged[key];
+        delete process.env.FIXER_TEST_FORGED_ENV;
+      }
       const receipt = { stage: 'started', arch: process.arch, reportAvailable: typeof process.report?.getReport === 'function' };
       try {
         receipt.stage = 'load-module';
@@ -277,9 +291,16 @@ if (process.platform === 'win32') {
         receipt.exe = tools.resolveTool('powershell.exe');
         receipt.stage = 'run-powershell';
         phase(receipt.stage);
+        const powershellEnv = forged ? {
+          ...process.env, SystemRoot: receipt.root, WINDIR: receipt.root, PATH: '',
+          FIXER_TEST_FORGED_SYSTEM_ROOT: forged.SystemRoot, FIXER_TEST_FORGED_WINDIR: forged.WINDIR
+        } : process.env;
+        const applyForgedEnvironment = forged
+          ? "$fixerTestSystemRoot = $env:FIXER_TEST_FORGED_SYSTEM_ROOT; $fixerTestWindir = $env:FIXER_TEST_FORGED_WINDIR; Remove-Item Env:FIXER_TEST_FORGED_SYSTEM_ROOT; Remove-Item Env:FIXER_TEST_FORGED_WINDIR; $env:SystemRoot = $fixerTestSystemRoot; $env:WINDIR = $fixerTestWindir; $env:PATH = ''; "
+          : '';
         const result = require('child_process').spawnSync(receipt.exe, tools.PS_STDIN_ARGS, {
-          input: Buffer.from(tools.prepareScript("& (Resolve-FixerTool 'cmd.exe') /d /c 'echo FIXER_TRUSTED'; [Environment]::SystemDirectory"), 'utf8'),
-          windowsHide: true, timeout: 15000, encoding: 'utf8'
+          input: Buffer.from(tools.prepareScript(applyForgedEnvironment + "& (Resolve-FixerTool 'cmd.exe') /d /c 'echo FIXER_TRUSTED'; [Environment]::SystemDirectory"), 'utf8'),
+          env: powershellEnv, windowsHide: true, timeout: 15000, encoding: 'utf8'
         });
         const lines = (result.stdout || '').trim().split(/\\r?\\n/);
         receipt.exitCode = result.status;
@@ -315,7 +336,7 @@ if (process.platform === 'win32') {
         stderrBytes: Buffer.byteLength(realChild.stderr || ''), proof: proof || null })}`);
       return { realChild, proof };
     };
-    const baselineEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^path$/i.test(key)));
+    const baselineEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:path|fixer_test_forged_env)$/i.test(key)));
     baselineEnv.PATH = '';
     const baseline = childProof(baselineEnv, 'native-child-baseline');
     const { realChild, proof } = childProof(forgedEnv, 'native-child-forged-root');
