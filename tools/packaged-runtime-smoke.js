@@ -270,13 +270,26 @@ async function run(options = {}) {
   const launchScriptStart = mainSource.indexOf('const launchPs = `');
   const launchScriptEnd = mainSource.indexOf('\n  `;', launchScriptStart);
   const launchScript = mainSource.slice(launchScriptStart, launchScriptEnd);
+  const secureStringCtor = launchScript.indexOf('$pw = [System.Security.SecureString]::new()');
+  const appendCharacter = launchScript.indexOf('$pw.AppendChar($fixerPasswordChar)');
+  const clearCharacters = launchScript.indexOf('[Array]::Clear($fixerPasswordChars, 0, $fixerPasswordChars.Length)');
+  const makeReadOnly = launchScript.indexOf('$pw.MakeReadOnly()');
+  const credentialCtor = launchScript.indexOf("$cred = [System.Management.Automation.PSCredential]::new('${FIX_USER}', $pw)");
+  const credentialSuccess = launchScript.indexOf('phase=credential outcome=success');
+  const startProcessPhase = launchScript.indexOf("$fixerLaunchPhase = 'start_process'");
+  const startProcess = launchScript.indexOf('Start-Process -FilePath');
   assert.ok(launchScriptStart >= 0 && launchScriptEnd > launchScriptStart &&
-    launchScript.indexOf('try {') < launchScript.indexOf('ConvertTo-SecureString') &&
-    launchScript.indexOf('ConvertTo-SecureString') < launchScript.indexOf('New-Object System.Management.Automation.PSCredential') &&
-    launchScript.indexOf('New-Object System.Management.Automation.PSCredential') < launchScript.indexOf('Start-Process') &&
+    launchScript.indexOf('try {') < secureStringCtor &&
+    secureStringCtor < appendCharacter && appendCharacter < clearCharacters &&
+    clearCharacters < makeReadOnly && makeReadOnly < credentialCtor &&
+    credentialCtor < credentialSuccess && credentialSuccess < startProcessPhase &&
+    startProcessPhase < startProcess && launchScript.includes('-Credential $cred -EA Stop') &&
+    !launchScript.includes('ConvertTo-SecureString') && !launchScript.includes('New-Object') &&
     launchScript.includes("$ErrorActionPreference = 'Stop'") &&
-    !launchScript.includes('Exception.Message'),
-  'one terminating outer boundary covers credential construction and Start-Process without a free-form exception');
+    launchScript.includes("$fixerFailurePhase = 'pre_launch'") &&
+    launchScript.includes("$fixerFailurePhase = [string]$fixerLaunchPhase") &&
+    !launchScript.includes('Exception.Message') && !launchScript.includes('StackTrace'),
+  'typed read-only credential construction reaches Start-Process and failures stay in the closed phase marker');
   assert.ok(mainSource.includes('const launchDiagnostics = formatLaunchDiagnostics(launch);') &&
     source.includes("const launchLine = /^Launch diagnostic: phase=") &&
     source.includes('window.__fixerAcceptanceFixLog.length < 32'),

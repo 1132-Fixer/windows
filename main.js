@@ -2518,8 +2518,18 @@ async function runFixFlow(event) {
     try {
       $ErrorActionPreference = 'Stop'
       $fixerLaunchPhase = 'credential'
-      $pw = ConvertTo-SecureString '${fixPass}' -AsPlainText -Force -ErrorAction Stop
-      $cred = New-Object System.Management.Automation.PSCredential('${FIX_USER}', $pw) -ErrorAction Stop
+      $pw = [System.Security.SecureString]::new()
+      $fixerPasswordChars = '${fixPass}'.ToCharArray()
+      try {
+        foreach ($fixerPasswordChar in $fixerPasswordChars) {
+          $pw.AppendChar($fixerPasswordChar)
+        }
+      } finally {
+        $fixerPasswordChar = $null
+        [Array]::Clear($fixerPasswordChars, 0, $fixerPasswordChars.Length)
+      }
+      $pw.MakeReadOnly()
+      $cred = [System.Management.Automation.PSCredential]::new('${FIX_USER}', $pw)
       Write-Output 'FIXER_LAUNCH_PHASE_V1 phase=credential outcome=success exceptionClass=none hresult=none nativeCode=none'
       $fixerLaunchPhase = 'start_process'
       Start-Process -FilePath '${zi.path}' -WorkingDirectory '${zi.dir}' -Credential $cred -EA Stop
