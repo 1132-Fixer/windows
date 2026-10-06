@@ -1004,47 +1004,58 @@ let fatalDialogShown = false;
 // termination; otherwise this process keeps custody and does not relaunch.
 const activeChildren = new Set();
 const unprovedChildTrees = new WeakSet();
+const CHILD_TREE_KILL_ATTEMPTS = 3;
 function terminateChildTree(child) {
   const result = {
     treeTerminated: false,
     taskkillStatus: null,
     taskkillError: null,
     taskkillSignal: null,
-    childKillSent: false,
-    childKillError: null
+    taskkillAttempts: [],
+    parentIdentifiable: false
   };
-  if (child && child.pid) {
-    try {
-      const killed = spawnWindowsToolSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
-        windowsHide: true,
-        timeout: 10000
-      });
-      result.taskkillStatus = Number.isInteger(killed && killed.status) ? killed.status : null;
-      result.taskkillError = killed && killed.error
-        ? String(killed.error.code || killed.error.name || 'process-error')
-        : null;
-      result.taskkillSignal = killed && killed.signal ? String(killed.signal) : null;
-      result.treeTerminated = result.taskkillStatus === 0 && !result.taskkillError && !result.taskkillSignal;
-    } catch (err) {
-      result.taskkillError = String((err && (err.code || err.name)) || 'exception');
+  const parentIsIdentifiable = () => !!(child && Number.isInteger(child.pid) && child.pid > 0 &&
+    child.exitCode === null && child.signalCode === null);
+  if (parentIsIdentifiable()) {
+    for (let attempt = 1; attempt <= CHILD_TREE_KILL_ATTEMPTS; attempt++) {
+      if (!parentIsIdentifiable()) break;
+      const evidence = { attempt, status: null, error: null, signal: null };
+      try {
+        const killed = spawnWindowsToolSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+          windowsHide: true,
+          timeout: 10000
+        });
+        evidence.status = Number.isInteger(killed && killed.status) ? killed.status : null;
+        evidence.error = killed && killed.error
+          ? String(killed.error.code || killed.error.name || 'process-error')
+          : null;
+        evidence.signal = killed && killed.signal ? String(killed.signal) : null;
+      } catch (err) {
+        evidence.error = String((err && (err.code || err.name)) || 'exception');
+      }
+      result.taskkillAttempts.push(evidence);
+      result.taskkillStatus = evidence.status;
+      result.taskkillError = evidence.error;
+      result.taskkillSignal = evidence.signal;
+      result.treeTerminated = evidence.status === 0 && !evidence.error && !evidence.signal;
+      if (result.treeTerminated) break;
     }
+    result.parentIdentifiable = parentIsIdentifiable();
   } else {
-    result.taskkillError = 'missing-pid';
-  }
-  try {
-    result.childKillSent = !!(child && typeof child.kill === 'function' && child.kill('SIGKILL') === true);
-  } catch (err) {
-    result.childKillError = String((err && (err.code || err.name)) || 'exception');
+    result.taskkillError = child && child.pid ? 'parent-not-live' : 'missing-pid';
   }
   return result;
 }
 
 function terminationEvidence(result) {
-  return `taskkillStatus=${result.taskkillStatus === null ? 'none' : result.taskkillStatus}` +
+  const attempts = result.taskkillAttempts.map(item =>
+    `${item.attempt}:${item.status === null ? 'none' : item.status}/${item.error || 'none'}/${item.signal || 'none'}`
+  ).join(',');
+  return `taskkillAttempts=${result.taskkillAttempts.length}[${attempts}]` +
+    ` taskkillStatus=${result.taskkillStatus === null ? 'none' : result.taskkillStatus}` +
     ` taskkillError=${result.taskkillError || 'none'}` +
     ` taskkillSignal=${result.taskkillSignal || 'none'}` +
-    ` childKillSent=${result.childKillSent}` +
-    ` childKillError=${result.childKillError || 'none'}`;
+    ` parentIdentifiable=${result.parentIdentifiable}`;
 }
 
 function killActiveChildren() {
@@ -1318,6 +1329,7 @@ async function runPSScriptLaunchCapture(scriptContent) {
     let exitObserved = false;
     let killTimer = null;
     let timedOut = false;
+    let processErrorCode = null;
     let child;
     try {
       child = spawnWindowsTool('powershell.exe', windowsTools.PS_STDIN_ARGS, { windowsHide: true });
@@ -1334,7 +1346,7 @@ async function runPSScriptLaunchCapture(scriptContent) {
       if (killTimer) clearTimeout(killTimer);
       try { child.stdout.destroy(); } catch (_) {}
       try { child.stderr.destroy(); } catch (_) {}
-      resolve({ code, stdout: stdoutBuf, timedOut });
+      resolve({ code, stdout: stdoutBuf, timedOut, errorCode: processErrorCode });
     };
     killTimer = setTimeout(() => {
       if (exitObserved) return;
@@ -1342,8 +1354,15 @@ async function runPSScriptLaunchCapture(scriptContent) {
       try { child.kill('SIGKILL'); } catch (_) {}
       settle(-1);
     }, 30000);
-    child.on('error', () => settle(-1));
-    child.stdin.on('error', () => { try { child.kill('SIGKILL'); } catch (_) {} settle(-1); });
+    child.on('error', (err) => {
+      processErrorCode = String((err && (err.code || err.name)) || 'process-error');
+      settle(-1);
+    });
+    child.stdin.on('error', () => {
+      processErrorCode = 'stdin-error';
+      try { child.kill('SIGKILL'); } catch (_) {}
+      settle(-1);
+    });
     child.stdin.end(windowsTools.prepareScript(scriptContent), 'utf8');
     child.on('exit', (code) => {
       exitObserved = true;
@@ -2435,8 +2454,17 @@ async function runFixFlow(event) {
   // The launcher writes '  Zoom launched as user1.' on success or
   // '  Launch failed: <exception>' before exit 1 — captured now,
   // so the exact Start-Process error reaches the log instead of a guess-list.
-  const launchFailLine = (launch.stdout || '').split(/\r?\n/)
-    .map(s => s.trim()).find(l => l.startsWith('Launch failed: ')) || '';
+  const launchLines = (launch.stdout || '').split(/\r?\n/).map(s => s.trim());
+  const launchSuccessMarker = launchLines.includes(`Zoom launched as ${FIX_USER}.`);
+  const launchFailLine = launchLines.find(l => l.startsWith('Launch failed: ')) || '';
+  const launchCode = Number.isInteger(launch.code) ? String(launch.code) : 'none';
+  const rawLaunchErrorCode = typeof launch.errorCode === 'string' ? launch.errorCode : '';
+  const launchErrorCode = /^[A-Za-z0-9_.-]{1,40}$/.test(rawLaunchErrorCode)
+    ? rawLaunchErrorCode
+    : (rawLaunchErrorCode ? 'present' : 'none');
+  send(`  Launch result: code=${launchCode} timedOut=${launch.timedOut === true}` +
+    ` error=${launchErrorCode} successMarker=${launchSuccessMarker} failureMarker=${!!launchFailLine}`,
+  launch.code === 0 && launch.timedOut !== true && !rawLaunchErrorCode && launchSuccessMarker ? 'out' : 'err');
   if (launch.code !== 0 && launch.code !== null) {
     send(`  Launch script exited with code ${launch.code}; verifying via Win32_Process...`, 'err');
   }

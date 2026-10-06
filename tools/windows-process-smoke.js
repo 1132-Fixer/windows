@@ -27,6 +27,8 @@ function wrapperSource(name) {
 function fakeChild(options = {}) {
   const child = new EventEmitter();
   child.pid = 11320;
+  child.exitCode = null;
+  child.signalCode = null;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.stdout.destroyedByTest = false;
@@ -54,6 +56,7 @@ function harness(options = {}) {
   const calls = [];
   const kills = [];
   const lines = [];
+  let taskkillCall = 0;
   let nextTimer = 1;
   let clock = 0;
   const startTimer = kind => (fn, ms) => {
@@ -83,6 +86,13 @@ function harness(options = {}) {
     spawnSync: (exe, args, opts) => {
       kills.push({ exe, args: Array.from(args), opts });
       if (options.taskkillThrows) throw options.taskkillThrows;
+      if (Array.isArray(options.taskkillResults)) {
+        const index = Math.min(taskkillCall++, Math.max(0, options.taskkillResults.length - 1));
+        const next = options.taskkillResults[index];
+        if (next instanceof Error) throw next;
+        return next;
+      }
+      taskkillCall++;
       return options.taskkillResult || { status: 0 };
     },
     activeChildren,
@@ -100,6 +110,7 @@ function harness(options = {}) {
   vm.runInContext([
     wrapperSource('spawnWindowsTool'),
     wrapperSource('spawnWindowsToolSync'),
+    wrapperSource('CHILD_TREE_KILL_ATTEMPTS'),
     functionSource('terminateChildTree'),
     functionSource('terminationEvidence'),
     functionSource('killActiveChildren'),
@@ -214,8 +225,8 @@ function check(condition, name) {
     check(result.code === -1 && result.errorCode === 'ETIMEDOUT' && result.timedOut,
       'deadline settles after whole-tree termination is proved');
     check(h.kills.length === 1 && h.kills[0].exe === 'D:\\Windows\\System32\\taskkill.exe' &&
-      JSON.stringify(h.kills[0].args) === JSON.stringify(['/PID', '11320', '/T', '/F']) && h.child.kills[0] === 'SIGKILL',
-      'deadline uses trusted taskkill for the entire process tree and direct-child fallback');
+      JSON.stringify(h.kills[0].args) === JSON.stringify(['/PID', '11320', '/T', '/F']) && h.child.kills.length === 0,
+      'deadline uses trusted taskkill for the entire process tree without killing the parent directly');
     check(h.timers.size === 0 && h.activeChildren.size === 0,
       'deadline clears heartbeat, timer and cancellation custody');
     const before = h.lines.length;
@@ -224,7 +235,20 @@ function check(condition, name) {
     check(result.code === -1 && h.lines.length === before, 'late timeout events do not report a second outcome');
   }
   {
-    const h = harness({ taskkillResult: { status: 5 }, childKillResult: true });
+    const h = harness({ taskkillResults: [{ status: 5 }, { status: 0 }] });
+    const pending = h.script('Write-Output 1', { timeoutMs: 40, heartbeatMs: 5 });
+    h.fire('timeout', 40);
+    const result = await pending;
+    check(result.code === -1 && result.errorCode === 'ETIMEDOUT' && result.timedOut &&
+      h.kills.length === 2 && h.child.kills.length === 0,
+      'a transient taskkill failure retries the same live parent and settles only after whole-tree proof');
+    check(h.kills.every(item => item.exe === 'D:\\Windows\\System32\\taskkill.exe' &&
+      JSON.stringify(item.args) === JSON.stringify(['/PID', '11320', '/T', '/F'])) &&
+      h.activeChildren.size === 0 && h.unprovedChildTrees.has(h.child) === false,
+      'verified retry uses the trusted tree-kill path and releases custody after proof');
+  }
+  {
+    const h = harness({ taskkillResults: [{ status: 5 }, { status: 5 }, { status: 5 }] });
     const pending = h.script('Write-Output 1', { timeoutMs: 40, heartbeatMs: 5 });
     let resolved = false;
     pending.then(() => { resolved = true; });
@@ -232,23 +256,31 @@ function check(condition, name) {
     await Promise.resolve();
     check(!resolved && h.activeChildren.has(h.child) && h.unprovedChildTrees.has(h.child),
       'a failed tree kill cannot settle the timed-out child or release custody');
-    check(h.child.kills[0] === 'SIGKILL' && h.lines.some(item => /termination is unproved/.test(item.line)),
-      'direct-child kill is checked but cannot substitute for whole-tree proof');
+    check(h.kills.length === 3 && h.child.kills.length === 0 &&
+      h.lines.some(item => /termination is unproved/.test(item.line)),
+      'tree termination exhausts the bounded retry count without destroying the identifiable parent');
+    h.child.exitCode = 0;
     h.child.emit('close', 0);
     await Promise.resolve();
     check(!resolved && h.activeChildren.has(h.child),
       'a later direct-child close cannot hide an unproved surviving tree');
   }
   {
-    const h = harness({ taskkillResult: { status: 1 }, childKillResult: false });
+    const h = harness({ taskkillResults: [
+      { status: 1 },
+      { status: null, error: Object.assign(new Error('access denied'), { code: 'EACCES' }) },
+      { status: null, signal: 'SIGTERM' }
+    ] });
     const pending = h.run('net.exe', [], { timeoutMs: 0 });
     let resolved = false;
     pending.then(() => { resolved = true; });
     const stopped = h.killAll();
+    h.child.exitCode = 0;
     h.child.emit('close', 0);
     await Promise.resolve();
-    check(stopped === false && !resolved && h.activeChildren.has(h.child) && h.unprovedChildTrees.has(h.child),
-      'fatal cleanup retains custody when both tree and direct-child termination fail');
+    check(stopped === false && !resolved && h.kills.length === 3 && h.child.kills.length === 0 &&
+      h.activeChildren.has(h.child) && h.unprovedChildTrees.has(h.child),
+      'fatal cleanup retains custody after bounded status, error and signal failures');
   }
   {
     const h = harness();
@@ -258,8 +290,8 @@ function check(condition, name) {
     check(result.code === -1 && result.errorCode === 'stdin_failed' && result.stderr === '' &&
       !h.lines.some(line => line.line.includes('private source')),
       'stdin failure returns a safe stage code without exposing private script text');
-    check(h.child.kills.length === 1 && h.activeChildren.size === 0 && h.timers.size === 0,
-      'stdin failure kills the child and clears process resources');
+    check(h.child.kills.length === 0 && h.kills.length === 1 && h.activeChildren.size === 0 && h.timers.size === 0,
+      'stdin failure clears process resources only after trusted whole-tree termination');
   }
   {
     const h = harness();
@@ -273,6 +305,15 @@ function check(condition, name) {
     const result = await pending;
     check(result.code === 7 && result.stdout === 'STARTED\n' && result.timedOut === false && h.child.kills.length === 0,
       'inherited handles cannot overwrite a completed launch outcome at the old deadline');
+  }
+  {
+    const h = harness();
+    const pending = h.launchCapture("Write-Output 'STARTED'");
+    h.child.emit('error', Object.assign(new Error('private launch detail'), { code: 'EACCES' }));
+    const result = await pending;
+    check(result.code === -1 && result.errorCode === 'EACCES' &&
+      !JSON.stringify(result).includes('private launch detail'),
+    'launch capture preserves a non-secret process error code without its private message');
   }
   {
     const h = harness();

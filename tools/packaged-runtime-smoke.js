@@ -8,8 +8,10 @@ const path = require('node:path');
 const vm = require('node:vm');
 const windowsTools = require('../src/main/windows-tools');
 const source = fs.readFileSync(path.join(__dirname, 'packaged-acceptance.js'), 'utf8');
+const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 function productionFunction(name) {
-  const fnStart = source.indexOf(`function ${name}(`);
+  const asyncStart = source.indexOf(`async function ${name}(`);
+  const fnStart = asyncStart >= 0 ? asyncStart : source.indexOf(`function ${name}(`);
   assert.notEqual(fnStart, -1, `production function ${name} exists`);
   const fnEnd = source.indexOf('\n}\n', fnStart);
   assert.notEqual(fnEnd, -1, `production function ${name} closes`);
@@ -117,8 +119,10 @@ async function run(options = {}) {
   vm.runInContext([
     productionFunction('fixJourneySucceeded'),
     productionFunction('acceptanceExitCode'),
+    productionFunction('selectFixLaunchTrace'),
     'this.fixJourneySucceeded = fixJourneySucceeded;',
-    'this.acceptanceExitCode = acceptanceExitCode;'
+    'this.acceptanceExitCode = acceptanceExitCode;',
+    'this.selectFixLaunchTrace = selectFixLaunchTrace;'
   ].join('\n'), acceptanceContract);
   assert.equal(acceptanceContract.fixJourneySucceeded('success'), true);
   for (const state of ['error', 'notice', 'cancelled']) {
@@ -131,11 +135,104 @@ async function run(options = {}) {
     'an explicitly optional not-run case stays report-only');
   assert.equal(acceptanceContract.acceptanceExitCode([{ status: 'failed' }]), 1,
     'a failed case makes packaged acceptance nonzero');
+  assert.equal(acceptanceContract.acceptanceExitCode([], false), 1,
+    'diagnostic mode is never eligible for a green release gate');
   checks++;
   assert.ok(source.includes("'fix.completes-successfully'") && source.includes('fixJourneySucceeded(done.state)'),
     'the terminal Fix now result uses the strict success predicate');
   assert.ok(/notRun\('fix\.journey',[\s\S]*?mandatory:\s*true/.test(source),
     'an unavailable mandatory Fix now journey is blocking');
+  checks++;
+
+  const detailsRecords = [];
+  const detailsContext = {
+    notRun: (id, detail, extra) => detailsRecords.push({ id, status: 'not-run', detail, ...(extra || {}) })
+  };
+  vm.createContext(detailsContext);
+  vm.runInContext([
+    productionFunction('runDetailsRoundTrip'),
+    'this.runDetailsRoundTrip = runDetailsRoundTrip;'
+  ].join('\n'), detailsContext);
+  await detailsContext.runDetailsRoundTrip({ evaluate: async () => false }, 'required-ready', 'ready');
+  assert.deepEqual(detailsRecords, [{
+    id: 'required-ready.details-round-trip',
+    status: 'not-run',
+    detail: 'View details is not offered on "ready"',
+    mandatory: true
+  }], 'the real missing View details branch records a mandatory not-run');
+  assert.equal(acceptanceContract.acceptanceExitCode(detailsRecords, true), 1,
+    'the real missing View details branch makes acceptance nonzero');
+  checks++;
+
+  const skipRecords = [];
+  const skipEvaluations = [
+    undefined,
+    { role: 'dialog', labelledBy: 'fixConfirmTitle', body: 'personal files will not be changed', inside: true, focused: 'fixConfirmContinue' },
+    { hidden: true, focused: 'fixBtn' }
+  ];
+  const skipPage = {
+    clicks: [],
+    evaluate: async () => skipEvaluations.shift(),
+    keyboard: { press: async () => {} },
+    waitForSelector: async () => ({}),
+    click: async selector => { skipPage.clicks.push(selector); }
+  };
+  const skipContext = {
+    SKIP_FIX: true,
+    stateOf: async () => 'ready',
+    sleep: async () => {},
+    shot: async () => 'diagnostic.png',
+    passed: (id, detail, extra) => skipRecords.push({ id, status: 'passed', detail, ...(extra || {}) }),
+    failed: (id, detail, extra) => skipRecords.push({ id, status: 'failed', detail, ...(extra || {}) }),
+    notRun: (id, detail, extra) => skipRecords.push({ id, status: 'not-run', detail, ...(extra || {}) })
+  };
+  vm.createContext(skipContext);
+  vm.runInContext([
+    productionFunction('runFixJourney'),
+    'this.runFixJourney = runFixJourney;'
+  ].join('\n'), skipContext);
+  await skipContext.runFixJourney(skipPage);
+  const skippedFix = skipRecords.find(row => row.id === 'fix.run');
+  assert.equal(skippedFix.status, 'not-run');
+  assert.equal(skippedFix.mandatory, true);
+  assert.equal(skippedFix.acceptanceResult, 'non-acceptance');
+  assert.equal(skipPage.clicks.length, 0, 'diagnostic mode never enters the destructive continuation branch');
+  assert.equal(acceptanceContract.acceptanceExitCode(skipRecords, false), 1,
+    'the real --skip-fix branch cannot be consumed as green acceptance');
+  checks++;
+
+  const secretMarker = 'DO-NOT-RECORD-SECRET-1132';
+  const launchTrace = acceptanceContract.selectFixLaunchTrace([
+    { line: "[5/8] Launching Zoom as 'user1'...", kind: 'header' },
+    { line: `net user user1 ${secretMarker} /add`, kind: 'out' },
+    { line: '  Dispatching Zoom launch (detached) ...', kind: 'out' },
+    { line: '  Launch result: code=0 timedOut=false error=none successMarker=true failureMarker=false', kind: 'out' },
+    { line: '  Launch script exited with code 1; verifying via Win32_Process...', kind: 'err' },
+    { line: "ERROR: Zoom.exe is not running as 'user1' after launch.", kind: 'err' },
+    { line: '  PowerShell launcher reported: Launch failed: Access is denied.', kind: 'err' },
+    { line: `unrelated ${secretMarker}`, kind: 'err' }
+  ]);
+  assert.deepEqual(Array.from(launchTrace), [
+    "[5/8] Launching Zoom as 'user1'...",
+    'Dispatching Zoom launch (detached) ...',
+    'Launch result: code=0 timedOut=false error=none successMarker=true failureMarker=false',
+    'Launch script exited with code 1; verifying via Win32_Process...',
+    "ERROR: Zoom.exe is not running as 'user1' after launch.",
+    'PowerShell launcher reported: Launch failed: Access is denied.'
+  ], 'diagnostic receipt keeps only the allowlisted launch boundary and exact exception');
+  assert.ok(!JSON.stringify(launchTrace).includes(secretMarker), 'unrelated secret-bearing output is excluded');
+  assert.equal(acceptanceContract.acceptanceExitCode([{ status: 'failed', launchTrace }], true), 1,
+    'capturing the launcher exception never turns an error into success');
+  checks++;
+  assert.ok(mainSource.includes('Launch result: code=${launchCode} timedOut=${launch.timedOut === true}') &&
+    mainSource.includes('successMarker=${launchSuccessMarker} failureMarker=${!!launchFailLine}'),
+  'main emits a structured launch outcome even when PowerShell has no exception line');
+  assert.ok(source.includes("line.startsWith('Launch result: ')") &&
+    source.includes('window.__fixerAcceptanceFixLog.length < 32'),
+  'receipt capture keeps only a bounded set of launch evidence lines');
+  checks++;
+  assert.ok(source.includes("mode: ACCEPTANCE_MODE") && source.includes("acceptanceResult = report.releaseGateEligible"),
+    'report declares full-acceptance versus diagnostic non-acceptance');
   checks++;
 
   const good = await run();

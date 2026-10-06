@@ -56,6 +56,8 @@ const TEST_COPY = has('--test-copy');
 const SCALES = String(argOf('--scales', '1,1.25,1.5')).split(',').map(Number).filter((n) => n > 0);
 const FIX_TIMEOUT_MS = Number(argOf('--fix-timeout-ms', 360000));
 const SKIP_FIX = has('--skip-fix');
+const ACCEPTANCE_MODE = SKIP_FIX ? 'diagnostic' : 'full-acceptance';
+const RELEASE_GATE_ELIGIBLE = !SKIP_FIX;
 
 // Startup contract (renderer STARTUP_DEADLINE_MS is 8 s; main's whoami probe
 // is bounded at 2.5 s). The packaged app must leave Checking well inside this.
@@ -65,7 +67,16 @@ const DISCLOSURE = 'Independent project. Not affiliated with Zoom.';
 const TERMINAL_STATES = ['success', 'error', 'notice', 'cancelled', 'blocked', 'ready'];
 
 let EXE = SHIPPED_EXE;
-const report = { exe: EXE, shippedExe: SHIPPED_EXE, testCopy: TEST_COPY, startedAt: new Date().toISOString(), host: {}, cases: [] };
+const report = {
+  exe: EXE,
+  shippedExe: SHIPPED_EXE,
+  testCopy: TEST_COPY,
+  mode: ACCEPTANCE_MODE,
+  releaseGateEligible: RELEASE_GATE_ELIGIBLE,
+  startedAt: new Date().toISOString(),
+  host: {},
+  cases: []
+};
 function record(id, status, detail, extra) {
   const row = { id, status, detail: detail || '', ...(extra || {}) };
   report.cases.push(row);
@@ -82,12 +93,35 @@ function fixJourneySucceeded(state) {
   return state === 'success';
 }
 
-function acceptanceExitCode(cases) {
+function acceptanceExitCode(cases, releaseGateEligible = true) {
+  if (!releaseGateEligible) return 1;
   for (const testCase of cases) {
     if (testCase.status === 'failed') return 1;
     if (testCase.status === 'not-run' && testCase.mandatory === true) return 1;
   }
   return 0;
+}
+
+// The main process already redacts the per-run helper credential before it
+// emits fix-log. Keep only the launch boundary needed to diagnose a packaged
+// failure; unrelated repair output never enters the acceptance artifact.
+function selectFixLaunchTrace(entries) {
+  if (!Array.isArray(entries)) return [];
+  const allowed = [
+    /^\[5\/8\] Launching Zoom as 'user1'\.\.\.$/,
+    /^Dispatching Zoom launch \(detached\) \.\.\.$/,
+    /^Launch result: code=(?:-?\d+|none) timedOut=(?:true|false) error=[A-Za-z0-9_.-]+ successMarker=(?:true|false) failureMarker=(?:true|false)$/,
+    /^Launch script exited with code -?\d+; verifying via Win32_Process\.\.\.$/,
+    /^ERROR: Zoom\.exe is not running as 'user1' after launch\.$/,
+    /^PowerShell launcher reported: Launch failed: .+$/,
+    /^Confirmed: Zoom\.exe is running as user1\.$/,
+    /^\[8\/8\] Relaunching Zoom as 'user1'\.\.\.$/
+  ];
+  return entries.map((entry) => typeof entry === 'string' ? entry : entry && entry.line)
+    .filter((line) => typeof line === 'string')
+    .map((line) => line.trim().slice(0, 1000))
+    .filter((line) => allowed.some((pattern) => pattern.test(line)))
+    .slice(0, 16);
 }
 
 let playwright;
@@ -394,7 +428,10 @@ async function runForgedRoot() {
 // focus on View details.
 async function runDetailsRoundTrip(page, tag, state) {
   const hasDetails = await page.evaluate(() => { const b = document.getElementById('detailsBtn'); return !!b && !b.hidden && getComputedStyle(b).display !== 'none'; });
-  if (!hasDetails) { notRun(`${tag}.details-round-trip`, `View details is not offered on "${state}"`); return; }
+  if (!hasDetails) {
+    notRun(`${tag}.details-round-trip`, `View details is not offered on "${state}"`, { mandatory: true });
+    return;
+  }
   const checkboxBefore = await page.evaluate(() => { const c = document.getElementById('shortcutOptInput'); return c ? c.checked : null; });
   await page.click('#detailsBtn');
   await sleep(300);
@@ -504,17 +541,53 @@ async function runFixJourney(page) {
   const afterEsc = await page.evaluate(() => ({ hidden: document.getElementById('fixConfirmOverlay').hidden, focused: document.activeElement && document.activeElement.id }));
   (afterEsc.hidden ? passed : failed)('fix.confirm-escape-goes-back', `overlay hidden=${afterEsc.hidden}`);
   (afterEsc.focused === 'fixBtn' ? passed : failed)('fix.confirm-focus-returns', `focus on #${afterEsc.focused}`);
-  if (SKIP_FIX) { notRun('fix.run', '--skip-fix'); return; }
+  if (SKIP_FIX) {
+    notRun('fix.run', '--skip-fix is diagnostic-only; required Fix now acceptance did not run', {
+      mandatory: true,
+      acceptanceResult: 'non-acceptance'
+    });
+    return;
+  }
 
   // Real run: click Fix now, Continue, and follow the orchestrator to a
   // terminal state. Rapid double-click must not start two repairs.
+  await page.evaluate(() => {
+    if (typeof window.__fixerAcceptanceStopFixLog === 'function') window.__fixerAcceptanceStopFixLog();
+    window.__fixerAcceptanceFixLog = [];
+    window.__fixerAcceptanceStopFixLog = window.electronAPI.onFixLog((entry) => {
+      if (!entry || typeof entry.line !== 'string') return;
+      const line = entry.line.trim();
+      const launchLine = line === "[5/8] Launching Zoom as 'user1'..." ||
+        line === 'Dispatching Zoom launch (detached) ...' ||
+        line.startsWith('Launch result: ') ||
+        line.startsWith('Launch script exited with code ') ||
+        line === "ERROR: Zoom.exe is not running as 'user1' after launch." ||
+        line.startsWith('PowerShell launcher reported: Launch failed: ') ||
+        line === 'Confirmed: Zoom.exe is running as user1.' ||
+        line === '[8/8] Relaunching Zoom as \'user1\'...';
+      if (launchLine && window.__fixerAcceptanceFixLog.length < 32) {
+        window.__fixerAcceptanceFixLog.push({ line, kind: entry.kind || '' });
+      }
+    });
+  });
+  const stopFixLogCapture = async () => selectFixLaunchTrace(await page.evaluate(() => {
+    const entries = Array.isArray(window.__fixerAcceptanceFixLog) ? window.__fixerAcceptanceFixLog.slice() : [];
+    if (typeof window.__fixerAcceptanceStopFixLog === 'function') window.__fixerAcceptanceStopFixLog();
+    delete window.__fixerAcceptanceStopFixLog;
+    delete window.__fixerAcceptanceFixLog;
+    return entries;
+  }));
   await page.click('#fixBtn');
   await page.waitForSelector('#fixConfirmOverlay:not([hidden])', { timeout: 5000 });
   await page.click('#fixConfirmContinue');
   await page.click('#fixConfirmContinue', { force: true }).catch(() => {});
   const fixing = await waitForState(page, (s) => s === 'fixing' || s === 'cancelling' || s === 'success' || s === 'error' || s === 'notice', 15000, 'fixing');
-  (fixing.ok ? passed : failed)('fix.starts', `state=${fixing.state} after ${fixing.ms} ms`);
-  if (!fixing.ok) return;
+  const fixingCase = (fixing.ok ? passed : failed)('fix.starts', `state=${fixing.state} after ${fixing.ms} ms`);
+  if (!fixing.ok) {
+    const launchTrace = await stopFixLogCapture();
+    if (launchTrace.length) fixingCase.launchTrace = launchTrace;
+    return;
+  }
   const fixingShot = await shot(page, '04-fixing');
   const progress = await page.evaluate(() => {
     const p = document.querySelector('#stepLine[role="progressbar"], .compact-step-line[role="progressbar"]');
@@ -526,12 +599,19 @@ async function runFixJourney(page) {
   (progress.aria ? passed : failed)('fix.progress-announced', `progress: ${progress.aria || 'none'}`);
   const done = await waitForState(page, (s) => ['success', 'error', 'notice', 'cancelled'].includes(s), FIX_TIMEOUT_MS, 'terminal');
   const endShot = await shot(page, `05-end-${done.state || 'timeout'}`);
-  if (!done.ok) { failed('fix.reaches-terminal-state', `still "${done.state}" after ${done.ms} ms — no terminal state`, { screenshot: endShot }); return; }
+  const launchTrace = await stopFixLogCapture();
+  if (!done.ok) {
+    failed('fix.reaches-terminal-state', `still "${done.state}" after ${done.ms} ms — no terminal state`, {
+      screenshot: endShot,
+      ...(launchTrace.length ? { launchTrace } : {})
+    });
+    return;
+  }
   passed('fix.reaches-terminal-state', `state=${done.state} after ${done.ms} ms`, { screenshot: endShot });
   (fixJourneySucceeded(done.state) ? passed : failed)(
     'fix.completes-successfully',
     `state=${done.state}`,
-    { screenshot: endShot }
+    { screenshot: endShot, ...(launchTrace.length ? { launchTrace } : {}) }
   );
   const endFacts = await page.evaluate(() => {
     const launch = document.getElementById('launchBtn');
@@ -651,13 +731,22 @@ function finish() {
   for (const c of report.cases) counts[c.status]++;
   report.counts = counts;
   report.blockingNotRun = report.cases.filter(c => c.status === 'not-run' && c.mandatory === true).length;
+  const exitCode = acceptanceExitCode(report.cases, report.releaseGateEligible);
+  report.acceptanceResult = report.releaseGateEligible
+    ? (exitCode === 0 ? 'passed' : 'failed')
+    : 'non-acceptance';
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
   const lines = ['# Packaged acceptance', '', `Executable driven: \`${report.exe}\``, `Shipped executable: \`${report.shippedExe}\` (${report.testCopy ? 'driven through an asInvoker-stamped copy because the host has UAC disabled' : 'driven directly'})`, `Host: ${report.host.platform} ${report.host.release}, EnableLUA=${report.host.enableLUA}`, `Run: ${report.startedAt} → ${report.finishedAt}`, '',
+    `Mode: ${report.mode} · Release gate eligible: ${report.releaseGateEligible} · Result: ${report.acceptanceResult}`, '',
     `Passed ${counts.passed} · Failed ${counts.failed} · Not run ${counts['not-run']} · Mandatory not run ${report.blockingNotRun}`, '',
     '| Case | Result | Detail | Evidence |', '|---|---|---|---|'];
   const cell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
-  for (const c of report.cases) lines.push(`| ${c.id} | ${c.status} | ${cell(c.detail)} | ${c.screenshot ? c.screenshot : ''} |`);
+  for (const c of report.cases) {
+    const evidence = [c.screenshot || '', Array.isArray(c.launchTrace) && c.launchTrace.length
+      ? `launch trace: ${c.launchTrace.join(' ⟶ ')}` : ''].filter(Boolean).join(' · ');
+    lines.push(`| ${c.id} | ${c.status} | ${cell(c.detail)} | ${cell(evidence)} |`);
+  }
   fs.writeFileSync(path.join(OUT, 'report.md'), lines.join('\n') + '\n');
   console.log(`packaged-acceptance: passed=${counts.passed} failed=${counts.failed} not-run=${counts['not-run']} → ${OUT}`);
-  process.exit(acceptanceExitCode(report.cases));
+  process.exit(exitCode);
 }
