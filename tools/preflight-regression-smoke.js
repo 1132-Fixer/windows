@@ -47,8 +47,17 @@ const allTools = [...required, ...optional];
 const preflightSource = functionSource('preflightCheck');
 const fixSource = functionSource('runFixFlow');
 const profileSelectorSource = functionSource('selectSidBoundProfileEntries');
+const exactSidDeleteScriptSource = functionSource('exactSidLocalUserDeleteScript');
+const exactSidDeleteReceiptSource = functionSource('exactSidLocalUserDeleteProved');
+const exactSidDisableScriptSource = functionSource('exactSidLocalUserDisableScript');
+const exactSidDisableReceiptSource = functionSource('exactSidLocalUserDisableProved');
+const exactSidFinalDrainSource = functionSource('exactSidFinalDrainScript');
 const profileIdentityHelper = templateConstant('PS_PROFILE_PATH_IDENTITY_HELPER');
+const profileRecoveryHelper = templateConstant('PS_PROFILE_RECOVERY_HELPER');
+const profileInventoryGuard = templateConstant('PS_PROFILE_INVENTORY_GUARD');
 const removeProfileHelper = templateConstant('PS_REMOVE_PROFILE_HELPER');
+const exactSidDisableHelper = templateConstant('PS_EXACT_SID_LOCAL_USER_DISABLE_HELPER');
+const exactSidProcessStopHelper = templateConstant('PS_EXACT_SID_PROCESS_STOP_HELPER');
 
 function inventory(overrides = {}) {
   return {
@@ -123,32 +132,43 @@ function repairHarness(options = {}) {
     profileFolderPresent: true,
     profileKeyPresent: true,
     cleanupAttempts: 0,
+    disableAttempts: 0,
+    finalDrainAttempts: 0,
     deleteAttempts: 0,
     createAttempts: 0,
     resolveCalls: 0,
     identityReads: 0,
     cleanupScript: '',
-    order: []
+    order: [],
+    accountEnabled: true
   };
   const logs = [];
   const cleanupResults = Array.from(options.cleanupResults || [probe('')]);
   const flushResult = options.flushResult || probe('PROFSVC_REFRESH=OK');
   const profileEntry = () => ({
     keyName: OLD_SID,
-    profileImagePath: PROFILE_PATH,
-    hasNtUserDat: state.profileFolderPresent,
+    profileImagePath: options.profilePathState === 'blank' || options.profilePathState === 'missing' ? '' : PROFILE_PATH,
+    profileImagePathPresent: options.profilePathState !== 'missing',
+    hasNtUserDat: options.profilePathState === 'blank' || options.profilePathState === 'missing'
+      ? false : state.profileFolderPresent,
     readable: true,
-    pathExists: state.profileFolderPresent,
+    pathExists: options.profilePathState === 'blank' || options.profilePathState === 'missing'
+      ? false : state.profileFolderPresent,
     isReparsePoint: false,
-    resolvedPath: PROFILE_PATH,
-    stableIdentity: state.profileFolderPresent ? PROFILE_IDENTITY : ''
+    resolvedPath: options.profilePathState === 'blank' || options.profilePathState === 'missing' ? '' : PROFILE_PATH,
+    stableIdentity: options.profilePathState === 'blank' || options.profilePathState === 'missing'
+      ? '' : (state.profileFolderPresent ? PROFILE_IDENTITY : '')
   });
   const context = {
     REQUIRED_TOOLS: required,
     OPTIONAL_TOOLS: optional,
     FIX_USER: 'user1',
     PS_PROFILE_PATH_IDENTITY_HELPER: profileIdentityHelper,
+    PS_PROFILE_RECOVERY_HELPER: profileRecoveryHelper,
+    PS_PROFILE_INVENTORY_GUARD: profileInventoryGuard,
     PS_REMOVE_PROFILE_HELPER: removeProfileHelper,
+    PS_EXACT_SID_LOCAL_USER_DISABLE_HELPER: exactSidDisableHelper,
+    PS_EXACT_SID_PROCESS_STOP_HELPER: exactSidProcessStopHelper,
     deletionOutcome: runVerdict.deletionOutcome,
     profsvcRefreshResult: runVerdict.profsvcRefreshResult,
     computeRunVerdict: runVerdict.computeRunVerdict,
@@ -190,15 +210,23 @@ function repairHarness(options = {}) {
     },
     readLocalAccountIdentity: async () => {
       state.identityReads++;
+      if (options.sidRace && state.identityReads === 2) state.accountSid = RACE_SID;
       if ((options.initialIdentityUnverified && state.identityReads === 1) ||
-          (options.deleteReadbackUnverified && state.identityReads > 1)) {
+          (options.deleteReadbackUnverified && state.identityReads > 2)) {
         return { verified: false, exists: false, sid: '' };
       }
       return { verified: true, exists: !!state.accountSid, sid: state.accountSid || '' };
     },
     verifyAdminMembership: async () => ({ verified: true, inGroup: false, sid: state.accountSid }),
     runPSCapture: async script => {
-      if (script.includes("Write-Output 'CLEAR'")) return probe('CLEAR');
+      if (script.includes('FIXER_HELPER_INITIAL_DRAIN_V1=')) {
+        return probe('FIXER_HELPER_INITIAL_DRAIN_V1=CLEAR');
+      }
+      if (script.includes('FIXER_HELPER_FINAL_DRAIN_V1=')) {
+        state.finalDrainAttempts++;
+        state.order.push('final-drain');
+        return options.finalDrainResult || probe('FIXER_HELPER_FINAL_DRAIN_V1=CLEAR');
+      }
       if (script.includes("marker = 'FIXER_PROFILELIST_V1'")) {
         return probe({
           marker: 'FIXER_PROFILELIST_V1',
@@ -210,6 +238,21 @@ function repairHarness(options = {}) {
       throw new Error('unexpected PowerShell capture in repair harness');
     },
     runPSScript: async script => {
+      if (script.includes('FIXER_LOCAL_USER_DISABLE_V1')) {
+        state.disableAttempts++;
+        state.order.push('disable');
+        if (options.disableFails) {
+          return probe(JSON.stringify({
+            marker: 'FIXER_LOCAL_USER_DISABLE_V1', pre: 'unknown', disable: 'not-run',
+            expectedSidPost: 'unknown', namePost: 'unknown'
+          }), { code: 1 });
+        }
+        state.accountEnabled = false;
+        return probe(JSON.stringify({
+          marker: 'FIXER_LOCAL_USER_DISABLE_V1', pre: 'exact', disable: 'success',
+          expectedSidPost: 'disabled', namePost: 'expected'
+        }));
+      }
       if (script.includes('Assert-FixerProfileInventory')) {
         state.cleanupScript = script;
         state.cleanupAttempts++;
@@ -225,6 +268,25 @@ function repairHarness(options = {}) {
         return result;
       }
       if (script.includes('PROFSVC_REFRESH=')) return flushResult;
+      if (script.includes('FIXER_LOCAL_USER_DELETE_V1')) {
+        state.deleteAttempts++;
+        state.order.push('delete');
+        assert.equal(state.profileFolderPresent, false, 'profile-folder cleanup finishes before account deletion');
+        assert.equal(state.profileKeyPresent, false, 'ProfileList cleanup finishes before account deletion');
+        assert.equal(state.accountSid, OLD_SID, 'only the validated old SID reaches deletion');
+        if (options.deleteReplacementSid) {
+          state.accountSid = options.deleteReplacementSid;
+          return probe(JSON.stringify({
+            marker: 'FIXER_LOCAL_USER_DELETE_V1', pre: 'exact', deletion: 'failed',
+            expectedSidPost: 'absent', namePost: 'replacement'
+          }), { code: 1 });
+        }
+        state.accountSid = '';
+        return probe(JSON.stringify({
+          marker: 'FIXER_LOCAL_USER_DELETE_V1', pre: 'exact', deletion: 'success',
+          expectedSidPost: 'absent', namePost: 'absent'
+        }));
+      }
       if (script === 'FIXTURE_CREATE_ACCOUNT') {
         state.createAttempts++;
         state.order.push('create');
@@ -239,24 +301,16 @@ function repairHarness(options = {}) {
       }
       throw new Error('unexpected PowerShell mutation in repair harness');
     },
-    runProcess: async (exe, args) => {
-      assert.equal(exe, 'net.exe');
-      assert.deepEqual(Array.from(args), ['user', 'user1', '/delete']);
-      state.deleteAttempts++;
-      state.order.push('delete');
-      assert.equal(state.profileFolderPresent, false, 'profile-folder cleanup finishes before account deletion');
-      assert.equal(state.profileKeyPresent, false, 'ProfileList cleanup finishes before account deletion');
-      assert.equal(state.accountSid, OLD_SID, 'only the validated old account reaches deletion');
-      state.accountSid = options.deleteReplacementSid || '';
-      return probe('');
-    },
+    runProcess: async () => { throw new Error('name-based account deletion must not run'); },
     runPSScriptLaunchCapture: async () => ({ code: 1, stdout: '', timedOut: false }),
     formatLaunchDiagnostics: () => [],
     console
   };
   vm.createContext(context);
   vm.runInContext(
-    profileSelectorSource + '\n' + fixSource +
+    profileSelectorSource + '\n' + exactSidDeleteScriptSource + '\n' + exactSidDeleteReceiptSource + '\n' +
+      exactSidDisableScriptSource + '\n' + exactSidDisableReceiptSource + '\n' +
+      exactSidFinalDrainSource + '\n' + fixSource +
       '\nthis.selectSidBoundProfileEntries = selectSidBoundProfileEntries; this.runFixFlow = runFixFlow;',
     context,
     { filename: 'main.js:repair-regression' }
@@ -393,9 +447,41 @@ async function main() {
     const unknown = repairHarness({ initialIdentityUnverified: true });
     const result = await unknown.repair();
     check(result.success === false && result.error === 'helper_sid_unresolved' &&
+      unknown.state.disableAttempts === 0 && unknown.state.finalDrainAttempts === 0 &&
       unknown.state.cleanupAttempts === 0 && unknown.state.deleteAttempts === 0 &&
       unknown.state.createAttempts === 0,
     'an uncertain initial local-account inventory blocks every cleanup and recreation mutation');
+  }
+  for (const profilePathState of ['blank', 'missing']) {
+    const malformed = repairHarness({ profilePathState });
+    const result = await malformed.repair();
+    check(result.success === false && result.error === 'profile_cleanup_identity_unresolved' &&
+      malformed.state.cleanupAttempts === 0 && malformed.state.deleteAttempts === 0 &&
+      malformed.state.disableAttempts === 0 && malformed.state.finalDrainAttempts === 0 &&
+      malformed.state.createAttempts === 0 && malformed.state.accountSid === OLD_SID &&
+      malformed.state.profileKeyPresent,
+    `an exact-SID key with a ${profilePathState} ProfileImagePath causes zero mutation`);
+  }
+  {
+    const blocked = repairHarness({ disableFails: true });
+    const result = await blocked.repair();
+    check(result.success === false && result.error === 'helper_disable_unproved' &&
+      blocked.state.disableAttempts === 1 && blocked.state.finalDrainAttempts === 0 &&
+      blocked.state.cleanupAttempts === 0 && blocked.state.deleteAttempts === 0 &&
+      blocked.state.createAttempts === 0,
+    'an unproved exact-SID disable starts no final drain or destructive cleanup');
+  }
+  for (const [name, finalDrainResult] of [
+    ['unknown', probe('FIXER_HELPER_FINAL_DRAIN_V1=UNKNOWN', { code: 1 })],
+    ['timeout', probe('FIXER_HELPER_FINAL_DRAIN_V1=CLEAR', { timedOut: true })]
+  ]) {
+    const blocked = repairHarness({ finalDrainResult });
+    const result = await blocked.repair();
+    check(result.success === false && result.error === 'helper_final_drain_unproved' &&
+      blocked.state.disableAttempts === 1 && blocked.state.finalDrainAttempts === 1 &&
+      blocked.state.cleanupAttempts === 0 && blocked.state.deleteAttempts === 0 &&
+      blocked.state.createAttempts === 0,
+    `a final exact-SID drain ${name} result starts no profile cleanup`);
   }
   {
     const retry = repairHarness({
@@ -406,7 +492,8 @@ async function main() {
     const first = await retry.repair();
     check(first.success === false && first.error === 'delete_profile_failed',
       'first cleanup failure returns a controlled result');
-    check(retry.state.accountSid === OLD_SID && !retry.state.profileFolderPresent &&
+    check(retry.state.accountSid === OLD_SID && !retry.state.accountEnabled &&
+      !retry.state.profileFolderPresent &&
       retry.state.profileKeyPresent &&
       retry.state.deleteAttempts === 0 && retry.state.createAttempts === 0,
     'first partial cleanup failure retains the old account and SID key after folder removal');
@@ -417,8 +504,9 @@ async function main() {
     check(retry.state.accountSid === NEW_SID && !retry.state.profileFolderPresent &&
       !retry.state.profileKeyPresent &&
       retry.state.cleanupAttempts === 2 && retry.state.deleteAttempts === 1 &&
+      retry.state.disableAttempts === 2 && retry.state.finalDrainAttempts === 2 &&
       retry.state.createAttempts === 1 &&
-      retry.state.order.join('>') === 'cleanup>delete>create' &&
+      retry.state.order.join('>') === 'disable>final-drain>disable>final-drain>cleanup>delete>create' &&
       retry.state.cleanupScript.includes(".TrimEnd('" + String.fromCharCode(92) + "')"),
     'retry orders cleanup before delete before one fresh-SID creation');
   }
@@ -432,10 +520,10 @@ async function main() {
   {
     const reappeared = repairHarness({ cleanupResults: [probe('')], deleteReplacementSid: RACE_SID });
     const result = await reappeared.repair();
-    check(result.success === false && result.error === 'delete_user_unproved' &&
+    check(result.success === false && result.error === 'delete_user_failed' &&
       reappeared.state.deleteAttempts === 1 && reappeared.state.createAttempts === 0 &&
       reappeared.state.accountSid === RACE_SID,
-    'a successful delete command cannot recreate over a retained or replacement local account');
+    'an exact-SID delete race preserves a same-name replacement and blocks recreation');
   }
   {
     const uncertain = repairHarness({ cleanupResults: [probe('')], deleteReadbackUnverified: true });
@@ -444,6 +532,11 @@ async function main() {
       uncertain.state.deleteAttempts === 1 && uncertain.state.createAttempts === 0,
     'an uncertain post-delete identity readback blocks account recreation');
   }
+  check(exactSidDeleteScriptSource.includes('& $removeLocalUser -SID $expectedSid') &&
+    exactSidDeleteScriptSource.includes('Import-Module -Name $trustedManifest -Force -PassThru') &&
+    !exactSidDeleteScriptSource.includes('Remove-LocalUser -Name') &&
+    !fixSource.includes("runProcess('net.exe', ['user', FIX_USER, '/delete']"),
+  'account deletion is exact-SID only and has no name-based fallback');
 
   console.log('preflight-regression-smoke: ProfSvc failures stay controlled');
   for (const [name, flushResult, detail] of [

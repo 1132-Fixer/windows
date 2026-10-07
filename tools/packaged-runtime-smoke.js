@@ -5,6 +5,7 @@
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const windowsTools = require('../src/main/windows-tools');
@@ -38,6 +39,11 @@ function mainTemplateConstant(name) {
   return vm.runInNewContext(mainSource.slice(expressionStart, end + 1));
 }
 const profileIdentityHelper = mainTemplateConstant('PS_PROFILE_PATH_IDENTITY_HELPER');
+const profileRecoveryHelper = mainTemplateConstant('PS_PROFILE_RECOVERY_HELPER');
+const profileInventoryGuard = mainTemplateConstant('PS_PROFILE_INVENTORY_GUARD');
+const removeProfileHelper = mainTemplateConstant('PS_REMOVE_PROFILE_HELPER');
+const exactSidDisableHelper = mainTemplateConstant('PS_EXACT_SID_LOCAL_USER_DISABLE_HELPER');
+const exactSidProcessStopHelper = mainTemplateConstant('PS_EXACT_SID_PROCESS_STOP_HELPER');
 const start = source.indexOf('async function runtimeAuthority(');
 const end = source.indexOf('\nasync function launch(', start);
 assert.ok(start >= 0 && end > start, 'the production packaged runtime gate is present');
@@ -364,6 +370,50 @@ async function run(options = {}) {
   assert.ok(exact.script.includes('Get-CimInstance Win32_UserAccount') &&
     exact.script.includes('[System.Environment]::MachineName'),
   'SID receipt comes from the local account inventory and machine identity');
+  const exactDeleteContext = {};
+  vm.createContext(exactDeleteContext);
+  vm.runInContext([
+    mainProductionFunction('exactSidLocalUserDeleteScript'),
+    mainProductionFunction('exactSidLocalUserDeleteProved'),
+    mainProductionFunction('exactSidLocalUserDisableScript'),
+    mainProductionFunction('exactSidLocalUserDisableProved'),
+    mainProductionFunction('exactSidFinalDrainScript'),
+    'this.exactSidLocalUserDeleteScript = exactSidLocalUserDeleteScript;',
+    'this.exactSidLocalUserDeleteProved = exactSidLocalUserDeleteProved;',
+    'this.exactSidLocalUserDisableScript = exactSidLocalUserDisableScript;',
+    'this.exactSidLocalUserDisableProved = exactSidLocalUserDisableProved;',
+    'this.exactSidFinalDrainScript = exactSidFinalDrainScript;'
+  ].join('\n'), Object.assign(exactDeleteContext, {
+    PS_EXACT_SID_LOCAL_USER_DISABLE_HELPER: exactSidDisableHelper
+  }));
+  const exactDeleteScript = exactDeleteContext.exactSidLocalUserDeleteScript(oldSid, 'user1');
+  const exactDeleteReceipt = JSON.stringify({
+    marker: 'FIXER_LOCAL_USER_DELETE_V1', pre: 'exact', deletion: 'success',
+    expectedSidPost: 'absent', namePost: 'absent'
+  });
+  assert.ok(exactDeleteScript.includes("Join-Path $PSHOME 'Modules\\Microsoft.PowerShell.LocalAccounts'") &&
+    exactDeleteScript.includes('Import-Module -Name $trustedManifest -Force -PassThru') &&
+    exactDeleteScript.includes("$removeLocalUser = $exactModules[0].ExportedCommands['Remove-LocalUser']") &&
+    exactDeleteScript.includes('& $removeLocalUser -SID $expectedSid') &&
+    !exactDeleteScript.includes('Remove-LocalUser -Name') &&
+    !exactDeleteScript.includes('net user') &&
+    exactDeleteContext.exactSidLocalUserDeleteProved({ code: 0, timedOut: false, stdout: exactDeleteReceipt }) &&
+    !exactDeleteContext.exactSidLocalUserDeleteProved({ code: 0, timedOut: false, stdout: exactDeleteReceipt + '\nnoise' }) &&
+    !exactDeleteContext.exactSidLocalUserDeleteProved({ code: 1, timedOut: false, stdout: exactDeleteReceipt }),
+  'local-account deletion requires one strict exact-SID success receipt and has no name mutation fallback');
+  const exactDisableScript = exactDeleteContext.exactSidLocalUserDisableScript(oldSid, 'user1');
+  const exactDisableReceipt = JSON.stringify({
+    marker: 'FIXER_LOCAL_USER_DISABLE_V1', pre: 'exact', disable: 'success',
+    expectedSidPost: 'disabled', namePost: 'expected'
+  });
+  assert.ok(exactDisableScript.includes("Join-Path $PSHOME 'Modules\\Microsoft.PowerShell.LocalAccounts'") &&
+    exactDisableScript.includes("$disableLocalUser = $exactModules[0].ExportedCommands['Disable-LocalUser']") &&
+    exactDisableScript.includes('& $disableLocalUser -SID $expectedSidObject') &&
+    !exactDisableScript.includes('Disable-LocalUser -Name') &&
+    exactDeleteContext.exactSidLocalUserDisableProved({ code: 0, timedOut: false, stdout: exactDisableReceipt }) &&
+    !exactDeleteContext.exactSidLocalUserDisableProved({ code: 0, timedOut: false, stdout: exactDisableReceipt + '\nnoise' }) &&
+    !exactDeleteContext.exactSidLocalUserDisableProved({ code: 1, timedOut: false, stdout: exactDisableReceipt }),
+  'local-account disable requires one strict exact-SID receipt and has no name mutation fallback');
   const verifyAdminSource = mainProductionFunction('verifyAdminMembership');
   async function verifyAdmin(stdout, code = 0, timedOut = false) {
     const context = { runPSCapture: async () => ({ stdout, code, timedOut }) };
@@ -397,8 +447,9 @@ async function run(options = {}) {
   const profileEntry = (keyName, profileImagePath = '', hasNtUserDat = true, readable = true,
     pathExists = profileImagePath !== '', isReparsePoint = false,
     resolvedPath = profileImagePath,
-    stableIdentity = pathExists ? profileIdentity(resolvedPath) : '') =>
-    ({ keyName, profileImagePath, hasNtUserDat, readable, pathExists, isReparsePoint,
+    stableIdentity = pathExists ? profileIdentity(resolvedPath) : '',
+    profileImagePathPresent = true) =>
+    ({ keyName, profileImagePath, profileImagePathPresent, hasNtUserDat, readable, pathExists, isReparsePoint,
       resolvedPath, stableIdentity });
   const domainSid = 'S-1-5-21-900-800-700-1001';
   const staleSid = 'S-1-5-21-400-500-600-1001';
@@ -417,6 +468,24 @@ async function run(options = {}) {
   const noMatchingKey = selectProfiles([], oldSid, 'cleanup');
   assert.ok(noMatchingKey.ok && noMatchingKey.keys.length === 0,
     'a name-only folder without an exact SID key is never deleted');
+  for (const [name, entries] of [
+    ['blank live target', [profileEntry(oldSid, '')]],
+    ['missing live target property', [profileEntry(oldSid, '', true, true, false, false, '', '', false)]],
+    ['valid live plus blank backup', [profileEntry(oldSid, canonicalProfile), profileEntry(`${oldSid}.bak`, '')]],
+    ['blank live plus valid backup', [profileEntry(oldSid, ''), profileEntry(`${oldSid}.bak`, backupProfile)]]
+  ]) {
+    assert.equal(selectProfiles(entries, oldSid, 'cleanup').ok, false,
+      `${name} ProfileImagePath fails closed`);
+  }
+  const missingPresenceMetadata = profileEntry(oldSid, canonicalProfile);
+  delete missingPresenceMetadata.profileImagePathPresent;
+  assert.equal(selectProfiles([missingPresenceMetadata], oldSid, 'cleanup').reason, 'invalid_inventory_shape',
+    'missing ProfileImagePath presence metadata fails closed');
+  assert.equal(selectProfiles([
+    profileEntry(oldSid, canonicalProfile),
+    profileEntry(domainSid, '', false, true, false, false, '', '', false)
+  ], oldSid, 'cleanup').ok, true,
+  'a blank unrelated record is preserved while a valid exact-SID target remains selectable');
   const exactCleanup = selectProfiles([
     profileEntry(oldSid, canonicalProfile),
     profileEntry(`${oldSid}.bak`, backupProfile),
@@ -462,7 +531,8 @@ async function run(options = {}) {
     ['pathExists', 'false'],
     ['isReparsePoint', 'false'],
     ['hasNtUserDat', 'false'],
-    ['readable', 'true']
+    ['readable', 'true'],
+    ['profileImagePathPresent', 'true']
   ]) {
     const malformed = profileEntry(oldSid, canonicalProfile);
     malformed[field] = value;
@@ -522,6 +592,7 @@ async function run(options = {}) {
   const resolveProfileSource = mainProductionFunction('resolveUserProfilePath');
   async function resolveProfile(payload, { code = 0, timedOut = false, stdout } = {}) {
     const context = { path: path.win32, PS_PROFILE_PATH_IDENTITY_HELPER: profileIdentityHelper,
+      PS_PROFILE_RECOVERY_HELPER: profileRecoveryHelper,
       capturedScript: '', runPSCapture: async script => {
       context.capturedScript = script;
       return {
@@ -550,6 +621,9 @@ async function run(options = {}) {
   assert.ok(resolvedProfile.script.includes('$liveKey = Join-Path $base $sid') &&
     resolvedProfile.script.includes("$bakKey = $liveKey + '.bak'") &&
     resolvedProfile.script.includes('Get-ChildItem -LiteralPath $base -EA Stop') &&
+    resolvedProfile.script.includes('Get-FixerProfilePathIdentity -Path $candidate') &&
+    resolvedProfile.script.includes("Join-Path $candidateIdentity.resolvedPath 'NTUSER.DAT'") &&
+    !resolvedProfile.script.includes("Join-Path $candidate 'NTUSER.DAT'") &&
     !resolveProfileSource.includes('NTAccount') &&
     !resolveProfileSource.includes('folder-suffixed') &&
     !resolveProfileSource.includes("Get-ChildItem 'C:\\\\Users'"),
@@ -566,8 +640,14 @@ async function run(options = {}) {
     stdout: `${JSON.stringify(exactProfileReceipt)}\n${JSON.stringify(exactProfileReceipt)}`
   })).result.path, null, 'multiple ProfileList receipts fail closed');
   const cleanupPlanIndex = mainSource.indexOf("profileCleanupPlan = selectSidBoundProfileEntries(entries, preDeleteSid, 'cleanup')");
-  const accountDeleteIndex = mainSource.indexOf("runProcess('net.exe', ['user', FIX_USER, '/delete']");
-  const folderDeleteIndex = mainSource.indexOf('Remove-ProfileFolder -Path $profilePath -Sid $expectedSid');
+  const accountDeleteIndex = mainSource.indexOf('exactSidLocalUserDeleteScript(preDeleteSid, FIX_USER)');
+  const folderDeleteIndex = mainSource.indexOf('Remove-ProfileFolder -Path $quarantinePath -Sid $expectedSid');
+  const recoveryReceiptIndex = mainSource.indexOf("New-ItemProperty -LiteralPath $folderKey.PSPath -Name 'FixerProfileQuarantineV1'");
+  const disableExactSidIndex = mainSource.indexOf('exactSidLocalUserDisableScript(preDeleteSid, FIX_USER)');
+  const finalDrainIndex = mainSource.indexOf('exactSidFinalDrainScript(preDeleteSid)', disableExactSidIndex);
+  const quarantineRenameIndex = mainSource.indexOf('$actualQuarantinePath = $lease.Quarantine()');
+  const deletingReceiptIndex = mainSource.indexOf("phase = 'deleting'", quarantineRenameIndex);
+  const recoveryReceiptRemovalIndex = mainSource.indexOf("Remove-ItemProperty -LiteralPath $folderKey.PSPath -Name 'FixerProfileQuarantineV1'");
   const residueProofIndex = mainSource.indexOf("throw 'profile folder remains after cleanup'", folderDeleteIndex);
   const keyDeleteIndex = mainSource.indexOf('Remove-Item -LiteralPath $key.PSPath', residueProofIndex);
   assert.ok(!mainSource.includes('const sourceProfile = `C:\\\\Users\\\\${FIX_USER}`') &&
@@ -576,14 +656,37 @@ async function run(options = {}) {
     mainSource.includes("selectSidBoundProfileEntries(entries, preDeleteSid, 'cleanup')") &&
     cleanupPlanIndex >= 0 && cleanupPlanIndex < accountDeleteIndex &&
     folderDeleteIndex >= 0 && folderDeleteIndex < residueProofIndex &&
+    recoveryReceiptIndex >= 0 && recoveryReceiptIndex < quarantineRenameIndex &&
+    disableExactSidIndex >= 0 && disableExactSidIndex < finalDrainIndex &&
+    finalDrainIndex < quarantineRenameIndex &&
+    quarantineRenameIndex < folderDeleteIndex && folderDeleteIndex < recoveryReceiptRemovalIndex &&
+    quarantineRenameIndex < deletingReceiptIndex && deletingReceiptIndex < folderDeleteIndex &&
     residueProofIndex < keyDeleteIndex && keyDeleteIndex < accountDeleteIndex &&
     mainSource.includes('GetFileInformationByHandleEx') &&
+    mainSource.includes('AcquireQuarantineLease') &&
+    mainSource.includes('SetFileInformationByHandle') &&
+    mainSource.includes('$actualQuarantinePath = $lease.Quarantine()') &&
+    mainSource.includes('$Lease.DeleteEmpty()') &&
+    mainSource.includes("$disableLocalUser = $exactModules[0].ExportedCommands['Disable-LocalUser']") &&
+    mainSource.includes('& $disableLocalUser -SID $expectedSidObject') &&
+    exactSidProcessStopHelper.includes('$heldProcess.SafeHandle') &&
+    exactSidProcessStopHelper.includes('$refreshed[0].CreationDate') &&
+    exactSidProcessStopHelper.includes('$heldProcess.Kill()') &&
+    !exactSidProcessStopHelper.includes('Stop-Process -Id') &&
+    !mainProductionFunction('exactSidFinalDrainScript').includes('Stop-Process') &&
+    !mainSource.includes('Stop-Process -Id') &&
+    mainSource.includes('[System.Security.AccessControl.AccessControlSections]::Owner') &&
+    mainSource.includes("$owner.Value -cne 'S-1-5-32-544'") &&
     mainSource.includes('FILE_FLAG_OPEN_REPARSE_POINT') &&
     mainSource.includes('profile identity is shared by an unrelated SID') &&
     mainSource.includes('Assert-FixerProfilePathIdentity -Path $profilePath') &&
     mainSource.includes('$plannedPaths = @($Plan | Where-Object { [bool]$_.pathExists }') &&
     mainSource.includes("throw 'previously absent profile folder appeared after validation'") &&
-    mainSource.includes("if ($expected.Count -ne 1 -or [string]$expected[0].profileImagePath -ine $profilePath)") &&
+    mainSource.includes("throw 'previously present profile folder disappeared after validation'") &&
+    mainSource.includes('if ($expected.Count -ne 1 -or -not [bool]$expected[0].profileImagePathPresent -or') &&
+    mainSource.indexOf("throw 'exact-SID ProfileImagePath is missing or blank'") <
+      mainSource.indexOf('$targets.Add($key)') &&
+    !mainSource.includes("runProcess('net.exe', ['user', FIX_USER, '/delete']") &&
     !mainSource.includes('if (profileCleanupPlan.entries.length > 0)'),
   'cleanup keeps the account/SID until stable-identity folder and ProfileList absence are proved');
   checks++;
@@ -638,26 +741,24 @@ async function run(options = {}) {
     !/\.User\b|\.Domain\b|user1/i.test(yesProbe.probeScript),
   'the real probe maps both enumeration and owner uncertainty to UNKNOWN and uses no same-name owner fallback');
 
-  const pwshCandidates = process.platform === 'win32'
-    ? ['pwsh.exe', 'pwsh']
-    : ['pwsh', '/mnt/c/Program Files/PowerShell/7/pwsh.exe'];
-  let pwsh = '';
-  for (const candidate of pwshCandidates) {
-    if (candidate.startsWith('/') && !fs.existsSync(candidate)) continue;
-    const version = spawnSync(candidate,
-      ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.Major'],
-      { encoding: 'utf8', windowsHide: true, timeout: 10000 });
-    if (!version.error && version.status === 0 && Number(String(version.stdout || '').trim()) >= 7) {
-      pwsh = candidate;
-      break;
-    }
-  }
-  if (pwsh) {
-    const executeOwnerFixture = setup => {
-      const child = spawnSync(pwsh, ['-NoProfile', '-NonInteractive', '-Command', '-'], {
-        input: `${setup}\n${yesProbe.probeScript}`,
-        encoding: 'utf8', windowsHide: true, timeout: 15000
+  if (process.platform === 'win32') {
+    const productPowerShell = process.platform === 'win32'
+      ? path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+      : '';
+    assert.ok(productPowerShell && fs.existsSync(productPowerShell),
+      'the native fixtures use the same trusted Windows PowerShell transport as production');
+    const executeProductPowerShell = (script, options = {}) => spawnSync(
+      productPowerShell,
+      windowsTools.PS_STDIN_ARGS,
+      {
+        input: windowsTools.prepareScript(script),
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 15000,
+        ...options
       });
+    const executeOwnerFixture = setup => {
+      const child = executeProductPowerShell(`${setup}\n${yesProbe.probeScript}`);
       assert.equal(child.status, 0, String(child.stderr || 'PowerShell fixture failed'));
       return String(child.stdout || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     };
@@ -686,14 +787,242 @@ async function run(options = {}) {
     assert.deepEqual(exactOwner, ['FIXER_ZOOM_DEDUP_V1=YES'],
       'a real PowerShell exact helper SID emits one YES marker');
 
-    const identityFixture = spawnSync(pwsh, ['-NoProfile', '-NonInteractive', '-Command', '-'], {
-      input: `
+    const executeFinalDrainFixture = setup => executeProductPowerShell(
+      `${setup}\n${exactDeleteContext.exactSidFinalDrainScript(oldSid)}`);
+    const finalDrainClear = executeFinalDrainFixture(`
+      function Get-CimInstance { [CmdletBinding()] param([Parameter(Position=0)][string]$ClassName) return @() }
+      function Invoke-CimMethod { throw 'must not run' }
+    `);
+    assert.equal(finalDrainClear.status, 0, String(finalDrainClear.stderr || 'final-drain clear fixture failed'));
+    assert.deepEqual(String(finalDrainClear.stdout || '').trim().split(/\r?\n/),
+      ['FIXER_HELPER_FINAL_DRAIN_V1=CLEAR'],
+      'the evaluated production final drain emits one exact CLEAR marker');
+    const finalDrainUnknown = executeFinalDrainFixture(`
+      function Get-CimInstance { [CmdletBinding()] param([Parameter(Position=0)][string]$ClassName) throw 'fixture inventory failure' }
+      function Invoke-CimMethod { throw 'must not run' }
+    `);
+    assert.equal(finalDrainUnknown.status, 1, 'an uncertain final owner inventory fails closed');
+    assert.deepEqual(String(finalDrainUnknown.stdout || '').trim().split(/\r?\n/),
+      ['FIXER_HELPER_FINAL_DRAIN_V1=UNKNOWN'],
+      'the evaluated production final drain emits one exact UNKNOWN marker');
+    const finalDrainDomain = executeFinalDrainFixture(`
+      function Get-CimInstance { [CmdletBinding()] param([Parameter(Position=0)][string]$ClassName) [pscustomobject]@{ ProcessId = 41 } }
+      function Invoke-CimMethod { [CmdletBinding()] param([object]$InputObject,[string]$MethodName) [pscustomobject]@{ ReturnValue = 0; Sid = '${domainSid}' } }
+    `);
+    assert.equal(finalDrainDomain.status, 0, 'a same-name domain SID is not the disabled local helper');
+    assert.deepEqual(String(finalDrainDomain.stdout || '').trim().split(/\r?\n/),
+      ['FIXER_HELPER_FINAL_DRAIN_V1=CLEAR'],
+      'the evaluated production final drain compares only the exact helper SID');
+
+    const processCustodyFixture = executeProductPowerShell(`
+      ${exactSidProcessStopHelper}
+      $trustedPowerShell = Resolve-FixerTool 'powershell.exe'
+      $currentSid = [string][System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+      $exactChild = $null
+      $wrongOwnerChild = $null
+      try {
+        $exactChild = Start-Process -FilePath $trustedPowerShell -ArgumentList @(
+          '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 60') -PassThru -WindowStyle Hidden
+        $exactCandidate = @(Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $exactChild.Id) -EA Stop)
+        if ($exactCandidate.Count -ne 1) { throw 'exact fixture process inventory failed' }
+        $exactOutcome = Stop-FixerOwnedProcessBySid -Candidate $exactCandidate[0] -ExpectedSid $currentSid
+
+        $wrongOwnerChild = Start-Process -FilePath $trustedPowerShell -ArgumentList @(
+          '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 60') -PassThru -WindowStyle Hidden
+        $wrongCandidate = @(Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $wrongOwnerChild.Id) -EA Stop)
+        if ($wrongCandidate.Count -ne 1) { throw 'wrong-owner fixture process inventory failed' }
+        $wrongOwnerBlocked = $false
+        try {
+          $null = Stop-FixerOwnedProcessBySid -Candidate $wrongCandidate[0] -ExpectedSid '${domainSid}'
+        } catch { $wrongOwnerBlocked = $true }
+        $wrongOwnerChild.Refresh()
+        [pscustomobject]@{
+          exactOutcome = $exactOutcome
+          exactExited = [bool]$exactChild.HasExited
+          wrongOwnerBlocked = $wrongOwnerBlocked
+          wrongOwnerSurvived = -not [bool]$wrongOwnerChild.HasExited
+        } | ConvertTo-Json -Compress
+      } finally {
+        foreach ($fixtureChild in @($exactChild,$wrongOwnerChild)) {
+          if ($null -ne $fixtureChild) {
+            try { $fixtureChild.Refresh(); if (-not $fixtureChild.HasExited) { $fixtureChild.Kill(); $null = $fixtureChild.WaitForExit(2000) } } catch {}
+            $fixtureChild.Dispose()
+          }
+        }
+      }
+    `, { timeout: 30000 });
+    assert.equal(processCustodyFixture.status, 0,
+      String(processCustodyFixture.stderr || 'retained-process-handle fixture failed'));
+    assert.deepEqual(JSON.parse(String(processCustodyFixture.stdout || '').trim()), {
+      exactOutcome: 'TERMINATED', exactExited: true,
+      wrongOwnerBlocked: true, wrongOwnerSurvived: true
+    }, 'retained Process custody kills only the refreshed exact SID and preserves a different-SID process');
+
+    const trustedModuleProbe = executeProductPowerShell(
+      exactDeleteContext.exactSidLocalUserDeleteScript(oldSid, '__fixer_fixture_absent__'));
+    const trustedModuleReceipt = JSON.parse(String(trustedModuleProbe.stdout || '').trim());
+    assert.equal(trustedModuleReceipt.pre, 'mismatch',
+      'the production transport loads the LocalAccounts commands from the trusted OS module tree');
+
+    const fakeLocalAccountsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-localaccounts-'));
+    try {
+      const fakeLocalAccountsVersion = path.join(fakeLocalAccountsRoot, '1.0.0.0');
+      fs.mkdirSync(fakeLocalAccountsVersion);
+      fs.writeFileSync(path.join(fakeLocalAccountsVersion, 'Microsoft.PowerShell.LocalAccounts.psm1'), `
+        $script:oldSidText = '${oldSid}'
+        $script:newSidText = '${newSid}'
+        $script:users = @([pscustomobject]@{
+          Name = 'user1'
+          SID = [System.Security.Principal.SecurityIdentifier]::new($script:oldSidText)
+          Enabled = [bool]($env:FIXER_TEST_ACCOUNT_DISABLED -ne '1')
+        })
+        function Get-LocalUser {
+          [CmdletBinding()]
+          param()
+          return @($script:users)
+        }
+        function Remove-LocalUser {
+          [CmdletBinding(SupportsShouldProcess=$true)]
+          param([Parameter(Mandatory=$true)][System.Security.Principal.SecurityIdentifier[]]$SID)
+          $requested = [string]$SID[0].Value
+          if ($requested -ine $script:oldSidText) { throw 'fixture received a non-target SID' }
+          $script:users = @([pscustomobject]@{
+            Name = 'user1'
+            SID = [System.Security.Principal.SecurityIdentifier]::new($script:newSidText)
+          })
+          throw 'fixture old SID no longer exists'
+        }
+        function Disable-LocalUser {
+          [CmdletBinding(SupportsShouldProcess=$true)]
+          param([Parameter(Mandatory=$true)][System.Security.Principal.SecurityIdentifier[]]$SID)
+          if ($SID.Count -ne 1 -or [string]$SID[0].Value -ine $script:oldSidText) {
+            throw 'fixture received a non-target account'
+          }
+          $script:users[0].Enabled = $false
+        }
+        Export-ModuleMember -Function Get-LocalUser,Remove-LocalUser,Disable-LocalUser
+      `, 'utf8');
+      fs.writeFileSync(path.join(fakeLocalAccountsVersion, 'Microsoft.PowerShell.LocalAccounts.psd1'), `@{
+        RootModule = 'Microsoft.PowerShell.LocalAccounts.psm1'
+        ModuleVersion = '1.0.0'
+        GUID = '8aa1a81d-fd55-4ed2-934c-179b9a42c09d'
+        FunctionsToExport = @('Get-LocalUser','Remove-LocalUser','Disable-LocalUser')
+        CmdletsToExport = @()
+        VariablesToExport = @()
+        AliasesToExport = @()
+      }`, 'utf8');
+      const raceDeleteScript = exactDeleteContext.exactSidLocalUserDeleteScript(
+        oldSid, 'user1', fakeLocalAccountsRoot);
+      const sidDisableScript = exactDeleteContext.exactSidLocalUserDisableScript(
+        oldSid, 'user1', fakeLocalAccountsRoot);
+      const sidDisable = executeProductPowerShell(sidDisableScript);
+      assert.equal(sidDisable.status, 0, String(sidDisable.stderr || 'exact-SID disable fixture failed'));
+      assert.equal(exactDeleteContext.exactSidLocalUserDisableProved({
+        code: sidDisable.status,
+        timedOut: false,
+        stdout: String(sidDisable.stdout || '')
+      }), true, 'the production helper disables and reads back only the exact local SID through trusted commands');
+      const sidDisableRetry = executeProductPowerShell(sidDisableScript, {
+        env: { ...process.env, FIXER_TEST_ACCOUNT_DISABLED: '1' }
+      });
+      assert.equal(exactDeleteContext.exactSidLocalUserDisableProved({
+        code: sidDisableRetry.status,
+        timedOut: false,
+        stdout: String(sidDisableRetry.stdout || '')
+      }), true, 'an already-disabled exact SID is a proved idempotent retry');
+      const sidDeleteRace = executeProductPowerShell(raceDeleteScript);
+      assert.equal(sidDeleteRace.status, 1, 'a same-name replacement makes exact-SID deletion fail closed');
+      assert.deepEqual(JSON.parse(String(sidDeleteRace.stdout || '').trim()), {
+        marker: 'FIXER_LOCAL_USER_DELETE_V1',
+        pre: 'exact',
+        deletion: 'failed',
+        expectedSidPost: 'absent',
+        namePost: 'replacement'
+      }, 'the production deletion script preserves and reports the replacement SID without selecting it by name');
+    } finally {
+      fs.rmSync(fakeLocalAccountsRoot, { recursive: true, force: true });
+    }
+
+    const executeMalformedProfileTarget = (profileState, receiptState = 'absent') => {
+      const itemExpression = profileState === 'missing'
+        ? '[pscustomobject]@{}'
+        : `[pscustomobject]@{ ProfileImagePath = '${profileState === 'safe' ? 'C:\\Users\\user1' : ''}' }`;
+      const receiptSetup = receiptState === 'valid'
+        ? `$fixtureReceipt = [ordered]@{
+            marker = 'FIXER_PROFILE_QUARANTINE_V1'
+            phase = 'moving'
+            originalPath = 'C:\\Users\\user1'
+            quarantinePath = 'C:\\Users\\.1132-fixer-quarantine-00112233445566778899aabbccddeeff'
+            stableIdentity = '0000000000000001:00112233445566778899AABBCCDDEEFF'
+          } | ConvertTo-Json -Compress`
+        : (receiptState === 'blank' ? "$fixtureReceipt = '   '" : '');
+      const receiptAdd = receiptState === 'absent'
+        ? ''
+        : '$item | Add-Member -NotePropertyName FixerProfileQuarantineV1 -NotePropertyValue $fixtureReceipt';
+      const child = executeProductPowerShell(`
+          $ErrorActionPreference = 'Stop'
+          ${profileRecoveryHelper}
+          ${profileInventoryGuard}
+          ${receiptSetup}
+          $script:identityCalls = 0
+          function Get-ChildItem {
+            [CmdletBinding()] param([string]$LiteralPath)
+            [pscustomobject]@{ PSChildName = '${oldSid}'; PSPath = 'fixture-key' }
+          }
+          function Get-ItemProperty {
+            [CmdletBinding()] param([string]$LiteralPath)
+            $item = ${itemExpression}
+            ${receiptAdd}
+            $item
+          }
+          function Get-FixerProfilePathIdentity { param([string]$Path) $script:identityCalls++; throw 'must not inspect malformed target' }
+          function Assert-FixerProfilePathIdentity { param() throw 'must not inspect malformed target' }
+          $plan = @([pscustomobject]@{
+            keyName = '${oldSid}'
+            profileImagePath = 'C:\\Users\\user1'
+            profileImagePathPresent = $true
+            pathExists = $true
+            stableIdentity = '0000000000000001:00112233445566778899AABBCCDDEEFF'
+            resolvedPath = 'C:\\Users\\user1'
+          })
+          $blocked = $false
+          $reason = ''
+          try { $null = Assert-FixerProfileInventory -Plan $plan -ExpectedSid '${oldSid}' -Base 'fixture-base' }
+          catch { $blocked = $true; $reason = [string]$_.Exception.Message }
+          [pscustomobject]@{ blocked = $blocked; identityCalls = $script:identityCalls; reason = $reason } | ConvertTo-Json -Compress
+        `);
+      assert.equal(child.status, 0, String(child.stderr || 'PowerShell malformed-profile fixture failed'));
+      return JSON.parse(String(child.stdout || '').trim());
+    };
+    assert.deepEqual(executeMalformedProfileTarget('blank'), {
+      blocked: true, identityCalls: 0, reason: 'exact-SID ProfileImagePath is missing or blank'
+    },
+      'the production mutation guard rejects a blank exact-SID ProfileImagePath before any identity or mutation call');
+    assert.deepEqual(executeMalformedProfileTarget('missing'), {
+      blocked: true, identityCalls: 0, reason: 'exact-SID ProfileImagePath is missing or blank'
+    },
+      'the production mutation guard rejects a missing exact-SID ProfileImagePath before any identity or mutation call');
+    for (const profileState of ['blank', 'missing']) {
+      assert.deepEqual(executeMalformedProfileTarget(profileState, 'valid'), {
+        blocked: true, identityCalls: 0, reason: 'profile quarantine receipt has no exact-SID path authority'
+      }, `a recovery receipt cannot authorize a ${profileState} exact-SID ProfileImagePath`);
+    }
+    assert.deepEqual(executeMalformedProfileTarget('safe', 'blank'), {
+      blocked: true, identityCalls: 0, reason: 'profile quarantine receipt is malformed'
+    }, 'a present blank quarantine receipt fails closed before identity or mutation');
+
+    const identityFixture = executeProductPowerShell(`
         $ErrorActionPreference = 'Stop'
         ${profileIdentityHelper}
+        ${profileRecoveryHelper}
         $root = Join-Path ([IO.Path]::GetTempPath()) ('fixer-profile-identity-' + [Guid]::NewGuid().ToString('N'))
         $target = Join-Path $root 'user1'
         $moved = Join-Path $root 'user1-original'
         $junction = Join-Path $root 'user1.CONTOSO'
+        $vanishing = Join-Path $root 'vanishing-profile'
+        $vanished = Join-Path $root 'vanished-profile'
+        $bound = Join-Path $root 'bound-profile'
+        $unrelated = Join-Path $root 'unrelated'
         try {
           $null = New-Item -ItemType Directory -Path $target -Force
           [IO.File]::WriteAllText((Join-Path $target 'old-sentinel.txt'), 'old')
@@ -702,7 +1031,7 @@ async function run(options = {}) {
           $null = New-Item -ItemType Junction -Path $junction -Target $target
           $junctionRejected = $false
           try { $null = Get-FixerProfilePathIdentity -Path $junction } catch { $junctionRejected = $true }
-          Remove-Item -LiteralPath $junction -Force -EA Stop
+          [IO.Directory]::Delete($junction, $false)
 
           $device = [string]([char]92) + [char]92 + '?' + [char]92 + $target
           $deviceRejected = $false
@@ -717,22 +1046,121 @@ async function run(options = {}) {
             $null = Assert-FixerProfilePathIdentity -Path $target -ExpectedExists $true -ExpectedIdentity $first.stableIdentity -ExpectedResolvedPath $first.resolvedPath
           } catch { $driftBlocked = $true }
 
+          $null = New-Item -ItemType Directory -Path $vanishing -Force
+          $vanishingIdentity = Get-FixerProfilePathIdentity -Path $vanishing
+          Move-Item -LiteralPath $vanishing -Destination $vanished -EA Stop
+          $missingIdentityBlocked = $false
+          try {
+            $null = Assert-FixerProfilePathIdentity -Path $vanishing -ExpectedExists $true -ExpectedIdentity $vanishingIdentity.stableIdentity -ExpectedResolvedPath $vanishingIdentity.resolvedPath
+          } catch { $missingIdentityBlocked = $true }
+
+          $null = New-Item -ItemType Directory -Path $bound -Force
+          $null = New-Item -ItemType Directory -Path $unrelated -Force
+          [IO.File]::WriteAllText((Join-Path $bound 'verified-sentinel.txt'), 'verified')
+          [IO.File]::WriteAllText((Join-Path $unrelated 'unrelated-sentinel.txt'), 'unrelated')
+          $boundIdentity = Get-FixerProfilePathIdentity -Path $bound
+          $wrongIdentityBlocked = $false
+          try {
+            $badLease = [FixerProfileIdentityV1]::AcquireQuarantineLease($bound, $first.stableIdentity, $boundIdentity.resolvedPath)
+            $badLease.Dispose()
+          } catch { $wrongIdentityBlocked = $true }
+          $lease = [FixerProfileIdentityV1]::AcquireQuarantineLease(
+            $bound, $boundIdentity.stableIdentity, $boundIdentity.resolvedPath)
+          $quarantinePath = ''
+          try {
+            $plannedQuarantinePath = [string]$lease.PlannedQuarantinePath
+            $recoveryJson = [ordered]@{
+              marker = 'FIXER_PROFILE_QUARANTINE_V1'
+              phase = 'moving'
+              originalPath = $bound
+              quarantinePath = $plannedQuarantinePath
+              stableIdentity = $boundIdentity.stableIdentity
+            } | ConvertTo-Json -Compress
+            $recoveryItem = [pscustomobject]@{
+              ProfileImagePath = $bound
+              FixerProfileQuarantineV1 = $recoveryJson
+            }
+            $preRenameRecovered = Resolve-FixerProfileInventoryPath -Item $recoveryItem -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
+            $quarantinePath = $lease.Quarantine()
+            $null = New-Item -ItemType Directory -Path $bound -Force
+            [IO.File]::WriteAllText((Join-Path $bound 'replacement-sentinel.txt'), 'replacement')
+            $movedSentinelPresent = [IO.File]::Exists((Join-Path $quarantinePath 'verified-sentinel.txt'))
+            $recoveredPath = Resolve-FixerProfileInventoryPath -Item $recoveryItem -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
+            $deletingJson = [ordered]@{
+              marker = 'FIXER_PROFILE_QUARANTINE_V1'
+              phase = 'deleting'
+              originalPath = $bound
+              quarantinePath = $plannedQuarantinePath
+              stableIdentity = $boundIdentity.stableIdentity
+            } | ConvertTo-Json -Compress
+            $deletingItem = [pscustomobject]@{
+              ProfileImagePath = $quarantinePath
+              FixerProfileQuarantineV1 = $deletingJson
+            }
+            $deleteReadyRecovered = Resolve-FixerProfileInventoryPath -Item $deletingItem -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
+            Remove-Item -LiteralPath (Join-Path $quarantinePath 'verified-sentinel.txt') -Force -EA Stop
+            $lease.DeleteEmpty()
+            $deleteProved = [bool]$lease.DeleteProved
+            $deleteCompleteRecovered = Resolve-FixerProfileInventoryPath -Item $deletingItem -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
+
+            $missingOriginal = Join-Path $root 'missing-original'
+            $missingQuarantine = Join-Path $root '.1132-fixer-quarantine-ffeeddccbbaa99887766554433221100'
+            $movingMissingJson = [ordered]@{
+              marker = 'FIXER_PROFILE_QUARANTINE_V1'
+              phase = 'moving'
+              originalPath = $missingOriginal
+              quarantinePath = $missingQuarantine
+              stableIdentity = $boundIdentity.stableIdentity
+            } | ConvertTo-Json -Compress
+            $movingMissingBlocked = $false
+            try {
+              $null = Resolve-FixerProfileInventoryPath -Item ([pscustomobject]@{
+                ProfileImagePath = $missingOriginal
+                FixerProfileQuarantineV1 = $movingMissingJson
+              }) -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
+            } catch { $movingMissingBlocked = $true }
+            $null = New-Item -ItemType Directory -Path $quarantinePath -Force
+            $wrongQuarantineBlocked = $false
+            try {
+              $null = Resolve-FixerProfileInventoryPath -Item $deletingItem -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
+            } catch { $wrongQuarantineBlocked = $true }
+            [IO.Directory]::Delete($quarantinePath, $false)
+          } finally {
+            $lease.Dispose()
+          }
+          $boundReplacement = Get-FixerProfilePathIdentity -Path $bound
+
           [pscustomobject]@{
             exactPresent = [bool]$first.pathExists
             exactIdentity = [bool]($first.stableIdentity -match '^[0-9A-F]{16}:[0-9A-F]{32}$')
             junctionRejected = $junctionRejected
             deviceRejected = $deviceRejected
             driftBlocked = $driftBlocked
+            missingIdentityBlocked = $missingIdentityBlocked
             identityChanged = [bool]($first.stableIdentity -cne $replacement.stableIdentity)
             oldSentinelPresent = [IO.File]::Exists((Join-Path $moved 'old-sentinel.txt'))
             newSentinelPresent = [IO.File]::Exists((Join-Path $target 'new-sentinel.txt'))
+            wrongIdentityBlocked = $wrongIdentityBlocked
+            handleDeleteProved = $deleteProved
+            nonEmptyObjectMoved = $movedSentinelPresent
+            plannedPathUsed = [bool]($plannedQuarantinePath -ieq $quarantinePath)
+            receiptAuthenticatedBeforeRename = [bool]([string]$preRenameRecovered.profileImagePath -ieq $bound)
+            receiptRecoveredMovedIdentity = [bool]([string]$recoveredPath.profileImagePath -ieq $quarantinePath)
+            deleteReceiptRecoveredIdentity = [bool]([string]$deleteReadyRecovered.profileImagePath -ieq $quarantinePath -and
+              -not [bool]$deleteReadyRecovered.recoveryCompleted)
+            deleteReceiptRecoveredAbsence = [bool]([string]$deleteCompleteRecovered.profileImagePath -ieq $quarantinePath -and
+              [bool]$deleteCompleteRecovered.recoveryCompleted)
+            movingMissingBlocked = $movingMissingBlocked
+            wrongQuarantineBlocked = $wrongQuarantineBlocked
+            quarantineAbsent = -not [IO.Directory]::Exists($quarantinePath)
+            replacementSurvived = [IO.File]::Exists((Join-Path $bound 'replacement-sentinel.txt'))
+            replacementIdentityChanged = [bool]($boundReplacement.stableIdentity -cne $boundIdentity.stableIdentity)
+            unrelatedSurvived = [IO.File]::Exists((Join-Path $unrelated 'unrelated-sentinel.txt'))
           } | ConvertTo-Json -Compress
         } finally {
           if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -EA SilentlyContinue }
         }
-      `,
-      encoding: 'utf8', windowsHide: true, timeout: 30000
-    });
+      `, { timeout: 30000 });
     assert.equal(identityFixture.status, 0, String(identityFixture.stderr || 'PowerShell identity fixture failed'));
     const identityEvidence = JSON.parse(String(identityFixture.stdout || '').trim());
     assert.deepEqual(identityEvidence, {
@@ -741,12 +1169,84 @@ async function run(options = {}) {
       junctionRejected: true,
       deviceRejected: true,
       driftBlocked: true,
+      missingIdentityBlocked: true,
       identityChanged: true,
       oldSentinelPresent: true,
-      newSentinelPresent: true
-    }, 'native handle identity rejects junction/device aliases and blocks same-path replacement without deleting either tree');
+      newSentinelPresent: true,
+      wrongIdentityBlocked: true,
+      handleDeleteProved: true,
+      nonEmptyObjectMoved: true,
+      plannedPathUsed: true,
+      receiptAuthenticatedBeforeRename: true,
+      receiptRecoveredMovedIdentity: true,
+      deleteReceiptRecoveredIdentity: true,
+      deleteReceiptRecoveredAbsence: true,
+      movingMissingBlocked: true,
+      wrongQuarantineBlocked: true,
+      quarantineAbsent: true,
+      replacementSurvived: true,
+      replacementIdentityChanged: true,
+      unrelatedSurvived: true
+    }, 'native handle custody quarantines and deletes only the verified object while replacement and unrelated trees survive');
+
+    const cleanupFixture = executeProductPowerShell(`
+        $ErrorActionPreference = 'Stop'
+        ${profileIdentityHelper}
+        ${removeProfileHelper}
+        function Resolve-FixerTool {
+          param([string]$Name)
+          $candidate = Join-Path (Join-Path $env:SystemRoot 'System32') $Name
+          if (-not [IO.File]::Exists($candidate)) { throw 'fixture tool missing' }
+          return $candidate
+        }
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('fixer-profile-cleanup-' + [Guid]::NewGuid().ToString('N'))
+        $profile = Join-Path $root 'profile'
+        $unrelated = Join-Path $root 'unrelated'
+        try {
+          $null = New-Item -ItemType Directory -Path $profile -Force
+          $null = New-Item -ItemType Directory -Path $unrelated -Force
+          $null = New-Item -ItemType Directory -Path (Join-Path $profile 'nested') -Force
+          [IO.File]::WriteAllText((Join-Path $profile 'nested\\owned.txt'), 'owned')
+          [IO.File]::WriteAllText((Join-Path $unrelated 'unrelated-sentinel.txt'), 'unrelated')
+          $null = New-Item -ItemType Junction -Path (Join-Path $profile 'outside-link') -Target $unrelated
+          $identity = Get-FixerProfilePathIdentity -Path $profile
+          $lease = [FixerProfileIdentityV1]::AcquireQuarantineLease(
+            $profile, $identity.stableIdentity, $identity.resolvedPath)
+          try {
+            Protect-FixerProfileQuarantineRoot -Path $profile
+            $privatePath = $lease.Quarantine()
+            $null = New-Item -ItemType Directory -Path $profile -Force
+            [IO.File]::WriteAllText((Join-Path $profile 'replacement-sentinel.txt'), 'replacement')
+            Remove-ProfileFolder -Path $privatePath -Sid '' -ExpectedIdentity $identity.stableIdentity -ExpectedResolvedPath $privatePath -Lease $lease
+            $proved = [bool]$lease.DeleteProved
+          } finally {
+            $lease.Dispose()
+          }
+          [pscustomobject]@{
+            proved = $proved
+            quarantineAbsent = -not [IO.Directory]::Exists($privatePath)
+            replacementSurvived = [IO.File]::Exists((Join-Path $profile 'replacement-sentinel.txt'))
+            unrelatedSurvived = [IO.File]::Exists((Join-Path $unrelated 'unrelated-sentinel.txt'))
+          } | ConvertTo-Json -Compress
+        } finally {
+          if ([IO.Directory]::Exists($root)) {
+            try { [IO.Directory]::Delete($root, $true) } catch {
+              $cleanupArgs = '/c rd /s /q "' + $root + '"'
+              Start-Process -FilePath (Join-Path (Join-Path $env:SystemRoot 'System32') 'cmd.exe') -ArgumentList $cleanupArgs -Wait -WindowStyle Hidden | Out-Null
+            }
+          }
+        }
+      `, { timeout: 60000 });
+    assert.equal(cleanupFixture.status, 0, String(cleanupFixture.stderr || 'PowerShell cleanup fixture failed'));
+    const cleanupLines = String(cleanupFixture.stdout || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    assert.deepEqual(JSON.parse(cleanupLines[cleanupLines.length - 1]), {
+      proved: true,
+      quarantineAbsent: true,
+      replacementSurvived: true,
+      unrelatedSurvived: true
+    }, 'the evaluated production cleanup deletes only the quarantined tree and preserves replacement and junction targets');
   } else {
-    console.log('packaged-runtime-smoke: skip native PowerShell 7 fixtures (pwsh unavailable)');
+    console.log('packaged-runtime-smoke: skip native Windows PowerShell fixtures (non-Windows host)');
   }
   checks++;
 
