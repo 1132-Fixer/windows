@@ -318,6 +318,36 @@ function check(condition, name) {
     'delayed close cannot deadlock custody or overwrite the completed exit outcome');
   }
   {
+    const h = harness();
+    const pending = h.run('net.exe', [], { timeoutMs: 40 });
+    const queuedDeadline = Array.from(h.timers.values()).find(timer => timer.kind === 'timeout' && timer.ms === 40);
+    h.advance(39);
+    h.child.exitCode = 0;
+    h.child.emit('exit', 0);
+    h.child.stdin.emit('error', Object.assign(new Error('private source must not be logged'), { code: 'EPIPE' }));
+    queuedDeadline.fn();
+    await Promise.resolve();
+    check(h.kills.length === 0 && h.child.kills.length === 0 &&
+      h.activeChildren.has(h.child) && !h.unprovedChildTrees.has(h.child) &&
+      Array.from(h.timers.values()).some(timer => timer.kind === 'timeout' && timer.ms === 500) &&
+      !h.lines.some(item => item.line.includes('private source')),
+    'post-exit stdin failure leaves the bounded close grace in control without killing a reused PID');
+    h.child.stdout.emit('data', Buffer.from('tail output\n'));
+    h.fire('timeout', 500);
+    const result = await pending;
+    const settledLineCount = h.lines.length;
+    const settledCancellationCount = h.cancelledTimers.length;
+    h.child.emit('close', 0);
+    await Promise.resolve();
+    check(result.code === -1 && result.errorCode === 'stdin_failed' && result.stdout === 'tail output\n' &&
+      result.timedOut === false &&
+      h.kills.length === 0 && h.child.kills.length === 0 && h.activeChildren.size === 0 &&
+      !h.unprovedChildTrees.has(h.child) && h.timers.size === 0,
+    'post-exit stdin failure settles once through close grace and clears all custody');
+    check(h.lines.length === settledLineCount && h.cancelledTimers.length === settledCancellationCount,
+      'late close after post-exit stdin failure is a no-op');
+  }
+  {
     const h = harness({ taskkillResults: [{ status: 1 }] });
     const pending = h.run('net.exe', [], { timeoutMs: 0 });
     let resolved = false;

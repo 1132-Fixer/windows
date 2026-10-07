@@ -1202,6 +1202,7 @@ function runProcess(exe, args, onLine, opts = {}) {
     let killTimer = null;
     let closeGraceTimer = null;
     let timedOut = false;
+    let postExitErrorCode = null;
     child.once('exit', (code) => {
       custody.exitObserved = true;
       if (killTimer) {
@@ -1212,7 +1213,7 @@ function runProcess(exe, args, onLine, opts = {}) {
       // `close` normally follows after stdout/stderr drain. A descendant can
       // keep inherited pipes open after the owned child exits, so bound that
       // drain without letting the old deadline target a reused numeric PID.
-      closeGraceTimer = setTimeout(() => finish(code), 500);
+      closeGraceTimer = setTimeout(() => finish(postExitErrorCode ? -1 : code, postExitErrorCode), 500);
     });
     const emit = (buf, kind) => {
       if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
@@ -1295,12 +1296,20 @@ function runProcess(exe, args, onLine, opts = {}) {
       finish(-1, err.code || 'launch_error');
     });
     child.on('close', code => {
-      if (!terminationUnproved && !unprovedChildTrees.has(child)) finish(code);
+      if (!terminationUnproved && !unprovedChildTrees.has(child)) {
+        finish(postExitErrorCode ? -1 : code, postExitErrorCode);
+      }
     });
     // Caller source can contain a helper credential. It is sent through a
     // private pipe, never embedded in PowerShell argv or a temporary script.
     child.stdin.on('error', () => {
       if (settled) return;
+      if (custody.exitObserved) {
+        if (!terminationUnproved && !unprovedChildTrees.has(child)) {
+          postExitErrorCode = 'stdin_failed';
+        }
+        return;
+      }
       terminationUnproved = true;
       const termination = terminateChildTree(child);
       if (!termination.treeTerminated) {
