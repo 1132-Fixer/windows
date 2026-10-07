@@ -44,6 +44,34 @@ const profileInventoryGuard = mainTemplateConstant('PS_PROFILE_INVENTORY_GUARD')
 const removeProfileHelper = mainTemplateConstant('PS_REMOVE_PROFILE_HELPER');
 const exactSidDisableHelper = mainTemplateConstant('PS_EXACT_SID_LOCAL_USER_DISABLE_HELPER');
 const exactSidProcessStopHelper = mainTemplateConstant('PS_EXACT_SID_PROCESS_STOP_HELPER');
+const identityFixtureFailureReceipt = `
+$fixerFailure = $_.Exception
+$fixerFailureFrames = @()
+for ($fixerDepth = 0; $fixerDepth -lt 8 -and $null -ne $fixerFailure; $fixerDepth++) {
+  $fixerFrame = [ordered]@{
+    depth = [int]$fixerDepth
+    exceptionClass = [string]$fixerFailure.GetType().FullName
+    hresult = [int]$fixerFailure.HResult
+  }
+  if ($fixerFailure -is [System.ComponentModel.Win32Exception]) {
+    $fixerFrame['nativeCode'] = [int]$fixerFailure.NativeErrorCode
+  }
+  $fixerFailureFrames += [pscustomobject]$fixerFrame
+  $fixerNextFailure = $fixerFailure.InnerException
+  if ($null -eq $fixerNextFailure -or [object]::ReferenceEquals($fixerFailure, $fixerNextFailure)) { break }
+  $fixerFailure = $fixerNextFailure
+}
+$fixerLeaseMoved = [bool]($null -ne $lease -and
+  -not [string]::IsNullOrEmpty([string]$lease.QuarantinePath))
+$fixerReceipt = [ordered]@{
+  marker = 'FIXER_PROFILE_IDENTITY_FIXTURE_V1'
+  phase = [string]$phase
+  outcome = 'failure'
+  leaseMoved = $fixerLeaseMoved
+  exceptions = @($fixerFailureFrames)
+}
+[pscustomobject]$fixerReceipt | ConvertTo-Json -Compress -Depth 5
+`;
 const start = source.indexOf('async function runtimeAuthority(');
 const end = source.indexOf('\nasync function launch(', start);
 assert.ok(start >= 0 && end > start, 'the production packaged runtime gate is present');
@@ -792,6 +820,98 @@ async function run(options = {}) {
         timeout: 15000,
         ...options
       });
+    const identityDiagnosticFixture = executeProductPowerShell(`
+      $ErrorActionPreference = 'Stop'
+      Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+
+public static class FixerIdentityDiagnosticFixtureV1 {
+  public static void ThrowNative() {
+    Win32Exception failure = new Win32Exception(
+      5, "PRIVATE_DIAGNOSTIC_MESSAGE PRIVATE_DIAGNOSTIC_PATH");
+    failure.Source = "PRIVATE_DIAGNOSTIC_SOURCE";
+    failure.Data["PRIVATE_DIAGNOSTIC_DATA_KEY"] = "PRIVATE_DIAGNOSTIC_DATA_VALUE";
+    throw failure;
+  }
+
+  public static void ThrowDeep() {
+    Exception failure = new Exception();
+    for (int index = 0; index < 10; index++) failure = new Exception(null, failure);
+    throw failure;
+  }
+}
+'@ -ErrorAction Stop
+      $phase = 'diagnostic-native'
+      $lease = [pscustomobject]@{ QuarantinePath = 'moved' }
+      try { [FixerIdentityDiagnosticFixtureV1]::ThrowNative() }
+      catch { ${identityFixtureFailureReceipt} }
+      $phase = 'diagnostic-bounded'
+      $lease = [pscustomobject]@{ QuarantinePath = '' }
+      try { [FixerIdentityDiagnosticFixtureV1]::ThrowDeep() }
+      catch { ${identityFixtureFailureReceipt} }
+    `);
+    assert.equal(identityDiagnosticFixture.status, 0, 'PowerShell identity diagnostic fixture failed');
+    const diagnosticLines = String(identityDiagnosticFixture.stdout || '')
+      .split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    assert.equal(diagnosticLines.length, 2, 'identity diagnostic fixture emits exactly two receipts');
+    let diagnosticReceipts;
+    try {
+      diagnosticReceipts = diagnosticLines.map(line => JSON.parse(line));
+    } catch (_) {
+      assert.fail('identity diagnostic fixture emitted malformed JSON');
+    }
+    const allowedReceiptKeys = ['marker', 'phase', 'outcome', 'leaseMoved', 'exceptions'];
+    const forbiddenDiagnosticKeys = new Set([
+      'message', 'errorrecord', 'data', 'source', 'targetsite', 'script', 'scripttext',
+      'path', 'stack', 'tostring', 'environment', 'command', 'commandline'
+    ]);
+    const collectDiagnosticKeys = value => {
+      if (Array.isArray(value)) return value.flatMap(collectDiagnosticKeys);
+      if (!value || typeof value !== 'object') return [];
+      return Object.entries(value).flatMap(([key, nested]) => [key, ...collectDiagnosticKeys(nested)]);
+    };
+    const assertDiagnosticReceipt = (receipt, phase, leaseMoved) => {
+      assert.deepEqual(Object.keys(receipt), allowedReceiptKeys);
+      assert.equal(receipt.marker, 'FIXER_PROFILE_IDENTITY_FIXTURE_V1');
+      assert.equal(receipt.phase, phase);
+      assert.equal(receipt.outcome, 'failure');
+      assert.equal(receipt.leaseMoved, leaseMoved);
+      assert.ok(Array.isArray(receipt.exceptions) && receipt.exceptions.length > 0 &&
+        receipt.exceptions.length <= 8);
+      receipt.exceptions.forEach((frame, depth) => {
+        const allowedFrameKeys = frame.exceptionClass === 'System.ComponentModel.Win32Exception'
+          ? ['depth', 'exceptionClass', 'hresult', 'nativeCode']
+          : ['depth', 'exceptionClass', 'hresult'];
+        assert.deepEqual(Object.keys(frame), allowedFrameKeys);
+        assert.equal(frame.depth, depth);
+        assert.ok(Number.isInteger(frame.hresult) && frame.hresult >= -2147483648 && frame.hresult <= 2147483647);
+      });
+      for (const key of collectDiagnosticKeys(receipt)) {
+        assert.ok(!forbiddenDiagnosticKeys.has(key.toLowerCase()),
+          'identity diagnostic receipt contains a forbidden field');
+      }
+    };
+    const [nativeDiagnostic, boundedDiagnostic] = diagnosticReceipts;
+    assertDiagnosticReceipt(nativeDiagnostic, 'diagnostic-native', true);
+    assert.deepEqual(nativeDiagnostic.exceptions.map(frame => frame.depth), [0, 1]);
+    assert.equal(nativeDiagnostic.exceptions[0].exceptionClass,
+      'System.Management.Automation.MethodInvocationException');
+    assert.equal(nativeDiagnostic.exceptions[1].exceptionClass, 'System.ComponentModel.Win32Exception');
+    assert.equal(nativeDiagnostic.exceptions[1].nativeCode, 5);
+    assertDiagnosticReceipt(boundedDiagnostic, 'diagnostic-bounded', false);
+    assert.deepEqual(boundedDiagnostic.exceptions.map(frame => frame.depth), [0, 1, 2, 3, 4, 5, 6, 7]);
+    assert.equal(boundedDiagnostic.exceptions[0].exceptionClass,
+      'System.Management.Automation.MethodInvocationException');
+    assert.ok(boundedDiagnostic.exceptions.every(frame => !Object.prototype.hasOwnProperty.call(frame, 'nativeCode')));
+    const diagnosticOutput = diagnosticLines.join('\n');
+    assert.ok(!diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_MESSAGE') &&
+      !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_PATH') &&
+      !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_SOURCE') &&
+      !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_DATA_KEY') &&
+      !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_DATA_VALUE') &&
+      !diagnosticOutput.includes('ThrowNative'),
+    'identity diagnostic receipts exclude messages, paths, source, data, target site, and stack');
     const executeOwnerFixture = setup => {
       const child = executeProductPowerShell(`${setup}\n${yesProbe.probeScript}`);
       assert.equal(child.status, 0, String(child.stderr || 'PowerShell fixture failed'));
@@ -1210,13 +1330,7 @@ async function run(options = {}) {
             unrelatedSurvived = [IO.File]::Exists((Join-Path $unrelated 'unrelated-sentinel.txt'))
           } | ConvertTo-Json -Compress
         } catch {
-          [pscustomobject]@{
-            marker = 'FIXER_PROFILE_ALIAS_FIXTURE_V1'
-            phase = $phase
-            outcome = 'failure'
-            exceptionType = $_.Exception.GetType().FullName
-            hresult = [int]$_.Exception.HResult
-          } | ConvertTo-Json -Compress
+          ${identityFixtureFailureReceipt}
           exit 1
         } finally {
           if (-not [string]::IsNullOrWhiteSpace($root) -and (Test-Path -LiteralPath $root)) {
