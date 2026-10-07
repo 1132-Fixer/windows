@@ -27,7 +27,6 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: npm audit (high)
         run: npm audit --audit-level=high
-        continue-on-error: true
 
   license-and-binaries:
     name: Licence and binary inventory

@@ -1199,7 +1199,21 @@ function runProcess(exe, args, onLine, opts = {}) {
       treeKillAttempted: false
     };
     childTreeCustody.set(child, custody);
-    child.once('exit', () => { custody.exitObserved = true; });
+    let killTimer = null;
+    let closeGraceTimer = null;
+    let timedOut = false;
+    child.once('exit', (code) => {
+      custody.exitObserved = true;
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+      if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
+      // `close` normally follows after stdout/stderr drain. A descendant can
+      // keep inherited pipes open after the owned child exits, so bound that
+      // drain without letting the old deadline target a reused numeric PID.
+      closeGraceTimer = setTimeout(() => finish(code), 500);
+    });
     const emit = (buf, kind) => {
       if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
       const text = (kind === 'err' ? stderrDecoder : stdoutDecoder).write(buf);
@@ -1226,11 +1240,9 @@ function runProcess(exe, args, onLine, opts = {}) {
       }, heartbeatMs);
     }
 
-    let killTimer = null;
-    let timedOut = false;
     if (timeoutMs > 0) {
       killTimer = setTimeout(() => {
-        if (settled) return;
+        if (settled || custody.exitObserved) return;
         timedOut = true;
         onLine(`  TIMEOUT after ${Math.round(timeoutMs / 1000)}s — killing ${exe}`, 'err');
         // Kill the TREE, not just the direct child: the profile
@@ -1255,8 +1267,10 @@ function runProcess(exe, args, onLine, opts = {}) {
     const stopTimers = () => {
       if (hbTimer) clearInterval(hbTimer);
       if (killTimer) clearTimeout(killTimer);
+      if (closeGraceTimer) clearTimeout(closeGraceTimer);
       hbTimer = null;
       killTimer = null;
+      closeGraceTimer = null;
     };
 
     const cleanup = () => {
@@ -4849,40 +4863,26 @@ ipcMain.handle('create-shortcut', async () => {
     "$sc.Save()"
   ].join('; ');
 
-  return new Promise((resolve) => {
-    const child = spawnWindowsTool('powershell.exe',
-      windowsTools.PS_STDIN_ARGS,
-      { windowsHide: true }
-    );
-    let stderr = '';
-    let settled = false;
-    const settle = (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
-    // Bounded: WScript.Shell COM can hang behind a stuck Explorer session.
-    const timer = setTimeout(() => {
-      try { spawnWindowsToolSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
-      settle({ success: false, error: 'Creating the shortcut took too long. Try again.' });
-    }, 30000);
-    child.stdin.on('error', () => { try { child.kill('SIGKILL'); } catch (_) {} settle({ success: false, error: 'Shortcut command input failed.' }); });
-    child.stdin.end(windowsTools.prepareScript(ps), 'utf8');
-    child.stderr.on('data', d => { stderr += d.toString(); });
-    child.on('error', err => settle({ success: false, error: err.message }));
-    child.on('close', async code => {
-      if (settled) return;
-      if (code !== 0) {
-        return settle({ success: false, error: stderr.trim() || `Exit ${code}` });
-      }
-      // Only after the renamed shortcut exists do we clear the old one, so a
-      // failed create never leaves the user with no shortcut at all. Cleanup
-      // failure is reported, never fatal.
-      const cleanup = await removeLegacyShortcuts();
-      resolve({
-        success: true,
-        path: shortcutPath,
-        legacyRemoved: cleanup.removed,
-        legacyRemovalFailed: cleanup.failed
-      });
-    });
-  });
+  // Reuse the trusted runner so the child tree has one custody, timeout and
+  // settlement policy. WScript.Shell COM can hang behind a stuck Explorer
+  // session, so keep the existing 30-second bound.
+  const result = await runPSScript(ps, () => {}, { timeoutMs: 30000 });
+  if (result.timedOut) {
+    return { success: false, error: 'Creating the shortcut took too long. Try again.' };
+  }
+  if (result.code !== 0) {
+    return { success: false, error: result.stderr.trim() || `Exit ${result.code}` };
+  }
+  // Only after the renamed shortcut exists do we clear the old one, so a
+  // failed create never leaves the user with no shortcut at all. Cleanup
+  // failure is reported, never fatal.
+  const cleanup = await removeLegacyShortcuts();
+  return {
+    success: true,
+    path: shortcutPath,
+    legacyRemoved: cleanup.removed,
+    legacyRemovalFailed: cleanup.failed
+  };
 });
 
 // "Open Zoom" on the Fix-complete screen — runs the SAME launcher script

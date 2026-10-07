@@ -20,6 +20,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
 
 // Frozen identity. These values are a contract with every installed client.
 const FROZEN = {
@@ -103,6 +104,23 @@ check(relYml.includes('node scripts/generate-checksums.mjs --dist dist') && relY
 const validator = fs.readFileSync(path.join(ROOT, 'scripts', 'validate-release-assets.mjs'), 'utf8');
 check(validator.includes("text.includes('\\r')") && validator.includes('checksums-sha256.txt uses CRLF'),
   'validate-release-assets.mjs rejects a CRLF checksums file on the published release');
+
+console.log('release-identity-smoke: blocking dependency audit');
+const securityYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'security.yml'), 'utf8');
+const auditStart = securityYml.indexOf('  npm-audit:');
+const auditEnd = securityYml.indexOf('  license-and-binaries:', auditStart);
+const auditJob = auditStart >= 0 && auditEnd > auditStart ? securityYml.slice(auditStart, auditEnd) : '';
+check(auditJob.includes('run: npm audit --audit-level=high'),
+  'Security workflow runs the high-severity dependency audit');
+check(auditJob.length > 0 && !auditJob.includes('continue-on-error'),
+  'dependency audit failure fails the Security job');
+const undiciVersion = String(lock.packages && lock.packages['node_modules/undici'] &&
+  lock.packages['node_modules/undici'].version || '');
+const undiciParts = undiciVersion.split('.').map(part => Number.parseInt(part, 10));
+const undiciFixed = undiciParts.length === 3 && undiciParts.every(Number.isInteger) &&
+  (undiciParts[0] > 7 || (undiciParts[0] === 7 &&
+    (undiciParts[1] > 29 || (undiciParts[1] === 29 && undiciParts[2] >= 1))));
+check(undiciFixed, `top-level undici lock is at or above fixed version 7.29.1 (found ${undiciVersion || 'missing'})`);
 
 if (failures) { console.error(`release-identity-smoke: ${failures} FAIL`); process.exit(1); }
 console.log('release-identity-smoke: PASS');

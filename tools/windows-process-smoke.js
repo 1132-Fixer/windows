@@ -128,6 +128,7 @@ function harness(options = {}) {
     script: (script, opts = {}) => context.runPSScript(script, (line, kind) => lines.push({ line, kind }), opts),
     launchCapture: script => context.runPSScriptLaunchCapture(script),
     killAll: () => context.killActiveChildren(),
+    advance: ms => { clock += ms; },
     fire: (kind, ms) => {
       const item = Array.from(timers.entries()).find(([, timer]) => timer.kind === kind && timer.ms === ms);
       assert.ok(item, `${kind} timer ${ms}ms exists`);
@@ -176,6 +177,21 @@ function check(condition, name) {
     h.child.stdout.emit('data', Buffer.from('late output'));
     check(h.lines.length === before && h.cancelledTimers.length === 2 && result.code === 0,
       'late close, error and output cannot alter a settled result or duplicate logs');
+  }
+  {
+    let replacementTargeted = false;
+    const h = harness({ onTaskkill: () => { replacementTargeted = true; } });
+    const pending = h.script('Write-Output 1', { timeoutMs: 30000 });
+    const staleDeadline = Array.from(h.timers.values()).find(timer => timer.kind === 'timeout' && timer.ms === 30000);
+    check(!!staleDeadline, 'shortcut runner exposes its bounded deadline to the fake clock');
+    h.child.emit('close', 0);
+    const result = await pending;
+    // The same number now represents an unrelated process. Even an already
+    // queued copy of the old callback must not use it after successful close.
+    h.advance(30001);
+    staleDeadline.fn();
+    check(result.code === 0 && h.kills.length === 0 && !replacementTargeted,
+      'successful close clears and fences the deadline before PID reuse');
   }
   {
     const h = harness();
@@ -278,6 +294,30 @@ function check(condition, name) {
       'a later direct-child close cannot hide an unproved surviving tree');
   }
   {
+    const h = harness();
+    const pending = h.run('net.exe', [], { timeoutMs: 40 });
+    let resolved = false;
+    pending.then(() => { resolved = true; });
+    const queuedDeadline = Array.from(h.timers.values()).find(timer => timer.kind === 'timeout' && timer.ms === 40);
+    h.advance(39);
+    h.child.exitCode = 7;
+    h.child.emit('exit', 7);
+    check(!Array.from(h.timers.values()).some(timer => timer.ms === 40) &&
+      Array.from(h.timers.values()).some(timer => timer.ms === 500),
+    'exit at deadline-minus-one clears the main deadline and starts bounded close grace');
+    queuedDeadline.fn();
+    await Promise.resolve();
+    check(!resolved && h.kills.length === 0 && h.child.kills.length === 0,
+      'an already queued deadline cannot kill after owned-child exit');
+    h.child.stdout.emit('data', Buffer.from('tail output\n'));
+    h.fire('timeout', 500);
+    const result = await pending;
+    h.child.emit('close', 7);
+    check(result.code === 7 && result.stdout === 'tail output\n' && result.timedOut === false &&
+      h.kills.length === 0 && h.child.kills.length === 0 && h.activeChildren.size === 0,
+    'delayed close cannot deadlock custody or overwrite the completed exit outcome');
+  }
+  {
     const h = harness({ taskkillResults: [{ status: 1 }] });
     const pending = h.run('net.exe', [], { timeoutMs: 0 });
     let resolved = false;
@@ -359,6 +399,12 @@ function check(condition, name) {
       source.includes("result.taskkillError = 'retry-blocked'") &&
       source.includes('custody.treeKillAttempted = true'),
     'production custody permits one tree-kill attempt per ChildProcess identity');
+    const shortcutStart = source.indexOf("ipcMain.handle('create-shortcut'");
+    const shortcutEnd = source.indexOf('// "Open Zoom"', shortcutStart);
+    const shortcutHandler = source.slice(shortcutStart, shortcutEnd);
+    check(/await runPSScript\(ps,[\s\S]*timeoutMs:\s*30000/.test(shortcutHandler) &&
+      !/setTimeout\(|spawnWindowsToolSync\(|child\.kill\(/.test(shortcutHandler),
+    'shortcut creation uses the trusted runner with no private timer or bare-PID kill');
   }
   if (failures) throw new Error(`windows-process-smoke: ${failures} failures in ${checks} checks`);
   console.log(`windows-process-smoke: ${checks} checks passed`);
