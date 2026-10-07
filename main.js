@@ -2233,7 +2233,7 @@ public static class FixerProfileIdentityV1 {
     return handle;
   }
 
-  private static string DescribeDirectoryHandle(SafeFileHandle handle) {
+  private static string DescribeDirectoryHandle(SafeFileHandle handle, bool includeResolvedPath) {
     FILE_ATTRIBUTE_TAG_INFO tag;
     if (!GetFileAttributeTagInfo(handle, FILE_ATTRIBUTE_TAG_INFO_CLASS, out tag,
         (uint)Marshal.SizeOf(typeof(FILE_ATTRIBUTE_TAG_INFO)))) {
@@ -2253,6 +2253,9 @@ public static class FixerProfileIdentityV1 {
     if (id.FileId.Identifier == null || id.FileId.Identifier.Length != 16) {
       throw new IOException("profile file identity is incomplete");
     }
+    string identity = id.VolumeSerialNumber.ToString("X16") + ":" +
+      BitConverter.ToString(id.FileId.Identifier).Replace("-", String.Empty);
+    if (!includeResolvedPath) return identity;
     var finalPath = new StringBuilder(32768);
     uint length = GetFinalPathNameByHandleW(handle, finalPath, (uint)finalPath.Capacity, 0);
     if (length == 0 || length >= finalPath.Capacity) {
@@ -2260,9 +2263,17 @@ public static class FixerProfileIdentityV1 {
     }
     string resolved = finalPath.ToString();
     if (resolved.StartsWith(@"\\?\", StringComparison.Ordinal)) resolved = resolved.Substring(4);
-    string identity = id.VolumeSerialNumber.ToString("X16") + ":" +
-      BitConverter.ToString(id.FileId.Identifier).Replace("-", String.Empty);
     return identity + "|" + resolved;
+  }
+
+  private static string DescribeDirectoryHandle(SafeFileHandle handle) {
+    return DescribeDirectoryHandle(handle, true);
+  }
+
+  private static void RequireIdentity(string actualIdentity, string expectedIdentity) {
+    if (!String.Equals(actualIdentity, expectedIdentity, StringComparison.Ordinal)) {
+      throw new IOException("receipt-identity");
+    }
   }
 
   private static void RequireReceipt(string receipt, string expectedIdentity, string expectedResolvedPath) {
@@ -2275,6 +2286,20 @@ public static class FixerProfileIdentityV1 {
         StringComparison.OrdinalIgnoreCase)) throw new IOException("receipt-path");
   }
 
+  private static void RequireQuarantinedState(
+      SafeFileHandle heldHandle, string expectedIdentity, string originalPath,
+      string plannedQuarantinePath) {
+    RequireIdentity(DescribeDirectoryHandle(heldHandle, false), expectedIdentity);
+    string destinationReceipt = Inspect(plannedQuarantinePath);
+    if (String.IsNullOrEmpty(destinationReceipt)) {
+      throw new IOException("receipt-destination-absent");
+    }
+    RequireReceipt(destinationReceipt, expectedIdentity, plannedQuarantinePath);
+    if (!String.IsNullOrEmpty(Inspect(originalPath))) {
+      throw new IOException("receipt-original-present");
+    }
+  }
+
   private static bool DirectoryIsEmpty(string path) {
     using (IEnumerator<string> entries = Directory.EnumerateFileSystemEntries(path).GetEnumerator()) {
       return !entries.MoveNext();
@@ -2282,17 +2307,29 @@ public static class FixerProfileIdentityV1 {
   }
 
   private static void RenameByHandle(SafeFileHandle handle, string destination) {
-    byte[] name = Encoding.Unicode.GetBytes(destination);
+    string fullDestination = Path.GetFullPath(destination);
+    string parent = Path.GetDirectoryName(fullDestination);
+    string leaf = Path.GetFileName(fullDestination);
+    if (String.IsNullOrEmpty(parent) || String.IsNullOrEmpty(leaf) ||
+        leaf.IndexOf(Path.DirectorySeparatorChar) >= 0 ||
+        leaf.IndexOf(Path.AltDirectorySeparatorChar) >= 0 ||
+        !String.Equals(Path.GetFullPath(Path.Combine(parent, leaf)), fullDestination,
+          StringComparison.OrdinalIgnoreCase)) {
+      throw new IOException("profile quarantine destination is invalid");
+    }
+    byte[] name = Encoding.Unicode.GetBytes(fullDestination);
     int rootOffset = IntPtr.Size == 8 ? 8 : 4;
     int lengthOffset = rootOffset + IntPtr.Size;
     int nameOffset = lengthOffset + 4;
-    IntPtr buffer = Marshal.AllocHGlobal(nameOffset + name.Length);
+    int structureSize = IntPtr.Size == 8 ? 24 : 16;
+    int bufferSize = structureSize + name.Length;
+    IntPtr buffer = Marshal.AllocHGlobal(bufferSize);
     try {
-      for (int index = 0; index < nameOffset + name.Length; index++) Marshal.WriteByte(buffer, index, 0);
+      for (int index = 0; index < bufferSize; index++) Marshal.WriteByte(buffer, index, 0);
       Marshal.WriteIntPtr(buffer, rootOffset, IntPtr.Zero);
       Marshal.WriteInt32(buffer, lengthOffset, name.Length);
       Marshal.Copy(name, 0, IntPtr.Add(buffer, nameOffset), name.Length);
-      if (!SetFileInformationByHandle(handle, FILE_RENAME_INFO_CLASS, buffer, (uint)(nameOffset + name.Length))) {
+      if (!SetFileInformationByHandle(handle, FILE_RENAME_INFO_CLASS, buffer, (uint)bufferSize)) {
         throw new Win32Exception(Marshal.GetLastWin32Error());
       }
     } finally {
@@ -2346,7 +2383,7 @@ public static class FixerProfileIdentityV1 {
       if (Directory.Exists(destination) || File.Exists(destination)) throw new IOException("profile quarantine collision");
       RenameByHandle(handle, destination);
       quarantinePath = destination;
-      RequireReceipt(DescribeDirectoryHandle(handle), expectedIdentity, quarantinePath);
+      RequireQuarantinedState(handle, expectedIdentity, originalPath, plannedQuarantinePath);
       return quarantinePath;
     }
 
@@ -2354,12 +2391,14 @@ public static class FixerProfileIdentityV1 {
       if (handle == null || handle.IsInvalid || handle.IsClosed || String.IsNullOrEmpty(quarantinePath)) {
         throw new ObjectDisposedException("profile quarantine lease");
       }
-      RequireReceipt(DescribeDirectoryHandle(handle), expectedIdentity, quarantinePath);
+      RequireQuarantinedState(handle, expectedIdentity, originalPath, plannedQuarantinePath);
       if (!DirectoryIsEmpty(quarantinePath)) throw new IOException("quarantined profile directory is not empty");
+      RequireQuarantinedState(handle, expectedIdentity, originalPath, plannedQuarantinePath);
       MarkDeleteByHandle(handle);
       handle.Dispose();
       handle = null;
-      if (Directory.Exists(quarantinePath) || File.Exists(quarantinePath)) {
+      if (!String.IsNullOrEmpty(Inspect(quarantinePath)) ||
+          !String.IsNullOrEmpty(Inspect(originalPath))) {
         throw new IOException("quarantined profile deletion was not proved");
       }
       deleteProved = true;
