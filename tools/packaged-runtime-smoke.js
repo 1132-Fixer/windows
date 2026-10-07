@@ -1179,13 +1179,21 @@ async function run(options = {}) {
             unrelatedSurvived = [IO.File]::Exists((Join-Path $unrelated 'unrelated-sentinel.txt'))
           } | ConvertTo-Json -Compress
         } catch {
-          [pscustomobject]@{
-            marker = 'FIXER_PROFILE_ALIAS_FIXTURE_V1'
-            phase = $phase
-            outcome = 'failure'
-            exceptionType = $_.Exception.GetType().FullName
-            hresult = [int]$_.Exception.HResult
-          } | ConvertTo-Json -Compress
+          $failure = $_.Exception
+          for ($depth = 0; $depth -lt 8; $depth++) {
+            $innerFailure = $failure.InnerException
+            if ($null -eq $innerFailure -or [object]::ReferenceEquals($failure, $innerFailure)) { break }
+            $failure = $innerFailure
+          }
+          $receipt = [ordered]@{
+            phase = [string]$phase
+            exceptionClass = [string]$failure.GetType().FullName
+            hresult = [int]$failure.HResult
+          }
+          if ($failure -is [System.ComponentModel.Win32Exception]) {
+            $receipt['nativeCode'] = [int]$failure.NativeErrorCode
+          }
+          [pscustomobject]$receipt | ConvertTo-Json -Compress
           exit 1
         } finally {
           if (-not [string]::IsNullOrWhiteSpace($root) -and (Test-Path -LiteralPath $root)) {
