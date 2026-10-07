@@ -47,6 +47,7 @@ const exactSidProcessStopHelper = mainTemplateConstant('PS_EXACT_SID_PROCESS_STO
 const identityFixtureFailureReceipt = `
 $fixerFailure = $_.Exception
 $fixerFailureFrames = @()
+$fixerNativeSite = 'other'
 for ($fixerDepth = 0; $fixerDepth -lt 8 -and $null -ne $fixerFailure; $fixerDepth++) {
   $fixerFrame = [ordered]@{
     depth = [int]$fixerDepth
@@ -55,6 +56,14 @@ for ($fixerDepth = 0; $fixerDepth -lt 8 -and $null -ne $fixerFailure; $fixerDept
   }
   if ($fixerFailure -is [System.ComponentModel.Win32Exception]) {
     $fixerFrame['nativeCode'] = [int]$fixerFailure.NativeErrorCode
+    if ($fixerNativeSite -ceq 'other' -and $null -ne $fixerFailure.TargetSite) {
+      $fixerNativeMethod = [string]$fixerFailure.TargetSite.Name
+      if ($fixerNativeMethod -ceq 'DescribeDirectoryHandle') {
+        $fixerNativeSite = 'describe-handle'
+      } elseif ($fixerNativeMethod -ceq 'RenameByHandle') {
+        $fixerNativeSite = 'rename-by-handle'
+      }
+    }
   }
   $fixerFailureFrames += [pscustomobject]$fixerFrame
   $fixerNextFailure = $fixerFailure.InnerException
@@ -68,6 +77,11 @@ $fixerReceipt = [ordered]@{
   phase = [string]$phase
   outcome = 'failure'
   leaseMoved = $fixerLeaseMoved
+  nativeSite = $fixerNativeSite
+  sourceParentIsUsersRoot = [bool]$fixerSourceParentIsUsersRoot
+  destinationParentIsUsersRoot = [bool]$fixerDestinationParentIsUsersRoot
+  destinationLeafValid = [bool]$fixerDestinationLeafValid
+  destinationCharCount = [int]$fixerDestinationCharCount
   exceptions = @($fixerFailureFrames)
 }
 [pscustomobject]$fixerReceipt | ConvertTo-Json -Compress -Depth 5
@@ -827,13 +841,16 @@ using System;
 using System.ComponentModel;
 
 public static class FixerIdentityDiagnosticFixtureV1 {
-  public static void ThrowNative() {
+  private static Win32Exception CreateNativeFailure(int code) {
     Win32Exception failure = new Win32Exception(
-      5, "PRIVATE_DIAGNOSTIC_MESSAGE PRIVATE_DIAGNOSTIC_PATH");
+      code, "PRIVATE_DIAGNOSTIC_MESSAGE PRIVATE_DIAGNOSTIC_PATH");
     failure.Source = "PRIVATE_DIAGNOSTIC_SOURCE";
     failure.Data["PRIVATE_DIAGNOSTIC_DATA_KEY"] = "PRIVATE_DIAGNOSTIC_DATA_VALUE";
-    throw failure;
+    return failure;
   }
+
+  public static void RenameByHandle() { throw CreateNativeFailure(5); }
+  public static void DescribeDirectoryHandle() { throw CreateNativeFailure(6); }
 
   public static void ThrowDeep() {
     Exception failure = new Exception();
@@ -842,26 +859,56 @@ public static class FixerIdentityDiagnosticFixtureV1 {
   }
 }
 '@ -ErrorAction Stop
+      $fixerDiagnosticUsersRoot = [IO.Path]::GetFullPath('C:\\Users').TrimEnd([char]92)
+      $fixerDiagnosticDestinationLeaf = '.1132-fixer-quarantine-0123456789abcdef0123456789abcdef'
+      $lease = [pscustomobject]@{
+        OriginalPath = Join-Path $fixerDiagnosticUsersRoot 'PRIVATE_DIAGNOSTIC_SOURCE_PATH'
+        PlannedQuarantinePath = Join-Path $fixerDiagnosticUsersRoot $fixerDiagnosticDestinationLeaf
+        QuarantinePath = 'moved'
+      }
+      $fixerSourceParentIsUsersRoot = [string]::Equals(
+        [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath([string]$lease.OriginalPath)).TrimEnd([char]92),
+        $fixerDiagnosticUsersRoot, [System.StringComparison]::OrdinalIgnoreCase)
+      $fixerDestinationParentIsUsersRoot = [string]::Equals(
+        [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath([string]$lease.PlannedQuarantinePath)).TrimEnd([char]92),
+        $fixerDiagnosticUsersRoot, [System.StringComparison]::OrdinalIgnoreCase)
+      $fixerDestinationLeafValid = [bool]([IO.Path]::GetFileName(
+        [string]$lease.PlannedQuarantinePath) -cmatch '^[.]1132-fixer-quarantine-[0-9a-f]{32}$')
+      $fixerDestinationCharCount = [int]([string]$lease.PlannedQuarantinePath).Length
       $phase = 'diagnostic-native'
-      $lease = [pscustomobject]@{ QuarantinePath = 'moved' }
-      try { [FixerIdentityDiagnosticFixtureV1]::ThrowNative() }
+      try { [FixerIdentityDiagnosticFixtureV1]::RenameByHandle() }
+      catch { ${identityFixtureFailureReceipt} }
+      $phase = 'diagnostic-describe'
+      try { [FixerIdentityDiagnosticFixtureV1]::DescribeDirectoryHandle() }
       catch { ${identityFixtureFailureReceipt} }
       $phase = 'diagnostic-bounded'
-      $lease = [pscustomobject]@{ QuarantinePath = '' }
+      $lease = [pscustomobject]@{
+        OriginalPath = 'D:\\PRIVATE_DIAGNOSTIC_SOURCE_PATH'
+        PlannedQuarantinePath = 'D:\\PRIVATE_DIAGNOSTIC_DESTINATION_PATH'
+        QuarantinePath = ''
+      }
+      $fixerSourceParentIsUsersRoot = $false
+      $fixerDestinationParentIsUsersRoot = $false
+      $fixerDestinationLeafValid = $false
+      $fixerDestinationCharCount = [int]([string]$lease.PlannedQuarantinePath).Length
       try { [FixerIdentityDiagnosticFixtureV1]::ThrowDeep() }
       catch { ${identityFixtureFailureReceipt} }
     `);
     assert.equal(identityDiagnosticFixture.status, 0, 'PowerShell identity diagnostic fixture failed');
     const diagnosticLines = String(identityDiagnosticFixture.stdout || '')
       .split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-    assert.equal(diagnosticLines.length, 2, 'identity diagnostic fixture emits exactly two receipts');
+    assert.equal(diagnosticLines.length, 3, 'identity diagnostic fixture emits exactly three receipts');
     let diagnosticReceipts;
     try {
       diagnosticReceipts = diagnosticLines.map(line => JSON.parse(line));
     } catch (_) {
       assert.fail('identity diagnostic fixture emitted malformed JSON');
     }
-    const allowedReceiptKeys = ['marker', 'phase', 'outcome', 'leaseMoved', 'exceptions'];
+    const allowedReceiptKeys = [
+      'marker', 'phase', 'outcome', 'leaseMoved', 'nativeSite',
+      'sourceParentIsUsersRoot', 'destinationParentIsUsersRoot',
+      'destinationLeafValid', 'destinationCharCount', 'exceptions'
+    ];
     const forbiddenDiagnosticKeys = new Set([
       'message', 'errorrecord', 'data', 'source', 'targetsite', 'script', 'scripttext',
       'path', 'stack', 'tostring', 'environment', 'command', 'commandline'
@@ -871,12 +918,19 @@ public static class FixerIdentityDiagnosticFixtureV1 {
       if (!value || typeof value !== 'object') return [];
       return Object.entries(value).flatMap(([key, nested]) => [key, ...collectDiagnosticKeys(nested)]);
     };
-    const assertDiagnosticReceipt = (receipt, phase, leaseMoved) => {
+    const assertDiagnosticReceipt = (receipt, phase, leaseMoved, nativeSite, geometry) => {
       assert.deepEqual(Object.keys(receipt), allowedReceiptKeys);
       assert.equal(receipt.marker, 'FIXER_PROFILE_IDENTITY_FIXTURE_V1');
       assert.equal(receipt.phase, phase);
       assert.equal(receipt.outcome, 'failure');
       assert.equal(receipt.leaseMoved, leaseMoved);
+      assert.equal(receipt.nativeSite, nativeSite);
+      assert.ok(['describe-handle', 'rename-by-handle', 'other'].includes(receipt.nativeSite));
+      assert.equal(receipt.sourceParentIsUsersRoot, geometry.sourceParentIsUsersRoot);
+      assert.equal(receipt.destinationParentIsUsersRoot, geometry.destinationParentIsUsersRoot);
+      assert.equal(receipt.destinationLeafValid, geometry.destinationLeafValid);
+      assert.equal(receipt.destinationCharCount, geometry.destinationCharCount);
+      assert.ok(Number.isInteger(receipt.destinationCharCount) && receipt.destinationCharCount >= 0);
       assert.ok(Array.isArray(receipt.exceptions) && receipt.exceptions.length > 0 &&
         receipt.exceptions.length <= 8);
       receipt.exceptions.forEach((frame, depth) => {
@@ -892,14 +946,31 @@ public static class FixerIdentityDiagnosticFixtureV1 {
           'identity diagnostic receipt contains a forbidden field');
       }
     };
-    const [nativeDiagnostic, boundedDiagnostic] = diagnosticReceipts;
-    assertDiagnosticReceipt(nativeDiagnostic, 'diagnostic-native', true);
-    assert.deepEqual(nativeDiagnostic.exceptions.map(frame => frame.depth), [0, 1]);
-    assert.equal(nativeDiagnostic.exceptions[0].exceptionClass,
+    const validDiagnosticDestination = path.win32.join(
+      'C:\\Users', '.1132-fixer-quarantine-0123456789abcdef0123456789abcdef');
+    const invalidDiagnosticDestination = 'D:\\PRIVATE_DIAGNOSTIC_DESTINATION_PATH';
+    const validGeometry = {
+      sourceParentIsUsersRoot: true,
+      destinationParentIsUsersRoot: true,
+      destinationLeafValid: true,
+      destinationCharCount: validDiagnosticDestination.length
+    };
+    const [renameDiagnostic, describeDiagnostic, boundedDiagnostic] = diagnosticReceipts;
+    assertDiagnosticReceipt(renameDiagnostic, 'diagnostic-native', true, 'rename-by-handle', validGeometry);
+    assert.deepEqual(renameDiagnostic.exceptions.map(frame => frame.depth), [0, 1]);
+    assert.equal(renameDiagnostic.exceptions[0].exceptionClass,
       'System.Management.Automation.MethodInvocationException');
-    assert.equal(nativeDiagnostic.exceptions[1].exceptionClass, 'System.ComponentModel.Win32Exception');
-    assert.equal(nativeDiagnostic.exceptions[1].nativeCode, 5);
-    assertDiagnosticReceipt(boundedDiagnostic, 'diagnostic-bounded', false);
+    assert.equal(renameDiagnostic.exceptions[1].exceptionClass, 'System.ComponentModel.Win32Exception');
+    assert.equal(renameDiagnostic.exceptions[1].nativeCode, 5);
+    assertDiagnosticReceipt(describeDiagnostic, 'diagnostic-describe', true, 'describe-handle', validGeometry);
+    assert.deepEqual(describeDiagnostic.exceptions.map(frame => frame.depth), [0, 1]);
+    assert.equal(describeDiagnostic.exceptions[1].nativeCode, 6);
+    assertDiagnosticReceipt(boundedDiagnostic, 'diagnostic-bounded', false, 'other', {
+      sourceParentIsUsersRoot: false,
+      destinationParentIsUsersRoot: false,
+      destinationLeafValid: false,
+      destinationCharCount: invalidDiagnosticDestination.length
+    });
     assert.deepEqual(boundedDiagnostic.exceptions.map(frame => frame.depth), [0, 1, 2, 3, 4, 5, 6, 7]);
     assert.equal(boundedDiagnostic.exceptions[0].exceptionClass,
       'System.Management.Automation.MethodInvocationException');
@@ -910,7 +981,10 @@ public static class FixerIdentityDiagnosticFixtureV1 {
       !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_SOURCE') &&
       !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_DATA_KEY') &&
       !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_DATA_VALUE') &&
-      !diagnosticOutput.includes('ThrowNative'),
+      !diagnosticOutput.includes('C:\\\\Users') &&
+      !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_DESTINATION_PATH') &&
+      !diagnosticOutput.includes('DescribeDirectoryHandle') &&
+      !diagnosticOutput.includes('RenameByHandle'),
     'identity diagnostic receipts exclude messages, paths, source, data, target site, and stack');
     const executeOwnerFixture = setup => {
       const child = executeProductPowerShell(`${setup}\n${yesProbe.probeScript}`);
@@ -1169,22 +1243,45 @@ public static class FixerIdentityDiagnosticFixtureV1 {
     const identityFixture = executeProductPowerShell(`
         $ErrorActionPreference = 'Stop'
         $root = ''
+        $fixtureTemp = ''
+        $fixturePrefix = ''
+        $bound = ''
+        $boundLeaf = ''
+        $plannedQuarantinePath = ''
+        $plannedQuarantineLeaf = ''
+        $lease = $null
+        $rootOwned = $false
+        $boundOwned = $false
+        $quarantineOwned = $false
+        $quarantineMoveObserved = $false
+        $usersRoot = [IO.Path]::GetFullPath('C:\\Users').TrimEnd([char]92)
+        $fixerSourceParentIsUsersRoot = $false
+        $fixerDestinationParentIsUsersRoot = $false
+        $fixerDestinationLeafValid = $false
+        $fixerDestinationCharCount = 0
         $phase = 'identity-helper-load'
         try {
           ${profileIdentityHelper}
           $phase = 'recovery-helper-load'
           ${profileRecoveryHelper}
           $phase = 'root-create'
+          $fixtureId = [Guid]::NewGuid().ToString('N')
+          $fixturePrefix = 'fixer-profile-identity-' + $fixtureId
           $fixtureTemp = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Temp'
-          $root = Join-Path $fixtureTemp ('fixer-profile-identity-' + [Guid]::NewGuid().ToString('N'))
-          $null = New-Item -ItemType Directory -Path $root -Force
+          $root = Join-Path $fixtureTemp $fixturePrefix
+          if ([IO.Directory]::Exists($root) -or [IO.File]::Exists($root)) {
+            throw 'identity fixture scratch collision'
+          }
+          $null = New-Item -ItemType Directory -Path $root
+          $rootOwned = $true
           $phase = 'fixture-paths'
           $target = Join-Path $root 'user1'
           $moved = Join-Path $root 'user1-original'
           $junction = Join-Path $root 'user1.CONTOSO'
           $vanishing = Join-Path $root 'vanishing-profile'
           $vanished = Join-Path $root 'vanished-profile'
-          $bound = Join-Path $root 'bound-profile'
+          $boundLeaf = 'fixer-profile-identity-bound-' + $fixtureId
+          $bound = Join-Path $usersRoot $boundLeaf
           $unrelated = Join-Path $root 'unrelated'
           $phase = 'baseline-identity'
           $null = New-Item -ItemType Directory -Path $target -Force
@@ -1217,7 +1314,15 @@ public static class FixerIdentityDiagnosticFixtureV1 {
             $null = Assert-FixerProfilePathIdentity -Path $vanishing -ExpectedExists $true -ExpectedIdentity $vanishingIdentity.stableIdentity -ExpectedResolvedPath $vanishingIdentity.resolvedPath
           } catch { $missingIdentityBlocked = $true }
 
-          $null = New-Item -ItemType Directory -Path $bound -Force
+          if ([IO.Directory]::Exists($bound) -or [IO.File]::Exists($bound)) {
+            throw 'identity fixture profile collision'
+          }
+          $fixerSourceParentIsUsersRoot = [string]::Equals(
+            [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($bound)).TrimEnd([char]92),
+            $usersRoot, [System.StringComparison]::OrdinalIgnoreCase)
+          if (-not $fixerSourceParentIsUsersRoot) { throw 'identity fixture source parent mismatch' }
+          $null = New-Item -ItemType Directory -Path $bound
+          $boundOwned = $true
           $null = New-Item -ItemType Directory -Path $unrelated -Force
           [IO.File]::WriteAllText((Join-Path $bound 'verified-sentinel.txt'), 'verified')
           [IO.File]::WriteAllText((Join-Path $unrelated 'unrelated-sentinel.txt'), 'unrelated')
@@ -1235,6 +1340,20 @@ public static class FixerIdentityDiagnosticFixtureV1 {
           $quarantinePath = ''
           try {
             $plannedQuarantinePath = [string]$lease.PlannedQuarantinePath
+            $plannedQuarantineLeaf = [IO.Path]::GetFileName($plannedQuarantinePath)
+            $fixerSourceParentIsUsersRoot = [string]::Equals(
+              [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($leaseOriginalPath)).TrimEnd([char]92),
+              $usersRoot, [System.StringComparison]::OrdinalIgnoreCase)
+            $fixerDestinationParentIsUsersRoot = [string]::Equals(
+              [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($plannedQuarantinePath)).TrimEnd([char]92),
+              $usersRoot, [System.StringComparison]::OrdinalIgnoreCase)
+            $fixerDestinationLeafValid = [bool]($plannedQuarantineLeaf -cmatch
+              '^[.]1132-fixer-quarantine-[0-9a-f]{32}$')
+            $fixerDestinationCharCount = [int]$plannedQuarantinePath.Length
+            if (-not $fixerSourceParentIsUsersRoot -or -not $fixerDestinationParentIsUsersRoot -or
+                -not $fixerDestinationLeafValid) {
+              throw 'identity fixture quarantine geometry mismatch'
+            }
             $phase = 'recovery-before-rename'
             $recoveryJson = [ordered]@{
               marker = 'FIXER_PROFILE_QUARANTINE_V1'
@@ -1250,7 +1369,11 @@ public static class FixerIdentityDiagnosticFixtureV1 {
             $preRenameRecovered = Resolve-FixerProfileInventoryPath -Item $recoveryItem -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
             $phase = 'quarantine-rename'
             $quarantinePath = $lease.Quarantine()
-            $null = New-Item -ItemType Directory -Path $leaseOriginalPath -Force
+            $quarantineMoveObserved = $true
+            $boundOwned = $false
+            $quarantineOwned = $true
+            $null = New-Item -ItemType Directory -Path $leaseOriginalPath
+            $boundOwned = $true
             [IO.File]::WriteAllText((Join-Path $leaseOriginalPath 'replacement-sentinel.txt'), 'replacement')
             $movedSentinelPresent = [IO.File]::Exists((Join-Path $quarantinePath 'verified-sentinel.txt'))
             $phase = 'recovery-after-rename'
@@ -1271,6 +1394,7 @@ public static class FixerIdentityDiagnosticFixtureV1 {
             $phase = 'handle-delete'
             $lease.DeleteEmpty()
             $deleteProved = [bool]$lease.DeleteProved
+            if ($deleteProved) { $quarantineOwned = $false }
             $phase = 'recovery-after-delete'
             $deleteCompleteRecovered = Resolve-FixerProfileInventoryPath -Item $deletingItem -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
 
@@ -1290,13 +1414,22 @@ public static class FixerIdentityDiagnosticFixtureV1 {
                 FixerProfileQuarantineV1 = $movingMissingJson
               }) -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
             } catch { $movingMissingBlocked = $true }
-            $null = New-Item -ItemType Directory -Path $quarantinePath -Force
+            $null = New-Item -ItemType Directory -Path $quarantinePath
+            $quarantineOwned = $true
             $wrongQuarantineBlocked = $false
             try {
               $null = Resolve-FixerProfileInventoryPath -Item $deletingItem -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
             } catch { $wrongQuarantineBlocked = $true }
             [IO.Directory]::Delete($quarantinePath, $false)
+            $quarantineOwned = $false
           } finally {
+            if (-not $quarantineMoveObserved -and $null -ne $lease -and
+                -not [string]::IsNullOrEmpty([string]$lease.QuarantinePath) -and
+                [string]$lease.QuarantinePath -ieq $plannedQuarantinePath) {
+              $quarantineMoveObserved = $true
+              $boundOwned = $false
+              $quarantineOwned = $true
+            }
             $lease.Dispose()
           }
           $phase = 'evidence'
@@ -1328,13 +1461,46 @@ public static class FixerIdentityDiagnosticFixtureV1 {
             replacementSurvived = [IO.File]::Exists((Join-Path $leaseOriginalPath 'replacement-sentinel.txt'))
             replacementIdentityChanged = [bool]($boundReplacement.stableIdentity -cne $boundIdentity.stableIdentity)
             unrelatedSurvived = [IO.File]::Exists((Join-Path $unrelated 'unrelated-sentinel.txt'))
+            sourceParentIsUsersRoot = $fixerSourceParentIsUsersRoot
+            destinationParentIsUsersRoot = $fixerDestinationParentIsUsersRoot
+            destinationLeafValid = $fixerDestinationLeafValid
           } | ConvertTo-Json -Compress
         } catch {
           ${identityFixtureFailureReceipt}
           exit 1
         } finally {
-          if (-not [string]::IsNullOrWhiteSpace($root) -and (Test-Path -LiteralPath $root)) {
-            Remove-Item -LiteralPath $root -Recurse -Force -EA SilentlyContinue
+          if ($null -ne $lease) {
+            try { $lease.Dispose() } catch {}
+          }
+          foreach ($ownedPath in @(
+            [pscustomobject]@{ Path = $bound; Parent = $usersRoot; Leaf = $boundLeaf; Allowed = $boundOwned },
+            [pscustomobject]@{ Path = $plannedQuarantinePath; Parent = $usersRoot; Leaf = $plannedQuarantineLeaf; Allowed = ($quarantineOwned -and $fixerDestinationLeafValid) }
+          )) {
+            if ([bool]$ownedPath.Allowed -and
+                -not [string]::IsNullOrWhiteSpace([string]$ownedPath.Path) -and
+                -not [string]::IsNullOrWhiteSpace([string]$ownedPath.Leaf) -and
+                (Test-Path -LiteralPath ([string]$ownedPath.Path))) {
+              $ownedFull = [IO.Path]::GetFullPath([string]$ownedPath.Path)
+              $ownedParent = [IO.Path]::GetDirectoryName($ownedFull).TrimEnd([char]92)
+              $ownedLeaf = [IO.Path]::GetFileName($ownedFull)
+              if ([string]::Equals($ownedParent, [string]$ownedPath.Parent,
+                    [System.StringComparison]::OrdinalIgnoreCase) -and
+                  $ownedLeaf -ceq [string]$ownedPath.Leaf) {
+                Remove-Item -LiteralPath $ownedFull -Recurse -Force -EA SilentlyContinue
+              }
+            }
+          }
+          if ($rootOwned -and
+              -not [string]::IsNullOrWhiteSpace($root) -and
+              -not [string]::IsNullOrWhiteSpace($fixturePrefix) -and
+              (Test-Path -LiteralPath $root)) {
+            $rootFull = [IO.Path]::GetFullPath($root)
+            $rootParent = [IO.Path]::GetDirectoryName($rootFull).TrimEnd([char]92)
+            if ([string]::Equals($rootParent, [IO.Path]::GetFullPath($fixtureTemp).TrimEnd([char]92),
+                  [System.StringComparison]::OrdinalIgnoreCase) -and
+                [IO.Path]::GetFileName($rootFull) -ceq $fixturePrefix) {
+              Remove-Item -LiteralPath $rootFull -Recurse -Force -EA SilentlyContinue
+            }
           }
         }
       `, { timeout: 30000 });
@@ -1364,7 +1530,10 @@ public static class FixerIdentityDiagnosticFixtureV1 {
       quarantineAbsent: true,
       replacementSurvived: true,
       replacementIdentityChanged: true,
-      unrelatedSurvived: true
+      unrelatedSurvived: true,
+      sourceParentIsUsersRoot: true,
+      destinationParentIsUsersRoot: true,
+      destinationLeafValid: true
     }, 'native handle custody quarantines and deletes only the verified object while replacement and unrelated trees survive');
 
     const cleanupFixture = executeProductPowerShell(`
@@ -1377,27 +1546,96 @@ public static class FixerIdentityDiagnosticFixtureV1 {
           if (-not [IO.File]::Exists($candidate)) { throw 'fixture tool missing' }
           return $candidate
         }
-        $root = Join-Path ([IO.Path]::GetTempPath()) ('fixer-profile-cleanup-' + [Guid]::NewGuid().ToString('N'))
-        $profile = Join-Path $root 'profile'
+        function Test-FixerFixtureEntryPresent {
+          param([string]$Path)
+          try {
+            $entry = Get-Item -LiteralPath $Path -Force -EA Stop
+            return [bool]($null -ne $entry)
+          } catch [System.Management.Automation.ItemNotFoundException] {
+            return $false
+          } catch [System.IO.FileNotFoundException] {
+            return $false
+          } catch [System.IO.DirectoryNotFoundException] {
+            return $false
+          } catch {
+            return $true
+          }
+        }
+        $usersRoot = [IO.Path]::GetFullPath('C:\\Users').TrimEnd([char]92)
+        $fixtureTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char]92)
+        $fixtureId = [Guid]::NewGuid().ToString('N')
+        $fixturePrefix = 'fixer-profile-cleanup-' + $fixtureId
+        $root = Join-Path $fixtureTemp $fixturePrefix
+        $profileLeaf = $fixturePrefix
+        $profile = Join-Path $usersRoot $profileLeaf
         $unrelated = Join-Path $root 'unrelated'
+        $outsideLink = Join-Path $profile 'outside-link'
+        $privatePath = ''
+        $plannedQuarantinePath = ''
+        $plannedQuarantineLeaf = ''
+        $lease = $null
+        $rootOwned = $false
+        $profileOwned = $false
+        $quarantineOwned = $false
+        $quarantineMoveObserved = $false
+        $sourceParentIsUsersRoot = $false
+        $destinationParentIsUsersRoot = $false
+        $destinationLeafValid = $false
         try {
-          $null = New-Item -ItemType Directory -Path $profile -Force
+          if ([IO.Directory]::Exists($root) -or [IO.File]::Exists($root) -or
+              [IO.Directory]::Exists($profile) -or [IO.File]::Exists($profile)) {
+            throw 'cleanup fixture path collision'
+          }
+          $null = New-Item -ItemType Directory -Path $root
+          $rootOwned = $true
+          $sourceParentIsUsersRoot = [string]::Equals(
+            [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($profile)).TrimEnd([char]92),
+            $usersRoot, [System.StringComparison]::OrdinalIgnoreCase)
+          if (-not $sourceParentIsUsersRoot) { throw 'cleanup fixture source parent mismatch' }
+          $null = New-Item -ItemType Directory -Path $profile
+          $profileOwned = $true
           $null = New-Item -ItemType Directory -Path $unrelated -Force
           $null = New-Item -ItemType Directory -Path (Join-Path $profile 'nested') -Force
           [IO.File]::WriteAllText((Join-Path $profile 'nested\\owned.txt'), 'owned')
           [IO.File]::WriteAllText((Join-Path $unrelated 'unrelated-sentinel.txt'), 'unrelated')
-          $null = New-Item -ItemType Junction -Path (Join-Path $profile 'outside-link') -Target $unrelated
+          $null = New-Item -ItemType Junction -Path $outsideLink -Target $unrelated
           $identity = Get-FixerProfilePathIdentity -Path $profile
           $lease = [FixerProfileIdentityV1]::AcquireQuarantineLease(
             $profile, $identity.stableIdentity, $identity.resolvedPath)
+          $plannedQuarantinePath = [string]$lease.PlannedQuarantinePath
+          $plannedQuarantineLeaf = [IO.Path]::GetFileName($plannedQuarantinePath)
+          $sourceParentIsUsersRoot = [string]::Equals(
+            [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath([string]$lease.OriginalPath)).TrimEnd([char]92),
+            $usersRoot, [System.StringComparison]::OrdinalIgnoreCase)
+          $destinationParentIsUsersRoot = [string]::Equals(
+            [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($plannedQuarantinePath)).TrimEnd([char]92),
+            $usersRoot, [System.StringComparison]::OrdinalIgnoreCase)
+          $destinationLeafValid = [bool]($plannedQuarantineLeaf -cmatch
+            '^[.]1132-fixer-quarantine-[0-9a-f]{32}$')
+          if (-not $sourceParentIsUsersRoot -or -not $destinationParentIsUsersRoot -or
+              -not $destinationLeafValid) {
+            throw 'cleanup fixture quarantine geometry mismatch'
+          }
           try {
             Protect-FixerProfileQuarantineRoot -Path $profile
             $privatePath = $lease.Quarantine()
-            $null = New-Item -ItemType Directory -Path $profile -Force
+            $quarantineMoveObserved = $true
+            $profileOwned = $false
+            $quarantineOwned = $true
+            $null = New-Item -ItemType Directory -Path $profile
+            $profileOwned = $true
             [IO.File]::WriteAllText((Join-Path $profile 'replacement-sentinel.txt'), 'replacement')
             Remove-ProfileFolder -Path $privatePath -Sid '' -ExpectedIdentity $identity.stableIdentity -ExpectedResolvedPath $privatePath -Lease $lease
             $proved = [bool]$lease.DeleteProved
+            if ($proved) { $quarantineOwned = $false }
           } finally {
+            if (-not $quarantineMoveObserved -and $null -ne $lease -and
+                -not [string]::IsNullOrEmpty([string]$lease.QuarantinePath) -and
+                [string]$lease.QuarantinePath -ieq $plannedQuarantinePath) {
+              $quarantineMoveObserved = $true
+              $profileOwned = $false
+              $quarantineOwned = $true
+            }
             $lease.Dispose()
           }
           [pscustomobject]@{
@@ -1405,12 +1643,49 @@ public static class FixerIdentityDiagnosticFixtureV1 {
             quarantineAbsent = -not [IO.Directory]::Exists($privatePath)
             replacementSurvived = [IO.File]::Exists((Join-Path $profile 'replacement-sentinel.txt'))
             unrelatedSurvived = [IO.File]::Exists((Join-Path $unrelated 'unrelated-sentinel.txt'))
+            sourceParentIsUsersRoot = $sourceParentIsUsersRoot
+            destinationParentIsUsersRoot = $destinationParentIsUsersRoot
+            destinationLeafValid = $destinationLeafValid
           } | ConvertTo-Json -Compress
         } finally {
-          if ([IO.Directory]::Exists($root)) {
-            try { [IO.Directory]::Delete($root, $true) } catch {
-              $cleanupArgs = '/c rd /s /q "' + $root + '"'
-              Start-Process -FilePath (Join-Path (Join-Path $env:SystemRoot 'System32') 'cmd.exe') -ArgumentList $cleanupArgs -Wait -WindowStyle Hidden | Out-Null
+          if ($null -ne $lease) {
+            try { $lease.Dispose() } catch {}
+          }
+          foreach ($ownedPath in @(
+            [pscustomobject]@{ Path = $profile; Parent = $usersRoot; Leaf = $profileLeaf; Allowed = $profileOwned },
+            [pscustomobject]@{ Path = $plannedQuarantinePath; Parent = $usersRoot; Leaf = $plannedQuarantineLeaf; Allowed = ($quarantineOwned -and $destinationLeafValid) }
+          )) {
+            if ([bool]$ownedPath.Allowed -and
+                -not [string]::IsNullOrWhiteSpace([string]$ownedPath.Path) -and
+                -not [string]::IsNullOrWhiteSpace([string]$ownedPath.Leaf) -and
+                (Test-Path -LiteralPath ([string]$ownedPath.Path))) {
+              $ownedFull = [IO.Path]::GetFullPath([string]$ownedPath.Path)
+              $ownedParent = [IO.Path]::GetDirectoryName($ownedFull).TrimEnd([char]92)
+              $ownedLeaf = [IO.Path]::GetFileName($ownedFull)
+              if ([string]::Equals($ownedParent, [string]$ownedPath.Parent,
+                    [System.StringComparison]::OrdinalIgnoreCase) -and
+                $ownedLeaf -ceq [string]$ownedPath.Leaf) {
+                $ownedLink = Join-Path $ownedFull 'outside-link'
+                $ownedLinkRemoved = $true
+                if (Test-FixerFixtureEntryPresent -Path $ownedLink) {
+                  try { [IO.Directory]::Delete($ownedLink, $false) } catch { $ownedLinkRemoved = $false }
+                  if (Test-FixerFixtureEntryPresent -Path $ownedLink) {
+                    $ownedLinkRemoved = $false
+                  }
+                }
+                if ($ownedLinkRemoved) {
+                  Remove-Item -LiteralPath $ownedFull -Recurse -Force -EA SilentlyContinue
+                }
+              }
+            }
+          }
+          if ($rootOwned -and [IO.Directory]::Exists($root)) {
+            $rootFull = [IO.Path]::GetFullPath($root)
+            $rootParent = [IO.Path]::GetDirectoryName($rootFull).TrimEnd([char]92)
+            if ([string]::Equals($rootParent, $fixtureTemp,
+                  [System.StringComparison]::OrdinalIgnoreCase) -and
+                [IO.Path]::GetFileName($rootFull) -ceq $fixturePrefix) {
+              Remove-Item -LiteralPath $rootFull -Recurse -Force -EA SilentlyContinue
             }
           }
         }
@@ -1421,7 +1696,10 @@ public static class FixerIdentityDiagnosticFixtureV1 {
       proved: true,
       quarantineAbsent: true,
       replacementSurvived: true,
-      unrelatedSurvived: true
+      unrelatedSurvived: true,
+      sourceParentIsUsersRoot: true,
+      destinationParentIsUsersRoot: true,
+      destinationLeafValid: true
     }, 'the evaluated production cleanup deletes only the quarantined tree and preserves replacement and junction targets');
   } else {
     console.log('packaged-runtime-smoke: skip native Windows PowerShell fixtures (non-Windows host)');
