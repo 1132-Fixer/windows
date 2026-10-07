@@ -2318,9 +2318,9 @@ public static class FixerProfileIdentityV1 {
     private string quarantinePath;
     private bool deleteProved;
 
-    internal QuarantineLease(SafeFileHandle heldHandle, string path, string identity) {
+    internal QuarantineLease(SafeFileHandle heldHandle, string resolvedPath, string identity) {
       handle = heldHandle;
-      originalPath = path;
+      originalPath = Path.GetFullPath(resolvedPath);
       expectedIdentity = identity;
       string parent = Path.GetDirectoryName(originalPath);
       if (String.IsNullOrEmpty(parent)) throw new IOException("profile directory has no parent");
@@ -2374,7 +2374,8 @@ public static class FixerProfileIdentityV1 {
   public static QuarantineLease AcquireQuarantineLease(
       string path, string expectedIdentity, string expectedResolvedPath) {
     string full = Path.GetFullPath(path);
-    RequireReceipt(Inspect(full), expectedIdentity, expectedResolvedPath);
+    string resolvedFull = Path.GetFullPath(expectedResolvedPath);
+    RequireReceipt(Inspect(full), expectedIdentity, resolvedFull);
     int error;
     SafeFileHandle held = CreateFileW(full, DELETE_ACCESS | FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ_WRITE, IntPtr.Zero, OPEN_EXISTING,
@@ -2385,8 +2386,8 @@ public static class FixerProfileIdentityV1 {
       throw new Win32Exception(error);
     }
     try {
-      RequireReceipt(DescribeDirectoryHandle(held), expectedIdentity, expectedResolvedPath);
-      return new QuarantineLease(held, full, expectedIdentity);
+      RequireReceipt(DescribeDirectoryHandle(held), expectedIdentity, resolvedFull);
+      return new QuarantineLease(held, resolvedFull, expectedIdentity);
     } catch {
       held.Dispose();
       throw;
@@ -3411,6 +3412,10 @@ async function runFixFlow(event) {
                 [string]$plannedFolder.stableIdentity,
                 [string]$plannedFolder.resolvedPath)
               try {
+                # The held handle has proved that this resolved path is the
+                # same object as the raw registry alias. From this point on,
+                # receipts and mutations use only the resolved identity.
+                $profilePath = [string]$lease.OriginalPath
                 $folderPlans = @($plan | Where-Object {
                   [string]$_.stableIdentity -ceq [string]$plannedFolder.stableIdentity
                 })

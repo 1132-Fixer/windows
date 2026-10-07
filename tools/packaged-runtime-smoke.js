@@ -664,6 +664,10 @@ async function run(options = {}) {
     residueProofIndex < keyDeleteIndex && keyDeleteIndex < accountDeleteIndex &&
     mainSource.includes('GetFileInformationByHandleEx') &&
     mainSource.includes('AcquireQuarantineLease') &&
+    mainSource.includes('string resolvedFull = Path.GetFullPath(expectedResolvedPath);') &&
+    mainSource.includes('return new QuarantineLease(held, resolvedFull, expectedIdentity);') &&
+    !mainSource.includes('return new QuarantineLease(held, full, expectedIdentity);') &&
+    mainSource.includes('$profilePath = [string]$lease.OriginalPath') &&
     mainSource.includes('SetFileInformationByHandle') &&
     mainSource.includes('$actualQuarantinePath = $lease.Quarantine()') &&
     mainSource.includes('$Lease.DeleteEmpty()') &&
@@ -1013,17 +1017,25 @@ async function run(options = {}) {
 
     const identityFixture = executeProductPowerShell(`
         $ErrorActionPreference = 'Stop'
-        ${profileIdentityHelper}
-        ${profileRecoveryHelper}
-        $root = Join-Path ([IO.Path]::GetTempPath()) ('fixer-profile-identity-' + [Guid]::NewGuid().ToString('N'))
-        $target = Join-Path $root 'user1'
-        $moved = Join-Path $root 'user1-original'
-        $junction = Join-Path $root 'user1.CONTOSO'
-        $vanishing = Join-Path $root 'vanishing-profile'
-        $vanished = Join-Path $root 'vanished-profile'
-        $bound = Join-Path $root 'bound-profile'
-        $unrelated = Join-Path $root 'unrelated'
+        $root = ''
+        $phase = 'identity-helper-load'
         try {
+          ${profileIdentityHelper}
+          $phase = 'recovery-helper-load'
+          ${profileRecoveryHelper}
+          $phase = 'root-create'
+          $fixtureTemp = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Temp'
+          $root = Join-Path $fixtureTemp ('fixer-profile-identity-' + [Guid]::NewGuid().ToString('N'))
+          $null = New-Item -ItemType Directory -Path $root -Force
+          $phase = 'fixture-paths'
+          $target = Join-Path $root 'user1'
+          $moved = Join-Path $root 'user1-original'
+          $junction = Join-Path $root 'user1.CONTOSO'
+          $vanishing = Join-Path $root 'vanishing-profile'
+          $vanished = Join-Path $root 'vanished-profile'
+          $bound = Join-Path $root 'bound-profile'
+          $unrelated = Join-Path $root 'unrelated'
+          $phase = 'baseline-identity'
           $null = New-Item -ItemType Directory -Path $target -Force
           [IO.File]::WriteAllText((Join-Path $target 'old-sentinel.txt'), 'old')
           $first = Get-FixerProfilePathIdentity -Path $target
@@ -1058,38 +1070,44 @@ async function run(options = {}) {
           $null = New-Item -ItemType Directory -Path $unrelated -Force
           [IO.File]::WriteAllText((Join-Path $bound 'verified-sentinel.txt'), 'verified')
           [IO.File]::WriteAllText((Join-Path $unrelated 'unrelated-sentinel.txt'), 'unrelated')
+          $phase = 'alias-identity'
           $boundIdentity = Get-FixerProfilePathIdentity -Path $bound
           $wrongIdentityBlocked = $false
           try {
             $badLease = [FixerProfileIdentityV1]::AcquireQuarantineLease($bound, $first.stableIdentity, $boundIdentity.resolvedPath)
             $badLease.Dispose()
           } catch { $wrongIdentityBlocked = $true }
+          $phase = 'lease-acquire'
           $lease = [FixerProfileIdentityV1]::AcquireQuarantineLease(
             $bound, $boundIdentity.stableIdentity, $boundIdentity.resolvedPath)
+          $leaseOriginalPath = [string]$lease.OriginalPath
           $quarantinePath = ''
           try {
             $plannedQuarantinePath = [string]$lease.PlannedQuarantinePath
+            $phase = 'recovery-before-rename'
             $recoveryJson = [ordered]@{
               marker = 'FIXER_PROFILE_QUARANTINE_V1'
               phase = 'moving'
-              originalPath = $bound
+              originalPath = $leaseOriginalPath
               quarantinePath = $plannedQuarantinePath
               stableIdentity = $boundIdentity.stableIdentity
             } | ConvertTo-Json -Compress
             $recoveryItem = [pscustomobject]@{
-              ProfileImagePath = $bound
+              ProfileImagePath = $leaseOriginalPath
               FixerProfileQuarantineV1 = $recoveryJson
             }
             $preRenameRecovered = Resolve-FixerProfileInventoryPath -Item $recoveryItem -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
+            $phase = 'quarantine-rename'
             $quarantinePath = $lease.Quarantine()
-            $null = New-Item -ItemType Directory -Path $bound -Force
-            [IO.File]::WriteAllText((Join-Path $bound 'replacement-sentinel.txt'), 'replacement')
+            $null = New-Item -ItemType Directory -Path $leaseOriginalPath -Force
+            [IO.File]::WriteAllText((Join-Path $leaseOriginalPath 'replacement-sentinel.txt'), 'replacement')
             $movedSentinelPresent = [IO.File]::Exists((Join-Path $quarantinePath 'verified-sentinel.txt'))
+            $phase = 'recovery-after-rename'
             $recoveredPath = Resolve-FixerProfileInventoryPath -Item $recoveryItem -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
             $deletingJson = [ordered]@{
               marker = 'FIXER_PROFILE_QUARANTINE_V1'
               phase = 'deleting'
-              originalPath = $bound
+              originalPath = $leaseOriginalPath
               quarantinePath = $plannedQuarantinePath
               stableIdentity = $boundIdentity.stableIdentity
             } | ConvertTo-Json -Compress
@@ -1099,8 +1117,10 @@ async function run(options = {}) {
             }
             $deleteReadyRecovered = Resolve-FixerProfileInventoryPath -Item $deletingItem -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
             Remove-Item -LiteralPath (Join-Path $quarantinePath 'verified-sentinel.txt') -Force -EA Stop
+            $phase = 'handle-delete'
             $lease.DeleteEmpty()
             $deleteProved = [bool]$lease.DeleteProved
+            $phase = 'recovery-after-delete'
             $deleteCompleteRecovered = Resolve-FixerProfileInventoryPath -Item $deletingItem -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
 
             $missingOriginal = Join-Path $root 'missing-original'
@@ -1128,7 +1148,8 @@ async function run(options = {}) {
           } finally {
             $lease.Dispose()
           }
-          $boundReplacement = Get-FixerProfilePathIdentity -Path $bound
+          $phase = 'evidence'
+          $boundReplacement = Get-FixerProfilePathIdentity -Path $leaseOriginalPath
 
           [pscustomobject]@{
             exactPresent = [bool]$first.pathExists
@@ -1144,7 +1165,7 @@ async function run(options = {}) {
             handleDeleteProved = $deleteProved
             nonEmptyObjectMoved = $movedSentinelPresent
             plannedPathUsed = [bool]($plannedQuarantinePath -ieq $quarantinePath)
-            receiptAuthenticatedBeforeRename = [bool]([string]$preRenameRecovered.profileImagePath -ieq $bound)
+            receiptAuthenticatedBeforeRename = [bool]([string]$preRenameRecovered.profileImagePath -ieq $leaseOriginalPath)
             receiptRecoveredMovedIdentity = [bool]([string]$recoveredPath.profileImagePath -ieq $quarantinePath)
             deleteReceiptRecoveredIdentity = [bool]([string]$deleteReadyRecovered.profileImagePath -ieq $quarantinePath -and
               -not [bool]$deleteReadyRecovered.recoveryCompleted)
@@ -1153,15 +1174,27 @@ async function run(options = {}) {
             movingMissingBlocked = $movingMissingBlocked
             wrongQuarantineBlocked = $wrongQuarantineBlocked
             quarantineAbsent = -not [IO.Directory]::Exists($quarantinePath)
-            replacementSurvived = [IO.File]::Exists((Join-Path $bound 'replacement-sentinel.txt'))
+            replacementSurvived = [IO.File]::Exists((Join-Path $leaseOriginalPath 'replacement-sentinel.txt'))
             replacementIdentityChanged = [bool]($boundReplacement.stableIdentity -cne $boundIdentity.stableIdentity)
             unrelatedSurvived = [IO.File]::Exists((Join-Path $unrelated 'unrelated-sentinel.txt'))
           } | ConvertTo-Json -Compress
+        } catch {
+          [pscustomobject]@{
+            marker = 'FIXER_PROFILE_ALIAS_FIXTURE_V1'
+            phase = $phase
+            outcome = 'failure'
+            exceptionType = $_.Exception.GetType().FullName
+            hresult = [int]$_.Exception.HResult
+          } | ConvertTo-Json -Compress
+          exit 1
         } finally {
-          if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -EA SilentlyContinue }
+          if (-not [string]::IsNullOrWhiteSpace($root) -and (Test-Path -LiteralPath $root)) {
+            Remove-Item -LiteralPath $root -Recurse -Force -EA SilentlyContinue
+          }
         }
       `, { timeout: 30000 });
-    assert.equal(identityFixture.status, 0, String(identityFixture.stderr || 'PowerShell identity fixture failed'));
+    assert.equal(identityFixture.status, 0,
+      String(identityFixture.stdout || identityFixture.stderr || 'PowerShell identity fixture failed').trim());
     const identityEvidence = JSON.parse(String(identityFixture.stdout || '').trim());
     assert.deepEqual(identityEvidence, {
       exactPresent: true,
@@ -1188,6 +1221,147 @@ async function run(options = {}) {
       replacementIdentityChanged: true,
       unrelatedSurvived: true
     }, 'native handle custody quarantines and deletes only the verified object while replacement and unrelated trees survive');
+
+    const aliasLeaseFixture = executeProductPowerShell(`
+        $ErrorActionPreference = 'Stop'
+        $root = ''
+        $phase = 'identity-helper-load'
+        try {
+          ${profileIdentityHelper}
+          $phase = 'alias-helper-load'
+          if (-not ('FixerLeaseAliasFixtureV1' -as [type])) {
+          Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class FixerLeaseAliasFixtureV1 {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern uint GetShortPathNameW(
+    string longPath, StringBuilder shortPath, uint bufferLength);
+
+  public static string GetShort(string path) {
+    var buffer = new StringBuilder(32768);
+    uint length = GetShortPathNameW(path, buffer, (uint)buffer.Capacity);
+    if (length == 0 || length >= buffer.Capacity) return String.Empty;
+    return buffer.ToString();
+  }
+
+}
+'@ -ErrorAction Stop
+          }
+          $phase = 'root-create'
+          $fixtureTemp = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Temp'
+          $root = Join-Path $fixtureTemp ('fixer-profile-alias-' + [Guid]::NewGuid().ToString('N'))
+          $verifiedPath = Join-Path $root 'verified-profile-with-long-name'
+          $unrelated = Join-Path $root 'unrelated'
+          $null = New-Item -ItemType Directory -Path $verifiedPath -Force
+          $null = New-Item -ItemType Directory -Path $unrelated -Force
+          $verifiedToken = [Guid]::NewGuid().ToString('N')
+          [IO.File]::WriteAllText((Join-Path $verifiedPath 'verified-sentinel.txt'), $verifiedToken)
+          [IO.File]::WriteAllText((Join-Path $unrelated 'unrelated-sentinel.txt'), 'unrelated')
+          $shortRoot = [FixerLeaseAliasFixtureV1]::GetShort($root)
+          $longComponents = @($root.Split([char]92))
+          $shortComponents = @($shortRoot.Split([char]92))
+          if ([string]::IsNullOrWhiteSpace($shortRoot) -or
+              $longComponents.Count -ne $shortComponents.Count) {
+            throw 'ALIAS_FIXTURE_UNAVAILABLE'
+          }
+          $aliasComponents = $longComponents.Clone()
+          $ancestorSubstituted = $false
+          for ($index = 0; $index -lt $longComponents.Count; $index++) {
+            if (-not $ancestorSubstituted -and $longComponents[$index] -ine $shortComponents[$index]) {
+              $aliasComponents[$index] = $shortComponents[$index]
+              $ancestorSubstituted = $true
+            }
+          }
+          if (-not $ancestorSubstituted) { throw 'ALIAS_FIXTURE_UNAVAILABLE' }
+          $aliasRoot = $aliasComponents -join '\\'
+          $rawAlias = Join-Path $aliasRoot ([IO.Path]::GetFileName($verifiedPath))
+          $aliasTargetAuthenticated = [bool]([IO.File]::ReadAllText(
+            (Join-Path $rawAlias 'verified-sentinel.txt')) -ceq $verifiedToken)
+          if (-not $aliasTargetAuthenticated) {
+            throw 'ALIAS_FIXTURE_TARGET_MISMATCH'
+          }
+
+          $phase = 'alias-identity'
+          $resolvedIdentity = Get-FixerProfilePathIdentity -Path $verifiedPath
+          if ($rawAlias -ieq [string]$resolvedIdentity.resolvedPath) {
+            $phase = 'alias-final-path-not-distinct'
+            throw 'ALIAS_FIXTURE_NOT_DISTINCT'
+          }
+
+          $phase = 'lease-acquire'
+          $lease = [FixerProfileIdentityV1]::AcquireQuarantineLease(
+            $rawAlias, [string]$resolvedIdentity.stableIdentity, [string]$resolvedIdentity.resolvedPath)
+          $leaseOriginalPath = [string]$lease.OriginalPath
+          $plannedQuarantinePath = [string]$lease.PlannedQuarantinePath
+          $rawAliasDistinct = [bool]($rawAlias -ine $leaseOriginalPath)
+          $leaseUsesResolvedPath = [bool]($leaseOriginalPath -ieq [string]$resolvedIdentity.resolvedPath)
+          $plannedUsesResolvedParent = [bool]([IO.Path]::GetDirectoryName($plannedQuarantinePath) -ieq
+            [IO.Path]::GetDirectoryName([string]$resolvedIdentity.resolvedPath))
+          try {
+            $phase = 'quarantine-rename'
+            $quarantinePath = $lease.Quarantine()
+            $plannedPathUsed = [bool]($quarantinePath -ieq $plannedQuarantinePath)
+            $verifiedSentinelMoved = [IO.File]::Exists((Join-Path $quarantinePath 'verified-sentinel.txt'))
+            $null = New-Item -ItemType Directory -Path $verifiedPath -Force
+            [IO.File]::WriteAllText((Join-Path $verifiedPath 'replacement-sentinel.txt'), 'replacement')
+            Remove-Item -LiteralPath (Join-Path $quarantinePath 'verified-sentinel.txt') -Force -EA Stop
+            $phase = 'handle-delete'
+            $lease.DeleteEmpty()
+            $deleteProved = [bool]$lease.DeleteProved
+          } finally {
+            $lease.Dispose()
+          }
+
+          $phase = 'evidence'
+          $replacementIdentity = Get-FixerProfilePathIdentity -Path $verifiedPath
+          [pscustomobject]@{
+            rawAliasDistinct = $rawAliasDistinct
+            aliasTargetAuthenticated = $aliasTargetAuthenticated
+            leaseUsesResolvedPath = $leaseUsesResolvedPath
+            plannedUsesResolvedParent = $plannedUsesResolvedParent
+            plannedPathUsed = $plannedPathUsed
+            verifiedSentinelMoved = $verifiedSentinelMoved
+            deleteProved = $deleteProved
+            quarantineAbsent = -not [IO.Directory]::Exists($plannedQuarantinePath)
+            replacementSurvived = [IO.File]::Exists((Join-Path $verifiedPath 'replacement-sentinel.txt'))
+            replacementIdentityChanged = [bool]([string]$replacementIdentity.stableIdentity -cne [string]$resolvedIdentity.stableIdentity)
+            unrelatedSurvived = [IO.File]::Exists((Join-Path $unrelated 'unrelated-sentinel.txt'))
+          } | ConvertTo-Json -Compress
+        } catch {
+          $failure = $_.Exception
+          while ($null -ne $failure.InnerException) { $failure = $failure.InnerException }
+          [pscustomobject]@{
+            marker = 'FIXER_PROFILE_ALIAS_FIXTURE_V1'
+            phase = $phase
+            outcome = 'failure'
+            exceptionType = $failure.GetType().FullName
+            hresult = [int]$failure.HResult
+          } | ConvertTo-Json -Compress
+          exit 1
+        } finally {
+          if (-not [string]::IsNullOrWhiteSpace($root) -and (Test-Path -LiteralPath $root)) {
+            Remove-Item -LiteralPath $root -Recurse -Force -EA SilentlyContinue
+          }
+        }
+      `, { timeout: 30000 });
+    assert.equal(aliasLeaseFixture.status, 0,
+      String(aliasLeaseFixture.stdout || aliasLeaseFixture.stderr || 'PowerShell alias fixture failed').trim());
+    assert.deepEqual(JSON.parse(String(aliasLeaseFixture.stdout || '').trim()), {
+      rawAliasDistinct: true,
+      aliasTargetAuthenticated: true,
+      leaseUsesResolvedPath: true,
+      plannedUsesResolvedParent: true,
+      plannedPathUsed: true,
+      verifiedSentinelMoved: true,
+      deleteProved: true,
+      quarantineAbsent: true,
+      replacementSurvived: true,
+      replacementIdentityChanged: true,
+      unrelatedSurvived: true
+    }, 'raw lexical alias custody retains the resolved object and preserves replacement and unrelated trees');
 
     const cleanupFixture = executeProductPowerShell(`
         $ErrorActionPreference = 'Stop'
