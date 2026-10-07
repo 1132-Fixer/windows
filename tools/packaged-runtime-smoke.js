@@ -48,6 +48,8 @@ const identityFixtureFailureReceipt = `
 $fixerFailure = $_.Exception
 $fixerFailureFrames = @()
 $fixerNativeSite = 'other'
+$fixerIoReason = 'none'
+$fixerSawIOException = $false
 for ($fixerDepth = 0; $fixerDepth -lt 8 -and $null -ne $fixerFailure; $fixerDepth++) {
   $fixerFrame = [ordered]@{
     depth = [int]$fixerDepth
@@ -64,12 +66,27 @@ for ($fixerDepth = 0; $fixerDepth -lt 8 -and $null -ne $fixerFailure; $fixerDept
         $fixerNativeSite = 'rename-by-handle'
       }
     }
+  } elseif ($fixerFailure -is [System.IO.IOException]) {
+    $fixerSawIOException = $true
+    $fixerMappedIoReason = switch -CaseSensitive ([string]$fixerFailure.Message) {
+      'profile path contains a reparse point' { 'path-reparse'; break }
+      'profile path is not a directory' { 'path-not-directory'; break }
+      'profile file identity is incomplete' { 'file-identity-incomplete'; break }
+      'receipt-format' { 'receipt-format'; break }
+      'receipt-identity' { 'receipt-identity'; break }
+      'receipt-path' { 'receipt-path'; break }
+      default { 'none' }
+    }
+    if ($fixerIoReason -ceq 'none' -and $fixerMappedIoReason -cne 'none') {
+      $fixerIoReason = $fixerMappedIoReason
+    }
   }
   $fixerFailureFrames += [pscustomobject]$fixerFrame
   $fixerNextFailure = $fixerFailure.InnerException
   if ($null -eq $fixerNextFailure -or [object]::ReferenceEquals($fixerFailure, $fixerNextFailure)) { break }
   $fixerFailure = $fixerNextFailure
 }
+if ($fixerIoReason -ceq 'none' -and $fixerSawIOException) { $fixerIoReason = 'other' }
 $fixerLeaseMoved = [bool]($null -ne $lease -and
   -not [string]::IsNullOrEmpty([string]$lease.QuarantinePath))
 $fixerReceipt = [ordered]@{
@@ -78,6 +95,7 @@ $fixerReceipt = [ordered]@{
   outcome = 'failure'
   leaseMoved = $fixerLeaseMoved
   nativeSite = $fixerNativeSite
+  ioReason = $fixerIoReason
   sourceParentIsUsersRoot = [bool]$fixerSourceParentIsUsersRoot
   destinationParentIsUsersRoot = [bool]$fixerDestinationParentIsUsersRoot
   destinationLeafValid = [bool]$fixerDestinationLeafValid
@@ -818,6 +836,13 @@ async function run(options = {}) {
     !/\.User\b|\.Domain\b|user1/i.test(yesProbe.probeScript),
   'the real probe maps both enumeration and owner uncertainty to UNKNOWN and uses no same-name owner fallback');
 
+  for (const reason of ['receipt-format', 'receipt-identity', 'receipt-path']) {
+    assert.ok(profileIdentityHelper.includes(`throw new IOException("${reason}")`),
+      `production receipt validation has the fixed ${reason} failure`);
+  }
+  assert.ok(!profileIdentityHelper.includes('throw new IOException("profile directory identity changed after validation")'),
+    'production receipt validation no longer merges format, identity, and path failures');
+
   if (process.platform === 'win32') {
     const productPowerShell = process.platform === 'win32'
       ? path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
@@ -836,9 +861,11 @@ async function run(options = {}) {
       });
     const identityDiagnosticFixture = executeProductPowerShell(`
       $ErrorActionPreference = 'Stop'
+      ${profileIdentityHelper}
       Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
+using System.IO;
 
 public static class FixerIdentityDiagnosticFixtureV1 {
   private static Win32Exception CreateNativeFailure(int code) {
@@ -851,6 +878,18 @@ public static class FixerIdentityDiagnosticFixtureV1 {
 
   public static void RenameByHandle() { throw CreateNativeFailure(5); }
   public static void DescribeDirectoryHandle() { throw CreateNativeFailure(6); }
+
+  public static void ThrowIo(string reason) {
+    IOException failure = new IOException(reason);
+    failure.Source = "PRIVATE_DIAGNOSTIC_SOURCE";
+    failure.Data["PRIVATE_DIAGNOSTIC_DATA_KEY"] = "PRIVATE_DIAGNOSTIC_DATA_VALUE";
+    throw failure;
+  }
+
+  public static void ThrowWrappedIo() {
+    throw new IOException(
+      "PRIVATE_DIAGNOSTIC_OUTER_IO", new IOException("receipt-path"));
+  }
 
   public static void ThrowDeep() {
     Exception failure = new Exception();
@@ -893,11 +932,57 @@ public static class FixerIdentityDiagnosticFixtureV1 {
       $fixerDestinationCharCount = [int]([string]$lease.PlannedQuarantinePath).Length
       try { [FixerIdentityDiagnosticFixtureV1]::ThrowDeep() }
       catch { ${identityFixtureFailureReceipt} }
+      foreach ($fixerIoCase in @(
+        [pscustomobject]@{ Phase = 'diagnostic-io-path-reparse'; Reason = 'profile path contains a reparse point' },
+        [pscustomobject]@{ Phase = 'diagnostic-io-path-not-directory'; Reason = 'profile path is not a directory' },
+        [pscustomobject]@{ Phase = 'diagnostic-io-file-identity-incomplete'; Reason = 'profile file identity is incomplete' },
+        [pscustomobject]@{ Phase = 'diagnostic-io-other'; Reason = 'PRIVATE_DIAGNOSTIC_IO_MESSAGE' }
+      )) {
+        $phase = [string]$fixerIoCase.Phase
+        try { [FixerIdentityDiagnosticFixtureV1]::ThrowIo([string]$fixerIoCase.Reason) }
+        catch { ${identityFixtureFailureReceipt} }
+      }
+      $fixerRequireReceiptFlags = [System.Reflection.BindingFlags]::NonPublic -bor
+        [System.Reflection.BindingFlags]::Static
+      $fixerRequireReceipt = [FixerProfileIdentityV1].GetMethod(
+        'RequireReceipt', $fixerRequireReceiptFlags)
+      foreach ($fixerReceiptCase in @(
+        [pscustomobject]@{
+          Phase = 'diagnostic-io-receipt-format'
+          Receipt = 'PRIVATE_FORMAT_RECEIPT'
+          ExpectedIdentity = 'PRIVATE_EXPECTED_IDENTITY'
+          ExpectedPath = 'C:\Users\PRIVATE_EXPECTED_PATH'
+        },
+        [pscustomobject]@{
+          Phase = 'diagnostic-io-receipt-identity'
+          Receipt = 'PRIVATE_ACTUAL_IDENTITY|C:\Users\PRIVATE_EXPECTED_PATH'
+          ExpectedIdentity = 'PRIVATE_EXPECTED_IDENTITY'
+          ExpectedPath = 'C:\Users\PRIVATE_EXPECTED_PATH'
+        },
+        [pscustomobject]@{
+          Phase = 'diagnostic-io-receipt-path'
+          Receipt = 'PRIVATE_EXPECTED_IDENTITY|C:\Users\PRIVATE_ACTUAL_PATH'
+          ExpectedIdentity = 'PRIVATE_EXPECTED_IDENTITY'
+          ExpectedPath = 'C:\Users\PRIVATE_EXPECTED_PATH'
+        }
+      )) {
+        $phase = [string]$fixerReceiptCase.Phase
+        try {
+          $null = $fixerRequireReceipt.Invoke($null, [object[]]@(
+            [string]$fixerReceiptCase.Receipt,
+            [string]$fixerReceiptCase.ExpectedIdentity,
+            [string]$fixerReceiptCase.ExpectedPath))
+          throw 'PRIVATE_DIAGNOSTIC_EXPECTED_RECEIPT_FAILURE'
+        } catch { ${identityFixtureFailureReceipt} }
+      }
+      $phase = 'diagnostic-io-nested-recognized'
+      try { [FixerIdentityDiagnosticFixtureV1]::ThrowWrappedIo() }
+      catch { ${identityFixtureFailureReceipt} }
     `);
     assert.equal(identityDiagnosticFixture.status, 0, 'PowerShell identity diagnostic fixture failed');
     const diagnosticLines = String(identityDiagnosticFixture.stdout || '')
       .split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-    assert.equal(diagnosticLines.length, 3, 'identity diagnostic fixture emits exactly three receipts');
+    assert.equal(diagnosticLines.length, 11, 'identity diagnostic fixture emits exactly eleven receipts');
     let diagnosticReceipts;
     try {
       diagnosticReceipts = diagnosticLines.map(line => JSON.parse(line));
@@ -905,7 +990,7 @@ public static class FixerIdentityDiagnosticFixtureV1 {
       assert.fail('identity diagnostic fixture emitted malformed JSON');
     }
     const allowedReceiptKeys = [
-      'marker', 'phase', 'outcome', 'leaseMoved', 'nativeSite',
+      'marker', 'phase', 'outcome', 'leaseMoved', 'nativeSite', 'ioReason',
       'sourceParentIsUsersRoot', 'destinationParentIsUsersRoot',
       'destinationLeafValid', 'destinationCharCount', 'exceptions'
     ];
@@ -918,7 +1003,11 @@ public static class FixerIdentityDiagnosticFixtureV1 {
       if (!value || typeof value !== 'object') return [];
       return Object.entries(value).flatMap(([key, nested]) => [key, ...collectDiagnosticKeys(nested)]);
     };
-    const assertDiagnosticReceipt = (receipt, phase, leaseMoved, nativeSite, geometry) => {
+    const allowedIoReasons = [
+      'none', 'other', 'path-reparse', 'path-not-directory',
+      'file-identity-incomplete', 'receipt-format', 'receipt-identity', 'receipt-path'
+    ];
+    const assertDiagnosticReceipt = (receipt, phase, leaseMoved, nativeSite, ioReason, geometry) => {
       assert.deepEqual(Object.keys(receipt), allowedReceiptKeys);
       assert.equal(receipt.marker, 'FIXER_PROFILE_IDENTITY_FIXTURE_V1');
       assert.equal(receipt.phase, phase);
@@ -926,6 +1015,8 @@ public static class FixerIdentityDiagnosticFixtureV1 {
       assert.equal(receipt.leaseMoved, leaseMoved);
       assert.equal(receipt.nativeSite, nativeSite);
       assert.ok(['describe-handle', 'rename-by-handle', 'other'].includes(receipt.nativeSite));
+      assert.equal(receipt.ioReason, ioReason);
+      assert.ok(allowedIoReasons.includes(receipt.ioReason));
       assert.equal(receipt.sourceParentIsUsersRoot, geometry.sourceParentIsUsersRoot);
       assert.equal(receipt.destinationParentIsUsersRoot, geometry.destinationParentIsUsersRoot);
       assert.equal(receipt.destinationLeafValid, geometry.destinationLeafValid);
@@ -955,17 +1046,17 @@ public static class FixerIdentityDiagnosticFixtureV1 {
       destinationLeafValid: true,
       destinationCharCount: validDiagnosticDestination.length
     };
-    const [renameDiagnostic, describeDiagnostic, boundedDiagnostic] = diagnosticReceipts;
-    assertDiagnosticReceipt(renameDiagnostic, 'diagnostic-native', true, 'rename-by-handle', validGeometry);
+    const [renameDiagnostic, describeDiagnostic, boundedDiagnostic, ...ioDiagnostics] = diagnosticReceipts;
+    assertDiagnosticReceipt(renameDiagnostic, 'diagnostic-native', true, 'rename-by-handle', 'none', validGeometry);
     assert.deepEqual(renameDiagnostic.exceptions.map(frame => frame.depth), [0, 1]);
     assert.equal(renameDiagnostic.exceptions[0].exceptionClass,
       'System.Management.Automation.MethodInvocationException');
     assert.equal(renameDiagnostic.exceptions[1].exceptionClass, 'System.ComponentModel.Win32Exception');
     assert.equal(renameDiagnostic.exceptions[1].nativeCode, 5);
-    assertDiagnosticReceipt(describeDiagnostic, 'diagnostic-describe', true, 'describe-handle', validGeometry);
+    assertDiagnosticReceipt(describeDiagnostic, 'diagnostic-describe', true, 'describe-handle', 'none', validGeometry);
     assert.deepEqual(describeDiagnostic.exceptions.map(frame => frame.depth), [0, 1]);
     assert.equal(describeDiagnostic.exceptions[1].nativeCode, 6);
-    assertDiagnosticReceipt(boundedDiagnostic, 'diagnostic-bounded', false, 'other', {
+    assertDiagnosticReceipt(boundedDiagnostic, 'diagnostic-bounded', false, 'other', 'none', {
       sourceParentIsUsersRoot: false,
       destinationParentIsUsersRoot: false,
       destinationLeafValid: false,
@@ -975,12 +1066,52 @@ public static class FixerIdentityDiagnosticFixtureV1 {
     assert.equal(boundedDiagnostic.exceptions[0].exceptionClass,
       'System.Management.Automation.MethodInvocationException');
     assert.ok(boundedDiagnostic.exceptions.every(frame => !Object.prototype.hasOwnProperty.call(frame, 'nativeCode')));
+    const expectedIoDiagnostics = [
+      ['diagnostic-io-path-reparse', 'path-reparse', 2],
+      ['diagnostic-io-path-not-directory', 'path-not-directory', 2],
+      ['diagnostic-io-file-identity-incomplete', 'file-identity-incomplete', 2],
+      ['diagnostic-io-other', 'other', 2],
+      ['diagnostic-io-receipt-format', 'receipt-format', null],
+      ['diagnostic-io-receipt-identity', 'receipt-identity', null],
+      ['diagnostic-io-receipt-path', 'receipt-path', null],
+      ['diagnostic-io-nested-recognized', 'receipt-path', 3]
+    ];
+    assert.equal(ioDiagnostics.length, expectedIoDiagnostics.length);
+    ioDiagnostics.forEach((receipt, index) => {
+      const [phase, ioReason, frameCount] = expectedIoDiagnostics[index];
+      assertDiagnosticReceipt(receipt, phase, false, 'other', ioReason, {
+        sourceParentIsUsersRoot: false,
+        destinationParentIsUsersRoot: false,
+        destinationLeafValid: false,
+        destinationCharCount: invalidDiagnosticDestination.length
+      });
+      if (frameCount === null) {
+        assert.ok(receipt.exceptions.length >= 2 &&
+          receipt.exceptions[0].exceptionClass === 'System.Management.Automation.MethodInvocationException' &&
+          receipt.exceptions[receipt.exceptions.length - 1].exceptionClass === 'System.IO.IOException',
+        'evaluated production receipt failure retains a bounded wrapper chain and terminal IOException');
+      } else {
+        assert.deepEqual(receipt.exceptions.map(frame => frame.exceptionClass), [
+          'System.Management.Automation.MethodInvocationException',
+          ...Array(frameCount - 1).fill('System.IO.IOException')
+        ]);
+      }
+      assert.ok(receipt.exceptions.every(frame => !Object.prototype.hasOwnProperty.call(frame, 'nativeCode')));
+    });
     const diagnosticOutput = diagnosticLines.join('\n');
     assert.ok(!diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_MESSAGE') &&
       !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_PATH') &&
       !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_SOURCE') &&
       !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_DATA_KEY') &&
       !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_DATA_VALUE') &&
+      !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_IO_MESSAGE') &&
+      !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_OUTER_IO') &&
+      !diagnosticOutput.includes('PRIVATE_FORMAT_RECEIPT') &&
+      !diagnosticOutput.includes('PRIVATE_ACTUAL_IDENTITY') &&
+      !diagnosticOutput.includes('PRIVATE_EXPECTED_IDENTITY') &&
+      !diagnosticOutput.includes('PRIVATE_ACTUAL_PATH') &&
+      !diagnosticOutput.includes('PRIVATE_EXPECTED_PATH') &&
+      !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_EXPECTED_RECEIPT_FAILURE') &&
       !diagnosticOutput.includes('C:\\\\Users') &&
       !diagnosticOutput.includes('PRIVATE_DIAGNOSTIC_DESTINATION_PATH') &&
       !diagnosticOutput.includes('DescribeDirectoryHandle') &&
@@ -1367,13 +1498,16 @@ public static class FixerIdentityDiagnosticFixtureV1 {
               FixerProfileQuarantineV1 = $recoveryJson
             }
             $preRenameRecovered = Resolve-FixerProfileInventoryPath -Item $recoveryItem -KeyName '${oldSid}' -ExpectedSid '${oldSid}'
-            $phase = 'quarantine-rename'
+            $phase = 'quarantine-call'
             $quarantinePath = $lease.Quarantine()
+            $phase = 'quarantine-returned'
             $quarantineMoveObserved = $true
             $boundOwned = $false
             $quarantineOwned = $true
+            $phase = 'replacement-create'
             $null = New-Item -ItemType Directory -Path $leaseOriginalPath
             $boundOwned = $true
+            $phase = 'replacement-write'
             [IO.File]::WriteAllText((Join-Path $leaseOriginalPath 'replacement-sentinel.txt'), 'replacement')
             $movedSentinelPresent = [IO.File]::Exists((Join-Path $quarantinePath 'verified-sentinel.txt'))
             $phase = 'recovery-after-rename'

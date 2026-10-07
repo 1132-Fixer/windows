@@ -2267,10 +2267,12 @@ public static class FixerProfileIdentityV1 {
 
   private static void RequireReceipt(string receipt, string expectedIdentity, string expectedResolvedPath) {
     string[] parts = receipt.Split(new char[] { '|' }, 2);
-    if (parts.Length != 2 || !String.Equals(parts[0], expectedIdentity, StringComparison.Ordinal) ||
-        !String.Equals(Path.GetFullPath(parts[1]), Path.GetFullPath(expectedResolvedPath), StringComparison.OrdinalIgnoreCase)) {
-      throw new IOException("profile directory identity changed after validation");
+    if (parts.Length != 2) throw new IOException("receipt-format");
+    if (!String.Equals(parts[0], expectedIdentity, StringComparison.Ordinal)) {
+      throw new IOException("receipt-identity");
     }
+    if (!String.Equals(Path.GetFullPath(parts[1]), Path.GetFullPath(expectedResolvedPath),
+        StringComparison.OrdinalIgnoreCase)) throw new IOException("receipt-path");
   }
 
   private static bool DirectoryIsEmpty(string path) {
