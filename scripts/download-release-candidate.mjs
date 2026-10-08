@@ -39,24 +39,110 @@ async function cancelBody(body) {
   try { await body.cancel(); } catch (_) { /* best-effort cancellation after a fixed failure */ }
 }
 
-async function removeOwnedPartial(fileSystem, partialPath, fileHandle) {
+function custodyFailure() {
+  const error = failure('candidate-download-cleanup');
+  error.preserveEntries = true;
+  return error;
+}
+
+function failCustody() {
+  throw custodyFailure();
+}
+
+function hasIdentity(stat, identity) {
+  return stat && typeof stat.isFile === 'function' && stat.isFile() &&
+    stat.dev === identity.dev && stat.ino === identity.ino;
+}
+
+async function closeHandles(handles) {
+  let ok = true;
+  for (const handle of handles.filter(Boolean)) {
+    try { await handle.close(); } catch (_) { ok = false; }
+  }
+  return ok;
+}
+
+async function readIdentity(fileHandle) {
+  let stat;
+  try { stat = await fileHandle.stat({ bigint: true }); } catch (_) { failCustody(); }
+  if (!stat.isFile() || typeof stat.dev !== 'bigint' || typeof stat.ino !== 'bigint' || stat.ino <= 0n) {
+    failCustody();
+  }
+  return { dev: stat.dev, ino: stat.ino };
+}
+
+async function openOwnedEntry(fileSystem, entryPath, identity) {
+  let handle = null;
+  try {
+    const entryStat = await fileSystem.lstat(entryPath, { bigint: true });
+    if (!hasIdentity(entryStat, identity)) failCustody();
+    handle = await fileSystem.open(entryPath, 'r');
+    const handleStat = await handle.stat({ bigint: true });
+    if (!hasIdentity(handleStat, identity)) failCustody();
+    return handle;
+  } catch (_) {
+    if (handle) await closeHandles([handle]);
+    failCustody();
+  }
+}
+
+async function verifyOwnedEntry(fileSystem, entryPath, identity) {
+  const handle = await openOwnedEntry(fileSystem, entryPath, identity);
+  if (!await closeHandles([handle])) failCustody();
+}
+
+async function removeOwnedEntries(fileSystem, entryPaths, identity) {
+  const proofs = [];
+  try {
+    for (const entryPath of entryPaths) proofs.push(await openOwnedEntry(fileSystem, entryPath, identity));
+  } catch (_) {
+    await closeHandles(proofs);
+    failCustody();
+  }
   let cleanupFailed = false;
-  if (fileHandle) {
-    try { await fileHandle.close(); } catch (_) { cleanupFailed = true; }
+  for (const entryPath of entryPaths) {
+    try {
+      await fileSystem.unlink(entryPath);
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') cleanupFailed = true;
+    }
   }
+  for (const entryPath of entryPaths) {
+    try {
+      await fileSystem.lstat(entryPath, { bigint: true });
+      cleanupFailed = true;
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') cleanupFailed = true;
+    }
+  }
+  if (!await closeHandles(proofs)) cleanupFailed = true;
+  if (cleanupFailed) failCustody();
+}
+
+async function verifyPromotedFinal(fileSystem, finalPath, identity, expectedSize, expectedDigest) {
+  const handle = await openOwnedEntry(fileSystem, finalPath, identity);
+  let verifyError = null;
   try {
-    await fileSystem.unlink(partialPath);
+    const before = await handle.stat({ bigint: true });
+    if (!hasIdentity(before, identity)) failCustody();
+    if (before.size !== BigInt(expectedSize)) fail('candidate-download-size');
+    const hash = crypto.createHash('sha256');
+    let size = 0;
+    for await (const chunk of handle.createReadStream({ autoClose: false, start: 0 })) {
+      size += chunk.length;
+      if (size > expectedSize) fail('candidate-download-size');
+      hash.update(chunk);
+    }
+    if (size !== expectedSize) fail('candidate-download-size');
+    if (`sha256:${hash.digest('hex')}` !== expectedDigest) fail('candidate-download-digest');
+    const after = await handle.stat({ bigint: true });
+    if (!hasIdentity(after, identity)) failCustody();
+    if (after.size !== BigInt(expectedSize)) fail('candidate-download-size');
   } catch (error) {
-    if (!error || error.code !== 'ENOENT') cleanupFailed = true;
+    verifyError = error && error.code ? error : custodyFailure();
   }
-  let absent = false;
-  try {
-    await fileSystem.lstat(partialPath);
-  } catch (error) {
-    if (error && error.code === 'ENOENT') absent = true;
-    else cleanupFailed = true;
-  }
-  if (cleanupFailed || !absent) fail('candidate-download-cleanup');
+  if (!await closeHandles([handle])) failCustody();
+  if (verifyError) throw verifyError;
 }
 
 export async function downloadReleaseCandidate({
@@ -69,7 +155,8 @@ export async function downloadReleaseCandidate({
       !/^release-candidate-[a-f0-9]{40}$/.test(expectedName) || !/^[a-f0-9]{40}$/.test(expectedHead) ||
       !/^sha256:[a-f0-9]{64}$/.test(expectedDigest) || typeof out !== 'string' || !out ||
       !partialFileSystem || typeof partialFileSystem.open !== 'function' ||
-      typeof partialFileSystem.unlink !== 'function' || typeof partialFileSystem.lstat !== 'function') {
+      typeof partialFileSystem.unlink !== 'function' || typeof partialFileSystem.lstat !== 'function' ||
+      typeof partialFileSystem.link !== 'function') {
     fail('candidate-download-input');
   }
   const base = `/repos/${repository}`;
@@ -83,13 +170,16 @@ export async function downloadReleaseCandidate({
   const temp = `${out}.part-${process.pid}`;
   if (fs.existsSync(out)) fail('candidate-download-output-exists');
   let partialHandle = null;
-  let ownsPartial = false;
+  let identity = null;
+  let ownedEntries = [];
   try {
     try {
-      partialHandle = await partialFileSystem.open(temp, 'wx');
-      ownsPartial = true;
+      partialHandle = await partialFileSystem.open(temp, 'wx+');
+      ownedEntries = [temp];
+      identity = await readIdentity(partialHandle);
     } catch (error) {
       if (error && error.code === 'EEXIST') fail('candidate-download-output-exists');
+      if (error && error.preserveEntries) throw error;
       fail('candidate-download-partial-open');
     }
     const archive = await api.request('GET', `${base}/actions/artifacts/${artifactId}/zip`, {
@@ -120,12 +210,38 @@ export async function downloadReleaseCandidate({
     if (size !== expectedSize) fail('candidate-download-size');
     const digest = `sha256:${hash.digest('hex')}`;
     if (digest !== expectedDigest) fail('candidate-download-digest');
-    await partialHandle.close();
+    await partialHandle.sync();
+    const writtenStat = await partialHandle.stat({ bigint: true });
+    if (!hasIdentity(writtenStat, identity)) failCustody();
+    if (writtenStat.size !== BigInt(expectedSize)) fail('candidate-download-size');
+
+    const sourceProof = await openOwnedEntry(partialFileSystem, temp, identity);
+    let linkError = null;
+    try {
+      await partialFileSystem.link(temp, out);
+      ownedEntries.push(out);
+    } catch (error) {
+      linkError = error && error.code === 'EEXIST'
+        ? failure('candidate-download-output-exists')
+        : failure('candidate-download-failed');
+    }
+    if (!await closeHandles([sourceProof])) failCustody();
+    if (linkError) throw linkError;
+    await verifyOwnedEntry(partialFileSystem, out, identity);
+
+    await removeOwnedEntries(partialFileSystem, [temp], identity);
+    ownedEntries = [out];
+    if (!await closeHandles([partialHandle])) failCustody();
     partialHandle = null;
-    fs.renameSync(temp, out);
-    ownsPartial = false;
+    await verifyPromotedFinal(partialFileSystem, out, identity, expectedSize, expectedDigest);
   } catch (error) {
-    if (ownsPartial) await removeOwnedPartial(partialFileSystem, temp, partialHandle);
+    let cleanupFailed = Boolean(error && error.preserveEntries);
+    if (!cleanupFailed && identity && ownedEntries.length) {
+      try { await removeOwnedEntries(partialFileSystem, ownedEntries, identity); }
+      catch (_) { cleanupFailed = true; }
+    }
+    if (partialHandle && !await closeHandles([partialHandle])) cleanupFailed = true;
+    if (cleanupFailed) fail('candidate-download-cleanup');
     throw error;
   }
   console.log(`[release-candidate] downloaded verified artifact ${artifactId}`);

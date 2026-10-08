@@ -81,6 +81,14 @@ function openByteStream(chunk, state) {
   });
 }
 
+function cleanupExactFiles(filePaths, directory) {
+  for (const filePath of filePaths) {
+    try { fs.unlinkSync(filePath); }
+    catch (error) { if (!error || error.code !== 'ENOENT') throw error; }
+  }
+  fs.rmdirSync(directory);
+}
+
 (async () => {
   const evidenceModule = await import('../scripts/release-evidence.mjs');
   const preflightModule = await import('../scripts/release-preflight.mjs');
@@ -115,7 +123,7 @@ function openByteStream(chunk, state) {
     size_in_bytes: size,
     workflow_run: { id: candidateRunId, head_sha: sourceHead }
   });
-  const candidateApi = ({ metadata, archive }) => {
+  const candidateApi = ({ metadata, archive, beforeRequest = null }) => {
     const state = { requests: 0, requestOptions: null };
     return {
       state,
@@ -129,6 +137,7 @@ function openByteStream(chunk, state) {
         state.requestOptions = options;
         assert.equal(method, 'GET');
         assert.equal(apiPath, `/repos/1132-Fixer/windows/actions/artifacts/${candidateArtifactId}/zip`);
+        if (beforeRequest) await beforeRequest();
         return archive;
       }
     };
@@ -215,6 +224,130 @@ function openByteStream(chunk, state) {
     }
   }
   {
+    const expected = Buffer.from('abc');
+    const replacement = Buffer.from('foreign-partial');
+    const digest = `sha256:${crypto.createHash('sha256').update(expected).digest('hex')}`;
+    const streamState = { cancelled: false };
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-replaced-failure-'));
+    const out = path.join(dir, 'candidate.zip');
+    const partial = `${out}.part-${process.pid}`;
+    const moved = `${partial}.owned`;
+    try {
+      const api = candidateApi({
+        metadata: candidateMetadata(expected.length, digest),
+        archive: response({ body: openByteStream(Buffer.from('abcd'), streamState) }),
+        async beforeRequest() {
+          await fs.promises.rename(partial, moved);
+          await fs.promises.writeFile(partial, replacement, { flag: 'wx' });
+        }
+      });
+      await assert.rejects(downloadReleaseCandidate(candidateInput(api, out, digest)),
+        error => error.code === 'candidate-download-cleanup' && error.message === 'candidate-download-cleanup',
+        'a replaced partial turns the original stream failure into a stable custody failure');
+      assert.equal(streamState.cancelled, true, 'the failed response is still cancelled');
+      assert.deepEqual(fs.readFileSync(partial), replacement,
+        'failure cleanup preserves a replacement that is not the opened file');
+      assert.equal(fs.existsSync(moved), true, 'identity loss closes but does not delete the opened file alias');
+      assert.equal(fs.existsSync(out), false, 'identity loss cannot produce a final candidate');
+    } finally {
+      cleanupExactFiles([partial, moved, out], dir);
+    }
+  }
+  {
+    const expected = Buffer.from('verified-candidate');
+    const replacement = Buffer.from('foreign-candidate');
+    const digest = `sha256:${crypto.createHash('sha256').update(expected).digest('hex')}`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-promotion-race-'));
+    const out = path.join(dir, 'candidate.zip');
+    const partial = `${out}.part-${process.pid}`;
+    const moved = `${partial}.owned`;
+    const partialFileSystem = {
+      open: (...args) => fs.promises.open(...args),
+      unlink: (...args) => fs.promises.unlink(...args),
+      lstat: (...args) => fs.promises.lstat(...args),
+      async link(source, target) {
+        assert.equal(source, partial);
+        assert.equal(target, out);
+        await fs.promises.rename(source, moved);
+        await fs.promises.writeFile(source, replacement, { flag: 'wx' });
+        await fs.promises.link(source, target);
+      }
+    };
+    try {
+      const api = candidateApi({
+        metadata: candidateMetadata(expected.length, digest),
+        archive: response({ body: closedByteStream([expected]) })
+      });
+      await assert.rejects(
+        downloadReleaseCandidate(candidateInput(api, out, digest, { partialFileSystem })),
+        error => error.code === 'candidate-download-cleanup' && error.message === 'candidate-download-cleanup',
+        'a source swap inside promotion cannot turn foreign bytes into an accepted final');
+      assert.deepEqual(fs.readFileSync(partial), replacement,
+        'promotion custody loss preserves the replacement partial');
+      assert.deepEqual(fs.readFileSync(out), replacement,
+        'promotion custody loss preserves the foreign final directory entry');
+      assert.deepEqual(fs.readFileSync(moved), expected,
+        'the bytes hashed through the opened handle remain separate from the foreign paths');
+    } finally {
+      cleanupExactFiles([out, partial, moved], dir);
+    }
+  }
+  {
+    const expected = Buffer.from('late-final-source');
+    const competing = Buffer.from('late-final-competitor');
+    const digest = `sha256:${crypto.createHash('sha256').update(expected).digest('hex')}`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-late-final-'));
+    const out = path.join(dir, 'candidate.zip');
+    const partial = `${out}.part-${process.pid}`;
+    try {
+      const api = candidateApi({
+        metadata: candidateMetadata(expected.length, digest),
+        archive: response({ body: closedByteStream([expected]) }),
+        async beforeRequest() {
+          await fs.promises.writeFile(out, competing, { flag: 'wx' });
+        }
+      });
+      await assert.rejects(downloadReleaseCandidate(candidateInput(api, out, digest)),
+        error => error.code === 'candidate-download-output-exists',
+        'atomic hard-link promotion refuses a final created after the early check');
+      assert.deepEqual(fs.readFileSync(out), competing, 'late final competitor survives byte-identical');
+      assert.equal(fs.existsSync(partial), false, 'owned partial is removed after no-replace promotion fails');
+    } finally {
+      cleanupExactFiles([partial, out], dir);
+    }
+  }
+  {
+    const expected = Buffer.from('abcd');
+    const changed = Buffer.from('wxyz');
+    const digest = `sha256:${crypto.createHash('sha256').update(expected).digest('hex')}`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-final-digest-'));
+    const out = path.join(dir, 'candidate.zip');
+    const partial = `${out}.part-${process.pid}`;
+    const partialFileSystem = {
+      open: (...args) => fs.promises.open(...args),
+      unlink: (...args) => fs.promises.unlink(...args),
+      lstat: (...args) => fs.promises.lstat(...args),
+      async link(source, target) {
+        await fs.promises.link(source, target);
+        await fs.promises.writeFile(target, changed);
+      }
+    };
+    try {
+      const api = candidateApi({
+        metadata: candidateMetadata(expected.length, digest),
+        archive: response({ body: closedByteStream([expected]) })
+      });
+      await assert.rejects(
+        downloadReleaseCandidate(candidateInput(api, out, digest, { partialFileSystem })),
+        error => error.code === 'candidate-download-digest',
+        'the promoted final is rehashed before success');
+      assert.equal(fs.existsSync(out), false, 'digest-mismatched promoted final is removed');
+      assert.equal(fs.existsSync(partial), false, 'digest-mismatched partial alias is removed');
+    } finally {
+      cleanupExactFiles([partial, out], dir);
+    }
+  }
+  {
     const bytes = Buffer.from('length-fixture');
     const digest = `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
     const streamState = { cancelled: false };
@@ -242,7 +375,7 @@ function openByteStream(chunk, state) {
     const expected = Buffer.from('abc');
     const digest = `sha256:${crypto.createHash('sha256').update(expected).digest('hex')}`;
     const streamState = { cancelled: false };
-    const fileState = { opens: 0, unlinks: 0, readbacks: 0 };
+    const fileState = { opens: 0, unlinks: 0, readbacks: 0, links: 0 };
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-overflow-'));
     const out = path.join(dir, 'candidate.zip');
     const partialFileSystem = {
@@ -257,6 +390,10 @@ function openByteStream(chunk, state) {
       lstat(...args) {
         fileState.readbacks++;
         return fs.promises.lstat(...args);
+      },
+      link(...args) {
+        fileState.links++;
+        return fs.promises.link(...args);
       }
     };
     try {
@@ -271,8 +408,8 @@ function openByteStream(chunk, state) {
       assert.equal(fs.existsSync(out), false, 'chunked candidate overflow retains no final file');
       assert.equal(fs.existsSync(`${out}.part-${process.pid}`), false,
         'chunked candidate overflow removes its exact owned partial');
-      assert.deepEqual(fileState, { opens: 1, unlinks: 1, readbacks: 1 },
-        'owned-partial cleanup unlinks once and reads back exact absence');
+      assert.deepEqual(fileState, { opens: 2, unlinks: 1, readbacks: 2, links: 0 },
+        'owned-partial cleanup proves identity, unlinks once, and reads back exact absence');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -292,7 +429,8 @@ function openByteStream(chunk, state) {
         error.code = 'EACCES';
         throw error;
       },
-      lstat: (...args) => fs.promises.lstat(...args)
+      lstat: (...args) => fs.promises.lstat(...args),
+      link: (...args) => fs.promises.link(...args)
     };
     try {
       const api = candidateApi({
