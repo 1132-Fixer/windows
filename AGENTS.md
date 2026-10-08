@@ -100,7 +100,7 @@ node tools/support-submission-smoke.js # desktop's stateless support boundary
 node tools/support-release-smoke.js    # public endpoint readiness contract
 npm run build                  # portable exe   (electron-builder)
 npm run build:installer        # NSIS installer
-node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out acceptance-evidence   # add --test-copy where UAC is disabled
+node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out acceptance-evidence   # native candidate; exact identity flags and operator attestation are required for release eligibility
 ```
 
 - `npm test` must pass from the exact final commit. Add a regression test for
@@ -114,8 +114,10 @@ node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out
 - The packaged acceptance driver needs an elevated Windows session **without**
   Smart App Control enforcement (SAC blocks the unsigned host binary before
   Electron starts). CI runs it on the `windows-latest` runner and uploads the
-  `packaged-acceptance` artifact (screenshots + `report.md`). A case that
-  cannot run is reported `not-run`, never `passed`.
+  `packaged-acceptance` artifact (screenshots + `report.md`) with `--test-copy`.
+  That modified-manifest run is diagnostic only: it may pass its executed cases
+  but can never be native/final-artifact release evidence. A case that cannot
+  run is reported `not-run`, never `passed`.
 - Release: bump `package.json` (`npm version patch`), update `CHANGELOG.md`,
   merge to `main`, tag `vX.Y.Z` on the `main` commit, push the tag, read the
   release run, then download the published assets and verify

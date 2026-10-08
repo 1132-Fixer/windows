@@ -33,6 +33,17 @@ function endpointUrl(value) {
   }
 }
 
+/** Stable identity for the one public support setting. Unsafe input is never
+ * copied into the revision: invalid and unset values share the disabled form. */
+function supportConfigRevision(value) {
+  const url = endpointUrl(value);
+  const endpoint = url ? url.href : '';
+  return crypto.createHash('sha256')
+    .update('1132-fixer-public-config-v1\0', 'utf8')
+    .update(endpoint, 'utf8')
+    .digest('hex');
+}
+
 function capabilities(config) {
   const enabled = Boolean(endpointUrl(config && config.FEEDBACK_PROXY_URL));
   return { configured: enabled, screenshots: enabled };
@@ -168,4 +179,11 @@ function createSupportClient({ transportRequest = https.request, timeoutMs = REQ
   return { capabilities, submitFeedback };
 }
 
-module.exports = { ...createSupportClient(), createSupportClient, endpointUrl, TEXT_MAX_BYTES, SCREENSHOT_MAX_BYTES };
+module.exports = {
+  ...createSupportClient(),
+  createSupportClient,
+  endpointUrl,
+  supportConfigRevision,
+  TEXT_MAX_BYTES,
+  SCREENSHOT_MAX_BYTES
+};

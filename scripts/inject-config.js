@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { endpointUrl } = require('../src/main/support-client');
+const { endpointUrl, supportConfigRevision } = require('../src/main/support-client');
 
 const input = (process.env.FEEDBACK_PROXY_URL || '').trim();
 const endpoint = input ? endpointUrl(input) : null;
@@ -16,8 +16,12 @@ if (input && !endpoint) {
 
 const outDir = path.join(__dirname, '..', 'src', 'main');
 const outFile = path.join(outDir, 'config.generated.js');
+const normalizedEndpoint = endpoint ? endpoint.href : '';
 const body = '// AUTO-GENERATED. Public configuration only. DO NOT COMMIT.\n' +
-  'module.exports = ' + JSON.stringify({ FEEDBACK_PROXY_URL: endpoint ? endpoint.href : '' }, null, 2) + ';\n';
+  'module.exports = ' + JSON.stringify({
+    FEEDBACK_PROXY_URL: normalizedEndpoint,
+    FEEDBACK_CONFIG_REVISION: supportConfigRevision(normalizedEndpoint)
+  }, null, 2) + ';\n';
 fs.mkdirSync(outDir, { recursive: true });
 fs.writeFileSync(outFile, body);
 console.log('[inject-config] Public configuration written.');

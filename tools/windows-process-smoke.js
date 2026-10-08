@@ -314,8 +314,10 @@ function check(condition, name) {
     const result = await pending;
     h.child.emit('close', 7);
     check(result.code === 7 && result.stdout === 'tail output\n' && result.timedOut === false &&
-      h.kills.length === 0 && h.child.kills.length === 0 && h.activeChildren.size === 0,
+      h.activeChildren.size === 0,
     'delayed close cannot deadlock custody or overwrite the completed exit outcome');
+    check(h.kills.length === 0 && h.child.kills.length === 0,
+      'a benign surviving descendant may hold inherited pipes through close grace without any PID kill');
   }
   {
     const h = harness();
@@ -404,6 +406,30 @@ function check(condition, name) {
   {
     const h = harness();
     const pending = h.launchCapture("Write-Output 'STARTED'");
+    const queuedDeadline = Array.from(h.timers.values()).find(timer => timer.ms === 30000);
+    h.child.stdout.emit('data', Buffer.from('STARTED\n'));
+    h.child.emit('exit', 0);
+    h.child.stdin.emit('error', Object.assign(new Error('private source must not be logged'), { code: 'EPIPE' }));
+    queuedDeadline.fn();
+    await Promise.resolve();
+    check(h.child.kills.length === 0 &&
+      Array.from(h.timers.values()).some(timer => timer.kind === 'timeout' && timer.ms === 500),
+    'late launch stdin failure cannot kill after observed exit or cancel close grace');
+    h.fire('timeout', 500);
+    const result = await pending;
+    const settledResult = JSON.stringify(result);
+    h.child.emit('close', 0);
+    await Promise.resolve();
+    check(result.code === 0 && result.errorCode === null && result.stdout === 'STARTED\n' &&
+      result.timedOut === false && h.child.kills.length === 0 && h.timers.size === 0,
+    'late launch stdin failure preserves the observed success and settles once');
+    check(JSON.stringify(result) === settledResult && h.child.kills.length === 0 && h.timers.size === 0 &&
+      !JSON.stringify(result).includes('private source'),
+      'late close is a no-op and launch capture exposes no private stdin error text');
+  }
+  {
+    const h = harness();
+    const pending = h.launchCapture("Write-Output 'STARTED'");
     h.child.emit('error', Object.assign(new Error('private launch detail'), { code: 'EACCES' }));
     const result = await pending;
     check(result.code === -1 && result.errorCode === 'EACCES' &&
@@ -435,6 +461,11 @@ function check(condition, name) {
     check(/await runPSScript\(ps,[\s\S]*timeoutMs:\s*30000/.test(shortcutHandler) &&
       !/setTimeout\(|spawnWindowsToolSync\(|child\.kill\(/.test(shortcutHandler),
     'shortcut creation uses the trusted runner with no private timer or bare-PID kill');
+    check(!/\bfunction\s+userExists\s*\(/.test(source) && !/\bUSER_EXISTS_TIMEOUT_MS\b/.test(source),
+      'the unreachable userExists raw-PID timeout helper is removed after the repository-wide call graph found no caller');
+    const rawPidTreeKills = source.match(/spawnWindowsToolSync\('taskkill\.exe',\s*\['\/PID',\s*String\([^)]*\),\s*'\/T',\s*'\/F'\]/g) || [];
+    check(rawPidTreeKills.length === 1 && functionSource('terminateChildTree').includes(rawPidTreeKills[0]),
+      'all product raw-PID tree termination is confined to verified ChildProcess custody');
   }
   if (failures) throw new Error(`windows-process-smoke: ${failures} failures in ${checks} checks`);
   console.log(`windows-process-smoke: ${checks} checks passed`);

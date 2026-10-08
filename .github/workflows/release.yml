@@ -31,13 +31,15 @@ env:
   # Disable code signing auto-discovery (we control this explicitly)
   CSC_IDENTITY_AUTO_DISCOVERY: false
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   build-and-release:
     name: Build & Release
     runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
 
     steps:
       - name: Validate tag format
@@ -52,9 +54,11 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -85,6 +89,7 @@ jobs:
           # 1132 Fixer Support service. Release builds require a verified endpoint.
           FEEDBACK_PROXY_URL: ${{ vars.FEEDBACK_PROXY_URL }}
         run: |
+          $ErrorActionPreference = 'Stop'
           # Unset empty CSC_LINK so electron-builder doesn't try to resolve it as a file
           if ([string]::IsNullOrEmpty($env:CSC_LINK)) {
             Remove-Item Env:CSC_LINK -ErrorAction SilentlyContinue
@@ -95,9 +100,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Bundle only the public endpoint from the environment.
           node scripts/inject-config.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # -p never: this workflow handles release creation via action-gh-release;
           # electron-builder's own publish would race it and duplicate the release.
           npx electron-builder --win --x64 -p never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Updater metadata. Strips the isAdminRightsRequired flag electron-builder
       # writes for per-machine installers (this package ships no elevate.exe,
@@ -149,8 +156,11 @@ jobs:
       - name: Generate checksums
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           node scripts/generate-checksums.mjs --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/generate-checksums.mjs --verify --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify checksums with sha256sum
         shell: bash
@@ -240,12 +250,11 @@ jobs:
           node scripts/validate-release-assets.mjs "v${{ steps.version.outputs.VERSION }}"
 
       # Convenience copy only — the real deliverables are already published as
-      # assets on this repo's GitHub Release by the step above. Actions artifact
-      # storage is a separate, quota-limited bucket, so a quota exhaustion here
-      # must never fail a release that has already shipped successfully.
+      # assets on this repo's GitHub Release by the step above. Its upload result
+      # remains visible: a green run must not imply evidence retention succeeded
+      # when Actions artifact storage rejected the copy.
       - name: Upload build artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-v${{ steps.version.outputs.VERSION }}
           path: |

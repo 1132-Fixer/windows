@@ -17,10 +17,74 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
+
+function workflowRunBlock(source, stepName) {
+  const lines = source.split(/\r?\n/);
+  const step = lines.findIndex(line => line.trim() === `- name: ${stepName}`);
+  if (step < 0) return '';
+  const run = lines.findIndex((line, index) => index > step && /^\s+run:\s*\|\s*$/.test(line));
+  if (run < 0) return '';
+  const indent = (lines[run].match(/^\s*/) || [''])[0].length + 2;
+  const body = [];
+  for (let index = run + 1; index < lines.length; index++) {
+    const line = lines[index];
+    if (line.trim() && (line.match(/^\s*/) || [''])[0].length < indent) break;
+    body.push(line.trim() ? line.slice(indent) : '');
+  }
+  return body.join('\n');
+}
+
+function safePowerShellEnvironment(extra = {}) {
+  const env = {};
+  for (const name of ['PATH', 'SystemRoot', 'WINDIR', 'WSLENV', 'WSL_INTEROP', 'WSL_DISTRO_NAME', 'TEMP', 'TMP']) {
+    if (typeof process.env[name] === 'string') env[name] = process.env[name];
+  }
+  return { ...env, CSC_LINK: '', CSC_KEY_PASSWORD: '', ...extra };
+}
+
+function findPowerShell7() {
+  const candidates = process.platform === 'win32'
+    ? ['pwsh.exe']
+    : ['pwsh', '/mnt/c/Program Files/PowerShell/7/pwsh.exe'];
+  for (const candidate of candidates) {
+    const probe = spawnSync(candidate, ['-NoProfile', '-NonInteractive', '-Command',
+      "if ($PSVersionTable.PSVersion.Major -ge 7) { exit 0 } else { exit 9 }"], {
+      encoding: 'utf8', timeout: 10000, env: safePowerShellEnvironment()
+    });
+    if (!probe.error && probe.status === 0) return candidate;
+  }
+  return null;
+}
+
+function executeWorkflowBlock(pwsh, block, failMatch = '') {
+  const prologue = `
+function global:node {
+  $call = 'node ' + ($args -join ' ')
+  [Console]::Out.WriteLine('FIXER_FAKE_STAGE=' + $call)
+  if ($env:FIXER_FAKE_FAIL_MATCH -ceq $call) { $global:LASTEXITCODE = 17 } else { $global:LASTEXITCODE = 0 }
+}
+function global:npx {
+  $call = 'npx ' + ($args -join ' ')
+  [Console]::Out.WriteLine('FIXER_FAKE_STAGE=' + $call)
+  if ($env:FIXER_FAKE_FAIL_MATCH -ceq $call) { $global:LASTEXITCODE = 17 } else { $global:LASTEXITCODE = 0 }
+}
+`;
+  return spawnSync(pwsh, ['-NoProfile', '-NonInteractive', '-Command', '-'], {
+    input: prologue + '\n' + block + '\n', encoding: 'utf8', timeout: 20000,
+    env: safePowerShellEnvironment({ FIXER_FAKE_FAIL_MATCH: failMatch })
+  });
+}
+
+function fakeStages(result) {
+  return String(result.stdout || '').split(/\r?\n/)
+    .filter(line => line.startsWith('FIXER_FAKE_STAGE='))
+    .map(line => line.slice('FIXER_FAKE_STAGE='.length));
+}
 
 // Frozen identity. These values are a contract with every installed client.
 const FROZEN = {
@@ -121,6 +185,75 @@ const undiciFixed = undiciParts.length === 3 && undiciParts.every(Number.isInteg
   (undiciParts[0] > 7 || (undiciParts[0] === 7 &&
     (undiciParts[1] > 29 || (undiciParts[1] === 29 && undiciParts[2] >= 1))));
 check(undiciFixed, `top-level undici lock is at or above fixed version 7.29.1 (found ${undiciVersion || 'missing'})`);
+
+console.log('release-identity-smoke: workflow authority and bounded execution');
+const ciYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+const brandYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'brand.yml'), 'utf8');
+const workflows = { 'ci.yml': ciYml, 'security.yml': securityYml, 'brand.yml': brandYml, 'release.yml': relYml };
+const uses = Object.entries(workflows).flatMap(([file, source]) => source.split(/\r?\n/)
+  .filter(line => /^\s*-?\s*uses:\s*/.test(line))
+  .map(line => ({ file, line: line.trim() })));
+check(uses.length > 0 && uses.every(item => /uses:\s*[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?@[a-f0-9]{40}(?:\s+#\s*\S+)?$/.test(item.line)),
+  'every external workflow action is pinned to a verified full commit SHA');
+const checkoutCount = uses.filter(item => item.line.includes('actions/checkout@')).length;
+const persistedCredentialGuards = Object.values(workflows)
+  .reduce((count, source) => count + (source.match(/persist-credentials:\s*false/g) || []).length, 0);
+check(checkoutCount === persistedCredentialGuards,
+  'every checkout removes persisted GitHub credentials');
+for (const [file, source] of Object.entries(workflows)) {
+  const jobs = (source.match(/^\s{4}runs-on:/gm) || []).length;
+  const timeouts = (source.match(/^\s{4}timeout-minutes:/gm) || []).length;
+  check(jobs > 0 && jobs === timeouts, `${file} gives every job an explicit timeout`);
+}
+check(ciYml.includes('group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}') &&
+  securityYml.includes('group: security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}') &&
+  brandYml.includes('group: brand-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}'),
+'pull-request workflows cancel only superseded work in their own stable groups');
+const securityHeader = securityYml.slice(0, securityYml.indexOf('\njobs:'));
+check(!securityHeader.includes('security-events: write') &&
+  (securityYml.match(/security-events:\s*write/g) || []).length === 1 &&
+  securityYml.slice(securityYml.indexOf('  codeql:')).includes('security-events: write'),
+'security-events write permission is scoped to the CodeQL job');
+check(!/uses:\s*actions\/upload-artifact@[\s\S]{0,100}continue-on-error:\s*true/.test(ciYml + '\n' + relYml),
+  'artifact upload failures remain visible in CI and release results');
+check(ciYml.includes('Check tracked JavaScript syntax') && !ciYml.includes('Advisory only') &&
+  !/name:\s*Code Quality[\s\S]*continue-on-error:\s*true/.test(ciYml),
+'Code Quality performs enforcing static syntax validation instead of a suppressed audit');
+
+const buildBlock = workflowRunBlock(relYml, 'Build all targets');
+const checksumBlock = workflowRunBlock(relYml, 'Generate checksums');
+check(buildBlock.includes("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }") &&
+  checksumBlock.includes("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"),
+'release build and checksum stages explicitly propagate every native exit');
+const pwsh = findPowerShell7();
+if (!pwsh) {
+  check(process.platform !== 'win32', 'the PowerShell 7 workflow fixture is never silently skipped on native Windows');
+  console.log('  skip PowerShell 7 workflow fixture (non-Windows host; native Windows focused gate required)');
+}
+if (pwsh) {
+  const verifyCall = 'node scripts/verify-support-endpoint.mjs';
+  const injectCall = 'node scripts/inject-config.js';
+  const builderCall = 'npx electron-builder --win --x64 -p never';
+  const verifyFailure = executeWorkflowBlock(pwsh, buildBlock, verifyCall);
+  check(verifyFailure.status === 17 && JSON.stringify(fakeStages(verifyFailure)) === JSON.stringify([verifyCall]),
+    'an early support-verification failure stops config injection and packaging');
+  const injectFailure = executeWorkflowBlock(pwsh, buildBlock, injectCall);
+  check(injectFailure.status === 17 && JSON.stringify(fakeStages(injectFailure)) === JSON.stringify([verifyCall, injectCall]),
+    'a config-injection failure cannot be masked by a successful builder');
+  const buildSuccess = executeWorkflowBlock(pwsh, buildBlock);
+  check(buildSuccess.status === 0 && JSON.stringify(fakeStages(buildSuccess)) ===
+    JSON.stringify([verifyCall, injectCall, builderCall]),
+  'the exact release build block reaches every stage only when prior stages succeed');
+  const generateCall = 'node scripts/generate-checksums.mjs --dist dist';
+  const verifyChecksumsCall = 'node scripts/generate-checksums.mjs --verify --dist dist';
+  const checksumFailure = executeWorkflowBlock(pwsh, checksumBlock, generateCall);
+  check(checksumFailure.status === 17 && JSON.stringify(fakeStages(checksumFailure)) === JSON.stringify([generateCall]),
+    'a checksum-generation failure stops checksum verification and remains nonzero');
+  const checksumSuccess = executeWorkflowBlock(pwsh, checksumBlock);
+  check(checksumSuccess.status === 0 && JSON.stringify(fakeStages(checksumSuccess)) ===
+    JSON.stringify([generateCall, verifyChecksumsCall]),
+  'the exact checksum block reaches verification only after generation succeeds');
+}
 
 if (failures) { console.error(`release-identity-smoke: ${failures} FAIL`); process.exit(1); }
 console.log('release-identity-smoke: PASS');

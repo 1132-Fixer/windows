@@ -21,6 +21,32 @@ function check(condition, name) {
   console.log(`  ok  ${name}`);
 }
 
+function evaluateRuntimeConfig({ generated, env = {}, generatedLoadError = null }) {
+  const source = fs.readFileSync(path.join(root, 'src/main/config.js'), 'utf8');
+  const module = { exports: {} };
+  const requireForConfig = request => {
+    if (request === './support-client') return support;
+    if (request === './config.generated.js') {
+      if (generatedLoadError) throw generatedLoadError;
+      return generated;
+    }
+    throw new Error(`unexpected config dependency: ${request}`);
+  };
+  requireForConfig.resolve = request => {
+    if (request !== './config.generated.js') throw new Error(`unexpected config resolution: ${request}`);
+    if (generated === undefined) throw Object.assign(new Error('not generated'), { code: 'MODULE_NOT_FOUND' });
+    return request;
+  };
+  const context = {
+    module,
+    exports: module.exports,
+    process: { env: { ...env } },
+    require: requireForConfig
+  };
+  vm.runInNewContext(source, context, { filename: 'src/main/config.js' });
+  return JSON.parse(JSON.stringify(module.exports));
+}
+
 async function run() {
   console.log('support-submission-smoke: endpoint trust boundary');
   for (const endpoint of [
@@ -31,6 +57,44 @@ async function run() {
     'https://support.example.test/private/path', 'https://support.example.test/ white',
   ]) check(support.endpointUrl(endpoint) === null, `rejects unsafe endpoint ${endpoint ? endpoint.split(':')[0] : 'unset'}`);
   check(support.endpointUrl(config.FEEDBACK_PROXY_URL).pathname === '/v1/feedback', 'one public submission route');
+
+  console.log('support-submission-smoke: effective public configuration identity');
+  const canonicalEndpoint = support.endpointUrl(config.FEEDBACK_PROXY_URL).href;
+  const canonicalRevision = support.supportConfigRevision(canonicalEndpoint);
+  for (const [name, value, expected, valid] of [
+    ['unset override', undefined, '', true],
+    ['whitespace override', '   ', '', true],
+    ['invalid override', 'https://private-user:private-secret@support.example.test/', '', false],
+    ['valid alternate public override', 'https://alternate.example.test/', 'https://alternate.example.test/v1/feedback', true]
+  ]) {
+    const runtime = evaluateRuntimeConfig({ env: value === undefined ? {} : { FEEDBACK_PROXY_URL: value } });
+    check(runtime.FEEDBACK_PROXY_URL === expected && runtime.FEEDBACK_CONFIG_SOURCE === 'development' &&
+      runtime.FEEDBACK_CONFIG_INTEGRITY === valid &&
+      runtime.FEEDBACK_CONFIG_REVISION === (valid ? support.supportConfigRevision(expected) : ''),
+    `${name} has a deterministic development-only identity`);
+  }
+  const bundled = evaluateRuntimeConfig({
+    generated: { FEEDBACK_PROXY_URL: canonicalEndpoint, FEEDBACK_CONFIG_REVISION: canonicalRevision },
+    env: { FEEDBACK_PROXY_URL: 'https://alternate.example.test/' }
+  });
+  check(bundled.FEEDBACK_PROXY_URL === canonicalEndpoint && bundled.FEEDBACK_CONFIG_REVISION === canonicalRevision &&
+    bundled.FEEDBACK_CONFIG_SOURCE === 'bundled' && bundled.FEEDBACK_CONFIG_INTEGRITY === true,
+  'bundled packaged configuration ignores a valid alternate development override');
+  const tampered = evaluateRuntimeConfig({
+    generated: { FEEDBACK_PROXY_URL: canonicalEndpoint, FEEDBACK_CONFIG_REVISION: '0'.repeat(64) },
+    env: { FEEDBACK_PROXY_URL: 'https://alternate.example.test/' }
+  });
+  check(tampered.FEEDBACK_PROXY_URL === '' && tampered.FEEDBACK_CONFIG_REVISION === '' &&
+    tampered.FEEDBACK_CONFIG_SOURCE === 'bundled' && tampered.FEEDBACK_CONFIG_INTEGRITY === false,
+  'a mismatched bundled configuration revision fails closed without environment fallback');
+  const unloadable = evaluateRuntimeConfig({
+    generated: { FEEDBACK_PROXY_URL: canonicalEndpoint, FEEDBACK_CONFIG_REVISION: canonicalRevision },
+    generatedLoadError: new SyntaxError('synthetic bundled config failure'),
+    env: { FEEDBACK_PROXY_URL: 'https://alternate.example.test/' }
+  });
+  check(unloadable.FEEDBACK_PROXY_URL === '' && unloadable.FEEDBACK_CONFIG_REVISION === '' &&
+    unloadable.FEEDBACK_CONFIG_SOURCE === 'bundled' && unloadable.FEEDBACK_CONFIG_INTEGRITY === false,
+  'an unloadable bundled configuration fails closed without a development override');
 
   const calls = [];
   let mode = 'ok';
@@ -282,13 +346,15 @@ async function run() {
       fs.copyFileSync(path.join(root, relative), target);
     }
     for (const value of ['ghp_secret_canary', 'https://private-user:private-secret@support.example.test/', 'https://support.example.test/?token=private-secret']) {
-      const result = spawnSync(process.execPath, [path.join(temp, 'scripts/inject-config.js')], { env: { ...process.env, FEEDBACK_PROXY_URL: value }, encoding: 'utf8' });
+      const result = spawnSync(process.execPath, [path.join(temp, 'scripts/inject-config.js')], { env: { FEEDBACK_PROXY_URL: value }, encoding: 'utf8' });
       check(result.status === 1 && !`${result.stdout}${result.stderr}`.includes(value) && !`${result.stdout}${result.stderr}`.includes('private-secret'), 'invalid configuration is refused without logging credential input');
       check(!fs.existsSync(path.join(temp, 'src/main/config.generated.js')), 'rejected configuration never enters a build file');
     }
-    const valid = spawnSync(process.execPath, [path.join(temp, 'scripts/inject-config.js')], { env: { ...process.env, FEEDBACK_PROXY_URL: config.FEEDBACK_PROXY_URL, DISCORD_BOT_TOKEN: 'private-canary' }, encoding: 'utf8' });
+    const valid = spawnSync(process.execPath, [path.join(temp, 'scripts/inject-config.js')], { env: { FEEDBACK_PROXY_URL: config.FEEDBACK_PROXY_URL, DISCORD_BOT_TOKEN: 'private-canary' }, encoding: 'utf8' });
     const output = fs.readFileSync(path.join(temp, 'src/main/config.generated.js'), 'utf8');
-    check(valid.status === 0 && output.includes('/v1/feedback') && !output.includes('private-canary'), 'only validated public endpoint enters client configuration');
+    check(valid.status === 0 && output.includes('/v1/feedback') && output.includes('FEEDBACK_CONFIG_REVISION') &&
+      output.includes(canonicalRevision) && !output.includes('private-canary'),
+    'only the validated public endpoint and deterministic revision enter client configuration');
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

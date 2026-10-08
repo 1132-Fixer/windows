@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
 const windowsTools = require('../src/main/windows-tools');
 const source = fs.readFileSync(path.join(__dirname, 'packaged-acceptance.js'), 'utf8');
 const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
@@ -157,7 +158,21 @@ async function run(options = {}) {
       if (name === 'path') return path.win32;
       if (name === 'module') return { createRequire: file => {
         assert.equal(file, path.win32.join(options.archive || archive, 'package.json'));
-        return name => { assert.equal(name, './src/main/windows-tools.js'); return tools; };
+        return name => {
+          if (name === './src/main/windows-tools.js') return tools;
+          if (name === './src/main/config.js') return {
+            FEEDBACK_PROXY_URL: options.supportEndpoint || 'https://support.example.test/v1/feedback',
+            FEEDBACK_CONFIG_REVISION: options.supportConfigRevision || 'a'.repeat(64),
+            FEEDBACK_CONFIG_SOURCE: options.supportConfigSource || 'bundled',
+            FEEDBACK_CONFIG_INTEGRITY: options.supportConfigIntegrity !== false
+          };
+          if (name === './src/main/support-client.js') return {
+            endpointUrl: value => {
+              try { return /^https:\/\//.test(value) ? new URL(value) : null; } catch (_) { return null; }
+            }
+          };
+          throw new Error('unexpected packaged module');
+        };
       } };
       if (name === 'child_process') return { spawnSync: (exe, args, spawnOptions) => {
         commands++;
@@ -182,9 +197,25 @@ async function run(options = {}) {
       throw new Error('unexpected builtin');
     }
   };
+  const acceptanceIdentity = {
+    runtimeConfigObserved: false,
+    effectiveSupportEndpoint: '',
+    supportConfigRevision: '',
+    supportConfigSource: '',
+    supportConfigIntegrity: false,
+    runtimeConfigConsistent: false
+  };
   const context = {
     process: runtime, Buffer, path: path.win32, EXE: 'D:\\build\\1132 Fixer.exe',
     require: name => { assert.equal(name, 'electron/package.json'); return { version: '44.2.0' }; },
+    supportClient: { endpointUrl: value => {
+      try { return /^https:\/\//.test(value) ? new URL(value) : null; } catch (_) { return null; }
+    } },
+    normalizeSha256: value => /^[a-f0-9]{64}$/.test(String(value || '').toLowerCase())
+      ? String(value).toLowerCase() : '',
+    report: { acceptanceIdentity },
+    EXPECTED_SUPPORT_ENDPOINT: '',
+    EXPECTED_CONFIG_REVISION: '',
     passed: (id, detail, extra) => records.push({ id, status: 'passed', detail, ...extra }),
     failed: (id, detail, extra) => records.push({ id, status: 'failed', detail, ...extra })
   };
@@ -194,21 +225,28 @@ async function run(options = {}) {
     evaluate: callback => callback({ app: { isPackaged: options.packaged !== false, getAppPath: () => options.archive || archive } }, options.fakeRoot || null)
   };
   const ok = await context.gate(app, 'fixture', options.fakeRoot);
-  assert.equal(records.length, 1, 'each gate produces one authoritative result');
+  assert.equal(records.length, 2, 'each gate produces support identity and OS authority results');
   assert.equal(report.excludeEnv, false);
   assert.equal(report.excludeNetwork, false);
   assert.deepEqual(runtime.env, originalEnvironment, 'the packaged main environment is restored exactly');
   assert.ok(!JSON.stringify(records).includes('PRIVATE_'), 'report and process errors cannot reach runtime evidence');
-  return { ok, records, commands, reports };
+  return { ok, records, commands, reports, acceptanceIdentity };
 }
 
 (async () => {
   const acceptanceContract = {};
   vm.createContext(acceptanceContract);
   vm.runInContext([
+    productionFunction('normalizeHead'),
+    productionFunction('normalizeSha256'),
+    productionFunction('normalizeArtifactKind'),
+    productionFunction('nativeReleaseEligibility'),
+    productionFunction('rawLaunchSucceeded'),
     productionFunction('fixJourneySucceeded'),
     productionFunction('acceptanceExitCode'),
     productionFunction('selectFixLaunchTrace'),
+    'this.nativeReleaseEligibility = nativeReleaseEligibility;',
+    'this.rawLaunchSucceeded = rawLaunchSucceeded;',
     'this.fixJourneySucceeded = fixJourneySucceeded;',
     'this.acceptanceExitCode = acceptanceExitCode;',
     'this.selectFixLaunchTrace = selectFixLaunchTrace;'
@@ -233,8 +271,122 @@ async function run(options = {}) {
     'an explicitly optional not-run case stays report-only');
   assert.equal(acceptanceContract.acceptanceExitCode([{ status: 'failed' }]), 1,
     'a failed case makes packaged acceptance nonzero');
-  assert.equal(acceptanceContract.acceptanceExitCode([], false), 1,
-    'diagnostic mode is never eligible for a green release gate');
+  assert.equal(acceptanceContract.acceptanceExitCode([{ status: 'passed' }]), 0,
+    'a successful diagnostic execution can stay green without claiming release acceptance');
+  checks++;
+
+  const identityHead = '1'.repeat(40);
+  const identitySha = '2'.repeat(64);
+  const identityRevision = '3'.repeat(64);
+  const identityEndpoint = 'https://support.example.test/v1/feedback';
+  const operatorAttestation = {
+    present: true, valid: true, schemaVersion: 1, artifactKind: 'portable',
+    artifactHead: identityHead, executableSha256: identitySha,
+    supportConfigRevision: identityRevision, uacEnabled: true,
+    uacAcceptObserved: true, uacCancelObserved: true,
+    disposableWindowsBoundary: true
+  };
+  const validNativeFacts = {
+    testCopy: false, skipFix: false, platform: 'win32', enableLUA: 1,
+    artifactKind: 'portable', artifactHead: identityHead, expectedHead: identityHead,
+    shippedExeSha256: identitySha, drivenExeSha256: identitySha,
+    expectedExeSha256: identitySha, effectiveSupportEndpoint: identityEndpoint,
+    expectedSupportEndpoint: identityEndpoint, supportConfigRevision: identityRevision,
+    expectedSupportConfigRevision: identityRevision, supportConfigSource: 'bundled',
+    supportConfigIntegrity: true, runtimeConfigConsistent: true, operatorAttestation
+  };
+  const passedCases = [{ id: 'required', status: 'passed' }];
+  assert.deepEqual(Array.from(acceptanceContract.nativeReleaseEligibility(validNativeFacts, passedCases).reasons), [],
+    'a fully bound native final-artifact result remains distinguishable and eligible');
+  for (const [name, facts, cases, reasons] of [
+    ['test-copy', { ...validNativeFacts, testCopy: true }, passedCases, ['test-copy']],
+    ['skip-fix', { ...validNativeFacts, skipFix: true }, passedCases, ['skip-fix']],
+    ['both diagnostic flags', { ...validNativeFacts, testCopy: true, skipFix: true }, passedCases, ['test-copy', 'skip-fix']],
+    ['failed mandatory case', validNativeFacts, [{ id: 'required', status: 'failed', mandatory: true }], ['acceptance-case-failed']],
+    ['mandatory not-run', validNativeFacts, [{ id: 'required', status: 'not-run', mandatory: true }], ['mandatory-case-not-run']],
+    ['disabled UAC', { ...validNativeFacts, enableLUA: 0 }, passedCases, ['uac-not-enabled']],
+    ['wrong binary hash', { ...validNativeFacts, shippedExeSha256: '4'.repeat(64) }, passedCases, ['binary-hash-mismatch', 'operator-attestation-identity-mismatch']],
+    ['mixed head', { ...validNativeFacts, artifactHead: '5'.repeat(40) }, passedCases, ['mixed-head', 'operator-attestation-identity-mismatch']],
+    ['missing operator attestation', { ...validNativeFacts, operatorAttestation: { present: false, valid: false } }, passedCases, ['operator-attestation-missing']]
+  ]) {
+    const result = acceptanceContract.nativeReleaseEligibility(facts, cases);
+    assert.equal(result.eligible, false, `${name} cannot be release eligible`);
+    for (const reason of reasons) assert.ok(result.reasons.includes(reason), `${name} records ${reason}`);
+  }
+  checks++;
+  assert.equal(acceptanceContract.rawLaunchSucceeded({ timedOut: true, terminationProved: true }, false), true,
+    'a bounded raw launch with proved tree termination remains acceptable');
+  for (const [name, receipt, fatal] of [
+    ['early exit', { timedOut: false, terminationProved: true }, false],
+    ['unproved termination', { timedOut: true, terminationProved: false }, false],
+    ['fatal output', { timedOut: true, terminationProved: true }, true]
+  ]) assert.equal(acceptanceContract.rawLaunchSucceeded(receipt, fatal), false, `${name} cannot pass raw launch`);
+  checks++;
+
+  const rawProbeHarness = taskkillResult => {
+    const child = new EventEmitter();
+    child.pid = 1132;
+    child.exitCode = null;
+    child.signalCode = null;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    const timers = new Map();
+    let nextTimer = 1;
+    let taskkillCalls = 0;
+    const context = {
+      spawn: () => child,
+      windowsTools: { resolveTool: () => 'C:\\Windows\\System32\\taskkill.exe' },
+      require: name => {
+        assert.equal(name, 'child_process');
+        return { spawnSync: () => { taskkillCalls++; return taskkillResult; } };
+      },
+      setTimeout: (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, ms }); return id; },
+      clearTimeout: id => timers.delete(id)
+    };
+    vm.createContext(context);
+    vm.runInContext(`${productionFunction('rawLaunchProbe')}\nthis.rawLaunchProbe = rawLaunchProbe;`, context);
+    return {
+      child, timers,
+      run: () => context.rawLaunchProbe('fixture.exe'),
+      taskkillCalls: () => taskkillCalls,
+      fire: ms => {
+        const item = Array.from(timers.entries()).find(([, value]) => value.ms === ms);
+        assert.ok(item, `raw launch timer ${ms} exists`);
+        timers.delete(item[0]);
+        item[1].fn();
+      }
+    };
+  };
+  {
+    const h = rawProbeHarness({ status: 0 });
+    const pending = h.run();
+    const queuedDeadline = Array.from(h.timers.values()).find(timer => timer.ms === 12000);
+    h.child.exitCode = 0;
+    h.child.emit('exit', 0);
+    queuedDeadline.fn();
+    const result = await pending;
+    assert.equal(result.why, 'exited 0');
+    assert.equal(result.timedOut, false);
+    assert.equal(h.taskkillCalls(), 0, 'queued raw deadline never targets a PID after exit');
+  }
+  {
+    const h = rawProbeHarness({ status: 5 });
+    const pending = h.run();
+    h.fire(12000);
+    const result = await pending;
+    assert.equal(result.terminationProved, false);
+    assert.equal(h.taskkillCalls(), 1, 'failed raw tree termination is attempted once and reported as uncertain');
+  }
+  {
+    const h = rawProbeHarness({ status: 0 });
+    const pending = h.run();
+    h.fire(12000);
+    h.child.exitCode = 1;
+    h.child.emit('exit', 1);
+    const result = await pending;
+    assert.equal(result.terminationProved, true);
+    assert.equal(h.taskkillCalls(), 1, 'raw timeout requires the original child exit after one successful tree kill');
+  }
   checks++;
   assert.ok(source.includes("'fix.completes-successfully'") && source.includes('fixJourneySucceeded(done.state)'),
     'the terminal Fix now result uses the strict success predicate');
@@ -295,7 +447,7 @@ async function run(options = {}) {
   assert.equal(skippedFix.mandatory, true);
   assert.equal(skippedFix.acceptanceResult, 'non-acceptance');
   assert.equal(skipPage.clicks.length, 0, 'diagnostic mode never enters the destructive continuation branch');
-  assert.equal(acceptanceContract.acceptanceExitCode(skipRecords, false), 1,
+  assert.equal(acceptanceContract.acceptanceExitCode(skipRecords), 1,
     'the real --skip-fix branch cannot be consumed as green acceptance');
   checks++;
 
@@ -2157,8 +2309,10 @@ public static class FixerIdentityDiagnosticFixtureV1 {
   'helper drain, Zoom liveness, close, verification and helper launch use exact SID ownership');
   checks++;
 
-  assert.ok(source.includes("mode: ACCEPTANCE_MODE") && source.includes("acceptanceResult = report.releaseGateEligible"),
-    'report declares full-acceptance versus diagnostic non-acceptance');
+  assert.ok(source.includes("mode: ACCEPTANCE_MODE") &&
+    source.includes("evidenceClass = releaseEligibility.eligible ? 'native-final-artifact' : 'diagnostic'") &&
+    source.includes('report.executionResult = exitCode === 0'),
+  'report separates diagnostic execution success from native final-artifact eligibility');
   checks++;
 
   const good = await run();
@@ -2169,10 +2323,11 @@ public static class FixerIdentityDiagnosticFixtureV1 {
   assert.equal(forged.ok, true);
   assert.equal(forged.commands, 1);
   assert.equal(forged.reports, 1);
-  assert.equal(forged.records[0].runtime.forgedEnvironmentApplied, true);
-  assert.equal(forged.records[0].runtime.nativeEnvironmentApplied, true);
-  assert.equal(forged.records[0].runtime.nativePathTrusted, true);
-  assert.equal(forged.records[0].runtime.environmentRestored, true);
+  const forgedRuntime = forged.records.find(record => record.runtime).runtime;
+  assert.equal(forgedRuntime.forgedEnvironmentApplied, true);
+  assert.equal(forgedRuntime.nativeEnvironmentApplied, true);
+  assert.equal(forgedRuntime.nativePathTrusted, true);
+  assert.equal(forgedRuntime.environmentRestored, true);
   checks++;
   for (const [name, options] of [
     ['report API unavailable', { noReport: true }],
@@ -2193,7 +2348,7 @@ public static class FixerIdentityDiagnosticFixtureV1 {
   ]) {
     const result = await run(options);
     assert.equal(result.ok, false, name);
-    assert.equal(result.records[0].status, 'failed', name);
+    assert.equal(result.records.find(record => record.id === 'fixture.os-tool-authority').status, 'failed', name);
     if (name === 'tool resolves inside forged root') assert.equal(result.commands, 0, 'fake PowerShell is never executed');
     checks++;
   }

@@ -1476,6 +1476,10 @@ async function runPSScriptLaunchCapture(scriptContent) {
       settle(-1);
     });
     child.stdin.on('error', (err) => {
+      // Once the owned launcher has exited, an inherited pipe can report a
+      // late EPIPE before close.  The exit result is authoritative: do not
+      // kill a possibly reused PID or replace that result with a stdin error.
+      if (settled || exitObserved) return;
       processErrorCode = 'stdin-error';
       const metadata = launchCaptureErrorMetadata(err);
       processExceptionClass = metadata.exceptionClass;
@@ -1508,26 +1512,6 @@ async function runPSCapture(scriptContent, opts = {}) {
 // It never uses net.exe session, username, or an unbounded child process.
 function isElevatedSync() {
   return elevCtl.isElevated().then((r) => r.elevated === true).catch(() => false);
-}
-
-// Bounded: `net user` can stall behind a slow Workstation/NetLogon lookup.
-// On timeout the account is reported as absent, which only makes the fix
-// take its create path — safe, because creation is idempotent.
-const USER_EXISTS_TIMEOUT_MS = 15000;
-function userExists(username) {
-  return new Promise(resolve => {
-    let settled = false;
-    const done = (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
-    const child = spawnWindowsTool('net.exe', ['user', username], { windowsHide: true });
-    const timer = setTimeout(() => {
-      try { spawnWindowsToolSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
-      done(false);
-    }, USER_EXISTS_TIMEOUT_MS);
-    child.stdout.on('data', () => {});
-    child.stderr.on('data', () => {});
-    child.on('error', () => done(false));
-    child.on('close', code => done(code === 0));
-  });
 }
 
 // ============================================================

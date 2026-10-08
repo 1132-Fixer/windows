@@ -63,6 +63,12 @@ separate launch supplies fake Windows tool folders, forged root variables and
 an empty PATH. These cases fail if the packaged runtime cannot establish OS
 authority or execute the trusted command; a Node-only pass cannot replace them.
 The driver records only narrow runtime metadata, never the diagnostic report.
+CI uses `--test-copy` because hosted Windows has UAC disabled. A successful CI
+execution stays useful as packaged-code evidence, but its report is explicitly
+`diagnostic` and `releaseGateEligible=false`. Native release evidence must bind
+the exact unmodified executable hash and head, UAC-enabled disposable host,
+effective bundled support endpoint/revision, mandatory cases and operator
+attestation.
 
 ## Rendered screens (headless Chromium)
 
@@ -81,7 +87,8 @@ Details round trip (open, category, Back to details, Back, Escape) with the
 checkbox preserved and focus returned, and no technical text on the Details
 surface. Label every capture "harness render — real page code and assets,
 mocked electronAPI"; the packaged binary is proven by
-`tools/packaged-acceptance.js` on CI.
+`tools/packaged-acceptance.js` on CI (diagnostic packaged-code evidence, not
+native UAC or final-artifact acceptance).
 
 ## What does not need Zoom
 

@@ -1,6 +1,6 @@
-# Trust-center security workflow for 1132 Fixer Windows.
-# Advisory and inventory checks. Not added to the required-status ruleset
-# by this change — ruleset edits are a separate governance action.
+# Required security workflow for 1132 Fixer Windows. Keep the job names stable:
+# repository rules require Dependency audit, Licence and binary inventory, and
+# CodeQL. Ruleset changes remain a separate governance action.
 name: Security
 
 on:
@@ -10,17 +10,24 @@ on:
   schedule:
     - cron: '17 7 * * 1'
 
-permissions:
-  contents: read
-  security-events: write
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
 
 jobs:
   npm-audit:
     name: Dependency audit
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -31,8 +38,13 @@ jobs:
   license-and-binaries:
     name: Licence and binary inventory
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: LICENSE is MIT
         shell: bash
         run: |
@@ -44,9 +56,15 @@ jobs:
   codeql:
     name: CodeQL
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
         with:
           languages: javascript
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4

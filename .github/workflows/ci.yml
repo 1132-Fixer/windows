@@ -12,12 +12,19 @@ on:
   # shipped unverified.
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
 jobs:
   support:
     # This name is required by the Windows repository ruleset. Keep the
     # desktop/service contract gate after the backend moved to its own repo.
     name: Support Service
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -26,7 +33,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -42,18 +49,22 @@ jobs:
   build:
     name: Build & Test
     runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
 
     steps:
       # submodules: true — tools/design-sync-pin-smoke.js proves the pinned
       # design-system commit is fetchable from a clean checkout and that the
       # app's tokens match the recorded Windows overlay at that pin.
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           submodules: true
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -81,10 +92,10 @@ jobs:
       - name: Finalize updater metadata
         run: node scripts/finalize-update-metadata.mjs --dist dist
 
-      # Packaged-build acceptance. The runner is an elevated Windows session
-      # without Smart App Control, so the unsigned host binary can start here
-      # (it cannot on a SAC-enforcing operator machine). Zoom Workplace is
-      # installed first so Fix now can drive the real repair orchestrator;
+      # Packaged-build diagnostic acceptance. GitHub-hosted Windows has UAC
+      # disabled, so this run cannot establish native elevation or final-artifact
+      # release eligibility. Zoom Workplace is installed first so Fix now can
+      # still drive the real repair orchestrator;
       # if that download fails the driver still runs and reports the fix
       # journey as not-run rather than passed. See tools/packaged-acceptance.js.
       - name: Install Zoom Workplace for the acceptance run
@@ -105,12 +116,11 @@ jobs:
       # throwaway copy asInvoker and drives that; dist/win-unpacked and the
       # installers are untouched and the report records which binary ran.
       - name: Packaged acceptance (launch, states, keyboard, scaling, Fix now)
-        run: node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out acceptance-evidence --test-copy
+        run: node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out acceptance-evidence --test-copy --artifact-head "${{ github.event.pull_request.head.sha || github.sha }}" --expected-head "${{ github.event.pull_request.head.sha || github.sha }}"
 
       - name: Upload packaged acceptance evidence
         if: always()
-        uses: actions/upload-artifact@v7
-        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: packaged-acceptance
           path: acceptance-evidence/
@@ -153,8 +163,7 @@ jobs:
         run: sha256sum -c checksums-sha256.txt
 
       - name: Upload release checksum manifest
-        uses: actions/upload-artifact@v7
-        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-checksums
           path: dist/checksums-sha256.txt
@@ -165,20 +174,17 @@ jobs:
           echo "=== Build Output ==="
           dir dist
 
-      # Debug conveniences only. Actions artifact storage is a quota-limited
-      # bucket shared across the account; when it fills up, these uploads fail.
-      # That must not red a build whose compile + tests actually passed.
+      # These exact-head executables are inputs to the separate native Windows
+      # acceptance gate. A green build must not hide that their upload failed.
       - name: Upload portable artifact
-        uses: actions/upload-artifact@v7
-        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: 1132-Fixer-Portable
           path: dist/*Portable*.exe
           retention-days: 7
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v7
-        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: 1132-Fixer-Installer
           path: dist/*Setup*.exe
@@ -187,20 +193,23 @@ jobs:
   lint:
     name: Code Quality
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22'
-          cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Check for security issues in dependencies
-        run: npm audit --audit-level=high
-        continue-on-error: true  # Advisory only
+      - name: Check tracked JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-files -z -- '*.js' '*.cjs' '*.mjs' | xargs -0 -r -n1 node --check
