@@ -48,21 +48,44 @@ function zipReceipt(name, value) {
   return Buffer.concat([local, bytes, central, eocd]);
 }
 
-function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} }) {
+function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {}, body = null }) {
   const normalized = Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
   return {
     ok: status >= 200 && status < 300,
     status,
-    headers: { get: name => normalized[String(name).toLowerCase()] || null },
+    headers: {
+      get(name) {
+        const key = String(name).toLowerCase();
+        return Object.hasOwn(normalized, key) ? normalized[key] : null;
+      }
+    },
     json: async () => clone(json),
-    arrayBuffer: async () => Buffer.from(bytes)
+    arrayBuffer: async () => Buffer.from(bytes),
+    body
   };
+}
+
+function closedByteStream(chunks) {
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(Buffer.from(chunk));
+      controller.close();
+    }
+  });
+}
+
+function openByteStream(chunk, state) {
+  return new ReadableStream({
+    start(controller) { controller.enqueue(Buffer.from(chunk)); },
+    cancel() { state.cancelled = true; }
+  });
 }
 
 (async () => {
   const evidenceModule = await import('../scripts/release-evidence.mjs');
   const preflightModule = await import('../scripts/release-preflight.mjs');
   const candidateModule = await import('../scripts/release-candidate.mjs');
+  const downloadModule = await import('../scripts/download-release-candidate.mjs');
   const publishModule = await import('../scripts/publish-release.mjs');
   const restModule = await import('../scripts/github-rest.mjs');
   const {
@@ -70,6 +93,7 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
   } = evidenceModule;
   const { REQUIRED_CHECKS, verifyReleasePreflight } = preflightModule;
   const { generateCandidateManifest, verifyCandidateManifest } = candidateModule;
+  const { downloadReleaseCandidate, MAX_CANDIDATE_ARCHIVE_BYTES } = downloadModule;
   const { exactAssets, publishRelease, githubReleaseApi } = publishModule;
   const { createGitHubRestClient, GITHUB_API_VERSION } = restModule;
 
@@ -79,6 +103,138 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
   const tagObjectSha = 'a'.repeat(40);
   const version = '6.4.1';
   const packageHashes = { setup: '4'.repeat(64), portable: '5'.repeat(64) };
+
+  const candidateArtifactId = 7101;
+  const candidateRunId = 8101;
+  const candidateName = `release-candidate-${sourceHead}`;
+  const candidateMetadata = (size, digest) => ({
+    id: candidateArtifactId,
+    name: candidateName,
+    expired: false,
+    digest,
+    size_in_bytes: size,
+    workflow_run: { id: candidateRunId, head_sha: sourceHead }
+  });
+  const candidateApi = ({ metadata, archive }) => {
+    const state = { requests: 0, requestOptions: null };
+    return {
+      state,
+      async json(method, apiPath) {
+        assert.equal(method, 'GET');
+        assert.equal(apiPath, `/repos/1132-Fixer/windows/actions/artifacts/${candidateArtifactId}`);
+        return clone(metadata);
+      },
+      async request(method, apiPath, options) {
+        state.requests++;
+        state.requestOptions = options;
+        assert.equal(method, 'GET');
+        assert.equal(apiPath, `/repos/1132-Fixer/windows/actions/artifacts/${candidateArtifactId}/zip`);
+        return archive;
+      }
+    };
+  };
+  const candidateInput = (api, out, digest) => ({
+    api,
+    repository: '1132-Fixer/windows',
+    artifactId: candidateArtifactId,
+    runId: candidateRunId,
+    expectedName: candidateName,
+    expectedHead: sourceHead,
+    expectedDigest: digest,
+    out
+  });
+  {
+    const bytes = Buffer.from('bounded-candidate-archive');
+    const digest = `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-bounded-'));
+    const out = path.join(dir, 'candidate.zip');
+    try {
+      const api = candidateApi({
+        metadata: candidateMetadata(bytes.length, digest),
+        archive: response({
+          body: closedByteStream([bytes.subarray(0, 5), bytes.subarray(5)]),
+          headers: { 'content-length': String(bytes.length) }
+        })
+      });
+      await downloadReleaseCandidate(candidateInput(api, out, digest));
+      assert.deepEqual(fs.readFileSync(out), bytes, 'bounded candidate bytes are retained only after exact verification');
+      assert.equal(api.state.requests, 1);
+      assert.equal(api.state.requestOptions.followRedirects, true,
+        'the bounded candidate download keeps the authorized redirect route');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  for (const [name, change] of [
+    ['missing candidate size', value => { delete value.size_in_bytes; }],
+    ['non-numeric candidate size', value => { value.size_in_bytes = '12'; }],
+    ['zero candidate size', value => { value.size_in_bytes = 0; }],
+    ['negative candidate size', value => { value.size_in_bytes = -1; }],
+    ['over-cap candidate size', value => { value.size_in_bytes = MAX_CANDIDATE_ARCHIVE_BYTES + 1; }]
+  ]) {
+    const bytes = Buffer.from('size-fixture');
+    const digest = `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+    const metadata = candidateMetadata(bytes.length, digest);
+    change(metadata);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-metadata-'));
+    const out = path.join(dir, 'candidate.zip');
+    try {
+      const api = candidateApi({ metadata, archive: null });
+      await assert.rejects(downloadReleaseCandidate(candidateInput(api, out, digest)),
+        error => error.code === 'candidate-download-size', name);
+      assert.equal(api.state.requests, 0, `${name} stops before byte download`);
+      assert.equal(fs.existsSync(out), false, `${name} retains no candidate`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  {
+    const bytes = Buffer.from('length-fixture');
+    const digest = `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+    const streamState = { cancelled: false };
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-length-'));
+    const out = path.join(dir, 'candidate.zip');
+    try {
+      const api = candidateApi({
+        metadata: candidateMetadata(bytes.length, digest),
+        archive: response({
+          body: openByteStream(bytes, streamState),
+          headers: { 'content-length': String(bytes.length + 1) }
+        })
+      });
+      await assert.rejects(downloadReleaseCandidate(candidateInput(api, out, digest)),
+        error => error.code === 'candidate-download-size',
+        'candidate Content-Length mismatch fails before retention');
+      assert.equal(streamState.cancelled, true, 'mismatched candidate response is cancelled');
+      assert.equal(fs.existsSync(out), false);
+      assert.equal(fs.existsSync(`${out}.part-${process.pid}`), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  {
+    const expected = Buffer.from('abc');
+    const digest = `sha256:${crypto.createHash('sha256').update(expected).digest('hex')}`;
+    const streamState = { cancelled: false };
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-overflow-'));
+    const out = path.join(dir, 'candidate.zip');
+    try {
+      const api = candidateApi({
+        metadata: candidateMetadata(expected.length, digest),
+        archive: response({ body: openByteStream(Buffer.from('abcd'), streamState) })
+      });
+      await assert.rejects(downloadReleaseCandidate(candidateInput(api, out, digest)),
+        error => error.code === 'candidate-download-size',
+        'chunked candidate overflow fails on its first over-bound chunk');
+      assert.equal(streamState.cancelled, true, 'chunked candidate overflow cancels the response');
+      assert.equal(fs.existsSync(out), false, 'chunked candidate overflow retains no final file');
+      assert.equal(fs.existsSync(`${out}.part-${process.pid}`), false,
+        'chunked candidate overflow removes its exact owned partial');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
   const support = {
     schemaVersion: 1,
     sourceHead,
@@ -681,9 +837,10 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
         return created;
       },
       getAsset: async id => state.assets.find(asset => asset.id === id),
-      readAsset: async id => {
+      readAsset: async (id, expectedSize) => {
         const source = state.assets.find(asset => asset.id === id).source;
         const index = id - 100;
+        assert.equal(expectedSize, source.size, 'publisher binds readback to the exact local asset size');
         return { size: source.size, sha256: readbackAt === index ? 'f'.repeat(64) : source.sha256 };
       },
       listAssets: async () => state.assets,
@@ -696,6 +853,70 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
       getLatestRelease: async () => state.latest
     };
   };
+  {
+    const originalFetch = globalThis.fetch;
+    const payload = Buffer.from('bounded-release-asset');
+    const calls = [];
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, redirect: options.redirect });
+      return response({ body: closedByteStream([payload.subarray(0, 4), payload.subarray(4)]) });
+    };
+    try {
+      const readback = await githubReleaseApi({
+        repository: '1132-Fixer/windows', token: 'fixture-token'
+      }).readAsset(100, payload.length);
+      assert.equal(readback.size, payload.length);
+      assert.equal(readback.sha256, crypto.createHash('sha256').update(payload).digest('hex'));
+      assert.deepEqual(calls, [{
+        url: 'https://api.github.com/repos/1132-Fixer/windows/releases/assets/100',
+        redirect: 'follow'
+      }], 'an exact bounded asset read keeps the authorized redirect route');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+  {
+    const originalFetch = globalThis.fetch;
+    const payload = Buffer.from('length-bound-release-asset');
+    const streamState = { cancelled: false };
+    globalThis.fetch = async () => response({
+      body: openByteStream(payload, streamState),
+      headers: { 'content-length': String(payload.length + 1) }
+    });
+    try {
+      await assert.rejects(githubReleaseApi({
+        repository: '1132-Fixer/windows', token: 'fixture-token'
+      }).readAsset(100, payload.length), error => error.code === 'publication-asset-readback',
+      'release asset Content-Length mismatch fails before stream consumption');
+      assert.equal(streamState.cancelled, true, 'mismatched release asset response is cancelled');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+  {
+    const originalFetch = globalThis.fetch;
+    const publication = publicationApi();
+    const streamState = { cancelled: false };
+    globalThis.fetch = async () => response({
+      body: openByteStream(Buffer.alloc(assets[0].size + 1), streamState)
+    });
+    publication.readAsset = githubReleaseApi({
+      repository: '1132-Fixer/windows', token: 'fixture-token'
+    }).readAsset;
+    try {
+      await assert.rejects(publishRelease({
+        api: publication, repository: '1132-Fixer/windows', tag: `v${version}`,
+        head: sourceHead, version, assets
+      }), error => error.code === 'publication-asset-readback',
+      'chunked release asset overflow fails at the exact local-size boundary');
+      assert.equal(streamState.cancelled, true, 'chunked release asset overflow cancels the response');
+      assert.equal(publication.state.public, false, 'stream overflow leaves no public release');
+      assert.equal(publication.state.latest, null, 'stream overflow leaves latest unchanged');
+      assert.equal(publication.state.draft.draft, true, 'stream overflow retains only a draft');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
   for (let index = 0; index < assets.length; index++) {
     const publication = publicationApi({ uploadAt: index });
     await assert.rejects(publishRelease({

@@ -19,6 +19,20 @@ function hashFile(file) {
   return { size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
 }
 
+function declaredContentLength(response) {
+  if (!response || !response.headers || typeof response.headers.get !== 'function') return Number.NaN;
+  const value = response.headers.get('content-length');
+  if (value === null) return null;
+  if (!/^(?:0|[1-9]\d*)$/.test(value)) return Number.NaN;
+  const size = Number(value);
+  return Number.isSafeInteger(size) ? size : Number.NaN;
+}
+
+async function cancelBody(body) {
+  if (!body || typeof body.cancel !== 'function') return;
+  try { await body.cancel(); } catch (_) { /* preserve the fixed readback failure */ }
+}
+
 export function exactAssets(dist, candidate) {
   const names = [
     ...candidate.assets.map(asset => asset.name),
@@ -38,7 +52,9 @@ export async function publishRelease({ api, repository, tag, head, version, asse
       typeof api.getImmutableReleaseState !== 'function' ||
       !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository || '') ||
       tag !== `v${version}` || !/^[a-f0-9]{40}$/.test(head || '') ||
-      !Array.isArray(assets) || !assets.length) fail('publication-input');
+      !Array.isArray(assets) || !assets.length || assets.some(asset =>
+        !asset || !Number.isSafeInteger(asset.size) || asset.size < 1 ||
+        !/^[a-f0-9]{64}$/.test(asset.sha256 || ''))) fail('publication-input');
   const initialTag = await api.resolveTag(tag);
   if (!initialTag || initialTag.tag !== tag || initialTag.targetSha !== head) fail('publication-tag-identity');
   const immutableReleases = await api.getImmutableReleaseState();
@@ -70,7 +86,7 @@ export async function publishRelease({ api, repository, tag, head, version, asse
     const metadata = await api.getAsset(created.id);
     if (!metadata || metadata.id !== created.id || metadata.name !== asset.name ||
         metadata.size !== asset.size || metadata.state !== 'uploaded') fail('publication-asset-metadata');
-    const readback = await api.readAsset(created.id);
+    const readback = await api.readAsset(created.id, asset.size);
     if (!readback || readback.size !== asset.size || readback.sha256 !== asset.sha256) {
       fail('publication-asset-readback');
     }
@@ -124,18 +140,49 @@ export function githubReleaseApi({ repository, token }) {
       return response.json();
     },
     getAsset: assetId => json('GET', `${apiBase}/releases/assets/${assetId}`),
-    async readAsset(assetId) {
+    async readAsset(assetId, expectedSize) {
+      if (!Number.isSafeInteger(expectedSize) || expectedSize < 1) fail('publication-asset-readback');
       const response = await client.request('GET', `${apiBase}/releases/assets/${assetId}`, {
         accept: 'application/octet-stream', errorCode: 'publication-asset-readback', followRedirects: true
       });
       if (!response.body) fail('publication-asset-readback');
+      const declaredSize = declaredContentLength(response);
+      if (declaredSize !== null && declaredSize !== expectedSize) {
+        await cancelBody(response.body);
+        fail('publication-asset-readback');
+      }
+      if (typeof response.body.getReader !== 'function') {
+        await cancelBody(response.body);
+        fail('publication-asset-readback');
+      }
       const hash = crypto.createHash('sha256');
       let size = 0;
-      for await (const chunk of response.body) {
-        hash.update(chunk);
-        size += chunk.length;
+      const reader = response.body.getReader();
+      let cancelled = false;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = Buffer.from(value);
+          const nextSize = size + chunk.length;
+          if (nextSize > expectedSize) {
+            try { await reader.cancel(); } catch (_) { /* fixed size failure remains authoritative */ }
+            cancelled = true;
+            fail('publication-asset-readback');
+          }
+          size = nextSize;
+          hash.update(chunk);
+        }
+        if (size !== expectedSize) fail('publication-asset-readback');
+        return { size, sha256: hash.digest('hex') };
+      } catch (error) {
+        if (!cancelled) {
+          try { await reader.cancel(); } catch (_) { /* preserve the original failure */ }
+        }
+        throw error;
+      } finally {
+        try { reader.releaseLock(); } catch (_) { /* stream may already be closed */ }
       }
-      return { size, sha256: hash.digest('hex') };
     },
     listAssets: async releaseId => {
       const page = await client.paginate(`${apiBase}/releases/${releaseId}/assets?per_page=100`);
