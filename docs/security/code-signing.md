@@ -274,9 +274,10 @@ What is and is not true about this:
   as "part of this app". It does **not** make the unsigned host open under
   SAC enforcement, and no release note may say that it does.
 - Testing therefore runs on hosts without SAC enforcement. The `windows-latest`
-  CI runner drives an asInvoker test copy with UAC disabled, so its report is
-  diagnostic packaged-code evidence only. Native release evidence needs an
-  unmodified exact artifact on disposable Windows with UAC enabled. A
+  CI runner drives a manifest-modified asInvoker test copy for non-interactive
+  automation, so its report is diagnostic packaged-code evidence only. Native
+  release evidence needs an unmodified exact artifact on disposable Windows
+  with UAC enabled and observed approval/cancel choices. A
   SAC-enforcing operator PC is a **blocked** test host, reported as such, never
   as a pass.
 - Do not instruct users to disable Smart App Control. Turning it off is a

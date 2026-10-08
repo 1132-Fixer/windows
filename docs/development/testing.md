@@ -63,8 +63,8 @@ separate launch supplies fake Windows tool folders, forged root variables and
 an empty PATH. These cases fail if the packaged runtime cannot establish OS
 authority or execute the trusted command; a Node-only pass cannot replace them.
 The driver records only narrow runtime metadata, never the diagnostic report.
-CI uses `--test-copy` because hosted Windows has UAC disabled. A successful CI
-execution stays useful as packaged-code evidence, but its report is explicitly
+CI uses `--test-copy` for non-interactive diagnostic automation. A successful
+CI execution stays useful as packaged-code evidence, but its report is explicitly
 `diagnostic` and `releaseGateEligible=false`. Native release evidence must bind
 the exact unmodified executable hash and head, UAC-enabled disposable host,
 effective bundled support endpoint/revision, mandatory cases and operator

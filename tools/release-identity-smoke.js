@@ -189,6 +189,8 @@ check(undiciFixed, `top-level undici lock is at or above fixed version 7.29.1 (f
 console.log('release-identity-smoke: workflow authority and bounded execution');
 const ciYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
 const brandYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'brand.yml'), 'utf8');
+check(!ciYml.includes('UAC disabled'),
+  'CI test-copy documentation does not infer the hosted runner UAC state');
 const workflows = { 'ci.yml': ciYml, 'security.yml': securityYml, 'brand.yml': brandYml, 'release.yml': relYml };
 const uses = Object.entries(workflows).flatMap(([file, source]) => source.split(/\r?\n/)
   .filter(line => /^\s*-?\s*uses:\s*/.test(line))

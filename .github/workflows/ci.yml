@@ -92,10 +92,10 @@ jobs:
       - name: Finalize updater metadata
         run: node scripts/finalize-update-metadata.mjs --dist dist
 
-      # Packaged-build diagnostic acceptance. GitHub-hosted Windows has UAC
-      # disabled, so this run cannot establish native elevation or final-artifact
-      # release eligibility. Zoom Workplace is installed first so Fix now can
-      # still drive the real repair orchestrator;
+      # Packaged-build diagnostic acceptance. This non-interactive run drives
+      # a manifest-modified asInvoker copy, so it cannot establish native
+      # elevation or final-artifact release eligibility. Zoom Workplace is
+      # installed first so Fix now can still drive the real repair orchestrator;
       # if that download fails the driver still runs and reports the fix
       # journey as not-run rather than passed. See tools/packaged-acceptance.js.
       - name: Install Zoom Workplace for the acceptance run
@@ -109,12 +109,11 @@ jobs:
           if ($p.ExitCode -ne 0) { exit $p.ExitCode }
           Get-ChildItem 'C:\Program Files\Zoom\bin\Zoom.exe' -ErrorAction SilentlyContinue | Select-Object FullName, Length
 
-      # --test-copy: GitHub-hosted runners have UAC disabled, and with UAC off
-      # Windows will not CreateProcess a requireAdministrator image from the
-      # Chromium sandbox's restricted token (renderer/GPU launch fails,
-      # SBOX_ERROR_CREATE_PROCESS = 18). The driver therefore stamps a
-      # throwaway copy asInvoker and drives that; dist/win-unpacked and the
-      # installers are untouched and the report records which binary ran.
+      # --test-copy: non-interactive automation does not exercise the shipped
+      # requireAdministrator launch or an operator's UAC choice. The driver
+      # stamps a throwaway copy asInvoker and drives that; dist/win-unpacked
+      # and the installers are untouched and the report records which binary
+      # ran.
       - name: Packaged acceptance (launch, states, keyboard, scaling, Fix now)
         run: node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out acceptance-evidence --test-copy --artifact-head "${{ github.event.pull_request.head.sha || github.sha }}" --expected-head "${{ github.event.pull_request.head.sha || github.sha }}"
 

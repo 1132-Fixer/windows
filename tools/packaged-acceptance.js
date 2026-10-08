@@ -32,8 +32,8 @@
  * Native release-evidence expectations: disposable Windows, UAC enabled, an
  * elevated (administrator) session, no Smart App Control enforcement, exact
  * artifact identity and an operator attestation. GitHub-hosted runners use
- * --test-copy with UAC disabled; that run is useful diagnostic evidence but is
- * never native final-artifact acceptance.
+ * --test-copy for non-interactive diagnostic automation; that modified-manifest
+ * run is never native final-artifact acceptance.
  */
 
 const fs = require('fs');
@@ -55,11 +55,10 @@ const has = (flag) => args.includes(flag);
 const SHIPPED_EXE = path.resolve(argOf('--exe', path.join(ROOT, 'dist', 'win-unpacked', '1132 Fixer.exe')));
 const OUT = path.resolve(argOf('--out', path.join(ROOT, 'acceptance-evidence')));
 // --test-copy: drive a throwaway copy of the unpacked app whose exe manifest
-// is stamped asInvoker. Needed on hosts with UAC disabled (GitHub-hosted
-// runners): there, CreateProcess of a requireAdministrator image from the
-// Chromium sandbox's restricted token fails (SBOX_ERROR_CREATE_PROCESS = 18)
-// and no renderer ever starts. The shipped artifact is not modified. The
-// report records which binary was driven.
+// is stamped asInvoker. This lets non-interactive automation drive packaged
+// code without claiming to exercise the shipped requireAdministrator manifest
+// or an operator's UAC choice. The shipped artifact is not modified. The report
+// records which binary was driven.
 const TEST_COPY = has('--test-copy');
 const SCALES = String(argOf('--scales', '1,1.25,1.5')).split(',').map(Number).filter((n) => n > 0);
 const FIX_TIMEOUT_MS = Number(argOf('--fix-timeout-ms', 360000));
@@ -984,7 +983,7 @@ function finish() {
     ? 'passed'
     : (!TEST_COPY && !SKIP_FIX && exitCode !== 0 ? 'failed' : 'non-acceptance');
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
-  const lines = ['# Packaged acceptance', '', `Executable driven: \`${report.exe}\``, `Shipped executable: \`${report.shippedExe}\` (${report.testCopy ? 'driven through an asInvoker-stamped copy because the host has UAC disabled' : 'driven directly'})`, `Host: ${report.host.platform} ${report.host.release}, EnableLUA=${report.host.enableLUA}`, `Run: ${report.startedAt} → ${report.finishedAt}`, '',
+  const lines = ['# Packaged acceptance', '', `Executable driven: \`${report.exe}\``, `Shipped executable: \`${report.shippedExe}\` (${report.testCopy ? 'packaged code driven through a manifest-modified asInvoker diagnostic copy; shipped executable untouched' : 'driven directly'})`, `Host: ${report.host.platform} ${report.host.release}, EnableLUA=${report.host.enableLUA}`, `Run: ${report.startedAt} → ${report.finishedAt}`, '',
     `Mode: ${report.mode} · Evidence: ${report.evidenceClass} · Execution: ${report.executionResult} · Release gate eligible: ${report.releaseGateEligible} · Result: ${report.acceptanceResult}`,
     `Release eligibility blockers: ${report.releaseEligibilityReasons.join(', ') || 'none'}`, '',
     '## Acceptance identity', '',

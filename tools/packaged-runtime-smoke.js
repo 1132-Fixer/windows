@@ -2314,6 +2314,10 @@ public static class FixerIdentityDiagnosticFixtureV1 {
     source.includes('report.executionResult = exitCode === 0'),
   'report separates diagnostic execution success from native final-artifact eligibility');
   checks++;
+  assert.ok(!source.includes('host has UAC disabled') &&
+    !source.includes('GitHub-hosted runners have UAC disabled'),
+  'test-copy evidence never infers the host UAC state');
+  checks++;
 
   const good = await run();
   assert.equal(good.ok, true);
