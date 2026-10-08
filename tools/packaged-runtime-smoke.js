@@ -417,22 +417,54 @@ async function run(options = {}) {
   'raw launch never targets a bare PID and unresolved custody blocks overlap/completion');
   checks++;
 
-  const secondCustody = new Set();
-  const secondContext = { custody: secondCustody, Number };
-  vm.createContext(secondContext);
-  vm.runInContext(`const unresolvedSecondInstanceCustody = this.custody;\n${productionFunction('observeSecondInstance')}\nthis.observeSecondInstance = observeSecondInstance;`, secondContext);
   const secondHarness = () => {
     const child = new EventEmitter();
     child.pid = 1132;
     let deadline;
+    let spawnCalls = 0;
     let killCalls = 0;
+    let pageCalls = 0;
+    const records = [];
     child.kill = () => { killCalls++; };
+    const fakeChildProcess = Object.freeze({
+      spawn: (exe, args, options) => {
+        spawnCalls++;
+        assert.equal(exe, 'fixture.exe');
+        assert.deepEqual(Array.from(args), []);
+        assert.equal(options.windowsHide, true);
+        assert.equal(options.stdio, 'ignore');
+        return child;
+      }
+    });
+    const context = {
+      require: name => {
+        assert.equal(name, 'child_process');
+        return fakeChildProcess;
+      },
+      setTimeout: callback => { deadline = callback; return 1; },
+      clearTimeout: () => {},
+      failed: (id, detail) => records.push({ id, status: 'failed', detail }),
+      passed: (id, detail) => records.push({ id, status: 'passed', detail }),
+      console: { error: () => {} }
+    };
+    vm.createContext(context);
+    vm.runInContext([
+      "const { spawn } = require('child_process');",
+      "const EXE = 'fixture.exe';",
+      'const unresolvedSecondInstanceCustody = new Set();',
+      productionFunction('observeSecondInstance'),
+      productionFunction('runSecondInstance'),
+      'this.runSecondInstance = runSecondInstance;',
+      'this.custody = unresolvedSecondInstanceCustody;'
+    ].join('\n'), context);
+    const page = { evaluate: async () => { pageCalls++; return 'visible'; } };
     return {
-      child,
-      run: () => secondContext.observeSecondInstance('fixture.exe', () => child,
-        callback => { deadline = callback; return 1; }, () => {}),
+      child, context, records,
+      run: () => context.runSecondInstance(page),
       fireDeadline: () => deadline(),
-      killCalls: () => killCalls
+      killCalls: () => killCalls,
+      spawnCalls: () => spawnCalls,
+      pageCalls: () => pageCalls
     };
   };
   {
@@ -441,27 +473,36 @@ async function run(options = {}) {
     h.child.emit('exit', 0);
     h.child.pid = 9911; // Simulated reuse cannot affect the retained callback.
     h.fireDeadline();
-    const result = await pending;
-    assert.equal(result.terminationProved, true);
-    assert.equal(result.timedOut, false);
+    await pending;
+    assert.equal(h.spawnCalls(), 1, 'the production default spawn binding is invoked once');
     assert.equal(h.killCalls(), 0, 'a queued deadline never kills a reused PID after exit');
-    assert.equal(secondCustody.size, 0);
+    assert.equal(h.context.custody.size, 0);
+    assert.equal(h.pageCalls(), 1);
+    assert.equal(h.records.some(record => record.id === 'single-instance.second-launch-exits' &&
+      record.status === 'passed'), true);
   }
   {
     const h = secondHarness();
     const pending = h.run();
     h.fireDeadline();
-    const result = await pending;
-    assert.equal(result.terminationProved, false);
+    let settled = false;
+    pending.then(() => { settled = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false, 'the real caller blocks after unresolved timeout custody');
+    assert.equal(h.spawnCalls(), 1);
     assert.equal(h.killCalls(), 0, 'an unresolved second instance is retained without a bare-PID kill');
-    assert.equal(secondCustody.has(h.child), true);
-    secondCustody.delete(h.child);
+    assert.equal(h.context.custody.has(h.child), true);
+    assert.equal(h.pageCalls(), 0, 'caller cannot continue to the first-window probe');
+    assert.equal(h.records.some(record => record.id === 'single-instance.second-launch-exits' &&
+      record.status === 'failed'), true);
+    h.context.custody.delete(h.child);
   }
   const secondSource = productionFunction('runSecondInstance');
-  assert.ok(secondSource.includes('observeSecondInstance(EXE)') &&
+  assert.ok(source.includes("const { spawn } = require('child_process');") &&
+    secondSource.includes('observeSecondInstance(EXE)') &&
     !secondSource.includes('child.kill') &&
     source.includes('second-instance custody is unresolved; blocking further launches and completion'),
-  'second-instance timeout retains custody and blocks overlap/completion');
+  'default spawn binding and real caller retain unresolved custody without a PID kill');
   checks++;
   assert.ok(source.includes("'fix.completes-successfully'") && source.includes('fixJourneySucceeded(done.state)'),
     'the terminal Fix now result uses the strict success predicate');

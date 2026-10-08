@@ -32,6 +32,10 @@ jobs:
       candidate_artifact_digest: ${{ steps.gate.outputs.candidate_artifact_digest }}
       setup_sha256: ${{ steps.gate.outputs.setup_sha256 }}
       portable_sha256: ${{ steps.gate.outputs.portable_sha256 }}
+      native_receipt_artifact_id: ${{ steps.gate.outputs.native_receipt_artifact_id }}
+      native_receipt_artifact_digest: ${{ steps.gate.outputs.native_receipt_artifact_digest }}
+      support_receipt_artifact_id: ${{ steps.gate.outputs.support_receipt_artifact_id }}
+      support_receipt_artifact_digest: ${{ steps.gate.outputs.support_receipt_artifact_digest }}
       native_manifest_sha256: ${{ steps.gate.outputs.native_manifest_sha256 }}
       support_clearance_sha256: ${{ steps.gate.outputs.support_clearance_sha256 }}
     steps:
@@ -72,8 +76,13 @@ jobs:
         id: gate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NATIVE_ACCEPTANCE_MANIFEST: ${{ vars.NATIVE_ACCEPTANCE_MANIFEST }}
-          SUPPORT_RELEASE_CLEARANCE: ${{ vars.SUPPORT_RELEASE_CLEARANCE }}
+          NATIVE_ACCEPTANCE_ARTIFACT_ID: ${{ vars.NATIVE_ACCEPTANCE_ARTIFACT_ID }}
+          SUPPORT_CLEARANCE_ARTIFACT_ID: ${{ vars.SUPPORT_CLEARANCE_ARTIFACT_ID }}
+          RELEASE_REF_CREATED: ${{ github.event.created }}
+          RELEASE_REF_FORCED: ${{ github.event.forced }}
+          RELEASE_REF_BEFORE: ${{ github.event.before }}
+          RELEASE_REF_AFTER: ${{ github.event.after }}
+          RELEASE_TAG_PUSHER: ${{ github.actor }}
         run: node scripts/release-preflight.mjs
 
   publish:
@@ -114,6 +123,21 @@ jobs:
           New-Item -ItemType Directory -Path dist -ErrorAction Stop | Out-Null
           Expand-Archive -LiteralPath "$env:RUNNER_TEMP\release-candidate.zip" -DestinationPath dist -ErrorAction Stop
 
+      - name: Fetch and materialize authoritative release receipts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          node scripts/release-evidence.mjs
+          --head "${{ github.sha }}"
+          --version "${{ needs.preflight.outputs.version }}"
+          --out dist
+          --native-artifact-id "${{ needs.preflight.outputs.native_receipt_artifact_id }}"
+          --native-artifact-digest "${{ needs.preflight.outputs.native_receipt_artifact_digest }}"
+          --support-artifact-id "${{ needs.preflight.outputs.support_receipt_artifact_id }}"
+          --support-artifact-digest "${{ needs.preflight.outputs.support_receipt_artifact_digest }}"
+          --native-evidence-sha256 "${{ needs.preflight.outputs.native_manifest_sha256 }}"
+          --support-clearance-sha256 "${{ needs.preflight.outputs.support_clearance_sha256 }}"
+
       - name: Verify exact candidate bytes and updater metadata
         shell: pwsh
         run: |
@@ -131,16 +155,8 @@ jobs:
       - name: Verify bound support deployment
         env:
           FEEDBACK_PROXY_URL: ${{ vars.FEEDBACK_PROXY_URL }}
-          NATIVE_ACCEPTANCE_MANIFEST: ${{ vars.NATIVE_ACCEPTANCE_MANIFEST }}
-          SUPPORT_RELEASE_CLEARANCE: ${{ vars.SUPPORT_RELEASE_CLEARANCE }}
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
-        run: node scripts/verify-support-endpoint.mjs
-
-      - name: Materialize validated release evidence
-        env:
-          NATIVE_ACCEPTANCE_MANIFEST: ${{ vars.NATIVE_ACCEPTANCE_MANIFEST }}
-          SUPPORT_RELEASE_CLEARANCE: ${{ vars.SUPPORT_RELEASE_CLEARANCE }}
-        run: node scripts/release-evidence.mjs --head "${{ github.sha }}" --version "${{ needs.preflight.outputs.version }}" --out dist
+        run: node scripts/verify-support-endpoint.mjs --native dist/native-acceptance.json --support dist/support-clearance.json
 
       # Evidence retention is required before publication. A storage failure
       # leaves no public Release and cannot update latest.yml for users.

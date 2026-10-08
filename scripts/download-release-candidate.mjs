@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
+import { createGitHubRestClient } from './github-rest.mjs';
 
 function fail(code) {
   const error = new Error(code);
@@ -15,19 +16,6 @@ function fail(code) {
 function argOf(flag, fallback = '') {
   const index = process.argv.indexOf(flag);
   return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
-}
-
-async function request(url, token, accept = 'application/vnd.github+json') {
-  const response = await fetch(url, {
-    headers: {
-      Accept: accept,
-      Authorization: `Bearer ${token}`,
-      'User-Agent': '1132-fixer-release-candidate',
-      'X-GitHub-Api-Version': '2022-11-28'
-    }
-  });
-  if (!response.ok) fail('candidate-download-failed');
-  return response;
 }
 
 async function main() {
@@ -43,13 +31,15 @@ async function main() {
       !Number.isSafeInteger(artifactId) || artifactId < 1 || !Number.isSafeInteger(runId) || runId < 1 ||
       !/^release-candidate-[a-f0-9]{40}$/.test(expectedName) || !/^[a-f0-9]{40}$/.test(expectedHead) ||
       !/^sha256:[a-f0-9]{64}$/.test(expectedDigest)) fail('candidate-download-input');
-  const base = `https://api.github.com/repos/${repository}`;
-  const metadataResponse = await request(`${base}/actions/artifacts/${artifactId}`, token);
-  const metadata = await metadataResponse.json();
-  if (metadata.id !== artifactId || metadata.name !== expectedName || metadata.expired === true ||
+  const api = createGitHubRestClient({ token, userAgent: '1132-fixer-release-candidate' });
+  const base = `/repos/${repository}`;
+  const metadata = await api.json('GET', `${base}/actions/artifacts/${artifactId}`);
+  if (!metadata || metadata.id !== artifactId || metadata.name !== expectedName || metadata.expired === true ||
       metadata.digest !== expectedDigest || !metadata.workflow_run || metadata.workflow_run.id !== runId ||
       metadata.workflow_run.head_sha !== expectedHead) fail('candidate-download-identity');
-  const archive = await request(`${base}/actions/artifacts/${artifactId}/zip`, token, 'application/octet-stream');
+  const archive = await api.request('GET', `${base}/actions/artifacts/${artifactId}/zip`, {
+    accept: 'application/octet-stream', errorCode: 'candidate-download-failed', followRedirects: true
+  });
   if (!archive.body) fail('candidate-download-body');
   const temp = `${out}.part-${process.pid}`;
   if (fs.existsSync(out) || fs.existsSync(temp)) fail('candidate-download-output-exists');

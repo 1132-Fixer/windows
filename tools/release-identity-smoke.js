@@ -128,7 +128,7 @@ check(undiciFixed, `top-level undici lock is at or above fixed version 7.29.1 (f
 console.log('release-identity-smoke: workflow authority and bounded execution');
 const ciYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
 const brandYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'brand.yml'), 'utf8');
-const tracked = spawnSync('git', ['ls-files', '-z'], {
+const tracked = spawnSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
   cwd: ROOT, encoding: 'utf8', timeout: 10000
 });
 const trackedTextFiles = tracked.status === 0
@@ -143,7 +143,9 @@ const unsupportedUacFiles = trackedTextFiles.filter(file =>
   unsupportedUacInference.test(fs.readFileSync(path.join(ROOT, file), 'utf8')));
 check(tracked.status === 0 && trackedTextFiles.length > 0 && unsupportedUacFiles.length === 0,
   'tracked source, workflow and documentation text makes no unsupported UAC-state inference');
-const workflows = { 'ci.yml': ciYml, 'security.yml': securityYml, 'brand.yml': brandYml, 'release.yml': relYml };
+const workflows = Object.fromEntries(fs.readdirSync(path.join(ROOT, '.github', 'workflows'))
+  .filter(file => /\.ya?ml$/i.test(file))
+  .map(file => [file, fs.readFileSync(path.join(ROOT, '.github', 'workflows', file), 'utf8')]));
 const uses = Object.entries(workflows).flatMap(([file, source]) => source.split(/\r?\n/)
   .filter(line => /^\s*-?\s*uses:\s*/.test(line))
   .map(line => ({ file, line: line.trim() })));
@@ -168,7 +170,7 @@ check(!securityHeader.includes('security-events: write') &&
   (securityYml.match(/security-events:\s*write/g) || []).length === 1 &&
   securityYml.slice(securityYml.indexOf('  codeql:')).includes('security-events: write'),
 'security-events write permission is scoped to the CodeQL job');
-check(!/uses:\s*actions\/upload-artifact@[\s\S]{0,100}continue-on-error:\s*true/.test(ciYml + '\n' + relYml),
+check(!/uses:\s*actions\/upload-artifact@[\s\S]{0,100}continue-on-error:\s*true/.test(Object.values(workflows).join('\n')),
   'artifact upload failures remain visible in CI and release results');
 check(ciYml.includes('Check tracked JavaScript syntax') && !ciYml.includes('Advisory only') &&
   !/name:\s*Code Quality[\s\S]*continue-on-error:\s*true/.test(ciYml),
@@ -183,6 +185,11 @@ check(preflightJob.includes('actions: read') && preflightJob.includes('checks: r
 check(publishJob.includes('needs: preflight') && publishJob.includes('contents: write') &&
   relYml.includes('node scripts/release-preflight.mjs') && relYml.includes('node scripts/publish-release.mjs'),
 'the sole write-capable release job is downstream of the fail-closed preflight');
+check(relYml.includes('NATIVE_ACCEPTANCE_ARTIFACT_ID') &&
+  relYml.includes('SUPPORT_CLEARANCE_ARTIFACT_ID') &&
+  !relYml.includes('NATIVE_ACCEPTANCE_MANIFEST') &&
+  !relYml.includes('SUPPORT_RELEASE_CLEARANCE'),
+'release evidence variables contain immutable artifact IDs, not self-authored receipt JSON');
 check(!relYml.includes('electron-builder') && !relYml.includes('softprops/action-gh-release') &&
   relYml.includes('download-release-candidate.mjs'),
 'release reuses the accepted CI candidate and has no direct public-release action');
@@ -203,10 +210,20 @@ check(!/npm audit[^\n]*advisory-only/i.test(releaseDoc) &&
   releaseDoc.includes('Native acceptance') &&
   releaseDoc.includes('Support clearance') && releaseDoc.includes('exact current `main`'),
 'release documentation describes the enforced audit, exact-main, draft, native and support gates');
-const releaseActionPins = uses.filter(item => item.file === 'release.yml')
+check(releaseDoc.includes('support-clearance.json') && !releaseDoc.includes('support-release-clearance.json'),
+'release documentation uses the implemented support-clearance asset name');
+const releaseActionPins = uses.filter(item => ['release.yml', 'release-evidence.yml'].includes(item.file))
   .map(item => (/@([a-f0-9]{40})/.exec(item.line) || [])[1]).filter(Boolean);
 check(releaseActionPins.length > 0 && releaseActionPins.every(sha => releaseDoc.includes(sha)),
 'release documentation action inventory matches the exact workflow pins');
+const releaseScripts = [
+  'github-rest.mjs', 'download-release-candidate.mjs', 'release-preflight.mjs', 'publish-release.mjs'
+].map(file => fs.readFileSync(path.join(ROOT, 'scripts', file), 'utf8')).join('\n');
+check(releaseScripts.includes("export const GITHUB_API_VERSION = '2026-03-10'") &&
+  !releaseScripts.includes('2022-11-28') &&
+  ['download-release-candidate.mjs', 'release-preflight.mjs', 'publish-release.mjs'].every(file =>
+    fs.readFileSync(path.join(ROOT, 'scripts', file), 'utf8').includes("./github-rest.mjs")),
+'release REST callers share the repository-required 2026-03-10 transport');
 
 if (failures) { console.error(`release-identity-smoke: ${failures} FAIL`); process.exit(1); }
 console.log('release-identity-smoke: PASS');

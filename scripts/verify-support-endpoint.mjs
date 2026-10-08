@@ -1,7 +1,9 @@
 // Release-only readiness check. The desktop app never runs this request.
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { parseEvidenceJson, validateReleaseEvidence } from './release-evidence.mjs';
+import { validateReleaseEvidence } from './release-evidence.mjs';
 
 const require = createRequire(import.meta.url);
 const { endpointUrl, supportConfigRevision } = require('../src/main/support-client');
@@ -61,10 +63,15 @@ export async function verifySupportEndpoint(value, expected, fetchImpl = fetch) 
   } finally { clearTimeout(timer); }
 }
 
+function argOf(flag, fallback = '') {
+  const index = process.argv.indexOf(flag);
+  return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const native = parseEvidenceJson(process.env.NATIVE_ACCEPTANCE_MANIFEST || '', 'native-manifest-input');
-    const support = parseEvidenceJson(process.env.SUPPORT_RELEASE_CLEARANCE || '', 'support-clearance-input');
+    const native = fs.readFileSync(path.resolve(argOf('--native')));
+    const support = fs.readFileSync(path.resolve(argOf('--support')));
     const evidence = validateReleaseEvidence(native, support, {
       expectedHead: process.env.GITHUB_SHA || '',
       expectedVersion: process.env.RELEASE_VERSION || ''

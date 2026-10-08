@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createGitHubRestClient } from './github-rest.mjs';
 import { validateReleaseEvidence } from './release-evidence.mjs';
 import { verifyCandidateManifest } from './release-candidate.mjs';
 
@@ -18,7 +19,7 @@ function hashFile(file) {
   return { size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
 }
 
-function exactAssets(dist, candidate) {
+export function exactAssets(dist, candidate) {
   const names = [
     ...candidate.assets.map(asset => asset.name),
     'release-candidate.json',
@@ -33,9 +34,12 @@ function exactAssets(dist, candidate) {
 
 export async function publishRelease({ api, repository, tag, head, version, assets }) {
   if (!api || typeof api.getReleaseByTag !== 'function' ||
+      typeof api.resolveTag !== 'function' ||
       !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository || '') ||
       tag !== `v${version}` || !/^[a-f0-9]{40}$/.test(head || '') ||
       !Array.isArray(assets) || !assets.length) fail('publication-input');
+  const initialTag = await api.resolveTag(tag);
+  if (!initialTag || initialTag.tag !== tag || initialTag.targetSha !== head) fail('publication-tag-identity');
   if (await api.getReleaseByTag(tag)) fail('publication-release-exists');
   const prerelease = version.includes('-');
   const draft = await api.createDraft({
@@ -50,9 +54,11 @@ export async function publishRelease({ api, repository, tag, head, version, asse
     ].join('\n')
   });
   if (!draft || !Number.isSafeInteger(draft.id) || draft.id < 1 || draft.draft !== true ||
-      draft.tag_name !== tag || draft.target_commitish !== head || draft.prerelease !== prerelease) {
+      draft.tag_name !== tag || draft.prerelease !== prerelease) {
     fail('publication-draft-create');
   }
+  const draftTag = await api.resolveTag(tag);
+  if (!draftTag || draftTag.tag !== tag || draftTag.targetSha !== head) fail('publication-tag-identity');
   const uploaded = [];
   for (const asset of assets) {
     const created = await api.uploadAsset(draft.id, asset);
@@ -75,9 +81,11 @@ export async function publishRelease({ api, repository, tag, head, version, asse
   }
   const published = await api.publishDraft(draft.id, { makeLatest: !prerelease });
   if (!published || published.id !== draft.id || published.draft !== false ||
-      published.tag_name !== tag || published.target_commitish !== head || published.prerelease !== prerelease) {
+      published.tag_name !== tag || published.prerelease !== prerelease) {
     fail('publication-final-state');
   }
+  const publishedTag = await api.resolveTag(tag);
+  if (!publishedTag || publishedTag.tag !== tag || publishedTag.targetSha !== head) fail('publication-tag-identity');
   if (!prerelease) {
     const latest = await api.getLatestRelease();
     if (!latest || latest.id !== draft.id || latest.tag_name !== tag || latest.draft !== false) fail('publication-latest-state');
@@ -86,22 +94,10 @@ export async function publishRelease({ api, repository, tag, head, version, asse
 }
 
 export function githubReleaseApi({ repository, token }) {
-  const apiBase = `https://api.github.com/repos/${repository}`;
-  const headers = (accept = 'application/vnd.github+json') => ({
-    Accept: accept,
-    Authorization: `Bearer ${token}`,
-    'User-Agent': '1132-fixer-release-publisher',
-    'X-GitHub-Api-Version': '2022-11-28'
-  });
+  const apiBase = `/repos/${repository}`;
+  const client = createGitHubRestClient({ token, userAgent: '1132-fixer-release-publisher' });
   async function json(method, url, body, allow404 = false) {
-    const response = await fetch(url, {
-      method, headers: { ...headers(), ...(body ? { 'Content-Type': 'application/json' } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
-      redirect: 'error'
-    });
-    if (allow404 && response.status === 404) return null;
-    if (!response.ok) fail('publication-api-failed');
-    return response.json();
+    return client.json(method, url, body, { allow404, errorCode: 'publication-api-failed' });
   }
   return {
     getReleaseByTag: tag => json('GET', `${apiBase}/releases/tags/${encodeURIComponent(tag)}`, null, true),
@@ -117,19 +113,18 @@ export function githubReleaseApi({ repository, token }) {
     }),
     async uploadAsset(releaseId, asset) {
       const blob = await fs.openAsBlob(asset.file, { type: 'application/octet-stream' });
-      const response = await fetch(
+      const response = await client.request('POST',
         `https://uploads.github.com/repos/${repository}/releases/${releaseId}/assets?name=${encodeURIComponent(asset.name)}`,
-        { method: 'POST', headers: headers('application/vnd.github+json'), body: blob, redirect: 'error' }
+        { body: blob, accept: 'application/vnd.github+json', errorCode: 'publication-asset-upload' }
       );
-      if (!response.ok) fail('publication-asset-upload');
       return response.json();
     },
     getAsset: assetId => json('GET', `${apiBase}/releases/assets/${assetId}`),
     async readAsset(assetId) {
-      const response = await fetch(`${apiBase}/releases/assets/${assetId}`, {
-        headers: headers('application/octet-stream')
+      const response = await client.request('GET', `${apiBase}/releases/assets/${assetId}`, {
+        accept: 'application/octet-stream', errorCode: 'publication-asset-readback', followRedirects: true
       });
-      if (!response.ok || !response.body) fail('publication-asset-readback');
+      if (!response.body) fail('publication-asset-readback');
       const hash = crypto.createHash('sha256');
       let size = 0;
       for await (const chunk of response.body) {
@@ -138,12 +133,26 @@ export function githubReleaseApi({ repository, token }) {
       }
       return { size, sha256: hash.digest('hex') };
     },
-    listAssets: releaseId => json('GET', `${apiBase}/releases/${releaseId}/assets?per_page=100`),
+    listAssets: async releaseId => {
+      const page = await client.paginate(`${apiBase}/releases/${releaseId}/assets?per_page=100`);
+      if (!page.complete) fail('publication-asset-pagination');
+      return page.items;
+    },
     publishDraft: (releaseId, { makeLatest }) => json('PATCH', `${apiBase}/releases/${releaseId}`, {
       draft: false,
       make_latest: makeLatest ? 'true' : 'false'
     }),
-    getLatestRelease: () => json('GET', `${apiBase}/releases/latest`)
+    getLatestRelease: () => json('GET', `${apiBase}/releases/latest`),
+    async resolveTag(tag) {
+      const ref = await json('GET', `${apiBase}/git/ref/tags/${encodeURIComponent(tag)}`);
+      if (!ref || !ref.object || ref.object.type !== 'tag' || !/^[a-f0-9]{40}$/.test(ref.object.sha || '')) {
+        fail('publication-tag-identity');
+      }
+      const object = await json('GET', `${apiBase}/git/tags/${ref.object.sha}`);
+      if (!object || object.tag !== tag || !object.object || object.object.type !== 'commit' ||
+          !/^[a-f0-9]{40}$/.test(object.object.sha || '')) fail('publication-tag-identity');
+      return { tag, tagObjectSha: ref.object.sha, targetSha: object.object.sha };
+    }
   };
 }
 
@@ -160,16 +169,16 @@ async function main() {
   const version = argOf('--version');
   const dist = path.resolve(argOf('--dist', 'dist'));
   if (!token) fail('publication-token-missing');
-  const native = JSON.parse(fs.readFileSync(path.join(dist, 'native-acceptance.json'), 'utf8'));
-  const support = JSON.parse(fs.readFileSync(path.join(dist, 'support-clearance.json'), 'utf8'));
-  const evidence = validateReleaseEvidence(native, support, { expectedHead: head, expectedVersion: version });
+  const nativeBytes = fs.readFileSync(path.join(dist, 'native-acceptance.json'));
+  const supportBytes = fs.readFileSync(path.join(dist, 'support-clearance.json'));
+  const evidence = validateReleaseEvidence(nativeBytes, supportBytes, { expectedHead: head, expectedVersion: version });
   if (evidence.nativeSha256 !== argOf('--native-evidence-sha256') ||
       evidence.supportSha256 !== argOf('--support-clearance-sha256')) fail('publication-evidence-digest');
   const candidate = JSON.parse(fs.readFileSync(path.join(dist, 'release-candidate.json'), 'utf8'));
   verifyCandidateManifest({
     dist, manifest: candidate, head, version,
-    setupSha256: native.packages.setup.packageSha256,
-    portableSha256: native.packages.portable.packageSha256
+    setupSha256: evidence.native.packages.setup.packageSha256,
+    portableSha256: evidence.native.packages.portable.packageSha256
   });
   const assets = exactAssets(dist, candidate);
   const published = await publishRelease({

@@ -44,12 +44,19 @@ link would have provided.
 ### 1. Source
 
 Tag format is validated first: `v1.2.3` or `v1.2.3-rc.1`. Anything else fails
-before checkout. The preflight then requires the tag commit to equal current
-`main`, `package.json` to equal the tag version, the active branch rules to
-retain all seven named checks and review controls, each check to be green on
-that SHA under its required integration, and an exact-head independent
-code-owner approval whose recorded base is the release commit's first parent.
-All release runs share one concurrency group.
+before checkout. The push must create a new tag: `created=true`, `forced=false`,
+and an all-zero before SHA. The preflight reads `git/ref/tags/<tag>`, requires
+an annotated tag object, dereferences it through `git/tags/<object-sha>`, and
+requires its commit to equal current `main`. It does not use a Release object's
+`target_commitish` as tag identity.
+
+The preflight also requires `package.json` to equal the tag version, the active
+branch rules to retain all seven named checks and every review control,
+including required thread resolution, and each check to be green on that SHA
+under its required integration. It paginates reviews and review threads to
+exhaustion. Every thread must be resolved. No current blocking review can
+remain. Exact-head approval must come from a code owner who is neither the PR
+author nor the last tag pusher. All release runs share one concurrency group.
 
 ### 2. CI tests
 
@@ -61,8 +68,20 @@ as `release-candidate-<SHA>`. Artifact upload failure fails the check.
 
 `release.yml` does **not** re-run the suite or rebuild. It reads the exact-SHA
 required checks, downloads the one candidate artifact named in the native
-acceptance manifest, verifies the artifact archive digest and every candidate
+acceptance receipt, verifies the artifact archive digest and every candidate
 file, and refuses any different package hash.
+
+Native and support evidence is not accepted from JSON-valued release
+variables. An independent code owner uses the `Release evidence issuer`
+workflow on protected `main`. That workflow validates the exact non-secret
+receipt bytes and stores one immutable Actions artifact. The release variables
+contain only those artifact IDs. Preflight fetches each artifact and its
+workflow run, checks the issuer, source SHA, workflow, event and archive digest,
+then hashes and validates the retrieved receipt bytes. It binds the source
+head, both package hashes, installed or extracted runtime hashes, UAC evidence,
+support deployment revision, destination and acknowledgement fingerprints,
+and all six support journeys. Support issue #2 must be closed or carry the
+explicit durable supersession marker before preflight reads candidate metadata.
 
 ### 3. Build
 
@@ -205,13 +224,15 @@ this change. Recorded as the obvious next step.
 
 ### 9. GitHub Release
 
-`scripts/publish-release.mjs` creates a non-latest draft and uploads:
+`scripts/publish-release.mjs` creates a non-latest draft and uploads this exact
+machine-checked set:
 
+<!-- release-assets:start -->
 `1132-Fixer-Setup-<version>.exe` · `1132-Fixer-Portable-<version>.exe` ·
 `checksums-sha256.txt` · `latest.yml` · `*.blockmap` · `signature-state.json` ·
 `package-inventory.json` · `sbom.spdx.json` · `provenance.json` ·
-`release-candidate.json` · `native-acceptance.json` ·
-`support-release-clearance.json`
+`release-candidate.json` · `native-acceptance.json` · `support-clearance.json`
+<!-- release-assets:end -->
 
 The script downloads each draft asset and checks its SHA-256, then checks the
 complete asset set. Only after all readbacks pass does it publish the release
@@ -273,6 +294,10 @@ job that publishes executables to users. A SHA cannot be repointed.
 
 The release path uses only GitHub-owned actions. Publication uses the checked-in
 Node script and the GitHub API instead of a third-party release action.
+All release REST callers use the shared `scripts/github-rest.mjs` transport,
+send API version `2026-03-10`, follow pagination links to exhaustion, reject
+redirects, and read back each mutation. Review threads use a cursor-paginated
+GraphQL query and fail closed on any incomplete page.
 
 Dependabot is configured for `github-actions` weekly, so it raises pull
 requests to move these pins forward. Review those like any other dependency
@@ -292,10 +317,13 @@ workflow bytes and rejects a tag or abbreviated SHA.
    commit.
 3. Let CI retain the exact candidate. Complete disposable native Windows Setup
    and Portable acceptance for those package hashes. Complete the six live
-   support journeys against the immutable backend revision and record the
-   bound support clearance. These external receipts must be installed as the
-   repository release variables before tagging.
-4. Tag the exact current `main` commit and push:
+   support journeys against the immutable backend revision. Close support
+   issue #2 or record its explicit supersession.
+4. Have an independent code owner run `Release evidence issuer` on protected
+   `main` once for `native` and once for `support`. Put only the resulting
+   immutable artifact IDs in `NATIVE_ACCEPTANCE_ARTIFACT_ID` and
+   `SUPPORT_CLEARANCE_ARTIFACT_ID`. Do not put receipt JSON in a variable.
+5. Create a new annotated tag on the exact current `main` commit and push it:
 
 ```bash
 git tag -a v5.6.1 -m "v5.6.1"
@@ -305,12 +333,12 @@ git tag -a v5.6.1 -m "v5.6.1"
 git push origin v5.6.1
 ```
 
-5. Watch the run. A preflight failure means no build, draft, or publication has
+6. Watch the run. A preflight failure means no build, draft, or publication has
    started. Do not work around it by weakening a required check or evidence
    receipt.
-6. After the run completes, confirm on the Releases page: both `.exe` assets,
+7. After the run completes, confirm on the Releases page: both `.exe` assets,
    `checksums-sha256.txt`, `latest.yml`, `signature-state.json`.
-7. Confirm the published `latest.yml` carries no `isAdminRightsRequired` line
+8. Confirm the published `latest.yml` carries no `isAdminRightsRequired` line
    and that its `version` is the tag. The candidate and draft-readback gates
    fail before publication if either condition is false.
 
