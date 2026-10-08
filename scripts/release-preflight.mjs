@@ -13,6 +13,8 @@ const SHA40 = /^[a-f0-9]{40}$/;
 const ZERO_SHA = '0'.repeat(40);
 const SUPPORT_REPOSITORY = '1132-Fixer/support-requests-bug-reporting';
 const SUPPORT_ISSUE = 2;
+const SUPPORT_SUPERSESSION_LIMIT = 8;
+const SUPPORT_REPOSITORY_URL = `https://api.github.com/repos/${SUPPORT_REPOSITORY}`;
 
 export const REQUIRED_CHECKS = Object.freeze([
   Object.freeze({ context: 'Build & Test', integrationId: 15368 }),
@@ -28,6 +30,7 @@ const REVIEW_THREADS_QUERY = `
   query ReleaseReviewThreads($owner: String!, $repo: String!, $number: Int!, $after: String) {
     repository(owner: $owner, name: $repo) {
       pullRequest(number: $number) {
+        reviewDecision
         reviewThreads(first: 100, after: $after) {
           nodes { id isResolved }
           pageInfo { hasNextPage endCursor }
@@ -133,8 +136,11 @@ async function assertReviewThreadsResolved(api, owner, repo, pullRequest) {
   const seen = new Set();
   for (let page = 0; page < 100; page++) {
     const data = await api.graphql(REVIEW_THREADS_QUERY, { owner, repo, number: pullRequest, after });
-    const connection = data && data.repository && data.repository.pullRequest &&
-      data.repository.pullRequest.reviewThreads;
+    const pullRequestState = data && data.repository && data.repository.pullRequest;
+    if (!pullRequestState || pullRequestState.reviewDecision !== 'APPROVED') {
+      fail('provider-review-decision-not-approved');
+    }
+    const connection = pullRequestState.reviewThreads;
     if (!connection || !Array.isArray(connection.nodes) || !connection.pageInfo ||
         typeof connection.pageInfo.hasNextPage !== 'boolean') fail('review-thread-pagination-incomplete');
     if (connection.nodes.some(node => !node || node.isResolved !== true)) fail('review-thread-unresolved');
@@ -147,15 +153,53 @@ async function assertReviewThreadsResolved(api, owner, repo, pullRequest) {
   fail('review-thread-pagination-incomplete');
 }
 
-function assertSupportIssueCleared(issue) {
-  if (!issue || issue.number !== SUPPORT_ISSUE || issue.pull_request) fail('support-issue-not-cleared');
-  if (issue.state === 'closed' && typeof issue.closed_at === 'string' && !Number.isNaN(Date.parse(issue.closed_at))) return;
+function assertSupportIssueShape(issue, issueNumber) {
+  if (!issue || issue.number !== issueNumber || issue.pull_request ||
+      issue.repository_url !== SUPPORT_REPOSITORY_URL ||
+      issue.url !== `${SUPPORT_REPOSITORY_URL}/issues/${issueNumber}`) {
+    fail('support-issue-target-invalid');
+  }
+}
+
+function supportSupersessionTarget(issue) {
   const labels = (Array.isArray(issue.labels) ? issue.labels : [])
     .map(label => String(typeof label === 'string' ? label : label && label.name || '').toLowerCase());
-  const marker = /^Superseded-by:\s*https:\/\/github\.com\/1132-Fixer\/support-requests-bug-reporting\/issues\/([1-9]\d*)\s*$/im
-    .exec(String(issue.body || ''));
-  const superseded = labels.includes('superseded') && marker && Number(marker[1]) !== SUPPORT_ISSUE;
-  if (!superseded) fail('support-issue-not-cleared');
+  const markers = String(issue.body || '').split(/\r?\n/)
+    .filter(line => /^\s*Superseded-by\s*:/i.test(line));
+  if (markers.length > 1) fail('support-supersession-ambiguous');
+  if (!markers.length) {
+    if (labels.includes('superseded')) fail('support-supersession-invalid');
+    return null;
+  }
+  if (!labels.includes('superseded')) fail('support-supersession-invalid');
+  const match = /^\s*Superseded-by:\s*https:\/\/github\.com\/1132-Fixer\/support-requests-bug-reporting\/issues\/([1-9]\d*)\s*$/i
+    .exec(markers[0]);
+  if (!match) fail('support-supersession-invalid');
+  const target = Number(match[1]);
+  if (!Number.isSafeInteger(target)) fail('support-supersession-invalid');
+  return target;
+}
+
+async function assertSupportIssueCleared(api) {
+  const seen = new Set();
+  let issueNumber = SUPPORT_ISSUE;
+  for (let depth = 0; depth < SUPPORT_SUPERSESSION_LIMIT; depth++) {
+    if (seen.has(issueNumber)) fail('support-supersession-cycle');
+    seen.add(issueNumber);
+    const issue = await api.json('GET',
+      `/repos/${SUPPORT_REPOSITORY}/issues/${issueNumber}`, undefined, { allow404: true });
+    assertSupportIssueShape(issue, issueNumber);
+    const target = supportSupersessionTarget(issue);
+    if (target !== null) {
+      if (seen.has(target)) fail('support-supersession-cycle');
+      issueNumber = target;
+      continue;
+    }
+    if (issue.state === 'closed' && typeof issue.closed_at === 'string' &&
+        !Number.isNaN(Date.parse(issue.closed_at))) return;
+    fail('support-issue-not-cleared');
+  }
+  fail('support-supersession-depth');
 }
 
 export async function verifyReleasePreflight({
@@ -186,6 +230,8 @@ export async function verifyReleasePreflight({
   const tagObject = await api.json('GET', `${root}/git/tags/${tagRef.object.sha}`);
   if (!tagObject || tagObject.tag !== tag || !tagObject.object ||
       tagObject.object.type !== 'commit' || tagObject.object.sha !== sha) fail('annotated-tag-identity');
+  const immutableReleases = await api.json('GET', `${root}/immutable-releases`, undefined, { allow404: true });
+  if (!immutableReleases || immutableReleases.enabled !== true) fail('immutable-releases-required');
 
   const rules = pageItems(await api.paginate(`${root}/rules/branches/main?per_page=100`), 'ruleset-pagination-incomplete');
   assertReviewRule(rules);
@@ -222,9 +268,9 @@ export async function verifyReleasePreflight({
       releaseCommit.parents[0].sha !== evidence.native.review.base) fail('review-base-not-current');
   const owners = codeOwners(codeownersText);
   const author = String(pr.user && pr.user.login || '').toLowerCase();
-  const pusher = String(tagEvent.pusher).toLowerCase();
+  const tagPusher = String(tagEvent.pusher).toLowerCase();
   for (const receipt of [nativeReceipt, supportReceipt]) {
-    if (!owners.has(receipt.issuer.login) || receipt.issuer.login === author || receipt.issuer.login === pusher) {
+    if (!owners.has(receipt.issuer.login) || receipt.issuer.login === author || receipt.issuer.login === tagPusher) {
       fail('receipt-issuer-not-independent');
     }
   }
@@ -234,13 +280,12 @@ export async function verifyReleasePreflight({
     fail('blocking-review-unresolved');
   }
   const approved = [...reviews.entries()].some(([login, review]) => owners.has(login) &&
-    login !== author && login !== pusher && review.state === 'APPROVED' &&
+    login !== author && review.state === 'APPROVED' &&
     review.commit_id === evidence.native.review.head);
   if (!approved) fail('independent-codeowner-approval-missing');
   await assertReviewThreadsResolved(api, owner, repo, prNumber);
 
-  const supportIssue = await api.json('GET', `/repos/${SUPPORT_REPOSITORY}/issues/${SUPPORT_ISSUE}`);
-  assertSupportIssueCleared(supportIssue);
+  await assertSupportIssueCleared(api);
 
   // Candidate metadata is intentionally last. Review, thread, issuer, policy,
   // and support clearance failures cannot read accepted package metadata.

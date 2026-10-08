@@ -35,11 +35,14 @@ export function exactAssets(dist, candidate) {
 export async function publishRelease({ api, repository, tag, head, version, assets }) {
   if (!api || typeof api.getReleaseByTag !== 'function' ||
       typeof api.resolveTag !== 'function' ||
+      typeof api.getImmutableReleaseState !== 'function' ||
       !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository || '') ||
       tag !== `v${version}` || !/^[a-f0-9]{40}$/.test(head || '') ||
       !Array.isArray(assets) || !assets.length) fail('publication-input');
   const initialTag = await api.resolveTag(tag);
   if (!initialTag || initialTag.tag !== tag || initialTag.targetSha !== head) fail('publication-tag-identity');
+  const immutableReleases = await api.getImmutableReleaseState();
+  if (!immutableReleases || immutableReleases.enabled !== true) fail('publication-immutable-releases-required');
   if (await api.getReleaseByTag(tag)) fail('publication-release-exists');
   const prerelease = version.includes('-');
   const draft = await api.createDraft({
@@ -100,6 +103,7 @@ export function githubReleaseApi({ repository, token }) {
     return client.json(method, url, body, { allow404, errorCode: 'publication-api-failed' });
   }
   return {
+    getImmutableReleaseState: () => json('GET', `${apiBase}/immutable-releases`, null, true),
     getReleaseByTag: tag => json('GET', `${apiBase}/releases/tags/${encodeURIComponent(tag)}`, null, true),
     createDraft: input => json('POST', `${apiBase}/releases`, {
       tag_name: input.tag,

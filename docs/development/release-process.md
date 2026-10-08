@@ -55,8 +55,10 @@ branch rules to retain all seven named checks and every review control,
 including required thread resolution, and each check to be green on that SHA
 under its required integration. It paginates reviews and review threads to
 exhaustion. Every thread must be resolved. No current blocking review can
-remain. Exact-head approval must come from a code owner who is neither the PR
-author nor the last tag pusher. All release runs share one concurrency group.
+remain. Exact-head approval must come from a code owner who is not the PR
+author. GitHub must also return the PR's current `reviewDecision` as `APPROVED`;
+that provider decision enforces the last-PR-push rule. The tag pusher is not
+treated as the last PR pusher. All release runs share one concurrency group.
 
 ### 2. CI tests
 
@@ -81,7 +83,10 @@ then hashes and validates the retrieved receipt bytes. It binds the source
 head, both package hashes, installed or extracted runtime hashes, UAC evidence,
 support deployment revision, destination and acknowledgement fingerprints,
 and all six support journeys. Support issue #2 must be closed or carry the
-explicit durable supersession marker before preflight reads candidate metadata.
+explicit durable supersession marker. Preflight fetches every referenced issue
+in a bounded chain and requires the final issue to be closed before it reads
+candidate metadata. Preflight and the publisher also require immutable releases
+to be enabled before either can create a draft.
 
 ### 3. Build
 
@@ -295,9 +300,12 @@ job that publishes executables to users. A SHA cannot be repointed.
 The release path uses only GitHub-owned actions. Publication uses the checked-in
 Node script and the GitHub API instead of a third-party release action.
 All release REST callers use the shared `scripts/github-rest.mjs` transport,
-send API version `2026-03-10`, follow pagination links to exhaustion, reject
-redirects, and read back each mutation. Review threads use a cursor-paginated
-GraphQL query and fail closed on any incomplete page.
+send API version `2026-03-10`, follow pagination links to exhaustion, and read
+back each mutation. Ordinary JSON and metadata REST calls reject redirects.
+Only bounded artifact-archive and release-asset byte downloads follow redirects
+to GitHub download storage; the caller limits their size and verifies their
+recorded digest. Review threads use a cursor-paginated GraphQL query and fail
+closed on any incomplete page.
 
 Dependabot is configured for `github-actions` weekly, so it raises pull
 requests to move these pins forward. Review those like any other dependency

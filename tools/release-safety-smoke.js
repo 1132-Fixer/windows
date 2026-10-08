@@ -70,7 +70,7 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
   } = evidenceModule;
   const { REQUIRED_CHECKS, verifyReleasePreflight } = preflightModule;
   const { generateCandidateManifest, verifyCandidateManifest } = candidateModule;
-  const { exactAssets, publishRelease } = publishModule;
+  const { exactAssets, publishRelease, githubReleaseApi } = publishModule;
   const { createGitHubRestClient, GITHUB_API_VERSION } = restModule;
 
   const sourceHead = '1'.repeat(40);
@@ -204,6 +204,9 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
       ? '*.blockmap'
       : name.replaceAll(version, '<version>')))].sort();
     assert.deepEqual(documented, normalized, 'documented assets exactly match exactAssets()');
+    assert.match(releaseDoc,
+      /Ordinary JSON and metadata REST calls reject redirects\.[\s\S]*Only bounded artifact-archive and release-asset byte downloads follow redirects/,
+      'release documentation distinguishes rejected metadata redirects from bounded byte downloads');
     fs.appendFileSync(path.join(candidateDir, portableName), 'changed');
     assert.throws(() => verifyCandidateManifest({
       dist: candidateDir, manifest, head: sourceHead, version,
@@ -248,6 +251,13 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
     repository: { full_name: '1132-Fixer/windows' },
     actor: { login: 'patricktobias86' }, triggering_actor: { login: 'patricktobias86' }
   });
+  const supportIssue = (number, overrides = {}) => ({
+    number,
+    url: `https://api.github.com/repos/1132-Fixer/support-requests-bug-reporting/issues/${number}`,
+    repository_url: 'https://api.github.com/repos/1132-Fixer/support-requests-bug-reporting',
+    state: 'closed', closed_at: '2026-10-08T12:00:00Z', labels: [], body: '',
+    ...overrides
+  });
   const jsonResponses = new Map([
     ['/repos/1132-Fixer/windows', { full_name: '1132-Fixer/windows', default_branch: 'main' }],
     ['/repos/1132-Fixer/windows/git/ref/heads/main', { object: { type: 'commit', sha: sourceHead } }],
@@ -255,6 +265,7 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
     [`/repos/1132-Fixer/windows/git/tags/${tagObjectSha}`, {
       tag: `v${version}`, object: { type: 'commit', sha: sourceHead }
     }],
+    ['/repos/1132-Fixer/windows/immutable-releases', { enabled: true, enforced_by_owner: false }],
     ['/repos/1132-Fixer/windows/actions/artifacts/7001', artifact(
       7001, 8001, `native-acceptance-receipt-${sourceHead}`, nativeArchive
     )],
@@ -268,9 +279,7 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
       base: { ref: 'main' }, head: { sha: reviewedHead }, user: { login: 'author' }
     }],
     [`/repos/1132-Fixer/windows/git/commits/${sourceHead}`, { parents: [{ sha: reviewedBase }] }],
-    ['/repos/1132-Fixer/support-requests-bug-reporting/issues/2', {
-      number: 2, state: 'closed', closed_at: '2026-10-08T12:00:00Z', labels: [], body: ''
-    }],
+    ['/repos/1132-Fixer/support-requests-bug-reporting/issues/2', supportIssue(2)],
     ['/repos/1132-Fixer/windows/actions/runs/1132', {
       id: 1132, head_sha: sourceHead, event: 'push', status: 'completed',
       conclusion: 'success', path: '.github/workflows/ci.yml'
@@ -302,7 +311,10 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
   const resolvedThreads = (after) => after === null
     ? { nodes: [{ id: 'T1', isResolved: true }], pageInfo: { hasNextPage: true, endCursor: 'cursor-1' } }
     : { nodes: [{ id: 'T2', isResolved: true }], pageInfo: { hasNextPage: false, endCursor: 'cursor-2' } };
-  const makeApi = ({ jsonMap = jsonResponses, pageMap = pageResponses, byteMap = byteResponses, threads = resolvedThreads } = {}) => {
+  const makeApi = ({
+    jsonMap = jsonResponses, pageMap = pageResponses, byteMap = byteResponses,
+    threads = resolvedThreads, reviewDecision = 'APPROVED'
+  } = {}) => {
     const calls = [];
     return {
       calls,
@@ -325,7 +337,11 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
       },
       async graphql(_query, variables) {
         calls.push(`graphql ${variables.after || 'first'}`);
-        return { repository: { pullRequest: { reviewThreads: clone(threads(variables.after)) } } };
+        return {
+          repository: {
+            pullRequest: { reviewDecision, reviewThreads: clone(threads(variables.after)) }
+          }
+        };
       }
     };
   };
@@ -370,6 +386,18 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
     await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi({ jsonMap: changed }) }),
       error => error.code === 'annotated-tag-identity', 'lightweight or reused tag identity is rejected');
   }
+  for (const [name, state] of [
+    ['disabled immutable releases', { enabled: false, enforced_by_owner: false }],
+    ['missing immutable-release endpoint', null]
+  ]) {
+    const changed = new Map(jsonResponses);
+    changed.set('/repos/1132-Fixer/windows/immutable-releases', state);
+    const immutableApi = makeApi({ jsonMap: changed });
+    await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: immutableApi }),
+      error => error.code === 'immutable-releases-required', `${name} fails closed`);
+    assert.equal(immutableApi.calls.includes('json /repos/1132-Fixer/windows/actions/runs/1132'), false,
+      `${name} stops before candidate metadata`);
+  }
   {
     const changed = new Map(pageResponses);
     const checkState = clone(changed.get(`/repos/1132-Fixer/windows/commits/${sourceHead}/check-runs?filter=latest&per_page=100`));
@@ -407,6 +435,10 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
     await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi({ pageMap: changed }) }),
       error => error.code === 'blocking-review-unresolved', 'current blocking review prevents release');
   }
+  await assert.rejects(verifyReleasePreflight({
+    ...preflightInput, api: makeApi({ reviewDecision: 'REVIEW_REQUIRED' })
+  }), error => error.code === 'provider-review-decision-not-approved',
+  'an exact-head REST approval cannot bypass the provider last-push review decision');
   await assert.rejects(verifyReleasePreflight({
     ...preflightInput,
     api: makeApi({ threads: () => ({ nodes: [{ id: 'T1', isResolved: false }], pageInfo: { hasNextPage: false, endCursor: null } }) })
@@ -455,9 +487,8 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
   }
   {
     const changed = new Map(jsonResponses);
-    changed.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/2', {
-      number: 2, state: 'open', closed_at: null, labels: [], body: ''
-    });
+    changed.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/2',
+      supportIssue(2, { state: 'open', closed_at: null }));
     const issueApi = makeApi({ jsonMap: changed });
     await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: issueApi }),
       error => error.code === 'support-issue-not-cleared', 'open support issue blocks candidate access');
@@ -465,23 +496,85 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
   }
   {
     const changed = new Map(jsonResponses);
-    changed.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/2', {
-      number: 2, state: 'open', closed_at: null, labels: [{ name: 'superseded' }],
-      body: 'Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/2'
-    });
+    changed.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/2', supportIssue(2, {
+      state: 'open', closed_at: null, labels: [{ name: 'superseded' }],
+      body: 'Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/3'
+    }));
+    changed.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/3', supportIssue(3));
+    const issueApi = makeApi({ jsonMap: changed });
+    const superseded = await verifyReleasePreflight({ ...preflightInput, api: issueApi });
+    assert.equal(superseded.artifact.id, 6401,
+      'a fetched terminal issue in the expected repository permits candidate readback');
+    assert.ok(issueApi.calls.indexOf('json /repos/1132-Fixer/support-requests-bug-reporting/issues/3') <
+      issueApi.calls.indexOf('json /repos/1132-Fixer/windows/actions/runs/1132'),
+    'the terminal supersession target is validated before candidate metadata');
+  }
+  const supersessionFixture = (issue2, issue3) => {
+    const changed = new Map(jsonResponses);
+    changed.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/2', issue2);
+    if (issue3 !== undefined) {
+      changed.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/3', issue3);
+    }
+    return changed;
+  };
+  const supersededTo = target => supportIssue(2, {
+    state: 'open', closed_at: null, labels: [{ name: 'superseded' }],
+    body: `Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/${target}`
+  });
+  for (const [name, changed, code] of [
+    ['missing supersession target', supersessionFixture(supersededTo(3), null), 'support-issue-target-invalid'],
+    ['open unresolved supersession target', supersessionFixture(
+      supersededTo(3), supportIssue(3, { state: 'open', closed_at: null })
+    ), 'support-issue-not-cleared'],
+    ['pull request supersession target', supersessionFixture(
+      supersededTo(3), supportIssue(3, { pull_request: { url: 'fixture' } })
+    ), 'support-issue-target-invalid'],
+    ['unrelated returned issue target', supersessionFixture(
+      supersededTo(3), supportIssue(3, {
+        repository_url: 'https://api.github.com/repos/1132-Fixer/windows'
+      })
+    ), 'support-issue-target-invalid'],
+    ['same issue supersession', supersessionFixture(supersededTo(2)), 'support-supersession-cycle'],
+    ['unrelated repository target', supersessionFixture(supportIssue(2, {
+      state: 'open', closed_at: null, labels: [{ name: 'superseded' }],
+      body: 'Superseded-by: https://github.com/1132-Fixer/windows/issues/3'
+    })), 'support-supersession-invalid'],
+    ['multiple supersession markers', supersessionFixture(supportIssue(2, {
+      state: 'open', closed_at: null, labels: [{ name: 'superseded' }],
+      body: [
+        'Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/3',
+        'Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/4'
+      ].join('\n')
+    })), 'support-supersession-ambiguous']
+  ]) {
     const issueApi = makeApi({ jsonMap: changed });
     await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: issueApi }),
-      error => error.code === 'support-issue-not-cleared', 'self-supersession is not a clearance');
+      error => error.code === code, name);
+    assert.equal(issueApi.calls.includes('json /repos/1132-Fixer/windows/actions/runs/1132'), false,
+      `${name} stops before candidate metadata`);
+  }
+  {
+    const changed = supersessionFixture(supersededTo(3), supportIssue(3, {
+      state: 'open', closed_at: null, labels: [{ name: 'superseded' }],
+      body: 'Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/2'
+    }));
+    const issueApi = makeApi({ jsonMap: changed });
+    await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: issueApi }),
+      error => error.code === 'support-supersession-cycle', 'supersession cycles fail closed');
     assert.equal(issueApi.calls.includes('json /repos/1132-Fixer/windows/actions/runs/1132'), false);
   }
   {
     const changed = new Map(jsonResponses);
-    changed.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/2', {
-      number: 2, state: 'open', closed_at: null, labels: [{ name: 'superseded' }],
-      body: 'Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/3'
-    });
-    const superseded = await verifyReleasePreflight({ ...preflightInput, api: makeApi({ jsonMap: changed }) });
-    assert.equal(superseded.artifact.id, 6401, 'explicit durable supersession permits candidate readback');
+    for (let issue = 2; issue <= 9; issue++) {
+      changed.set(`/repos/1132-Fixer/support-requests-bug-reporting/issues/${issue}`, supportIssue(issue, {
+        state: 'open', closed_at: null, labels: [{ name: 'superseded' }],
+        body: `Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/${issue + 1}`
+      }));
+    }
+    const issueApi = makeApi({ jsonMap: changed });
+    await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: issueApi }),
+      error => error.code === 'support-supersession-depth', 'supersession traversal is bounded');
+    assert.equal(issueApi.calls.includes('json /repos/1132-Fixer/windows/actions/runs/1132'), false);
   }
   {
     const changedJson = new Map(jsonResponses);
@@ -493,11 +586,12 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
     supportRun.actor.login = 'JG2547';
     supportRun.triggering_actor.login = 'JG2547';
     changedJson.set('/repos/1132-Fixer/windows/actions/runs/8002', supportRun);
-    await assert.rejects(verifyReleasePreflight({
+    const approved = await verifyReleasePreflight({
       ...preflightInput, tagEvent: { ...tagEvent, pusher: 'patricktobias86' },
       api: makeApi({ jsonMap: changedJson })
-    }), error => error.code === 'independent-codeowner-approval-missing',
-    'approval from the last tag pusher is not independent');
+    });
+    assert.equal(approved.artifact.id, 6401,
+      'the tag pusher is not substituted for the provider-authoritative last PR pusher');
   }
 
   const headersSeen = [];
@@ -523,6 +617,30 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
   await assert.rejects(rest.graphql('query Fixture { viewer { login } }', {}),
     error => error.code === 'github-graphql-failed');
 
+  {
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async (url, options) => {
+      calls.push({
+        url, method: options.method, redirect: options.redirect,
+        version: options.headers['X-GitHub-Api-Version']
+      });
+      return response({ json: { enabled: true, enforced_by_owner: false } });
+    };
+    try {
+      const state = await githubReleaseApi({
+        repository: '1132-Fixer/windows', token: 'fixture-token'
+      }).getImmutableReleaseState();
+      assert.equal(state.enabled, true);
+      assert.deepEqual(calls, [{
+        url: 'https://api.github.com/repos/1132-Fixer/windows/immutable-releases',
+        method: 'GET', redirect: 'error', version: GITHUB_API_VERSION
+      }], 'the publisher uses the versioned ordinary-REST immutable-release endpoint');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
   const receiptOnlyApi = makeApi();
   const fetched = await fetchAuthoritativeReceipt({
     api: receiptOnlyApi, repository: '1132-Fixer/windows', artifactId: 7001,
@@ -538,7 +656,10 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
     sha256: crypto.createHash('sha256').update(value).digest('hex'),
     bytes: value
   }));
-  const publicationApi = ({ uploadAt = -1, readbackAt = -1, wrongTagTarget = false } = {}) => {
+  const publicationApi = ({
+    uploadAt = -1, readbackAt = -1, wrongTagTarget = false,
+    immutableState = { enabled: true, enforced_by_owner: false }
+  } = {}) => {
     const state = { draft: null, public: false, latest: null, assets: [], uploadIndex: 0, tagReads: 0 };
     return {
       state,
@@ -546,6 +667,7 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
         state.tagReads++;
         return { tag, tagObjectSha, targetSha: wrongTagTarget ? 'f'.repeat(40) : sourceHead };
       },
+      getImmutableReleaseState: async () => immutableState,
       getReleaseByTag: async () => null,
       createDraft: async ({ tag, prerelease }) => (state.draft = {
         id: 44, draft: true, tag_name: tag, prerelease
@@ -600,6 +722,18 @@ function response({ status = 200, json, bytes = Buffer.alloc(0), headers = {} })
       head: sourceHead, version, assets
     }), error => error.code === 'publication-tag-identity');
     assert.equal(publication.state.draft, null, 'wrong annotated-tag target stops before draft creation');
+  }
+  for (const [name, immutableState] of [
+    ['disabled immutable releases', { enabled: false, enforced_by_owner: false }],
+    ['missing immutable-release endpoint', null]
+  ]) {
+    const publication = publicationApi({ immutableState });
+    await assert.rejects(publishRelease({
+      api: publication, repository: '1132-Fixer/windows', tag: `v${version}`,
+      head: sourceHead, version, assets
+    }), error => error.code === 'publication-immutable-releases-required', name);
+    assert.equal(publication.state.draft, null, `${name} stops before draft creation`);
+    assert.equal(publication.state.public, false, `${name} cannot publish`);
   }
   {
     const publication = publicationApi();
