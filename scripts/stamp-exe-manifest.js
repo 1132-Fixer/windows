@@ -75,11 +75,10 @@ function stampWithResedit(exePath, level) {
 }
 
 // Shipped builds are always requireAdministrator. asInvoker exists only for
-// the packaged acceptance driver: a GitHub-hosted runner has UAC disabled,
-// and with UAC off Windows refuses to CreateProcess a requireAdministrator
-// image from the sandbox's restricted token (Chromium SBOX_ERROR_CREATE_PROCESS
-// = 18), so the renderer never launches there. The driver stamps a throwaway
-// copy; the release artifact is never touched.
+// the packaged acceptance driver. Non-interactive automation cannot complete
+// or attest the shipped requireAdministrator UAC accept/cancel flow, so the
+// driver stamps a throwaway copy for diagnostic packaged-UI coverage. The
+// release artifact is never touched.
 async function stampExecutionLevel(exePath, level = 'requireAdministrator') {
   if (!LEVELS.has(level)) throw new Error(`unsupported requestedExecutionLevel: ${level}`);
   if (await stampWithRcedit(exePath, level)) return 'rcedit';

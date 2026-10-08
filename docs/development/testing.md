@@ -5,7 +5,6 @@ From a clone of this repository on Windows:
 ```bash
 npm ci
 npm test
-node feedback-proxy/test.js
 ```
 
 `npm test` is the unit and integration smoke chain in `package.json`. It covers
@@ -14,8 +13,62 @@ cancellation, profile safety, Electron isolation, the updater channel, the
 screen action map (`tools/screen-actions-smoke.js`), the plain-English
 Details model (`tools/details-view-smoke.js`) and the release checksum
 manifest bytes (`tools/release-checksums-smoke.js`: no CR, no BOM, final LF,
-sorted, hashes match, `sha256sum -c` passes unmodified; needs `sha256sum` —
-coreutils or Git for Windows).
+sorted, hashes match, `sha256sum -c` passes unmodified and rejects a wrong
+digest or changed binary; needs `sha256sum` — coreutils or Git for Windows).
+The repository byte-format verifier rejects CRLF regardless of the installed
+tool version. GNU Coreutils 9.0 and later accept CRLF checksum input, so that
+tool's acceptance does not replace the repository's strict LF gate.
+
+## Windows tool and preflight regression checks
+
+These Node-only checks run in `npm test`:
+
+- `tools/windows-tools-smoke.js`: OS-loaded DLL consensus, forged environment
+  and folder candidates, mismatching roots, missing DLLs, malformed paths,
+  unavailable reports, caching, spaces and Unicode, and probe-result validation.
+  On Windows it also starts a real Node child with forged `SystemRoot`/`WINDIR`
+  and an empty PATH, then runs read-only commands through the trusted executable.
+- `tools/preflight-regression-smoke.js`: the real preflight function with
+  controlled process results. Empty output, malformed or incomplete JSON,
+  nonzero exit, timeout and launch failure each produce one check blocker;
+  none invents seven missing tools. A successful inventory can report actual
+  missing tools, and service-check failure cannot pass the repair gate.
+- `tools/windows-process-smoke.js`: actual production process functions with
+  controlled children, deadline and single completion checks, UTF-8 chunk
+  decoding, and stdin failures.
+- `tools/packaged-runtime-smoke.js`: the actual acceptance gate with controlled
+  main-process facts. Missing APIs, wrong archives, conflicting DLLs and failed
+  child commands cannot produce a passing runtime result.
+- `tools/ps-encoding-smoke.js`: fixed UTF-8 standard-input transport, no
+  dynamic script or helper secret in arguments or a temporary script file,
+  and the PowerShell preparation contract.
+
+These checks prove the source contracts. They do not prove what stopped
+PowerShell on a reported user's PC. Preserve process status and checked paths
+in a redacted Support Report to diagnose that environment.
+
+On a disposable Windows VM, exercise both Setup and Portable builds from
+folders with spaces and with a restricted or empty PATH. Confirm the tool
+check uses Windows system-folder executables and that **Fix now** reaches the
+expected repair gate. Also test missing-tool and failed-check cases without
+changing the real system tools: use the controlled fixtures, then confirm
+their renderer outcomes in the capture harness. A failed check must show one
+plain-English explanation with retry and support actions. Report unavailable
+Windows runtime or packaged cases as `not-run`.
+
+`tools/packaged-acceptance.js` has mandatory actual Electron main-process
+checks for the shipped archive hash, diagnostic-report availability, all three
+loaded OS DLLs, resolved system tools and a read-only PowerShell command. A
+separate launch supplies fake Windows tool folders, forged root variables and
+an empty PATH. These cases fail if the packaged runtime cannot establish OS
+authority or execute the trusted command; a Node-only pass cannot replace them.
+The driver records only narrow runtime metadata, never the diagnostic report.
+CI uses `--test-copy` for non-interactive diagnostic automation. A successful
+CI execution stays useful as packaged-code evidence, but its report is explicitly
+`diagnostic` and `releaseGateEligible=false`. Native release evidence must bind
+the exact unmodified executable hash and head, UAC-enabled disposable host,
+effective bundled support endpoint/revision, mandatory cases and operator
+attestation.
 
 ## Rendered screens (headless Chromium)
 
@@ -34,7 +87,8 @@ Details round trip (open, category, Back to details, Back, Escape) with the
 checkbox preserved and focus returned, and no technical text on the Details
 surface. Label every capture "harness render — real page code and assets,
 mocked electronAPI"; the packaged binary is proven by
-`tools/packaged-acceptance.js` on CI.
+`tools/packaged-acceptance.js` on CI (diagnostic packaged-code evidence, not
+native UAC or final-artifact acceptance).
 
 ## What does not need Zoom
 
@@ -98,3 +152,12 @@ real Windows profile.
 Brand-guard CI is not packaged visual proof. Packaged Electron screenshots of
 Checking, Ready, Fixing, Success, and Failure belong under this repository
 when they are captured from the shipped `.exe`.
+
+## Support submission boundary
+
+`tools/support-submission-smoke.js` exercises the actual desktop client and
+renderer submission handler against a local mock endpoint. It checks one POST,
+acknowledgment validation, failed responses, draft retention, explicit retry,
+size limits and numeric overall ratings. No live Discord message is posted.
+The separate support service owns its HTTP and Discord integration tests;
+this Windows repository does not need Postgres or Redis.

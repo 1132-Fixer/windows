@@ -7,6 +7,57 @@ records the decisions this repository owns, and the evidence behind them.
 
 ---
 
+## Windows tool check outcomes (2026-10-05)
+
+The repair check distinguishes an unavailable result from a tool proved
+missing. A failed or timed-out check produces one blocker. It must not create
+one missing-tool error for every tool. Only a successful system-folder check
+can report a missing required tool; several absent tools share one blocker.
+
+The existing Unable screen keeps its existing controls and tokens. Primary
+copy states what the app could check and gives **Try again** and **Support
+Report** as next steps. It does not blame PATH, cleanup software, antivirus,
+AppLocker, or a Windows policy without evidence. It never asks the user to
+disable security software. Paths, process status and check diagnostics belong
+in the support report rather than the primary explanation. Do not claim that
+nothing changed unless the recorded repair stage proves that claim.
+
+The source defect in 6.4.0 is reproducible: empty output was treated as an
+empty tool inventory, and process failure and timeout were not validated
+before accepting JSON. The reported Windows incident has no accompanying
+runtime log. Its exact environmental or policy trigger remains unproven.
+
+---
+
+## Support submission (2026-10-05)
+
+The existing feedback chooser, dialogs, buttons and tokens remain the Windows
+support surface. Bug Report, Rate Your Experience and Share Other Feedback
+send only after the user selects Submit. All three use one public support
+endpoint. The normal submission includes the app version and user-entered
+text. It does not collect device inventories, usernames, administrator state
+or Zoom details. The sanitized support report remains an optional attachment
+that the user chooses and can preview first.
+
+Rate Your Experience requires the existing Overall score from 1 to 5. That
+selected score is the numeric rating sent with the survey. No average of other
+answers replaces the user's Overall choice.
+
+Submission has one bounded HTTP exchange. Show **Sending…** during that
+exchange and **Sent** only after a valid acknowledgement. Keep the draft on
+failure. Do not show delivery, case, inbox or follow-up status. Do not retry
+automatically. An explicit retry of unchanged content keeps the same temporary
+request ID. That ID remains in memory only and is not an install identity.
+
+Screenshot attachment is available when a valid public endpoint is configured.
+The capability check is local and sends no startup or dialog-opening network
+request. Screenshots remain optional, with the existing PNG, JPEG, WebP and
+GIF controls and 5 MB limit. Reports over the service text limit are rejected
+with clear copy rather than cut short. No server credential, bot identity,
+private destination or support database code belongs in the Windows client.
+
+---
+
 ## Explore panel
 
 Governing issue: [#185](https://github.com/1132-Fixer/windows/issues/185).

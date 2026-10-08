@@ -126,7 +126,7 @@ function exploreDestinationUrl(key) {
 
 const IPC_SCHEMAS = Object.freeze({
   'user-activity': { args: ['activity-kind'] },
-  'submit-feedback': { args: ['feedback-type', 'feedback-text', 'screenshot?'] },
+  'submit-feedback': { args: ['feedback-type', 'feedback-text', 'screenshot?', 'feedback-rating?'] },
   'support-report': { args: ['support-context?'] },
   'open-explore-destination': { args: ['explore-destination'] },
 });
@@ -340,7 +340,11 @@ function coerceArg(kind, value) {
       return { ok: true, value };
     case 'feedback-text':
       if (typeof value !== 'string') return { ok: false, reason: 'text not a string' };
-      if (value.length > FEEDBACK_TEXT_MAX) return { ok: false, reason: 'text too long' };
+      if (Buffer.byteLength(value, 'utf8') > FEEDBACK_TEXT_MAX) return { ok: false, reason: 'text too long' };
+      return { ok: true, value };
+    case 'feedback-rating?':
+      if (value === undefined || value === null) return { ok: true, value: undefined };
+      if (!Number.isInteger(value) || value < 1 || value > 5) return { ok: false, reason: 'rating not allowed' };
       return { ok: true, value };
     case 'screenshot?': {
       if (value === undefined || value === null) return { ok: true, value: undefined };
@@ -415,6 +419,10 @@ function validateInvoke(channel, args) {
     const coerced = coerceArg(kind, value);
     if (!coerced.ok) return { ok: false, reason: `arg ${i}: ${coerced.reason}` };
     out.push(coerced.value);
+  }
+  if (channel === 'submit-feedback') {
+    if (out[0] === 'User Rating' && out[3] === undefined) return { ok: false, reason: 'rating required' };
+    if (out[0] !== 'User Rating' && out[3] !== undefined) return { ok: false, reason: 'rating type not allowed' };
   }
   return { ok: true, args: out };
 }

@@ -28,6 +28,7 @@ main.js + src/main/*         privileged Windows work
 | --- | --- |
 | App entry, window, fix orchestration | `main.js` |
 | Renderer isolation, IPC allowlist, openExternal | `src/main/electron-security.js` |
+| Windows system-tool resolution and tool-check result validation | `src/main/windows-tools.js` |
 | Cooperative cancel | `src/main/fix-cancel.js` |
 | Update lifecycle: state machine, verification, install handoff, relaunch validation, retry policy | `src/main/updater.js` |
 | Sanitized updater log (`%APPDATA%\1132-fixer\logs\updater.log`) | `src/main/updater-log.js` |
@@ -50,12 +51,64 @@ main.js + src/main/*         privileged Windows work
 | Zoom install discovery | `zoom-detect.js` |
 | Success / partial / fail verdict | `run-verdict.js` |
 | Packaging allowlist | `build/package-allowlist.json` |
-| Tests | `tools/*-smoke.js`, `feedback-proxy/test.js` |
+| Tests | `tools/*-smoke.js` |
 
 Issue #154 described a later physical move into
 `src/{main,preload,renderer,shared}`. That move is **not** done here: it would
 retarget Electron entry points, packaging globs, and every smoke test in one
 cut. This map is the auditor index until a dedicated, reviewed move lands.
+
+## Windows repair process boundary
+
+`src/main/windows-tools.js` owns the allowlisted Windows executable names
+and absolute system-folder paths. At module initialization, the Node resolver
+reads `process.report.getReport().sharedObjects`, which Node obtains from
+Windows' loaded-module APIs. It requires `ntdll.dll`, `kernel32.dll` and
+`kernelbase.dll` to agree on one local drive root and one `System32` or
+`SysWOW64` directory. Only that vetted root and directory are cached; no
+diagnostic report is written or retained. Conflicting, incomplete or unavailable
+reports fail closed. Environment variables, folder shapes, the working folder,
+PATH and a fixed drive are never executable authorities. The shipped app is
+x64; `SysWOW64` DLLs in an ia32 process establish the need for `Sysnative`.
+PowerShell repair
+scripts resolve native tools through Windows' system directory and
+`$PSHOME`; they use the same tool allowlist.
+
+PowerShell starts from its resolved absolute path. Its fixed command-line
+bootstrap reads UTF-8 script source from standard input and creates the
+script block in memory. Node closes standard input after sending the prepared
+script. Dynamic script source and helper passwords are absent from PowerShell
+arguments and temporary script files. The existing native `net.exe` account
+creation receives the password in its own arguments. Terminating-error output is generic;
+it must not echo source or secrets into diagnostics.
+
+Preflight accepts a tool inventory only after the process completes with
+exit code zero, without timeout or launch failure, and returns a complete
+boolean inventory. Empty output, malformed JSON, missing or mistyped fields,
+nonzero exit and timeout produce one check-failure blocker. Valid JSON cannot
+override failed process status. A successful inventory with absent required
+tools produces one missing-tool blocker. Optional tools remain optional;
+they do not cause a required-tool failure.
+
+Secondary Logon is a separate service check. A nonrunning service must be
+started and verified before repair can continue. A failed or timed-out start
+attempt cannot pass on the strength of its output alone. Tool-check failures
+also block account/profile mutation; startup scanning is not proof that a
+later repair check succeeded.
+
+### 6.4.0 incident diagnosis
+
+The old preflight parsed empty output as `{}`, converted absent fields into
+seven missing-tool blockers, and blamed PATH. It also accepted a complete
+JSON inventory even when PowerShell exited unsuccessfully or timed out. Those
+source defects are reproducible with controlled process results and explain
+how one failed check became a wall of false missing-tool messages in both
+Setup and Portable builds, which share the same repair code.
+
+The reported affected Windows session has no accompanying process log.
+Its exact PowerShell failure, security policy or local environment trigger
+is unproven. The repair corrects the process and inventory contracts rather
+than treating the misleading PATH message as evidence of a broken PATH.
 
 ## Product identity (do not change casually)
 

@@ -13,8 +13,11 @@
 //  - empty/missing steps -> legacy verdict unchanged (success; warning-count
 //    headline when warnings exist)
 //  - 'warn' steps and plain warnings never flip a run to partial
+//  - bundled consent script resolves native registry tools without PATH
 
 const rv = require('../run-verdict.js');
+const fs = require('fs');
+const path = require('path');
 
 let failures = 0;
 function check(cond, name) {
@@ -110,6 +113,25 @@ console.log('run-verdict-smoke: consent outcome (P1-A — HKU is the toggle Zoom
        detail: 'camera=UNVERIFIED, microphone=OK — sign in as user1, open Settings > Privacy & security > Camera (and Microphone), and toggle access on manually.' }],
     [], []);
   check(v.partial === true, 'unconfirmed consent -> partial run');
+}
+
+console.log('run-verdict-smoke: bundled consent native-tool boundary');
+{
+  const consent = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'grant-media-consent.ps1'), 'utf8');
+  function usesTrustedRegForHiveOperations(script) {
+    const trustedBinding = /\$fixerRegExe\s*=\s*Join-Path\s+\(\[Environment\]::SystemDirectory\)\s+'reg\.exe'/.test(script);
+    const operations = Array.from(script.matchAll(/^\s*\$\w+\s*=\s*&\s*\$fixerRegExe\s+(query|load|unload)\b/gim), match => match[1]);
+    return trustedBinding && operations.length === 3 && ['query', 'load', 'unload'].every(operation => operations.includes(operation));
+  }
+  check(usesTrustedRegForHiveOperations(consent),
+    'hive query, load and unload all use Windows API system-directory reg.exe');
+  check(!consent.includes('Resolve-FixerTool') && !consent.includes('$env:SystemRoot'),
+    'bundled -File script works without an inherited helper or environment-root lookup');
+  for (const operation of ['query', 'load', 'unload']) {
+    const unsafe = consent.replace(`& $fixerRegExe ${operation}`, `& reg.exe ${operation}`);
+    check(!usesTrustedRegForHiveOperations(unsafe),
+      `negative control rejects a PATH-dependent hive ${operation}`);
+  }
 }
 
 console.log('run-verdict-smoke: ProfSvc refresh marker (P1-B)');
