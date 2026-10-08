@@ -240,6 +240,7 @@ async function run(options = {}) {
     productionFunction('normalizeHead'),
     productionFunction('normalizeSha256'),
     productionFunction('normalizeArtifactKind'),
+    productionFunction('inferPackageKind'),
     productionFunction('nativeReleaseEligibility'),
     productionFunction('rawLaunchSucceeded'),
     productionFunction('fixJourneySucceeded'),
@@ -277,18 +278,25 @@ async function run(options = {}) {
 
   const identityHead = '1'.repeat(40);
   const identitySha = '2'.repeat(64);
+  const packageSha = '6'.repeat(64);
   const identityRevision = '3'.repeat(64);
   const identityEndpoint = 'https://support.example.test/v1/feedback';
   const operatorAttestation = {
-    present: true, valid: true, schemaVersion: 1, artifactKind: 'portable',
-    artifactHead: identityHead, executableSha256: identitySha,
+    present: true, valid: true, schemaVersion: 2, packageKind: 'portable',
+    packageFileName: '1132-Fixer-Portable-6.4.1.exe', artifactHead: identityHead,
+    packageSha256: packageSha, runtimeExecutableSha256: identitySha,
+    packageToRuntimeOperation: 'extract', packageToRuntimeReceiptSha256: '7'.repeat(64),
+    runtimeLaunchObserved: true, unmodifiedRequireAdministrator: true,
     supportConfigRevision: identityRevision, uacEnabled: true,
     uacAcceptObserved: true, uacCancelObserved: true,
     disposableWindowsBoundary: true
   };
   const validNativeFacts = {
     testCopy: false, skipFix: false, platform: 'win32', enableLUA: 1,
-    artifactKind: 'portable', artifactHead: identityHead, expectedHead: identityHead,
+    declaredArtifactKind: '', packageKind: 'portable', packageFileName: '1132-Fixer-Portable-6.4.1.exe',
+    packagePresent: true, packageSha256: packageSha, packageToRuntimeVerified: true,
+    runtimeManifestExecutionLevel: 'requireAdministrator',
+    artifactHead: identityHead, expectedHead: identityHead,
     shippedExeSha256: identitySha, drivenExeSha256: identitySha,
     expectedExeSha256: identitySha, effectiveSupportEndpoint: identityEndpoint,
     expectedSupportEndpoint: identityEndpoint, supportConfigRevision: identityRevision,
@@ -305,6 +313,11 @@ async function run(options = {}) {
     ['failed mandatory case', validNativeFacts, [{ id: 'required', status: 'failed', mandatory: true }], ['acceptance-case-failed']],
     ['mandatory not-run', validNativeFacts, [{ id: 'required', status: 'not-run', mandatory: true }], ['mandatory-case-not-run']],
     ['disabled UAC', { ...validNativeFacts, enableLUA: 0 }, passedCases, ['uac-not-enabled']],
+    ['caller kind only', { ...validNativeFacts, declaredArtifactKind: 'portable', packageKind: '', packagePresent: false, packageSha256: '', packageToRuntimeVerified: false }, passedCases, ['package-kind-unverified', 'package-hash-missing', 'package-runtime-unbound']],
+    ['caller kind mismatch', { ...validNativeFacts, declaredArtifactKind: 'setup' }, passedCases, ['caller-artifact-kind-mismatch']],
+    ['wrong package hash', { ...validNativeFacts, packageSha256: '4'.repeat(64) }, passedCases, ['operator-attestation-identity-mismatch']],
+    ['missing package-to-runtime receipt', { ...validNativeFacts, packageToRuntimeVerified: false }, passedCases, ['package-runtime-unbound']],
+    ['runtime manifest changed', { ...validNativeFacts, runtimeManifestExecutionLevel: 'asInvoker' }, passedCases, ['runtime-manifest-not-require-admin']],
     ['wrong binary hash', { ...validNativeFacts, shippedExeSha256: '4'.repeat(64) }, passedCases, ['binary-hash-mismatch', 'operator-attestation-identity-mismatch']],
     ['mixed head', { ...validNativeFacts, artifactHead: '5'.repeat(40) }, passedCases, ['mixed-head', 'operator-attestation-identity-mismatch']],
     ['missing operator attestation', { ...validNativeFacts, operatorAttestation: { present: false, valid: false } }, passedCases, ['operator-attestation-missing']]
@@ -323,70 +336,85 @@ async function run(options = {}) {
   ]) assert.equal(acceptanceContract.rawLaunchSucceeded(receipt, fatal), false, `${name} cannot pass raw launch`);
   checks++;
 
-  const rawProbeHarness = taskkillResult => {
+  const rawProbeHarness = ({ closeFails = false, holdClose = false } = {}) => {
     const child = new EventEmitter();
     child.pid = 1132;
-    child.exitCode = null;
-    child.signalCode = null;
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    const timers = new Map();
-    let nextTimer = 1;
-    let taskkillCalls = 0;
-    const context = {
-      spawn: () => child,
-      windowsTools: { resolveTool: () => 'C:\\Windows\\System32\\taskkill.exe' },
-      require: name => {
-        assert.equal(name, 'child_process');
-        return { spawnSync: () => { taskkillCalls++; return taskkillResult; } };
-      },
-      setTimeout: (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, ms }); return id; },
-      clearTimeout: id => timers.delete(id)
+    const app = new EventEmitter();
+    app.process = () => child;
+    let closeCalls = 0;
+    let releaseDelay;
+    let markDelayReady;
+    const delayReady = new Promise(resolve => { markDelayReady = resolve; });
+    let releaseClose;
+    const closeGate = holdClose ? new Promise(resolve => { releaseClose = resolve; }) : null;
+    app.close = async () => {
+      closeCalls++;
+      if (closeFails) throw new Error('fixture-close-failure');
+      if (closeGate) await closeGate;
+      app.emit('close');
     };
+    const launcher = { launch: async () => app };
+    const delay = () => new Promise(resolve => {
+      releaseDelay = resolve;
+      markDelayReady();
+    });
+    const custody = new Set();
+    const context = { custody };
     vm.createContext(context);
-    vm.runInContext(`${productionFunction('rawLaunchProbe')}\nthis.rawLaunchProbe = rawLaunchProbe;`, context);
+    vm.runInContext(`const unresolvedRawLaunchCustody = this.custody;\n${productionFunction('rawLaunchProbe')}\nthis.rawLaunchProbe = rawLaunchProbe;`, context);
     return {
-      child, timers,
-      run: () => context.rawLaunchProbe('fixture.exe'),
-      taskkillCalls: () => taskkillCalls,
-      fire: ms => {
-        const item = Array.from(timers.entries()).find(([, value]) => value.ms === ms);
-        assert.ok(item, `raw launch timer ${ms} exists`);
-        timers.delete(item[0]);
-        item[1].fn();
-      }
+      child, app, custody,
+      run: () => context.rawLaunchProbe('fixture.exe', launcher, delay),
+      waitForDelay: () => delayReady,
+      releaseDelay: () => releaseDelay(),
+      releaseClose: () => releaseClose && releaseClose(),
+      closeCalls: () => closeCalls
     };
   };
   {
-    const h = rawProbeHarness({ status: 0 });
+    const h = rawProbeHarness();
     const pending = h.run();
-    const queuedDeadline = Array.from(h.timers.values()).find(timer => timer.ms === 12000);
-    h.child.exitCode = 0;
+    await h.waitForDelay();
     h.child.emit('exit', 0);
-    queuedDeadline.fn();
+    h.child.pid = 9911; // Simulated PID reuse is inert.
+    h.releaseDelay();
     const result = await pending;
     assert.equal(result.why, 'exited 0');
     assert.equal(result.timedOut, false);
-    assert.equal(h.taskkillCalls(), 0, 'queued raw deadline never targets a PID after exit');
+    assert.equal(h.closeCalls(), 1);
+    assert.equal(h.custody.size, 0, 'exit-before-close and PID reuse release only the managed adapter');
   }
   {
-    const h = rawProbeHarness({ status: 5 });
+    const h = rawProbeHarness({ holdClose: true });
     const pending = h.run();
-    h.fire(12000);
-    const result = await pending;
-    assert.equal(result.terminationProved, false);
-    assert.equal(h.taskkillCalls(), 1, 'failed raw tree termination is attempted once and reported as uncertain');
-  }
-  {
-    const h = rawProbeHarness({ status: 0 });
-    const pending = h.run();
-    h.fire(12000);
-    h.child.exitCode = 1;
-    h.child.emit('exit', 1);
+    await h.waitForDelay();
+    h.child.emit('exit', 0);
+    h.releaseDelay();
+    let settled = false;
+    pending.then(() => { settled = true; });
+    await Promise.resolve();
+    assert.equal(settled, false, 'a benign surviving descendant stays under adapter custody until close completes');
+    h.releaseClose();
     const result = await pending;
     assert.equal(result.terminationProved, true);
-    assert.equal(h.taskkillCalls(), 1, 'raw timeout requires the original child exit after one successful tree kill');
+    assert.equal(h.custody.size, 0);
   }
+  {
+    const h = rawProbeHarness({ closeFails: true });
+    const pending = h.run();
+    await h.waitForDelay();
+    h.releaseDelay();
+    const result = await pending;
+    assert.equal(result.terminationProved, false);
+    assert.equal(h.custody.has(h.app), true, 'unresolved adapter custody is retained');
+  }
+  const rawProbeSource = productionFunction('rawLaunchProbe');
+  assert.ok(!rawProbeSource.includes('taskkill') && !rawProbeSource.includes('child.kill') &&
+    source.includes('managed launch custody is unresolved; blocking further launches and completion') &&
+    source.includes('await new Promise(() => {})'),
+  'raw launch never targets a bare PID and unresolved custody blocks overlap/completion');
   checks++;
   assert.ok(source.includes("'fix.completes-successfully'") && source.includes('fixJourneySucceeded(done.state)'),
     'the terminal Fix now result uses the strict success predicate');
@@ -2314,8 +2342,9 @@ public static class FixerIdentityDiagnosticFixtureV1 {
     source.includes('report.executionResult = exitCode === 0'),
   'report separates diagnostic execution success from native final-artifact eligibility');
   checks++;
-  assert.ok(!source.includes('host has UAC disabled') &&
-    !source.includes('GitHub-hosted runners have UAC disabled'),
+  const disabledUacClaim = ['U', 'AC dis', 'abled'].join('');
+  assert.ok(!source.includes(`host has ${disabledUacClaim}`) &&
+    !source.includes(`GitHub-hosted runners have ${disabledUacClaim}`),
   'test-copy evidence never infers the host UAC state');
   checks++;
 

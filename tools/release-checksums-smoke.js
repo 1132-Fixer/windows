@@ -134,8 +134,10 @@ function findSha256sum() {
   console.log('release-checksums-smoke: workflows call the generator');
   const rel = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
   const ci = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
-  check(rel.includes('node scripts/generate-checksums.mjs --dist dist') && rel.includes('node scripts/generate-checksums.mjs --verify --dist dist'),
-    'release.yml generates and verifies through scripts/generate-checksums.mjs');
+  check(rel.includes('node scripts/generate-checksums.mjs --verify --dist dist') &&
+    !rel.includes('node scripts/generate-checksums.mjs --dist dist\n') &&
+    rel.includes('sha256sum -c checksums-sha256.txt'),
+  'release.yml verifies the retained CI checksum manifest without rewriting accepted bytes');
   check(!/Out-File[^\n]*checksums|checksums[^\n]*Out-File|Set-Content[^\n]*checksums/.test(rel), 'release.yml has no other checksum writer');
   check(ci.includes('node scripts/generate-checksums.mjs --dist dist') && ci.includes('sha256sum -c checksums-sha256.txt'),
     'ci.yml exercises the same generator and runs sha256sum -c on its output');

@@ -23,69 +23,6 @@ const ROOT = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
 
-function workflowRunBlock(source, stepName) {
-  const lines = source.split(/\r?\n/);
-  const step = lines.findIndex(line => line.trim() === `- name: ${stepName}`);
-  if (step < 0) return '';
-  const run = lines.findIndex((line, index) => index > step && /^\s+run:\s*\|\s*$/.test(line));
-  if (run < 0) return '';
-  const indent = (lines[run].match(/^\s*/) || [''])[0].length + 2;
-  const body = [];
-  for (let index = run + 1; index < lines.length; index++) {
-    const line = lines[index];
-    if (line.trim() && (line.match(/^\s*/) || [''])[0].length < indent) break;
-    body.push(line.trim() ? line.slice(indent) : '');
-  }
-  return body.join('\n');
-}
-
-function safePowerShellEnvironment(extra = {}) {
-  const env = {};
-  for (const name of ['PATH', 'SystemRoot', 'WINDIR', 'WSLENV', 'WSL_INTEROP', 'WSL_DISTRO_NAME', 'TEMP', 'TMP']) {
-    if (typeof process.env[name] === 'string') env[name] = process.env[name];
-  }
-  return { ...env, CSC_LINK: '', CSC_KEY_PASSWORD: '', ...extra };
-}
-
-function findPowerShell7() {
-  const candidates = process.platform === 'win32'
-    ? ['pwsh.exe']
-    : ['pwsh', '/mnt/c/Program Files/PowerShell/7/pwsh.exe'];
-  for (const candidate of candidates) {
-    const probe = spawnSync(candidate, ['-NoProfile', '-NonInteractive', '-Command',
-      "if ($PSVersionTable.PSVersion.Major -ge 7) { exit 0 } else { exit 9 }"], {
-      encoding: 'utf8', timeout: 10000, env: safePowerShellEnvironment()
-    });
-    if (!probe.error && probe.status === 0) return candidate;
-  }
-  return null;
-}
-
-function executeWorkflowBlock(pwsh, block, failMatch = '') {
-  const prologue = `
-function global:node {
-  $call = 'node ' + ($args -join ' ')
-  [Console]::Out.WriteLine('FIXER_FAKE_STAGE=' + $call)
-  if ($env:FIXER_FAKE_FAIL_MATCH -ceq $call) { $global:LASTEXITCODE = 17 } else { $global:LASTEXITCODE = 0 }
-}
-function global:npx {
-  $call = 'npx ' + ($args -join ' ')
-  [Console]::Out.WriteLine('FIXER_FAKE_STAGE=' + $call)
-  if ($env:FIXER_FAKE_FAIL_MATCH -ceq $call) { $global:LASTEXITCODE = 17 } else { $global:LASTEXITCODE = 0 }
-}
-`;
-  return spawnSync(pwsh, ['-NoProfile', '-NonInteractive', '-Command', '-'], {
-    input: prologue + '\n' + block + '\n', encoding: 'utf8', timeout: 20000,
-    env: safePowerShellEnvironment({ FIXER_FAKE_FAIL_MATCH: failMatch })
-  });
-}
-
-function fakeStages(result) {
-  return String(result.stdout || '').split(/\r?\n/)
-    .filter(line => line.startsWith('FIXER_FAKE_STAGE='))
-    .map(line => line.slice('FIXER_FAKE_STAGE='.length));
-}
-
 // Frozen identity. These values are a contract with every installed client.
 const FROZEN = {
   appId: 'com.hightexas.1132fixer',
@@ -163,8 +100,10 @@ check(!relYml.includes(LEGACY_FEED_REPO), 'release.yml does not publish to the l
 // it. Out-File writes CRLF on Windows; 6.3.3 shipped that way.
 check(!/checksums-sha256\.txt[^\n]*\n?[^\n]*Out-File/.test(relYml) && !/Out-File[^\n]*checksums-sha256\.txt/.test(relYml),
   'release.yml does not write checksums-sha256.txt with Out-File (CRLF)');
-check(relYml.includes('node scripts/generate-checksums.mjs --dist dist') && relYml.includes('node scripts/generate-checksums.mjs --verify --dist dist'),
-  'release.yml writes checksums-sha256.txt through scripts/generate-checksums.mjs (LF, UTF-8, no BOM) and verifies it');
+check(relYml.includes('node scripts/release-candidate.mjs --verify') &&
+  relYml.includes('node scripts/generate-checksums.mjs --verify --dist dist') &&
+  !relYml.includes('node scripts/generate-checksums.mjs --dist dist\n'),
+  'release.yml preserves and verifies the accepted candidate checksum manifest instead of regenerating it');
 const validator = fs.readFileSync(path.join(ROOT, 'scripts', 'validate-release-assets.mjs'), 'utf8');
 check(validator.includes("text.includes('\\r')") && validator.includes('checksums-sha256.txt uses CRLF'),
   'validate-release-assets.mjs rejects a CRLF checksums file on the published release');
@@ -189,8 +128,21 @@ check(undiciFixed, `top-level undici lock is at or above fixed version 7.29.1 (f
 console.log('release-identity-smoke: workflow authority and bounded execution');
 const ciYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
 const brandYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'brand.yml'), 'utf8');
-check(!ciYml.includes('UAC disabled'),
-  'CI test-copy documentation does not infer the hosted runner UAC state');
+const tracked = spawnSync('git', ['ls-files', '-z'], {
+  cwd: ROOT, encoding: 'utf8', timeout: 10000
+});
+const trackedTextFiles = tracked.status === 0
+  ? tracked.stdout.split('\0').filter(Boolean)
+    .filter(file => /\.(?:c?js|mjs|ts|tsx|ps1|ya?ml|md)$/i.test(file))
+    .filter(file => !/^docs\/(?:history|evidence)\//i.test(file))
+  : [];
+const uacWord = ['U', 'AC'].join('');
+const disabledWord = ['dis', 'abled'].join('');
+const unsupportedUacInference = new RegExp(`\\b${uacWord}\\s+(?:is\\s+)?${disabledWord}\\b`, 'i');
+const unsupportedUacFiles = trackedTextFiles.filter(file =>
+  unsupportedUacInference.test(fs.readFileSync(path.join(ROOT, file), 'utf8')));
+check(tracked.status === 0 && trackedTextFiles.length > 0 && unsupportedUacFiles.length === 0,
+  'tracked source, workflow and documentation text makes no unsupported UAC-state inference');
 const workflows = { 'ci.yml': ciYml, 'security.yml': securityYml, 'brand.yml': brandYml, 'release.yml': relYml };
 const uses = Object.entries(workflows).flatMap(([file, source]) => source.split(/\r?\n/)
   .filter(line => /^\s*-?\s*uses:\s*/.test(line))
@@ -222,40 +174,39 @@ check(ciYml.includes('Check tracked JavaScript syntax') && !ciYml.includes('Advi
   !/name:\s*Code Quality[\s\S]*continue-on-error:\s*true/.test(ciYml),
 'Code Quality performs enforcing static syntax validation instead of a suppressed audit');
 
-const buildBlock = workflowRunBlock(relYml, 'Build all targets');
-const checksumBlock = workflowRunBlock(relYml, 'Generate checksums');
-check(buildBlock.includes("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }") &&
-  checksumBlock.includes("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"),
-'release build and checksum stages explicitly propagate every native exit');
-const pwsh = findPowerShell7();
-if (!pwsh) {
-  check(process.platform !== 'win32', 'the PowerShell 7 workflow fixture is never silently skipped on native Windows');
-  console.log('  skip PowerShell 7 workflow fixture (non-Windows host; native Windows focused gate required)');
-}
-if (pwsh) {
-  const verifyCall = 'node scripts/verify-support-endpoint.mjs';
-  const injectCall = 'node scripts/inject-config.js';
-  const builderCall = 'npx electron-builder --win --x64 -p never';
-  const verifyFailure = executeWorkflowBlock(pwsh, buildBlock, verifyCall);
-  check(verifyFailure.status === 17 && JSON.stringify(fakeStages(verifyFailure)) === JSON.stringify([verifyCall]),
-    'an early support-verification failure stops config injection and packaging');
-  const injectFailure = executeWorkflowBlock(pwsh, buildBlock, injectCall);
-  check(injectFailure.status === 17 && JSON.stringify(fakeStages(injectFailure)) === JSON.stringify([verifyCall, injectCall]),
-    'a config-injection failure cannot be masked by a successful builder');
-  const buildSuccess = executeWorkflowBlock(pwsh, buildBlock);
-  check(buildSuccess.status === 0 && JSON.stringify(fakeStages(buildSuccess)) ===
-    JSON.stringify([verifyCall, injectCall, builderCall]),
-  'the exact release build block reaches every stage only when prior stages succeed');
-  const generateCall = 'node scripts/generate-checksums.mjs --dist dist';
-  const verifyChecksumsCall = 'node scripts/generate-checksums.mjs --verify --dist dist';
-  const checksumFailure = executeWorkflowBlock(pwsh, checksumBlock, generateCall);
-  check(checksumFailure.status === 17 && JSON.stringify(fakeStages(checksumFailure)) === JSON.stringify([generateCall]),
-    'a checksum-generation failure stops checksum verification and remains nonzero');
-  const checksumSuccess = executeWorkflowBlock(pwsh, checksumBlock);
-  check(checksumSuccess.status === 0 && JSON.stringify(fakeStages(checksumSuccess)) ===
-    JSON.stringify([generateCall, verifyChecksumsCall]),
-  'the exact checksum block reaches verification only after generation succeeds');
-}
+const preflightJob = relYml.slice(relYml.indexOf('  preflight:'), relYml.indexOf('  publish:'));
+const publishJob = relYml.slice(relYml.indexOf('  publish:'));
+check(preflightJob.includes('actions: read') && preflightJob.includes('checks: read') &&
+  preflightJob.includes('contents: read') && preflightJob.includes('pull-requests: read') &&
+  !preflightJob.includes('contents: write'),
+'tag authorization has read-only repository permissions');
+check(publishJob.includes('needs: preflight') && publishJob.includes('contents: write') &&
+  relYml.includes('node scripts/release-preflight.mjs') && relYml.includes('node scripts/publish-release.mjs'),
+'the sole write-capable release job is downstream of the fail-closed preflight');
+check(!relYml.includes('electron-builder') && !relYml.includes('softprops/action-gh-release') &&
+  relYml.includes('download-release-candidate.mjs'),
+'release reuses the accepted CI candidate and has no direct public-release action');
+const retainIndex = relYml.indexOf('Retain exact release transaction inputs');
+const publishIndex = relYml.indexOf('Draft, verify and publish exact assets');
+check(retainIndex >= 0 && publishIndex > retainIndex &&
+  publishJob.slice(0, publishIndex - relYml.indexOf('  publish:')).includes('verify-support-endpoint.mjs'),
+'candidate/evidence retention and bound support verification precede publication');
+check(ciYml.includes('release-candidate-${{ github.sha }}') &&
+  ciYml.includes('node scripts/release-candidate.mjs --dist dist --head "${{ github.sha }}"') &&
+  !/Upload exact release candidate[\s\S]{0,500}continue-on-error:\s*true/.test(ciYml),
+'CI records and retains the exact main-SHA release candidate without masking failure');
+
+const releaseDoc = fs.readFileSync(path.join(ROOT, 'docs', 'development', 'release-process.md'), 'utf8');
+check(!/npm audit[^\n]*advisory-only/i.test(releaseDoc) &&
+  releaseDoc.includes('blocking `npm audit --audit-level=high`') &&
+  releaseDoc.includes('non-latest draft') &&
+  releaseDoc.includes('Native acceptance') &&
+  releaseDoc.includes('Support clearance') && releaseDoc.includes('exact current `main`'),
+'release documentation describes the enforced audit, exact-main, draft, native and support gates');
+const releaseActionPins = uses.filter(item => item.file === 'release.yml')
+  .map(item => (/@([a-f0-9]{40})/.exec(item.line) || [])[1]).filter(Boolean);
+check(releaseActionPins.length > 0 && releaseActionPins.every(sha => releaseDoc.includes(sha)),
+'release documentation action inventory matches the exact workflow pins');
 
 if (failures) { console.error(`release-identity-smoke: ${failures} FAIL`); process.exit(1); }
 console.log('release-identity-smoke: PASS');

@@ -1,19 +1,4 @@
-# 1132 Fixer - Automated Release Pipeline
-# Triggered when a version tag is pushed (e.g., v5.6.1)
-#
-# Releases from this repository are currently UNSIGNED: no CSC_LINK or
-# CSC_KEY_PASSWORD secret is configured, and no certificate has been purchased.
-# The "Check signature state" step below records that fact on every release and
-# blocks the combinations that would break the update channel.
-#
-# Read docs/security/code-signing.md before changing anything signing-related.
-# In particular, do not set verifyUpdateCodeSignature to true until a release
-# actually produces validly signed artifacts — that flag is evaluated by the
-# version already installed on a user's machine, so enabling it early breaks
-# updates permanently for everyone running that version.
-#
-# Full chain: docs/development/release-process.md
-
+# 1132 Fixer - guarded exact-artifact release pipeline
 name: Release
 
 on:
@@ -21,38 +6,47 @@ on:
     tags:
       - 'v*'
 
-# Serialize ALL release runs (any tag) so an accidental rerun of an old tag
-# can't race the current tag's release upload.
+# Serialize every tag. A failed draft is never published or made latest, and a
+# later attempt must be a new version rather than a racing asset replacement.
 concurrency:
   group: release-pipeline
   cancel-in-progress: false
 
-env:
-  # Disable code signing auto-discovery (we control this explicitly)
-  CSC_IDENTITY_AUTO_DISCOVERY: false
-
 permissions: {}
 
 jobs:
-  build-and-release:
-    name: Build & Release
-    runs-on: windows-latest
-    timeout-minutes: 90
+  preflight:
+    name: Release authorization
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
-      contents: write
-
+      actions: read
+      checks: read
+      contents: read
+      pull-requests: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      candidate_run_id: ${{ steps.gate.outputs.candidate_run_id }}
+      candidate_artifact_id: ${{ steps.gate.outputs.candidate_artifact_id }}
+      candidate_artifact_name: ${{ steps.gate.outputs.candidate_artifact_name }}
+      candidate_artifact_digest: ${{ steps.gate.outputs.candidate_artifact_digest }}
+      setup_sha256: ${{ steps.gate.outputs.setup_sha256 }}
+      portable_sha256: ${{ steps.gate.outputs.portable_sha256 }}
+      native_manifest_sha256: ${{ steps.gate.outputs.native_manifest_sha256 }}
+      support_clearance_sha256: ${{ steps.gate.outputs.support_clearance_sha256 }}
     steps:
       - name: Validate tag format
         shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          TAG="${{ github.ref_name }}"
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
-            echo "::error::Invalid tag format '$TAG'. Expected: v1.2.3 or v1.2.3-rc.1"
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Invalid release tag format"
             exit 1
           fi
-          echo "Tag format valid: $TAG"
 
-      - name: Checkout code
+      - name: Checkout exact tag source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
@@ -61,203 +55,114 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22'
-          cache: 'npm'
 
       - name: Extract version from tag
         id: version
         shell: bash
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
-      - name: Install dependencies
-        run: npm ci
         env:
-          # Reduce flakiness on Windows runners
-          npm_config_prefer_offline: true
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Install dependencies (retry on failure)
-        if: failure()
-        run: |
-          npm cache clean --force
-          npm ci
-
-      - name: Build all targets
-        shell: pwsh
+      # This job has no write permission. Every v* path stops here unless the
+      # tag is exact current main, current repository rules and all required
+      # check integrations are green on that SHA, an independent code-owner
+      # approved the reviewed head/current base, and the exact candidate bytes
+      # have bound native and support evidence.
+      - name: Verify source, checks, review and release evidence
+        id: gate
         env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          # Public support endpoint. Bot credentials stay in the separate
-          # 1132 Fixer Support service. Release builds require a verified endpoint.
-          FEEDBACK_PROXY_URL: ${{ vars.FEEDBACK_PROXY_URL }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # Unset empty CSC_LINK so electron-builder doesn't try to resolve it as a file
-          if ([string]::IsNullOrEmpty($env:CSC_LINK)) {
-            Remove-Item Env:CSC_LINK -ErrorAction SilentlyContinue
-            Remove-Item Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
-          }
-          # Fail before packaging if support is not configured and ready.
-          node scripts/verify-support-endpoint.mjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # Bundle only the public endpoint from the environment.
-          node scripts/inject-config.js
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # -p never: this workflow handles release creation via action-gh-release;
-          # electron-builder's own publish would race it and duplicate the release.
-          npx electron-builder --win --x64 -p never
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NATIVE_ACCEPTANCE_MANIFEST: ${{ vars.NATIVE_ACCEPTANCE_MANIFEST }}
+          SUPPORT_RELEASE_CLEARANCE: ${{ vars.SUPPORT_RELEASE_CLEARANCE }}
+        run: node scripts/release-preflight.mjs
 
-      # Updater metadata. Strips the isAdminRightsRequired flag electron-builder
-      # writes for per-machine installers (this package ships no elevate.exe,
-      # so clients 6.3.1–6.3.3 could not install with it) and proves the
-      # version, installer name, size and SHA-512 in latest.yml match the
-      # bytes in dist/ and the tag being released. See
-      # docs/development/updater-channel.md.
-      - name: Finalize updater metadata
-        shell: pwsh
-        run: |
-          node scripts/finalize-update-metadata.mjs --dist dist --expect-version "${{ steps.version.outputs.VERSION }}"
-
-      - name: Verify build artifacts exist
-        shell: pwsh
-        run: |
-          $exeFiles = Get-ChildItem -Path dist -Filter "*.exe" -ErrorAction SilentlyContinue
-          $exeCount = ($exeFiles | Measure-Object).Count
-
-          Write-Host "Found $exeCount executable(s) in dist/"
-          $exeFiles | ForEach-Object { Write-Host "  - $($_.Name)" }
-
-          if ($exeCount -lt 2) {
-            Write-Error "Build verification failed: Expected at least 2 .exe files (installer + portable), found $exeCount"
-            exit 1
-          }
-
-          # Verify expected files exist
-          $hasInstaller = $exeFiles | Where-Object { $_.Name -like "*Setup*" }
-          $hasPortable = $exeFiles | Where-Object { $_.Name -like "*Portable*" }
-
-          if (-not $hasInstaller) {
-            Write-Error "Missing installer executable (*Setup*.exe)"
-            exit 1
-          }
-          if (-not $hasPortable) {
-            Write-Error "Missing portable executable (*Portable*.exe)"
-            exit 1
-          }
-
-          Write-Host "Build verification passed"
-
-      # checksums-sha256.txt in coreutils format — LF, UTF-8 without BOM,
-      # sorted, final LF — written by the repository's own generator and then
-      # read back as bytes. The former PowerShell step piped the list through a
-      # cmdlet that writes CRLF on Windows; older checksum tools treated CR
-      # as part of the filename. The strict format stays portable. This script
-      # runs in ci.yml on every push, and validate-release-assets.mjs checks
-      # the file as attached to the release.
-      - name: Generate checksums
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          node scripts/generate-checksums.mjs --dist dist
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/generate-checksums.mjs --verify --dist dist
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Verify checksums with sha256sum
-        shell: bash
-        working-directory: dist
-        run: sha256sum -c checksums-sha256.txt
-
-      # What actually ships, enumerated and checked against
-      # build/package-allowlist.json. Fails on an unexpected executable,
-      # script, key, database or archive. See docs/security/BINARY-POLICY.md.
-      - name: Package inventory and allowlist
-        shell: pwsh
-        run: |
-          node scripts/package-inventory.mjs --unpacked dist/win-unpacked
-
-      # Records the true Authenticode state of what was just built, and refuses
-      # to publish the combinations that break the update channel. Runs BEFORE
-      # the release is created so a refusal means nothing shipped.
-      # See docs/security/code-signing.md.
-      - name: Check signature state
-        shell: pwsh
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-        run: |
-          node scripts/check-signature-state.mjs --dist dist
-
-      # SPDX bill of materials. Runs after the inventory so shipped binaries
-      # that electron-builder fetches outside the lockfile are included with
-      # their real hashes.
-      - name: Generate SBOM
-        shell: pwsh
-        run: |
-          node scripts/generate-sbom.mjs --out dist/sbom.spdx.json
-
-      # Build record. Runs last so it hashes every artifact, including the SBOM.
-      # This is metadata, not an attestation — see the script header.
-      - name: Generate provenance
-        shell: pwsh
-        run: |
-          node scripts/generate-provenance.mjs --dist dist
-
-      - name: List release artifacts
-        shell: pwsh
-        run: |
-          Write-Host "=== Release Artifacts ==="
-          Get-ChildItem -Path dist | Format-Table Name, Length, LastWriteTime
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+  publish:
+    name: Publish verified release
+    needs: preflight
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Checkout authorized source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          name: 1132 Fixer v${{ steps.version.outputs.VERSION }}
-          tag_name: v${{ steps.version.outputs.VERSION }}
-          draft: false
-          make_latest: true
-          generate_release_notes: true
-          # Prepended above the auto-generated notes.
-          body: |
-            ## Download
+          persist-credentials: false
 
-            | File | Use this one if |
-            |---|---|
-            | **1132-Fixer-Setup-${{ steps.version.outputs.VERSION }}.exe** | **Most people.** Standard installer — adds Start Menu / desktop shortcuts and enables auto-update. |
-            | **1132-Fixer-Portable-${{ steps.version.outputs.VERSION }}.exe** | You want no install — just run it. |
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22'
 
-            Right-click → **Run as administrator**. Requires Windows 10/11 with Zoom Workplace installed machine-wide.
-
-            ---
-          files: |
-            dist/*Setup*.exe
-            dist/*Portable*.exe
-            dist/checksums-sha256.txt
-            dist/latest.yml
-            dist/*.blockmap
-            dist/signature-state.json
-            dist/package-inventory.json
-            dist/sbom.spdx.json
-            dist/provenance.json
-
-      - name: Validate published release assets
+      # The accepted Setup and Portable packages came from this exact CI
+      # artifact. Rebuilding here would invalidate their package hashes.
+      - name: Download exact accepted candidate
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Named explicitly. The script's defaults used to be this repository's
-          # former name, which resolved only through GitHub's rename redirect.
-          RELEASES_OWNER: ${{ github.repository_owner }}
-          RELEASES_REPO: ${{ github.event.repository.name }}
         run: |
-          node scripts/validate-release-assets.mjs "v${{ steps.version.outputs.VERSION }}"
+          $ErrorActionPreference = 'Stop'
+          node scripts/download-release-candidate.mjs `
+            --artifact-id "${{ needs.preflight.outputs.candidate_artifact_id }}" `
+            --run-id "${{ needs.preflight.outputs.candidate_run_id }}" `
+            --name "${{ needs.preflight.outputs.candidate_artifact_name }}" `
+            --head "${{ github.sha }}" `
+            --digest "${{ needs.preflight.outputs.candidate_artifact_digest }}" `
+            --out "$env:RUNNER_TEMP\release-candidate.zip"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Path dist -ErrorAction Stop | Out-Null
+          Expand-Archive -LiteralPath "$env:RUNNER_TEMP\release-candidate.zip" -DestinationPath dist -ErrorAction Stop
 
-      # Convenience copy only — the real deliverables are already published as
-      # assets on this repo's GitHub Release by the step above. Its upload result
-      # remains visible: a green run must not imply evidence retention succeeded
-      # when Actions artifact storage rejected the copy.
-      - name: Upload build artifacts
+      - name: Verify exact candidate bytes and updater metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/release-candidate.mjs --verify --dist dist --head "${{ github.sha }}" --version "${{ needs.preflight.outputs.version }}" --setup-sha256 "${{ needs.preflight.outputs.setup_sha256 }}" --portable-sha256 "${{ needs.preflight.outputs.portable_sha256 }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/finalize-update-metadata.mjs --check --dist dist --expect-version "${{ needs.preflight.outputs.version }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/generate-checksums.mjs --verify --dist dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Push-Location dist
+          try { & sha256sum -c checksums-sha256.txt; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+          finally { Pop-Location }
+
+      - name: Verify bound support deployment
+        env:
+          FEEDBACK_PROXY_URL: ${{ vars.FEEDBACK_PROXY_URL }}
+          NATIVE_ACCEPTANCE_MANIFEST: ${{ vars.NATIVE_ACCEPTANCE_MANIFEST }}
+          SUPPORT_RELEASE_CLEARANCE: ${{ vars.SUPPORT_RELEASE_CLEARANCE }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: node scripts/verify-support-endpoint.mjs
+
+      - name: Materialize validated release evidence
+        env:
+          NATIVE_ACCEPTANCE_MANIFEST: ${{ vars.NATIVE_ACCEPTANCE_MANIFEST }}
+          SUPPORT_RELEASE_CLEARANCE: ${{ vars.SUPPORT_RELEASE_CLEARANCE }}
+        run: node scripts/release-evidence.mjs --head "${{ github.sha }}" --version "${{ needs.preflight.outputs.version }}" --out dist
+
+      # Evidence retention is required before publication. A storage failure
+      # leaves no public Release and cannot update latest.yml for users.
+      - name: Retain exact release transaction inputs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: release-v${{ steps.version.outputs.VERSION }}
-          path: |
-            dist/*.exe
-            dist/checksums-sha256.txt
+          name: release-v${{ needs.preflight.outputs.version }}
+          path: dist/
+          if-no-files-found: error
           retention-days: 30
+
+      # The script creates a non-latest draft, uploads and downloads every
+      # exact asset, checks every SHA-256 and the complete asset set, and only
+      # then atomically publishes it (and sets latest for stable versions).
+      - name: Draft, verify and publish exact assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          node scripts/publish-release.mjs
+          --dist dist
+          --tag "${{ github.ref_name }}"
+          --head "${{ github.sha }}"
+          --version "${{ needs.preflight.outputs.version }}"
+          --native-evidence-sha256 "${{ needs.preflight.outputs.native_manifest_sha256 }}"
+          --support-clearance-sha256 "${{ needs.preflight.outputs.support_clearance_sha256 }}"

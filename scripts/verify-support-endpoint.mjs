@@ -1,13 +1,34 @@
 // Release-only readiness check. The desktop app never runs this request.
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { parseEvidenceJson, validateReleaseEvidence } from './release-evidence.mjs';
 
 const require = createRequire(import.meta.url);
-const { endpointUrl } = require('../src/main/support-client');
+const { endpointUrl, supportConfigRevision } = require('../src/main/support-client');
 
-export async function verifySupportEndpoint(value, fetchImpl = fetch) {
+function expectedSupportIdentity(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const keys = Object.keys(value).sort();
+  const allowed = [
+    'acknowledgementFingerprint', 'backendDeploymentRevision', 'destinationFingerprint',
+    'endpointConfigRevision'
+  ];
+  if (keys.length !== allowed.length || keys.some((key, index) => key !== allowed[index])) return null;
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value.backendDeploymentRevision || '') ||
+      !/^[a-f0-9]{64}$/.test(value.destinationFingerprint || '') ||
+      !/^[a-f0-9]{64}$/.test(value.acknowledgementFingerprint || '') ||
+      !/^[a-f0-9]{64}$/.test(value.endpointConfigRevision || '')) return null;
+  return value;
+}
+
+export async function verifySupportEndpoint(value, expected, fetchImpl = fetch) {
   const endpoint = endpointUrl(value);
   if (!endpoint) throw new Error('A valid public HTTPS support endpoint is required.');
+  const identity = expectedSupportIdentity(expected);
+  if (!identity) throw new Error('A bound support deployment identity is required.');
+  if (supportConfigRevision(endpoint.href) !== identity.endpointConfigRevision) {
+    throw new Error('The public support configuration revision does not match the release evidence.');
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
@@ -27,7 +48,10 @@ export async function verifySupportEndpoint(value, fetchImpl = fetch) {
     }
     const state = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     if (state.ok !== true || state.service !== '1132-fixer-support' || state.configured !== true ||
-        state.capabilities?.feedback !== true || state.capabilities?.statelessFeedback !== true) {
+        state.capabilities?.feedback !== true || state.capabilities?.statelessFeedback !== true ||
+        state.deploymentRevision !== identity.backendDeploymentRevision ||
+        state.destinationFingerprint !== identity.destinationFingerprint ||
+        state.acknowledgementFingerprint !== identity.acknowledgementFingerprint) {
       throw new Error('The verified stateless support service is required.');
     }
   } catch (_) {
@@ -38,7 +62,26 @@ export async function verifySupportEndpoint(value, fetchImpl = fetch) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  verifySupportEndpoint(process.env.FEEDBACK_PROXY_URL).then(() => {
-    console.log('[release] Verified stateless support service is ready.');
-  }).catch((error) => { console.error('[release] ' + error.message); process.exitCode = 1; });
+  try {
+    const native = parseEvidenceJson(process.env.NATIVE_ACCEPTANCE_MANIFEST || '', 'native-manifest-input');
+    const support = parseEvidenceJson(process.env.SUPPORT_RELEASE_CLEARANCE || '', 'support-clearance-input');
+    const evidence = validateReleaseEvidence(native, support, {
+      expectedHead: process.env.GITHUB_SHA || '',
+      expectedVersion: process.env.RELEASE_VERSION || ''
+    });
+    verifySupportEndpoint(process.env.FEEDBACK_PROXY_URL, {
+      endpointConfigRevision: evidence.support.endpointConfigRevision,
+      backendDeploymentRevision: evidence.support.backendDeploymentRevision,
+      destinationFingerprint: evidence.support.destinationFingerprint,
+      acknowledgementFingerprint: evidence.support.acknowledgementFingerprint
+    }).then(() => {
+      console.log('[release] Verified the bound stateless support deployment is ready.');
+    }).catch(() => {
+      console.error('[release] Support readiness verification failed.');
+      process.exitCode = 1;
+    });
+  } catch (_) {
+    console.error('[release] Support release evidence is invalid.');
+    process.exitCode = 1;
+  }
 }

@@ -19,6 +19,7 @@
  *                                         [--scales 1,1.25,1.5]
  *                                         [--fix-timeout-ms 360000]
  *                                         [--skip-fix] [--test-copy]
+ *                                         [--package <Setup-or-Portable.exe>]
  *                                         [--artifact-kind setup|portable]
  *                                         [--artifact-head <sha>] [--expected-head <sha>]
  *                                         [--expected-exe-sha256 <sha256>]
@@ -39,7 +40,6 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const screenActions = require(path.join(ROOT, 'screen-actions.js'));
@@ -63,6 +63,8 @@ const TEST_COPY = has('--test-copy');
 const SCALES = String(argOf('--scales', '1,1.25,1.5')).split(',').map(Number).filter((n) => n > 0);
 const FIX_TIMEOUT_MS = Number(argOf('--fix-timeout-ms', 360000));
 const SKIP_FIX = has('--skip-fix');
+const PACKAGE_ARG = argOf('--package', '');
+const PACKAGE_PATH = PACKAGE_ARG ? path.resolve(PACKAGE_ARG) : '';
 const ACCEPTANCE_MODE = TEST_COPY && SKIP_FIX
   ? 'diagnostic-test-copy-skip-fix'
   : TEST_COPY
@@ -85,15 +87,23 @@ function normalizeArtifactKind(value) {
   return value === 'setup' || value === 'portable' ? value : '';
 }
 
+function inferPackageKind(fileName) {
+  if (/^1132-Fixer-Setup-[0-9]/i.test(fileName || '') && /\.exe$/i.test(fileName || '')) return 'setup';
+  if (/^1132-Fixer-Portable-[0-9]/i.test(fileName || '') && /\.exe$/i.test(fileName || '')) return 'portable';
+  return '';
+}
+
 function loadOperatorAttestation(file) {
   const empty = { present: !!file, valid: false };
   if (!file) return empty;
   try {
     const value = JSON.parse(fs.readFileSync(file, 'utf8'));
     const allowed = [
-      'artifactHead', 'artifactKind', 'disposableWindowsBoundary', 'executableSha256',
-      'schemaVersion', 'supportConfigRevision', 'uacAcceptObserved',
-      'uacCancelObserved', 'uacEnabled'
+      'artifactHead', 'disposableWindowsBoundary', 'packageFileName', 'packageKind',
+      'packageSha256', 'packageToRuntimeOperation', 'packageToRuntimeReceiptSha256',
+      'runtimeExecutableSha256', 'runtimeLaunchObserved', 'schemaVersion',
+      'supportConfigRevision', 'uacAcceptObserved', 'uacCancelObserved', 'uacEnabled',
+      'unmodifiedRequireAdministrator'
     ];
     const keys = value && typeof value === 'object' && !Array.isArray(value)
       ? Object.keys(value).sort()
@@ -102,19 +112,30 @@ function loadOperatorAttestation(file) {
       keys.every((key, index) => key === allowed[index]);
     const safe = {
       present: true,
-      valid: exactShape && value.schemaVersion === 1 &&
-        !!normalizeArtifactKind(value.artifactKind) && !!normalizeHead(value.artifactHead) &&
-        !!normalizeSha256(value.executableSha256) && !!normalizeSha256(value.supportConfigRevision) &&
+      valid: exactShape && value.schemaVersion === 2 &&
+        !!normalizeArtifactKind(value.packageKind) && !!normalizeHead(value.artifactHead) &&
+        typeof value.packageFileName === 'string' && path.basename(value.packageFileName) === value.packageFileName &&
+        inferPackageKind(value.packageFileName) === value.packageKind &&
+        !!normalizeSha256(value.packageSha256) && !!normalizeSha256(value.runtimeExecutableSha256) &&
+        !!normalizeSha256(value.packageToRuntimeReceiptSha256) && !!normalizeSha256(value.supportConfigRevision) &&
+        value.packageToRuntimeOperation === (value.packageKind === 'setup' ? 'install' : 'extract') &&
+        value.runtimeLaunchObserved === true && value.unmodifiedRequireAdministrator === true &&
         value.uacEnabled === true && value.uacAcceptObserved === true &&
         value.uacCancelObserved === true && value.disposableWindowsBoundary === true
     };
     if (!safe.valid) return safe;
     return {
       ...safe,
-      schemaVersion: 1,
-      artifactKind: normalizeArtifactKind(value.artifactKind),
+      schemaVersion: 2,
+      packageKind: normalizeArtifactKind(value.packageKind),
+      packageFileName: value.packageFileName,
       artifactHead: normalizeHead(value.artifactHead),
-      executableSha256: normalizeSha256(value.executableSha256),
+      packageSha256: normalizeSha256(value.packageSha256),
+      runtimeExecutableSha256: normalizeSha256(value.runtimeExecutableSha256),
+      packageToRuntimeOperation: value.packageToRuntimeOperation,
+      packageToRuntimeReceiptSha256: normalizeSha256(value.packageToRuntimeReceiptSha256),
+      runtimeLaunchObserved: true,
+      unmodifiedRequireAdministrator: true,
       supportConfigRevision: normalizeSha256(value.supportConfigRevision),
       uacEnabled: true,
       uacAcceptObserved: true,
@@ -134,7 +155,12 @@ function nativeReleaseEligibility(facts, cases) {
   if (facts.skipFix) add('skip-fix');
   if (facts.platform !== 'win32') add('non-windows-host');
   if (facts.enableLUA !== 1) add('uac-not-enabled');
-  if (!normalizeArtifactKind(facts.artifactKind)) add('artifact-kind-unbound');
+  if (!normalizeArtifactKind(facts.packageKind)) add('package-kind-unverified');
+  if (facts.declaredArtifactKind && facts.declaredArtifactKind !== facts.packageKind) add('caller-artifact-kind-mismatch');
+  if (facts.packagePresent !== true || !normalizeSha256(facts.packageSha256)) add('package-hash-missing');
+  if (facts.packageKind && inferPackageKind(facts.packageFileName) !== facts.packageKind) add('package-kind-unverified');
+  if (facts.packageToRuntimeVerified !== true) add('package-runtime-unbound');
+  if (facts.runtimeManifestExecutionLevel !== 'requireAdministrator') add('runtime-manifest-not-require-admin');
   if (!normalizeHead(facts.artifactHead) || !normalizeHead(facts.expectedHead)) add('head-unbound');
   else if (facts.artifactHead !== facts.expectedHead) add('mixed-head');
   if (!normalizeSha256(facts.expectedExeSha256)) add('expected-binary-hash-missing');
@@ -152,9 +178,15 @@ function nativeReleaseEligibility(facts, cases) {
   const attestation = facts.operatorAttestation;
   if (!attestation || !attestation.present) add('operator-attestation-missing');
   else if (!attestation.valid) add('operator-attestation-invalid');
-  else if (attestation.artifactKind !== facts.artifactKind ||
+  else if (attestation.packageKind !== facts.packageKind ||
+      attestation.packageFileName !== facts.packageFileName ||
       attestation.artifactHead !== facts.artifactHead ||
-      attestation.executableSha256 !== facts.shippedExeSha256 ||
+      attestation.packageSha256 !== facts.packageSha256 ||
+      attestation.runtimeExecutableSha256 !== facts.shippedExeSha256 ||
+      attestation.packageToRuntimeOperation !== (facts.packageKind === 'setup' ? 'install' : 'extract') ||
+      !normalizeSha256(attestation.packageToRuntimeReceiptSha256) ||
+      attestation.runtimeLaunchObserved !== true ||
+      attestation.unmodifiedRequireAdministrator !== true ||
       attestation.supportConfigRevision !== facts.supportConfigRevision ||
       attestation.uacEnabled !== true || attestation.uacAcceptObserved !== true ||
       attestation.uacCancelObserved !== true || attestation.disposableWindowsBoundary !== true) {
@@ -168,7 +200,7 @@ function nativeReleaseEligibility(facts, cases) {
   return { eligible: reasons.length === 0, reasons };
 }
 
-const ARTIFACT_KIND = normalizeArtifactKind(argOf('--artifact-kind', ''));
+const DECLARED_ARTIFACT_KIND = normalizeArtifactKind(argOf('--artifact-kind', ''));
 const ARTIFACT_HEAD = normalizeHead(argOf('--artifact-head', ''));
 const EXPECTED_HEAD = normalizeHead(argOf('--expected-head', ''));
 const EXPECTED_EXE_SHA256 = normalizeSha256(argOf('--expected-exe-sha256', ''));
@@ -194,7 +226,13 @@ const report = {
   releaseGateEligible: false,
   releaseEligibilityReasons: [],
   acceptanceIdentity: {
-    artifactKind: ARTIFACT_KIND,
+    declaredArtifactKind: DECLARED_ARTIFACT_KIND,
+    packageKind: '',
+    packageFileName: '',
+    packagePresent: false,
+    packageSha256: '',
+    packageToRuntimeVerified: false,
+    runtimeManifestExecutionLevel: '',
     artifactHead: ARTIFACT_HEAD,
     expectedHead: EXPECTED_HEAD,
     expectedExeSha256: EXPECTED_EXE_SHA256,
@@ -812,69 +850,56 @@ async function prepareTestCopy() {
   return { exe, how };
 }
 
-// Raw launch without the debugger: the app's own stderr for 12 s, so a
-// renderer/GPU child launch failure is visible in the report even when the
-// driver cannot attach.
-async function rawLaunchProbe(exe) {
-  return new Promise((resolve) => {
-    let out = '';
-    let settled = false;
-    let exitObserved = false;
-    let timeoutStarted = false;
-    let timer = null;
-    let killVerificationTimer = null;
-    let child;
-    const finishProbe = (receipt) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      if (killVerificationTimer) clearTimeout(killVerificationTimer);
-      resolve({ ...receipt, out: out.slice(-4000) });
-    };
-    try {
-      child = spawn(exe, ['--enable-logging=stderr'], { windowsHide: true });
-    } catch (err) {
-      finishProbe({ why: `error:${String((err && (err.code || err.name)) || 'launch')}`, timedOut: false, terminationProved: true });
-      return;
+// Playwright owns this diagnostic launch from creation through close. This
+// avoids ever converting custody into a numeric PID that could be reused.
+// A close failure retains the adapter object and the caller blocks before any
+// later launch or process exit.
+const unresolvedRawLaunchCustody = new Set();
+async function rawLaunchProbe(exe, launcher = electron, delay = sleep) {
+  let app = null;
+  let child = null;
+  let out = '';
+  let exitObserved = false;
+  let exitCode = null;
+  let appClosed = false;
+  try {
+    app = await launcher.launch({
+      executablePath: exe,
+      args: ['--enable-logging=stderr'],
+      timeout: 30000
+    });
+    unresolvedRawLaunchCustody.add(app);
+    app.on('close', () => { appClosed = true; });
+    child = app.process();
+    if (!child || typeof child.on !== 'function') {
+      try { await app.close(); } catch (_) { /* retained below */ }
+      if (appClosed) unresolvedRawLaunchCustody.delete(app);
+      return { why: 'error:managed-process-unavailable', timedOut: false,
+        terminationProved: appClosed, out: out.slice(-4000) };
     }
-    timer = setTimeout(() => {
-      if (settled || exitObserved || child.exitCode !== null || child.signalCode !== null) return;
-      timeoutStarted = true;
-      let killed;
-      try {
-        killed = require('child_process').spawnSync(windowsTools.resolveTool('taskkill.exe'),
-          ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 });
-      } catch (_) {
-        finishProbe({ why: 'timeout', timedOut: true, terminationProved: false });
-        return;
-      }
-      if (!killed || killed.error || killed.status !== 0) {
-        finishProbe({ why: 'timeout', timedOut: true, terminationProved: false });
-        return;
-      }
-      // A successful /T /F request is not enough by itself. Keep the original
-      // ChildProcess identity until Node observes its exit; otherwise stop the
-      // acceptance run instead of overlapping a possibly live tree.
-      killVerificationTimer = setTimeout(() => {
-        finishProbe({ why: 'timeout', timedOut: true, terminationProved: false });
-      }, 2000);
-    }, 12000);
-    child.stdout.on('data', (d) => { out += d; });
-    child.stderr.on('data', (d) => { out += d; });
-    child.on('error', (err) => {
-      finishProbe({
-        why: `error:${String((err && (err.code || err.name)) || 'process')}`,
-        timedOut: timeoutStarted,
-        terminationProved: !timeoutStarted && !child.pid
-      });
-    });
-    child.on('exit', (code) => {
-      exitObserved = true;
-      finishProbe(timeoutStarted
-        ? { why: 'timeout', timedOut: true, terminationProved: true }
-        : { why: `exited ${code}`, timedOut: false, terminationProved: true });
-    });
-  });
+    if (child.stdout && typeof child.stdout.on === 'function') child.stdout.on('data', data => { out += data; });
+    if (child.stderr && typeof child.stderr.on === 'function') child.stderr.on('data', data => { out += data; });
+    child.on('exit', code => { exitObserved = true; exitCode = code; });
+    await delay(12000);
+    const reachedDeadline = !exitObserved;
+    try {
+      if (!appClosed) await app.close();
+    } catch (_) {
+      return { why: 'managed-close-failed', timedOut: reachedDeadline,
+        terminationProved: false, out: out.slice(-4000) };
+    }
+    unresolvedRawLaunchCustody.delete(app);
+    return {
+      why: reachedDeadline ? 'managed deadline' : `exited ${exitCode}`,
+      timedOut: reachedDeadline,
+      terminationProved: true,
+      out: out.slice(-4000)
+    };
+  } catch (_) {
+    if (!app) return { why: 'error:launch', timedOut: false, terminationProved: true, out: out.slice(-4000) };
+    return { why: 'managed-close-failed', timedOut: false,
+      terminationProved: false, out: out.slice(-4000) };
+  }
 }
 
 function rawLaunchSucceeded(receipt, fatalOutput) {
@@ -901,6 +926,14 @@ function rawLaunchSucceeded(receipt, fatalOutput) {
   const digest = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
   report.acceptanceIdentity.shippedExeSha256 = digest(SHIPPED_EXE);
   report.acceptanceIdentity.drivenExeSha256 = digest(EXE);
+  const runtimeManifest = require('../scripts/verify-exe-manifest').inspectExeManifest(SHIPPED_EXE);
+  report.acceptanceIdentity.runtimeManifestExecutionLevel = runtimeManifest.requestedExecutionLevel || '';
+  (runtimeManifest.requestedExecutionLevel === 'requireAdministrator' ? passed : failed)(
+    'runtime-require-administrator-manifest',
+    runtimeManifest.requestedExecutionLevel === 'requireAdministrator'
+      ? 'the unmodified shipped runtime requests administrator elevation'
+      : 'the unmodified shipped runtime does not request administrator elevation'
+  );
   passed('executable-hash-recorded', TEST_COPY
     ? 'recorded distinct shipped and diagnostic-copy executable identities'
     : 'the driven executable is the byte-identical shipped executable', {
@@ -909,6 +942,39 @@ function rawLaunchSucceeded(receipt, fatalOutput) {
       drivenSha256: report.acceptanceIdentity.drivenExeSha256
     }
   });
+  const packageMandatory = !TEST_COPY && !SKIP_FIX;
+  if (!PACKAGE_PATH) {
+    notRun('package-to-runtime-identity', 'no Setup or Portable package was supplied', { mandatory: packageMandatory });
+  } else if (!fs.existsSync(PACKAGE_PATH) || !fs.statSync(PACKAGE_PATH).isFile()) {
+    failed('package-to-runtime-identity', 'the supplied package file is unavailable');
+  } else {
+    const packageFileName = path.basename(PACKAGE_PATH);
+    const packageKind = inferPackageKind(packageFileName);
+    const packageSha256 = digest(PACKAGE_PATH);
+    Object.assign(report.acceptanceIdentity, {
+      packagePresent: true,
+      packageFileName,
+      packageKind,
+      packageSha256
+    });
+    const attestation = OPERATOR_ATTESTATION;
+    const expectedOperation = packageKind === 'setup' ? 'install' : packageKind === 'portable' ? 'extract' : '';
+    const verified = !!packageKind && attestation.valid === true &&
+      attestation.packageKind === packageKind && attestation.packageFileName === packageFileName &&
+      attestation.packageSha256 === packageSha256 &&
+      attestation.runtimeExecutableSha256 === report.acceptanceIdentity.shippedExeSha256 &&
+      attestation.packageToRuntimeOperation === expectedOperation &&
+      attestation.runtimeLaunchObserved === true &&
+      attestation.unmodifiedRequireAdministrator === true &&
+      runtimeManifest.requestedExecutionLevel === 'requireAdministrator';
+    report.acceptanceIdentity.packageToRuntimeVerified = verified;
+    (verified ? passed : failed)(
+      'package-to-runtime-identity',
+      verified
+        ? `${packageKind} package hash, ${expectedOperation} receipt, launched runtime hash and elevation manifest are bound`
+        : 'the package-to-runtime receipt does not match the supplied package and launched runtime'
+    );
+  }
   if (EXPECTED_EXE_SHA256) {
     (report.acceptanceIdentity.shippedExeSha256 === EXPECTED_EXE_SHA256 ? passed : failed)(
       'executable-expected-hash',
@@ -941,7 +1007,10 @@ function rawLaunchSucceeded(receipt, fatalOutput) {
   const rawFatal = /render-process-gone|GPU process launch failed|FATAL/.test(raw.out);
   const rawOk = rawLaunchSucceeded(raw, rawFatal);
   (rawOk ? passed : failed)('raw-launch', `${raw.why}; terminationProved=${raw.terminationProved}; ${rawFatal ? 'renderer/GPU launch failure in stderr' : 'no fatal child-launch error in 12 s'}`, { stderrTail: raw.out.split(/\r?\n/).filter(Boolean).slice(-12) });
-  if (!raw.terminationProved) { finish(); return; }
+  if (!raw.terminationProved) {
+    console.error('packaged-acceptance: managed launch custody is unresolved; blocking further launches and completion');
+    await new Promise(() => {});
+  }
 
   const main = await runLanding(1, 'scale100');
   if (main) {
@@ -987,9 +1056,12 @@ function finish() {
     `Mode: ${report.mode} · Evidence: ${report.evidenceClass} · Execution: ${report.executionResult} · Release gate eligible: ${report.releaseGateEligible} · Result: ${report.acceptanceResult}`,
     `Release eligibility blockers: ${report.releaseEligibilityReasons.join(', ') || 'none'}`, '',
     '## Acceptance identity', '',
-    `- Artifact kind: ${report.acceptanceIdentity.artifactKind || 'unbound'}`,
+    `- Verified package kind / caller label: ${report.acceptanceIdentity.packageKind || 'unbound'} / ${report.acceptanceIdentity.declaredArtifactKind || 'unset'}`,
+    `- Package file / SHA-256: ${report.acceptanceIdentity.packageFileName || 'unbound'} / ${report.acceptanceIdentity.packageSha256 || 'unbound'}`,
+    `- Package-to-runtime receipt verified: ${report.acceptanceIdentity.packageToRuntimeVerified}`,
     `- Artifact head / expected head: ${report.acceptanceIdentity.artifactHead || 'unbound'} / ${report.acceptanceIdentity.expectedHead || 'unbound'}`,
     `- Shipped executable SHA-256 / expected: ${report.acceptanceIdentity.shippedExeSha256 || 'unavailable'} / ${report.acceptanceIdentity.expectedExeSha256 || 'unbound'}`,
+    `- Shipped runtime execution level: ${report.acceptanceIdentity.runtimeManifestExecutionLevel || 'unavailable'}`,
     `- Effective support endpoint: ${report.acceptanceIdentity.effectiveSupportEndpoint || 'unset'}`,
     `- Support configuration revision / expected: ${report.acceptanceIdentity.supportConfigRevision || 'unavailable'} / ${report.acceptanceIdentity.expectedSupportConfigRevision || 'unbound'}`,
     `- Support configuration source/integrity: ${report.acceptanceIdentity.supportConfigSource || 'unavailable'} / ${report.acceptanceIdentity.supportConfigIntegrity}`,

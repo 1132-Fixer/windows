@@ -188,7 +188,12 @@ npm install --package-lock-only
 
 `npm test` runs every `tools/*-smoke.js` check with Node alone. CI additionally builds the installer on a Windows runner and runs `tools/packaged-acceptance.js` against an asInvoker-stamped test copy: it launches the real packaged app code, proves it leaves **Checking** within the deadline, checks the footer, focus rings, target sizes and scrollbars at 100 %, 125 % and 150 % scaling, confirms only that state's controls are visible, walks **View details** → category → **Back**, exercises the second-instance guard and the **Fix now** journey, and uploads screenshots and a report as the `packaged-acceptance` artifact. This CI run is diagnostic and never native/final-artifact release acceptance. Release evidence needs the exact unmodified artifact on disposable Windows with UAC enabled, matching head/hash/support configuration, and the required operator attestation.
 
-A `v*` tag reachable from `main` runs `.github/workflows/release.yml`, which builds Setup and Portable artifacts, checksums, and `latest.yml` onto this repository's GitHub Releases.
+A `v*` tag on exact current `main` runs `.github/workflows/release.yml`. Its
+read-only preflight requires current checks and independent review plus bound
+native Windows and support receipts. The publication job reuses the exact CI
+Setup and Portable bytes, verifies every digest, uploads them to a draft, and
+publishes only after complete asset readback; it does not rebuild accepted
+packages.
 
 Secrets belong in GitHub Actions or the feedback service — never in app source or a packaged config. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/development/building.md](docs/development/building.md).
 
