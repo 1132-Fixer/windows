@@ -40,6 +40,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const screenActions = require(path.join(ROOT, 'screen-actions.js'));
@@ -688,17 +689,51 @@ async function runDetailsRoundTrip(page, tag, state) {
   (after.checkbox === checkboxBefore ? passed : failed)(`${tag}.details-back-preserves-option`, `shortcut option ${checkboxBefore} -> ${after.checkbox}`);
 }
 
+// Keep the original ChildProcess object until its exit. A timeout does not
+// authorize a later numeric-PID kill: custody remains unresolved and blocks
+// every later launch and completion path.
+const unresolvedSecondInstanceCustody = new Set();
+function observeSecondInstance(exe, launch = spawn, armDeadline = setTimeout, clearDeadline = clearTimeout) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = launch(exe, [], { windowsHide: true, stdio: 'ignore' });
+    } catch (_) {
+      resolve({ launchFailed: true, timedOut: false, terminationProved: true });
+      return;
+    }
+    if (!child || typeof child.once !== 'function') {
+      resolve({ launchFailed: true, timedOut: false, terminationProved: true });
+      return;
+    }
+    unresolvedSecondInstanceCustody.add(child);
+    let settled = false;
+    let timer = null;
+    const settle = (receipt) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearDeadline(timer);
+      if (receipt.terminationProved) unresolvedSecondInstanceCustody.delete(child);
+      resolve(receipt);
+    };
+    child.once('exit', code => settle({ code, timedOut: false, terminationProved: true }));
+    child.once('error', () => {
+      const noProcessIdentity = !Number.isSafeInteger(child.pid) || child.pid <= 0;
+      settle({ launchFailed: true, timedOut: false, terminationProved: noProcessIdentity });
+    });
+    timer = armDeadline(() => settle({ timedOut: true, terminationProved: false }), 15000);
+  });
+}
+
 async function runSecondInstance(page) {
   const t0 = Date.now();
-  const child = spawn(EXE, [], { windowsHide: true, stdio: 'ignore' });
-  const exit = await new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ timedOut: true }), 15000);
-    child.on('exit', (code) => { clearTimeout(timer); resolve({ code }); });
-    child.on('error', (err) => { clearTimeout(timer); resolve({ error: err.message }); });
-  });
-  if (exit.timedOut) {
-    try { child.kill(); } catch (_) {}
+  const exit = await observeSecondInstance(EXE);
+  if (!exit.terminationProved) {
     failed('single-instance.second-launch-exits', 'second instance still running after 15 s');
+    console.error('packaged-acceptance: second-instance custody is unresolved; blocking further launches and completion');
+    await new Promise(() => {});
+  } else if (exit.launchFailed) {
+    failed('single-instance.second-launch-exits', 'second instance could not be launched safely');
   } else {
     passed('single-instance.second-launch-exits', `second instance exited in ${Date.now() - t0} ms (code ${exit.code})`);
   }

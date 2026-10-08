@@ -416,6 +416,53 @@ async function run(options = {}) {
     source.includes('await new Promise(() => {})'),
   'raw launch never targets a bare PID and unresolved custody blocks overlap/completion');
   checks++;
+
+  const secondCustody = new Set();
+  const secondContext = { custody: secondCustody, Number };
+  vm.createContext(secondContext);
+  vm.runInContext(`const unresolvedSecondInstanceCustody = this.custody;\n${productionFunction('observeSecondInstance')}\nthis.observeSecondInstance = observeSecondInstance;`, secondContext);
+  const secondHarness = () => {
+    const child = new EventEmitter();
+    child.pid = 1132;
+    let deadline;
+    let killCalls = 0;
+    child.kill = () => { killCalls++; };
+    return {
+      child,
+      run: () => secondContext.observeSecondInstance('fixture.exe', () => child,
+        callback => { deadline = callback; return 1; }, () => {}),
+      fireDeadline: () => deadline(),
+      killCalls: () => killCalls
+    };
+  };
+  {
+    const h = secondHarness();
+    const pending = h.run();
+    h.child.emit('exit', 0);
+    h.child.pid = 9911; // Simulated reuse cannot affect the retained callback.
+    h.fireDeadline();
+    const result = await pending;
+    assert.equal(result.terminationProved, true);
+    assert.equal(result.timedOut, false);
+    assert.equal(h.killCalls(), 0, 'a queued deadline never kills a reused PID after exit');
+    assert.equal(secondCustody.size, 0);
+  }
+  {
+    const h = secondHarness();
+    const pending = h.run();
+    h.fireDeadline();
+    const result = await pending;
+    assert.equal(result.terminationProved, false);
+    assert.equal(h.killCalls(), 0, 'an unresolved second instance is retained without a bare-PID kill');
+    assert.equal(secondCustody.has(h.child), true);
+    secondCustody.delete(h.child);
+  }
+  const secondSource = productionFunction('runSecondInstance');
+  assert.ok(secondSource.includes('observeSecondInstance(EXE)') &&
+    !secondSource.includes('child.kill') &&
+    source.includes('second-instance custody is unresolved; blocking further launches and completion'),
+  'second-instance timeout retains custody and blocks overlap/completion');
+  checks++;
   assert.ok(source.includes("'fix.completes-successfully'") && source.includes('fixJourneySucceeded(done.state)'),
     'the terminal Fix now result uses the strict success predicate');
   assert.ok(/notRun\('fix\.journey',[\s\S]*?mandatory:\s*true/.test(source),
