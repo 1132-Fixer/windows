@@ -133,7 +133,7 @@ function openByteStream(chunk, state) {
       }
     };
   };
-  const candidateInput = (api, out, digest) => ({
+  const candidateInput = (api, out, digest, extra = {}) => ({
     api,
     repository: '1132-Fixer/windows',
     artifactId: candidateArtifactId,
@@ -141,7 +141,8 @@ function openByteStream(chunk, state) {
     expectedName: candidateName,
     expectedHead: sourceHead,
     expectedDigest: digest,
-    out
+    out,
+    ...extra
   });
   {
     const bytes = Buffer.from('bounded-candidate-archive');
@@ -189,6 +190,31 @@ function openByteStream(chunk, state) {
     }
   }
   {
+    const bytes = Buffer.from('competing-partial-archive');
+    const digest = `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-competing-'));
+    const out = path.join(dir, 'candidate.zip');
+    const partial = `${out}.part-${process.pid}`;
+    const competingBytes = Buffer.from('competing-file');
+    fs.writeFileSync(partial, competingBytes, { flag: 'wx' });
+    try {
+      const api = candidateApi({
+        metadata: candidateMetadata(bytes.length, digest),
+        archive: response({ body: closedByteStream([bytes]) })
+      });
+      await assert.rejects(downloadReleaseCandidate(candidateInput(api, out, digest)),
+        error => error.code === 'candidate-download-output-exists',
+        'atomic partial open rejects a competing file');
+      assert.equal(api.state.requests, 0, 'a competing partial stops before archive download');
+      assert.deepEqual(fs.readFileSync(partial), competingBytes,
+        'a partial that this process did not create is not deleted');
+      assert.equal(fs.existsSync(out), false, 'a competing partial cannot produce a final candidate');
+    } finally {
+      fs.unlinkSync(partial);
+      fs.rmdirSync(dir);
+    }
+  }
+  {
     const bytes = Buffer.from('length-fixture');
     const digest = `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
     const streamState = { cancelled: false };
@@ -216,22 +242,74 @@ function openByteStream(chunk, state) {
     const expected = Buffer.from('abc');
     const digest = `sha256:${crypto.createHash('sha256').update(expected).digest('hex')}`;
     const streamState = { cancelled: false };
+    const fileState = { opens: 0, unlinks: 0, readbacks: 0 };
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-overflow-'));
     const out = path.join(dir, 'candidate.zip');
+    const partialFileSystem = {
+      open(...args) {
+        fileState.opens++;
+        return fs.promises.open(...args);
+      },
+      unlink(...args) {
+        fileState.unlinks++;
+        return fs.promises.unlink(...args);
+      },
+      lstat(...args) {
+        fileState.readbacks++;
+        return fs.promises.lstat(...args);
+      }
+    };
     try {
       const api = candidateApi({
         metadata: candidateMetadata(expected.length, digest),
         archive: response({ body: openByteStream(Buffer.from('abcd'), streamState) })
       });
-      await assert.rejects(downloadReleaseCandidate(candidateInput(api, out, digest)),
+      await assert.rejects(downloadReleaseCandidate(candidateInput(api, out, digest, { partialFileSystem })),
         error => error.code === 'candidate-download-size',
         'chunked candidate overflow fails on its first over-bound chunk');
       assert.equal(streamState.cancelled, true, 'chunked candidate overflow cancels the response');
       assert.equal(fs.existsSync(out), false, 'chunked candidate overflow retains no final file');
       assert.equal(fs.existsSync(`${out}.part-${process.pid}`), false,
         'chunked candidate overflow removes its exact owned partial');
+      assert.deepEqual(fileState, { opens: 1, unlinks: 1, readbacks: 1 },
+        'owned-partial cleanup unlinks once and reads back exact absence');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  {
+    const expected = Buffer.from('abc');
+    const digest = `sha256:${crypto.createHash('sha256').update(expected).digest('hex')}`;
+    const streamState = { cancelled: false };
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-cleanup-failure-'));
+    const out = path.join(dir, 'candidate.zip');
+    const partial = `${out}.part-${process.pid}`;
+    const partialFileSystem = {
+      open: (...args) => fs.promises.open(...args),
+      async unlink(target) {
+        assert.equal(target, partial);
+        const error = new Error('simulated cleanup failure');
+        error.code = 'EACCES';
+        throw error;
+      },
+      lstat: (...args) => fs.promises.lstat(...args)
+    };
+    try {
+      const api = candidateApi({
+        metadata: candidateMetadata(expected.length, digest),
+        archive: response({ body: openByteStream(Buffer.from('abcd'), streamState) })
+      });
+      await assert.rejects(
+        downloadReleaseCandidate(candidateInput(api, out, digest, { partialFileSystem })),
+        error => error.code === 'candidate-download-cleanup' && error.message === 'candidate-download-cleanup',
+        'a non-ENOENT owned-partial cleanup failure surfaces a stable error');
+      assert.equal(streamState.cancelled, true, 'cleanup failure does not mask response cancellation');
+      assert.equal(fs.existsSync(out), false, 'cleanup failure cannot produce a final candidate');
+      assert.equal(fs.existsSync(partial), true,
+        'cleanup failure cannot be reported as clean or residue-free');
+    } finally {
+      if (fs.existsSync(partial)) fs.unlinkSync(partial);
+      fs.rmdirSync(dir);
     }
   }
 

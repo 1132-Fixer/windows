@@ -39,14 +39,37 @@ async function cancelBody(body) {
   try { await body.cancel(); } catch (_) { /* best-effort cancellation after a fixed failure */ }
 }
 
+async function removeOwnedPartial(fileSystem, partialPath, fileHandle) {
+  let cleanupFailed = false;
+  if (fileHandle) {
+    try { await fileHandle.close(); } catch (_) { cleanupFailed = true; }
+  }
+  try {
+    await fileSystem.unlink(partialPath);
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') cleanupFailed = true;
+  }
+  let absent = false;
+  try {
+    await fileSystem.lstat(partialPath);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') absent = true;
+    else cleanupFailed = true;
+  }
+  if (cleanupFailed || !absent) fail('candidate-download-cleanup');
+}
+
 export async function downloadReleaseCandidate({
-  api, repository, artifactId, runId, expectedName, expectedHead, expectedDigest, out
+  api, repository, artifactId, runId, expectedName, expectedHead, expectedDigest, out,
+  partialFileSystem = fs.promises
 }) {
   if (!api || typeof api.json !== 'function' || typeof api.request !== 'function' ||
       !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) ||
       !Number.isSafeInteger(artifactId) || artifactId < 1 || !Number.isSafeInteger(runId) || runId < 1 ||
       !/^release-candidate-[a-f0-9]{40}$/.test(expectedName) || !/^[a-f0-9]{40}$/.test(expectedHead) ||
-      !/^sha256:[a-f0-9]{64}$/.test(expectedDigest) || typeof out !== 'string' || !out) {
+      !/^sha256:[a-f0-9]{64}$/.test(expectedDigest) || typeof out !== 'string' || !out ||
+      !partialFileSystem || typeof partialFileSystem.open !== 'function' ||
+      typeof partialFileSystem.unlink !== 'function' || typeof partialFileSystem.lstat !== 'function') {
     fail('candidate-download-input');
   }
   const base = `/repos/${repository}`;
@@ -58,38 +81,51 @@ export async function downloadReleaseCandidate({
   if (!Number.isSafeInteger(expectedSize) || expectedSize < 1 ||
       expectedSize > MAX_CANDIDATE_ARCHIVE_BYTES) fail('candidate-download-size');
   const temp = `${out}.part-${process.pid}`;
-  if (fs.existsSync(out) || fs.existsSync(temp)) fail('candidate-download-output-exists');
-  const archive = await api.request('GET', `${base}/actions/artifacts/${artifactId}/zip`, {
-    accept: 'application/octet-stream', errorCode: 'candidate-download-failed', followRedirects: true
-  });
-  if (!archive.body) fail('candidate-download-body');
-  const declaredSize = declaredContentLength(archive);
-  if (declaredSize !== null && declaredSize !== expectedSize) {
-    await cancelBody(archive.body);
-    fail('candidate-download-size');
-  }
-  const hash = crypto.createHash('sha256');
-  let size = 0;
-  const tee = new Transform({
-    transform(chunk, _encoding, callback) {
-      const nextSize = size + chunk.length;
-      if (nextSize > expectedSize) {
-        callback(failure('candidate-download-size'));
-        return;
-      }
-      size = nextSize;
-      hash.update(chunk);
-      callback(null, chunk);
-    }
-  });
+  if (fs.existsSync(out)) fail('candidate-download-output-exists');
+  let partialHandle = null;
+  let ownsPartial = false;
   try {
-    await pipeline(Readable.fromWeb(archive.body), tee, fs.createWriteStream(temp, { flags: 'wx' }));
+    try {
+      partialHandle = await partialFileSystem.open(temp, 'wx');
+      ownsPartial = true;
+    } catch (error) {
+      if (error && error.code === 'EEXIST') fail('candidate-download-output-exists');
+      fail('candidate-download-partial-open');
+    }
+    const archive = await api.request('GET', `${base}/actions/artifacts/${artifactId}/zip`, {
+      accept: 'application/octet-stream', errorCode: 'candidate-download-failed', followRedirects: true
+    });
+    if (!archive.body) fail('candidate-download-body');
+    const declaredSize = declaredContentLength(archive);
+    if (declaredSize !== null && declaredSize !== expectedSize) {
+      await cancelBody(archive.body);
+      fail('candidate-download-size');
+    }
+    const hash = crypto.createHash('sha256');
+    let size = 0;
+    const tee = new Transform({
+      transform(chunk, _encoding, callback) {
+        const nextSize = size + chunk.length;
+        if (nextSize > expectedSize) {
+          callback(failure('candidate-download-size'));
+          return;
+        }
+        size = nextSize;
+        hash.update(chunk);
+        callback(null, chunk);
+      }
+    });
+    await pipeline(Readable.fromWeb(archive.body), tee,
+      partialHandle.createWriteStream({ autoClose: false }));
     if (size !== expectedSize) fail('candidate-download-size');
     const digest = `sha256:${hash.digest('hex')}`;
     if (digest !== expectedDigest) fail('candidate-download-digest');
+    await partialHandle.close();
+    partialHandle = null;
     fs.renameSync(temp, out);
+    ownsPartial = false;
   } catch (error) {
-    try { fs.unlinkSync(temp); } catch (_) { /* exact owned partial may already be absent */ }
+    if (ownsPartial) await removeOwnedPartial(partialFileSystem, temp, partialHandle);
     throw error;
   }
   console.log(`[release-candidate] downloaded verified artifact ${artifactId}`);
