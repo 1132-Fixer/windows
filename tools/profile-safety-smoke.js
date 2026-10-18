@@ -12,12 +12,13 @@
 //  - Zoom exe discovery (mock paths)
 //  - shortcut name/icon
 //  - privilege/error handling (unknown ≠ success)
-//  - credential not in logs/argv (presence assertions, never print secrets)
+//  - credential redaction and PowerShell stdin transport (never print secrets)
 
 const ps = require('../profile-safety.js');
 const hc = require('../helper-credential.js');
 const rv = require('../run-verdict.js');
 const zd = require('../zoom-detect.js');
+const windowsTools = require('../src/main/windows-tools');
 
 let failures = 0;
 function check(cond, name) {
@@ -111,10 +112,12 @@ console.log('profile-safety-smoke: command quoting');
   check(ps.winArgvQuote('') === '""', 'winArgvQuote empty -> empty quotes');
   const create = ps.accountCreateScript('user1', 'Aa1!Aa1!Aa1!Aa1!Aa1!Aa1!');
   check(create.includes("/add /y"), 'account create keeps net.exe /add /y');
-  check(create.includes("net.exe user"), 'account create calls net.exe user');
-  const argv = ps.accountCreateArgv('C:\\tmp\\fixer-create.ps1');
-  check(argv[0] === 'powershell.exe' && argv.includes('-File'), 'create spawn is powershell -File');
-  check(!argv.includes('Aa1!Aa1!Aa1!Aa1!Aa1!Aa1!'), 'create argv has no password token');
+  check(create.includes("& (Resolve-FixerTool 'net.exe') user $u $p"),
+    'account create uses the trusted native net.exe resolver');
+  const argv = windowsTools.PS_STDIN_ARGS;
+  check(argv.includes('-Command') && !argv.includes('-File'), 'current create transport uses a fixed command and stdin');
+  check(!ps.argvContainsSecret(argv, ['Aa1!Aa1!Aa1!Aa1!Aa1!Aa1!']) &&
+    !argv.some(arg => arg.includes(create)), 'current PowerShell argv contains neither credential nor account script');
 }
 
 console.log('profile-safety-smoke: env construction');
@@ -223,18 +226,23 @@ console.log('profile-safety-smoke: helper-profile inventory card');
     'ProfileList parser classifies canonical vs TEMP.bak');
 }
 
-console.log('profile-safety-smoke: credential not in logs/argv');
+console.log('profile-safety-smoke: credential redaction and PowerShell stdin');
 {
   const pw = hc.generateHelperPassword();
   check(hc.isSafeHelperPassword(pw), 'fixture password is a real helper password');
   check(!/user1/.test(pw) || pw !== 'user1', 'fixture is not the legacy static password');
 
-  const argv = ps.accountCreateArgv('C:\\tmp\\create.ps1');
-  check(!ps.argvContainsSecret(argv, [pw]), 'create argv does not contain the password');
-  check(!ps.argvContainsSecret(['powershell.exe', '-File', 'C:\\tmp\\x.ps1'], [pw]),
-    'generic -File argv does not contain the password');
+  const exe = windowsTools.resolveTool('powershell.exe', {
+    env: { SystemRoot: 'D:\\Windows', PATH: '' }, arch: 'x64',
+    getReport: () => ({ sharedObjects: ['ntdll.dll', 'kernel32.dll', 'kernelbase.dll'].map(name => `D:\\Windows\\System32\\${name}`) })
+  });
+  const argv = [exe, ...windowsTools.PS_STDIN_ARGS];
+  check(!ps.argvContainsSecret(argv, [pw]) && !argv.includes('-File'),
+    'actual shared PowerShell argv has no credential or script-file argument');
+  check(exe === 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    'account transport uses absolute Windows PowerShell without PATH');
   check(ps.argvContainsSecret(['net.exe', 'user', 'user1', pw, '/add'], [pw]),
-    'presence helper flags a net.exe argv that DID leak the password');
+    'presence helper detects the remaining native net.exe credential argument');
 
   const leaked = `net user user1 ${pw} /add`;
   const redacted = ps.redactSecrets(leaked, [pw]);
@@ -243,7 +251,10 @@ console.log('profile-safety-smoke: credential not in logs/argv');
   check(ps.redactSecrets('no secrets here', [pw]) === 'no secrets here', 'redactSecrets is a no-op without a match');
 
   const script = ps.accountCreateScript('user1', pw);
-  check(script.includes(pw), 'tmp script body holds the password (accepted residual)');
+  const stdin = windowsTools.prepareScript(script);
+  check(stdin.includes(pw) && stdin.endsWith(script), 'complete account script and credential are carried in stdin');
+  check(stdin.includes('function Resolve-FixerTool') && script.includes("Resolve-FixerTool 'net.exe'"),
+    'account script receives the shared native-tool resolver before its first invocation');
   const spawnLine = argv.join(' ');
   check(!spawnLine.includes(pw), 'joined create argv string has no password');
   // Never print the fixture password itself.

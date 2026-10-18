@@ -18,10 +18,11 @@
 //   - records sorted by filename (byte order) so the manifest is deterministic
 //
 // This used to be a PowerShell step in release.yml that piped an array
-// through Out-File. On the windows-latest runner that writes CRLF, so every
-// filename in the published manifest carried a trailing "\r" and sha256sum
-// reported "No such file or directory" for each line (releases up to 6.3.3).
-// The bytes are now written explicitly here; nothing depends on a platform
+// through Out-File. On the windows-latest runner that writes CRLF. Older
+// checksum tools can treat the CR as part of the filename; GNU Coreutils
+// 9.0 added CRLF support. This repository requires LF for reproducible bytes
+// and compatibility with older tools. Bytes are written explicitly here;
+// nothing depends on a platform
 // default, an editor setting, or Git line-ending normalisation (this file is
 // a build output, never a tracked blob).
 //
@@ -87,7 +88,7 @@ export function verifyManifest(distDir, manifestFile) {
     if (b === 0x0A) report.lfBytes++;
   }
   if (report.bom) errors.push('manifest starts with a UTF-8 BOM');
-  if (report.crBytes) errors.push(`manifest contains ${report.crBytes} CR byte(s); sha256sum -c cannot read CRLF records`);
+  if (report.crBytes) errors.push(`manifest contains ${report.crBytes} CR byte(s); release manifest format requires LF line endings`);
   if (!report.finalLf) errors.push('manifest does not end with LF');
   if (report.lfBytes === 0) errors.push('manifest has no LF separators');
 

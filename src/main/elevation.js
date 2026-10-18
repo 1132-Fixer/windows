@@ -19,9 +19,8 @@
  * with the script passed in memory.
  */
 
-const fs = require('fs');
-const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const windowsTools = require('./windows-tools');
 
 const ELEVATE_RETRY_FLAG = '--self-elevate-attempted';
 const ELEVATION_PROBE_MS = 5000;
@@ -81,44 +80,29 @@ function logStage(name, extra) {
 function killTree(pid) {
   if (!pid) return;
   try {
-    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 8000 });
+    spawnSync(windowsTools.resolveTool('taskkill.exe'), ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 8000 });
   } catch (_) { /* already gone */ }
 }
 
-// %SystemRoot% is trusted only when it is an absolute directory that exists.
-// A missing or relative value (a stripped launcher environment) falls back to
-// C:\Windows. Returns null when no Windows directory can be found at all so
-// the caller reports a launch error instead of spawning a nonexistent path.
-function resolveSystemRoot(env = process.env, existsSync = fs.existsSync) {
-  const candidates = [];
-  const raw = typeof env.SystemRoot === 'string' ? env.SystemRoot.trim() : '';
-  if (raw && path.win32.isAbsolute(raw)) candidates.push(raw);
-  candidates.push('C:\\Windows');
-  for (const dir of candidates) {
-    try {
-      if (existsSync(dir)) return dir;
-    } catch (_) { /* treat as missing */ }
-  }
-  return null;
+// Elevation and repair share one trusted system-directory contract. A missing
+// Windows root is a launch error, never a reason to search PATH or the CWD.
+const resolveSystemRoot = windowsTools.resolveSystemRoot;
+
+function systemPowerShell(options) {
+  try { return windowsTools.resolveTool('powershell.exe', options); }
+  catch (_) { return null; }
 }
 
-function systemPowerShell(env = process.env, existsSync = fs.existsSync) {
-  const root = resolveSystemRoot(env, existsSync);
-  if (!root) return null;
-  return path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-}
-
-function systemWhoami(env = process.env, existsSync = fs.existsSync) {
-  const root = resolveSystemRoot(env, existsSync);
-  if (!root) return null;
-  return path.win32.join(root, 'System32', 'whoami.exe');
+function systemWhoami(options) {
+  try { return windowsTools.resolveTool('whoami.exe', options); }
+  catch (_) { return null; }
 }
 
 // In-memory -Command only (see the module header). The script is one argv
 // entry: Node quotes it for CreateProcess and PowerShell reads the whole
 // argument as the command text, so no shell ever re-parses it.
-function runPsCommand(script, timeoutMs, spawnImpl) {
-  const exe = systemPowerShell();
+function runPsCommand(script, timeoutMs, spawnImpl, toolOptions = {}) {
+  const exe = systemPowerShell(toolOptions);
   if (!exe) {
     return Promise.resolve({
       outcome: 'launch-error', timedOut: false, code: -1,
@@ -141,6 +125,7 @@ function runTimed(command, args, timeoutMs) {
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let exitObserved = false;
     let timer = null;
     let graceTimer = null;
     const started = Date.now();
@@ -159,6 +144,7 @@ function runTimed(command, args, timeoutMs) {
       return;
     }
     timer = setTimeout(() => {
+      if (exitObserved) return;
       killTree(child.pid);
       try { child.kill('SIGKILL'); } catch (_) {}
       finish({ outcome: 'timeout', timedOut: true, code: -1, error: `timeout after ${timeoutMs}ms` });
@@ -172,6 +158,11 @@ function runTimed(command, args, timeoutMs) {
     // reported a real relaunch as failed. If a grandchild holds the pipes
     // open, the grace timer settles instead of waiting forever.
     child.on('exit', (code) => {
+      exitObserved = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
       graceTimer = setTimeout(() => finish({ outcome: 'ok', timedOut: false, code, error: null }), EXIT_CLOSE_GRACE_MS);
     });
     child.on('close', (code) => finish({ outcome: 'ok', timedOut: false, code, error: null }));
@@ -241,7 +232,12 @@ function createElevationController(deps = {}) {
   const retryFlag = deps.retryFlag || ELEVATE_RETRY_FLAG;
   const probeMs = deps.probeMs || ELEVATION_PROBE_MS;
   const relaunchMs = deps.relaunchMs || UAC_RELAUNCH_MS;
+  const toolOptions = {
+    arch: deps.arch || process.arch,
+    ...(Object.prototype.hasOwnProperty.call(deps, 'getReport') ? { getReport: deps.getReport } : {})
+  };
   let memo = null;
+  let memoResult = null;
 
   // Fast path: whoami /groups prints the process token's integrity SID. It
   // is synchronous, bounded, and cannot stall on Add-Type. Packaged 6.3.0
@@ -249,14 +245,18 @@ function createElevationController(deps = {}) {
   function probeWhoamiSync() {
     const t0 = Date.now();
     try {
-      const whoami = systemWhoami();
+      const whoami = systemWhoami(toolOptions);
       if (!whoami) return null;
       const r = spawnSyncImpl(whoami, ['/groups'], {
         encoding: 'utf8',
         timeout: Math.min(probeMs, 2500),
         windowsHide: true,
-        env: process.env
+        env: deps.env || process.env
       });
+      // Output is evidence only after the process completed successfully.
+      // Timed-out or failed probes can contain stale, partial valid-looking
+      // SIDs; those must not grant elevation authority.
+      if (!r || r.status !== 0 || r.error || r.signal) return null;
       const il = parseWhoamiIntegrity((r && r.stdout) || '');
       if (il.ok) {
         logStage('elevation.whoami', `sync elevated=${il.elevated} ${Date.now() - t0}ms`);
@@ -279,23 +279,29 @@ function createElevationController(deps = {}) {
     logStage('elevation.token', 'begin');
     const fast = probeWhoamiSync();
     if (fast) return fast;
-    const ps = await runPsCommand(TOKEN_PROBE_PS, probeMs, spawnImpl);
-    const parsed = parseTokenProbe(ps.stdout);
+    const ps = await runPsCommand(TOKEN_PROBE_PS, probeMs, spawnImpl, toolOptions);
+    const completed = ps && ps.outcome === 'ok' && ps.code === 0 && !ps.timedOut && !ps.error;
+    const parsed = completed ? parseTokenProbe(ps.stdout) : { ok: false, elevated: null };
     if (parsed.ok) {
       logStage('elevation.token', `ok elevated=${parsed.elevated} ${Date.now() - t0}ms`);
       return { elevated: parsed.elevated, method: 'token-elevation', ms: Date.now() - t0, error: null };
     }
-    const err = ps.timedOut
+    const err = ps && (ps.timedOut || ps.outcome === 'timeout')
       ? 'elevation probe timed out'
-      : (ps.error || 'elevation probe returned no usable result');
+      : ((ps && ps.error) || 'elevation probe returned no usable result');
     logStage('elevation.fail', err);
     return { elevated: false, method: 'failed', ms: Date.now() - t0, error: err };
   }
 
   // Synchronous answer for the startup-status IPC. Never elevated on doubt.
   function snapshot() {
+    if (memoResult) return memoResult;
+    if (memo) {
+      return { elevated: false, method: 'failed', ms: 0, error: 'elevation probe still running' };
+    }
     const fast = probeWhoamiSync();
     if (fast) {
+      memoResult = fast;
       memo = Promise.resolve(fast);
       return fast;
     }
@@ -304,14 +310,21 @@ function createElevationController(deps = {}) {
 
   function isElevated() {
     if (memo) return memo;
-    memo = probeToken().catch((err) => ({
-      elevated: false, method: 'failed', ms: 0, error: String((err && err.message) || err)
-    }));
+    memo = probeToken().then((result) => {
+      memoResult = result;
+      return result;
+    }, (err) => {
+      memoResult = {
+        elevated: false, method: 'failed', ms: 0, error: String((err && err.message) || err)
+      };
+      return memoResult;
+    });
     return memo;
   }
 
   function resetMemoForTests() {
     memo = null;
+    memoResult = null;
   }
 
   // Asks Windows for approval and reports exactly one outcome:
@@ -331,10 +344,11 @@ function createElevationController(deps = {}) {
     });
     const script = buildRelaunchScript(exe, args);
     logStage('elevation.relaunch', 'Start-Process -Verb RunAs (no script file)');
-    const r = await runPsCommand(script, relaunchMs, spawnImpl);
+    const r = await runPsCommand(script, relaunchMs, spawnImpl, toolOptions);
     let outcome;
     if (r.outcome === 'timeout' || r.timedOut) outcome = 'timeout';
     else if (r.outcome === 'launch-error') outcome = 'launch-error';
+    else if (r.outcome !== 'ok' || r.code !== 0 || r.error) outcome = 'failed';
     else outcome = parseRelaunchOutput(r.stdout) || 'failed';
     const started = outcome === 'started';
     const declined = outcome === 'declined' || outcome === 'timeout';
@@ -379,6 +393,7 @@ module.exports = {
   buildRelaunchScript,
   resolveSystemRoot,
   systemPowerShell,
+  systemWhoami,
   runTimed,
   createElevationController,
   logStage

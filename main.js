@@ -1,11 +1,16 @@
-const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage, screen, powerMonitor } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, screen, powerMonitor } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const https = require('https');
 const crypto = require('crypto');
+const { StringDecoder } = require('string_decoder');
 const { spawn, spawnSync } = require('child_process');
+const windowsTools = require('./src/main/windows-tools');
+// System tools never use the app directory, current directory or PATH.
+const spawnWindowsTool = (name, args, opts) => spawn(windowsTools.resolveTool(name), args, opts);
+const spawnWindowsToolSync = (name, args, opts) => spawnSync(windowsTools.resolveTool(name), args, opts);
 const electronSecurity = require('./src/main/electron-security');
 electronSecurity.installIpcAllowlist(ipcMain);
 const elevation = require('./src/main/elevation');
@@ -164,7 +169,7 @@ function sendUpdateStatus(payload) {
 // Bounded registry read of the location the NSIS installer will update.
 function readRegistryValue(key, name) {
   try {
-    const r = spawnSync('reg.exe', ['query', key, '/v', name], { windowsHide: true, timeout: 5000, encoding: 'utf8' });
+    const r = spawnWindowsToolSync('reg.exe', ['query', key, '/v', name], { windowsHide: true, timeout: 5000, encoding: 'utf8' });
     if (r.status !== 0) return null;
     const m = new RegExp(`^\\s*${name}\\s+REG_\\w+\\s+(.+?)\\s*$`, 'mi').exec(r.stdout || '');
     return m ? m[1] : null;
@@ -684,7 +689,7 @@ ipcMain.handle('zoom-run-installer', async () => {
   try {
     // Deliberately NOT added to activeChildren: quitting 1132 Fixer must
     // never kill a Windows Installer transaction mid-flight.
-    const child = spawn('msiexec.exe', ['/i', file], { windowsHide: false });
+    const child = spawnWindowsTool('msiexec.exe', ['/i', file], { windowsHide: false });
     child.on('error', () => { notifyDone(-1); releaseInstaller(); });
     child.on('exit', (code) => { notifyDone(code); releaseInstaller(); });
     return { started: true };
@@ -694,10 +699,11 @@ ipcMain.handle('zoom-run-installer', async () => {
   }
 });
 
-// Tools that must exist on PATH; the destructive flow can't run without them.
+// Tools that must exist in the Windows system folder before repair starts.
 const REQUIRED_TOOLS = [
   'powershell.exe', 'taskkill.exe', 'robocopy.exe',
-  'icacls.exe', 'takeown.exe', 'net.exe', 'reg.exe'
+  'icacls.exe', 'takeown.exe', 'net.exe', 'reg.exe',
+  'sc.exe', 'attrib.exe', 'cmd.exe'
 ];
 // Tools we'd like but can survive without — surfaced as warnings.
 const OPTIONAL_TOOLS = ['quser.exe', 'logoff.exe'];
@@ -777,8 +783,11 @@ function createWindow() {
       if (inactivityCtl) inactivityCtl.activity('dialog', 'unresponsive-dialog');
     }
     if (choice === 1) {
+      if (!killActiveChildren()) {
+        console.error('fatal-path: restart blocked because child-tree termination is unproved');
+        return;
+      }
       fatalDialogShown = true;
-      killActiveChildren();
       app.relaunch();
       app.exit(1);
     }
@@ -804,13 +813,20 @@ const ELEVATE_RETRY_FLAG = elevCtl.retryFlag;
 // (launch → UAC accepted → nothing opens). A child carrying
 // ELEVATE_RETRY_FLAG retries briefly instead; every other second instance
 // still quits immediately.
+let singleInstanceLockOwned = false;
 const singleInstanceReady = (async () => {
-  if (app.requestSingleInstanceLock()) return true;
+  if (app.requestSingleInstanceLock()) {
+    singleInstanceLockOwned = true;
+    return true;
+  }
   if (!process.argv.includes(ELEVATE_RETRY_FLAG)) return false;
   const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 250));
-    if (app.requestSingleInstanceLock()) return true;
+    if (app.requestSingleInstanceLock()) {
+      singleInstanceLockOwned = true;
+      return true;
+    }
   }
   return false;
 })();
@@ -838,13 +854,27 @@ singleInstanceReady.then(got => {
 // Last relaunch outcome, reported to the renderer so "View details" can say
 // whether Windows approval was cancelled, timed out, or never asked
 // (PowerShell missing). One of: started | declined | timeout |
-// launch-error | failed | already-elevated | null.
+// launch-error | failed | already-elevated | lock-lost | null.
 let lastRelaunchOutcome = null;
+
+function reacquireSingleInstanceLock() {
+  try {
+    singleInstanceLockOwned = app.requestSingleInstanceLock() === true;
+  } catch (_) {
+    singleInstanceLockOwned = false;
+  }
+  if (!singleInstanceLockOwned) {
+    lastRelaunchOutcome = 'lock-lost';
+    shutdown.request(shutdown.REASONS.SECOND_INSTANCE);
+  }
+  return singleInstanceLockOwned;
+}
 
 async function relaunchElevated() {
   if (await isElevatedSync()) { lastRelaunchOutcome = 'already-elevated'; return false; }
   const exe = process.execPath;
   app.releaseSingleInstanceLock();
+  singleInstanceLockOwned = false;
   let started = false;
   try {
     const r = await elevCtl.relaunchElevated({
@@ -860,7 +890,7 @@ async function relaunchElevated() {
     lastRelaunchOutcome = 'failed';
     console.warn(`[startup] elevation.relaunch threw: ${(err && err.message) || err}`);
   }
-  if (!started) app.requestSingleInstanceLock();
+  if (!started) reacquireSingleInstanceLock();
   return started;
 }
 
@@ -879,6 +909,7 @@ app.whenReady().then(async () => {
       let started = false;
       try { started = await relaunchElevated(); } catch (_) { /* stay un-elevated */ }
       if (started) { shutdown.request(shutdown.REASONS.ELEVATED_RELAUNCH); return; }
+      if (!singleInstanceLockOwned) return;
     }
   }
   createWindow();
@@ -935,14 +966,18 @@ app.on('window-all-closed', () => {
   app.quit();
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   // A quit that nothing in this process asked for (OS session end, a
   // Windows-initiated close) is recorded as such; the first named reason
   // wins so an update restart is never mislabelled.
   const reason = shutdown.note(shutdown.REASONS.SYSTEM_SHUTDOWN);
   // No warning can reopen and no countdown can fire once shutdown began.
   if (inactivityCtl) inactivityCtl.dispose();
-  killActiveChildren();
+  if (!killActiveChildren()) {
+    event.preventDefault();
+    console.error('fatal-path: quit blocked because child-tree termination is unproved');
+    return;
+  }
   // A verified update the user deferred installs silently as the app exits
   // (no relaunch — the user chose to leave). Excluded for an update restart
   // (the installer is already running) and for fatal / relaunch exits.
@@ -965,37 +1000,111 @@ let fatalDialogShown = false;
 // reliably end them on Windows, and an orphaned fix child mutating accounts/
 // registry while a relaunched instance starts a second fix would mean two
 // concurrent writers on system state. Every fatal exit path kills the tracked
-// child TREE first; the fix is safe to re-run and repairs the interrupted run.
+// child TREE first. A fatal exit proceeds only after Windows confirms that
+// termination; otherwise this process keeps custody and does not relaunch.
 const activeChildren = new Set();
+const unprovedChildTrees = new WeakSet();
+const childTreeCustody = new WeakMap();
+function terminateChildTree(child) {
+  const result = {
+    treeTerminated: false,
+    taskkillStatus: null,
+    taskkillError: null,
+    taskkillSignal: null,
+    taskkillAttempts: [],
+    parentIdentifiable: false
+  };
+  const custody = child && childTreeCustody.get(child);
+  const parentIsIdentifiable = !!(custody && Number.isInteger(custody.pid) && custody.pid > 0 &&
+    !custody.exitObserved && child.exitCode === null && child.signalCode === null);
+  result.parentIdentifiable = parentIsIdentifiable;
+  if (!custody) {
+    result.taskkillError = 'unregistered-child';
+    return result;
+  }
+  if (custody.treeKillAttempted) {
+    result.taskkillError = 'retry-blocked';
+    return result;
+  }
+  if (!parentIsIdentifiable) {
+    result.taskkillError = 'parent-not-live';
+    return result;
+  }
+
+  // spawnSync blocks delivery of the child's exit event. A failed call can
+  // therefore outlive the original process while Windows reuses its numeric
+  // PID. Mark the original ChildProcess identity before the one permitted
+  // tree-kill attempt. No later path may target that PID again.
+  custody.treeKillAttempted = true;
+  const evidence = { attempt: 1, status: null, error: null, signal: null };
+  try {
+    const killed = spawnWindowsToolSync('taskkill.exe', ['/PID', String(custody.pid), '/T', '/F'], {
+      windowsHide: true,
+      timeout: 10000
+    });
+    evidence.status = Number.isInteger(killed && killed.status) ? killed.status : null;
+    evidence.error = killed && killed.error
+      ? String(killed.error.code || killed.error.name || 'process-error')
+      : null;
+    evidence.signal = killed && killed.signal ? String(killed.signal) : null;
+  } catch (err) {
+    evidence.error = String((err && (err.code || err.name)) || 'exception');
+  }
+  result.taskkillAttempts.push(evidence);
+  result.taskkillStatus = evidence.status;
+  result.taskkillError = evidence.error;
+  result.taskkillSignal = evidence.signal;
+  result.treeTerminated = evidence.status === 0 && !evidence.error && !evidence.signal;
+  return result;
+}
+
+function terminationEvidence(result) {
+  const attempts = result.taskkillAttempts.map(item =>
+    `${item.attempt}:${item.status === null ? 'none' : item.status}/${item.error || 'none'}/${item.signal || 'none'}`
+  ).join(',');
+  return `taskkillAttempts=${result.taskkillAttempts.length}[${attempts}]` +
+    ` taskkillStatus=${result.taskkillStatus === null ? 'none' : result.taskkillStatus}` +
+    ` taskkillError=${result.taskkillError || 'none'}` +
+    ` taskkillSignal=${result.taskkillSignal || 'none'}` +
+    ` parentIdentifiable=${result.parentIdentifiable}`;
+}
+
 function killActiveChildren() {
+  let allTerminated = true;
   for (const child of activeChildren) {
-    if (!child.pid) continue;
-    try {
-      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 });
-      console.warn(`fatal-path: killed child tree pid=${child.pid}`);
-    } catch (err) {
-      console.warn(`fatal-path: could not kill child pid=${child.pid}: ${err && err.message}`);
+    const result = terminateChildTree(child);
+    if (result.treeTerminated) {
+      unprovedChildTrees.delete(child);
+      activeChildren.delete(child);
+      console.warn(`fatal-path: killed child tree pid=${child.pid} ${terminationEvidence(result)}`);
+    } else {
+      unprovedChildTrees.add(child);
+      allTerminated = false;
+      console.warn(`fatal-path: retained child custody pid=${child && child.pid || 'none'} ${terminationEvidence(result)}`);
     }
   }
-  activeChildren.clear();
+  return allTerminated;
 }
 
 process.on('uncaughtException', (err) => {
   console.error('FATAL uncaughtException:', (err && err.stack) || err);
-  killActiveChildren(); // before the blocking dialog — never leave a writer running
+  const childrenStopped = killActiveChildren();
   if (!fatalDialogShown) {
     fatalDialogShown = true;
     try {
       dialog.showErrorBox(
         '1132 Fixer hit a problem it could not recover from',
-        'The app has to close. If a fix was running, run it again after ' +
-        'restarting — the fix is safe to repeat and repairs partial runs.\n\n' +
+        (childrenStopped
+          ? 'The app has to close. If a fix was running, run it again after restarting — the fix is safe to repeat and repairs partial runs.\n\n'
+          : 'Windows did not confirm that the active repair process tree stopped. ' +
+            'The app will stay open and will not start another repair. After Windows confirms the process has ended, close the app and restart it.\n\n') +
         'Start 1132 Fixer again. If this keeps happening, report it at\n' +
         'https://github.com/1132-Fixer/windows/issues\n\n' +
         `Detail for support: ${(err && err.message) || err}`
       );
     } catch (_) { /* dialog itself failed — the console line above remains */ }
   }
+  if (!childrenStopped) return;
   app.exit(1);
 });
 
@@ -1005,9 +1114,11 @@ app.on('render-process-gone', (_event, _webContents, details) => {
   if (fatalDialogShown) return;
   fatalDialogShown = true;
   const hadFix = fixInProgress;
-  killActiveChildren(); // before the blocking dialog — never leave a writer running
+  const childrenStopped = killActiveChildren();
   const fixNote = hadFix
-    ? '\n\nA fix was running — it has been stopped. Run it again after restarting; the fix is safe to repeat and repairs partial runs.'
+    ? (childrenStopped
+      ? '\n\nA fix was running — it has been stopped. Run it again after restarting; the fix is safe to repeat and repairs partial runs.'
+      : '\n\nWindows did not confirm that the repair process tree stopped. The app will stay open and will not start another repair.')
     : '';
   const choice = dialog.showMessageBoxSync({
     type: 'error',
@@ -1020,6 +1131,7 @@ app.on('render-process-gone', (_event, _webContents, details) => {
     cancelId: 1,
     noLink: true
   });
+  if (!childrenStopped) return;
   if (choice === 0) app.relaunch();
   app.exit(1);
 });
@@ -1062,16 +1174,50 @@ function sleep(ms) {
 }
 
 function runProcess(exe, args, onLine, opts = {}) {
-  const { heartbeatMs = 0, heartbeatLabel = '', timeoutMs = 0 } = opts;
+  const { heartbeatMs = 0, heartbeatLabel = '', timeoutMs = 60000, stdin = null } = opts;
   return new Promise((resolve) => {
     let stdoutBuf = '';
     let stderrBuf = '';
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
+    let settled = false;
+    let terminationUnproved = false;
     let lastOutputAt = Date.now();
     const started = Date.now();
-    const child = spawn(exe, args, { windowsHide: true });
+    let child;
+    try {
+      child = spawnWindowsTool(exe, args, { windowsHide: true });
+    } catch (err) {
+      onLine(`Failed to launch ${exe}: ${err.message}`, 'err');
+      resolve({ code: -1, stdout: '', stderr: err.message, timedOut: false, errorCode: err.code || 'launch_error' });
+      return;
+    }
     activeChildren.add(child);
+    const custody = {
+      pid: child.pid,
+      exitObserved: false,
+      treeKillAttempted: false
+    };
+    childTreeCustody.set(child, custody);
+    let killTimer = null;
+    let closeGraceTimer = null;
+    let timedOut = false;
+    let postExitErrorCode = null;
+    child.once('exit', (code) => {
+      custody.exitObserved = true;
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+      if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
+      // `close` normally follows after stdout/stderr drain. A descendant can
+      // keep inherited pipes open after the owned child exits, so bound that
+      // drain without letting the old deadline target a reused numeric PID.
+      closeGraceTimer = setTimeout(() => finish(postExitErrorCode ? -1 : code, postExitErrorCode), 500);
+    });
     const emit = (buf, kind) => {
-      const text = buf.toString();
+      if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
+      const text = (kind === 'err' ? stderrDecoder : stdoutDecoder).write(buf);
       if (kind === 'err') stderrBuf += text; else stdoutBuf += text;
       lastOutputAt = Date.now();
       text.split(/\r?\n/).forEach(line => {
@@ -1085,6 +1231,7 @@ function runProcess(exe, args, onLine, opts = {}) {
     let hbTimer = null;
     if (heartbeatMs > 0) {
       hbTimer = setInterval(() => {
+        if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
         const idleSec = Math.round((Date.now() - lastOutputAt) / 1000);
         const elapsedSec = Math.round((Date.now() - started) / 1000);
         if (idleSec >= Math.round(heartbeatMs / 1000)) {
@@ -1094,10 +1241,9 @@ function runProcess(exe, args, onLine, opts = {}) {
       }, heartbeatMs);
     }
 
-    let killTimer = null;
-    let timedOut = false;
     if (timeoutMs > 0) {
       killTimer = setTimeout(() => {
+        if (settled || custody.exitObserved) return;
         timedOut = true;
         onLine(`  TIMEOUT after ${Math.round(timeoutMs / 1000)}s — killing ${exe}`, 'err');
         // Kill the TREE, not just the direct child: the profile
@@ -1105,30 +1251,82 @@ function runProcess(exe, args, onLine, opts = {}) {
         // powershell.exe, and killing only PS orphans a recursive tool
         // mid-cycle — it keeps grinding (and holding profile handles)
         // invisibly. Same idiom as killActiveChildren.
-        try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }); } catch (_) {}
-        try { child.kill('SIGKILL'); } catch (_) {}
+        terminationUnproved = true;
+        const termination = terminateChildTree(child);
+        if (!termination.treeTerminated) {
+          unprovedChildTrees.add(child);
+          stopTimers();
+          onLine(`  BLOCKED: child-tree termination is unproved; retaining custody (${terminationEvidence(termination)})`, 'err');
+          return;
+        }
+        unprovedChildTrees.delete(child);
+        terminationUnproved = false;
+        finish(-1, 'ETIMEDOUT');
       }, timeoutMs);
     }
 
-    const cleanup = () => {
+    const stopTimers = () => {
       if (hbTimer) clearInterval(hbTimer);
       if (killTimer) clearTimeout(killTimer);
-      activeChildren.delete(child);
+      if (closeGraceTimer) clearTimeout(closeGraceTimer);
+      hbTimer = null;
+      killTimer = null;
+      closeGraceTimer = null;
     };
 
-    child.on('error', err => {
+    const cleanup = () => {
+      stopTimers();
+      unprovedChildTrees.delete(child);
+      activeChildren.delete(child);
+      childTreeCustody.delete(child);
+    };
+
+    const finish = (code, errorCode = null) => {
+      if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
+      stdoutBuf += stdoutDecoder.end();
+      stderrBuf += stderrDecoder.end();
+      settled = true;
       cleanup();
+      resolve({ code, stdout: stdoutBuf, stderr: stderrBuf, timedOut, errorCode });
+    };
+    child.on('error', err => {
+      if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
+      stderrBuf += err.message;
       onLine(`Failed to launch ${exe}: ${err.message}`, 'err');
-      resolve({ code: -1, stdout: stdoutBuf, stderr: stderrBuf, timedOut });
+      finish(-1, err.code || 'launch_error');
     });
     child.on('close', code => {
-      cleanup();
-      resolve({ code, stdout: stdoutBuf, stderr: stderrBuf, timedOut });
+      if (!terminationUnproved && !unprovedChildTrees.has(child)) {
+        finish(postExitErrorCode ? -1 : code, postExitErrorCode);
+      }
     });
+    // Caller source can contain a helper credential. It is sent through a
+    // private pipe, never embedded in PowerShell argv or a temporary script.
+    child.stdin.on('error', () => {
+      if (settled) return;
+      if (custody.exitObserved) {
+        if (!terminationUnproved && !unprovedChildTrees.has(child)) {
+          postExitErrorCode = 'stdin_failed';
+        }
+        return;
+      }
+      terminationUnproved = true;
+      const termination = terminateChildTree(child);
+      if (!termination.treeTerminated) {
+        unprovedChildTrees.add(child);
+        stopTimers();
+        onLine(`Failed to stop child after stdin failure; retaining custody (${terminationEvidence(termination)})`, 'err');
+        return;
+      }
+      unprovedChildTrees.delete(child);
+      terminationUnproved = false;
+      finish(-1, 'stdin_failed');
+    });
+    child.stdin.end(stdin === null ? undefined : stdin, 'utf8');
   });
 }
 
-// Output-side twin of the UTF-8 BOM fix below (#93 #111).
+// Keep UTF-8 input and output together in the shared transport (#93 #111).
 // Windows PowerShell 5.1 writes REDIRECTED stdout/stderr in the legacy OEM
 // codepage while runProcess decodes the pipes as UTF-8, so any non-ASCII
 // character in captured output arrived corrupted \u2014 most damagingly the
@@ -1137,25 +1335,11 @@ function runProcess(exe, args, onLine, opts = {}) {
 // \u0441\u0442\u043e\u043b", accented user names), which then fed shortcut creation a folder
 // that does not exist. Forcing the console output encoding to UTF-8 as the
 // script's first statement makes PS emit what Node decodes. try/catch: the
-// setter needs a console handle; if it ever fails we degrade to today's
-// behavior instead of breaking the script.
-const PS_UTF8_OUTPUT_PREAMBLE =
-  'try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}\r\n';
-
+// setter needs a console handle; the shared preamble falls back to UTF-8
+// stream writers when PowerShell starts without a console.
 async function runPSScript(scriptContent, onLine, opts = {}) {
-  const tmp = path.join(os.tmpdir(),
-    `fixer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
-  // UTF-8 BOM: Windows PowerShell 5.1 reads BOM-less files in the legacy
-  // system codepage, which corrupts non-ASCII install paths interpolated
-  // into the script (review P2 on custom Unicode Zoom dirs).
-  await fs.promises.writeFile(tmp, '\ufeff' + PS_UTF8_OUTPUT_PREAMBLE + scriptContent, 'utf8');
-  try {
-    return await runProcess('powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp],
-      onLine, opts);
-  } finally {
-    fs.promises.unlink(tmp).catch(() => {});
-  }
+  return runProcess('powershell.exe', windowsTools.PS_STDIN_ARGS,
+    onLine, { ...opts, stdin: windowsTools.prepareScript(scriptContent) });
 }
 
 // Zoom-launch runner. Start-Process -Credential
@@ -1163,9 +1347,8 @@ async function runPSScript(scriptContent, onLine, opts = {}) {
 // PowerShell's std handles. The old stdio:'ignore' variant existed because
 // with plain runPSScript pipes, Zoom held our stderr pipe open after PS
 // exited, so the 'close' event never fired and run-fix froze at Step 5 —
-// but 'ignore' also threw away the launcher's "Launch failed: <exception>"
-// line, leaving launch_failed diagnoses to a guess-list (#54 #58 #64 #66
-// #70 #72). This variant keeps BOTH properties:
+// but 'ignore' also threw away the launcher's bounded phase diagnostics.
+// This variant keeps BOTH properties:
 //   - detach semantics preserved: Start-Process without -Wait creates a
 //     free-standing process; PS exits right after dispatch, and we resolve
 //     on 'exit' (process ended) instead of 'close' (pipes drained), so a
@@ -1173,46 +1356,144 @@ async function runPSScript(scriptContent, onLine, opts = {}) {
 //     pipes are destroyed after a short drain race; Zoom writing to a
 //     broken pipe is the same do-nothing sink 'ignore' gave it.
 //   - the launcher's own output (written before PS exits) is captured and
-//     returned, so the exact Start-Process exception reaches the log.
+//     returned. Only a closed, non-secret phase marker reaches the log.
 // The 30s guard kills only powershell.exe (never the credential-launched
 // Zoom — child.kill targets the PS pid alone). Callers still verify launch
 // success out-of-band by polling Win32_Process — capture is evidence, the
 // poll stays the authority.
+function normalizeLaunchExceptionClass(value) {
+  const text = typeof value === 'string' ? value : '';
+  return /^[A-Za-z][A-Za-z0-9_.]{0,127}$/.test(text) ? text : 'none';
+}
+
+function normalizeLaunchInteger(value) {
+  if (!Number.isSafeInteger(value) || value < -2147483648 || value > 4294967295) return 'none';
+  return String(value);
+}
+
+function launchCaptureErrorMetadata(error) {
+  const nativeCode = normalizeLaunchInteger(error && error.errno);
+  return {
+    exceptionClass: normalizeLaunchExceptionClass(error && error.name),
+    nativeCode: nativeCode === 'none' ? null : Number(nativeCode)
+  };
+}
+
+function parseLaunchPhaseMarkers(stdout) {
+  const prefix = 'FIXER_LAUNCH_PHASE_V1 ';
+  const pattern = /^FIXER_LAUNCH_PHASE_V1 phase=(pre_launch|credential|start_process) outcome=(success|failure) exceptionClass=(none|[A-Za-z][A-Za-z0-9_.]{0,127}) hresult=(none|-?\d{1,12}) nativeCode=(none|-?\d{1,12})$/;
+  const lines = String(stdout || '').split(/\r?\n/).map(line => line.trim());
+  const candidates = lines.filter(line => line.startsWith(prefix));
+  if (!candidates.length || candidates.length > 2) return [];
+  const markers = [];
+  for (const line of candidates) {
+    const match = pattern.exec(line);
+    if (!match) return [];
+    const marker = { phase: match[1], outcome: match[2], exceptionClass: match[3], hresult: match[4], nativeCode: match[5] };
+    if (marker.outcome === 'success' &&
+        (marker.exceptionClass !== 'none' || marker.hresult !== 'none' || marker.nativeCode !== 'none')) return [];
+    markers.push(marker);
+  }
+  const credential = markers[0];
+  if (credential.phase === 'pre_launch') {
+    return credential.outcome === 'failure' && markers.length === 1 ? markers : [];
+  }
+  if (credential.phase !== 'credential') return [];
+  if (credential.outcome === 'failure') return markers.length === 1 ? markers : [];
+  if (markers.length !== 2 || markers[1].phase !== 'start_process') return [];
+  return markers;
+}
+
+function formatLaunchDiagnostics(launch) {
+  const result = launch && typeof launch === 'object' ? launch : {};
+  let markers = parseLaunchPhaseMarkers(result.stdout);
+  const exitCode = Number.isSafeInteger(result.code) ? String(result.code) : 'none';
+  const timeout = result.timedOut === true;
+  if (markers.length) {
+    const terminal = markers[markers.length - 1];
+    const exitConsistent = terminal.outcome === 'success' ? result.code === 0 : result.code !== 0;
+    if (!exitConsistent || timeout) markers = [];
+  }
+  const markerPresent = markers.length > 0;
+  if (!markerPresent) {
+    markers = [{
+      phase: 'pre_launch',
+      outcome: 'failure',
+      exceptionClass: normalizeLaunchExceptionClass(result.exceptionClass),
+      hresult: normalizeLaunchInteger(result.hresult),
+      nativeCode: normalizeLaunchInteger(result.nativeCode)
+    }];
+  }
+  return markers.map(marker =>
+    `Launch diagnostic: phase=${marker.phase} outcome=${marker.outcome}` +
+    ` exceptionClass=${marker.exceptionClass} hresult=${marker.hresult} nativeCode=${marker.nativeCode}` +
+    ` exitCode=${exitCode} timeout=${timeout} markerPresent=${markerPresent}`);
+}
+
 async function runPSScriptLaunchCapture(scriptContent) {
-  const tmp = path.join(os.tmpdir(),
-    `fixer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`);
-  // UTF-8 BOM: Windows PowerShell 5.1 reads BOM-less files in the legacy
-  // system codepage, which corrupts non-ASCII install paths interpolated
-  // into the script (review P2 on custom Unicode Zoom dirs). The output
-  // preamble keeps the captured launch-failure lines (localized exception
-  // text) decodable \u2014 same OEM-vs-UTF-8 mismatch as runPSScript.
-  await fs.promises.writeFile(tmp, '\ufeff' + PS_UTF8_OUTPUT_PREAMBLE + scriptContent, 'utf8');
   return new Promise((resolve) => {
     let stdoutBuf = '';
+    const outputDecoder = new StringDecoder('utf8');
+    const errorDecoder = new StringDecoder('utf8');
     let settled = false;
+    let exitObserved = false;
     let killTimer = null;
     let timedOut = false;
-    const child = spawn('powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', tmp],
-      { windowsHide: true });
-    child.stdout.on('data', d => { stdoutBuf += d.toString(); });
-    child.stderr.on('data', d => { stdoutBuf += d.toString(); });
+    let processErrorCode = null;
+    let processExceptionClass = 'none';
+    let processNativeCode = null;
+    let child;
+    try {
+      child = spawnWindowsTool('powershell.exe', windowsTools.PS_STDIN_ARGS, { windowsHide: true });
+    } catch (err) {
+      const metadata = launchCaptureErrorMetadata(err);
+      resolve({ code: -1, stdout: '', timedOut: false, errorCode: err.code || 'launch_error', ...metadata });
+      return;
+    }
+    child.stdout.on('data', d => { if (!settled) stdoutBuf += outputDecoder.write(d); });
+    child.stderr.on('data', d => { if (!settled) stdoutBuf += errorDecoder.write(d); });
     const settle = (code) => {
       if (settled) return;
+      stdoutBuf += outputDecoder.end() + errorDecoder.end();
       settled = true;
       if (killTimer) clearTimeout(killTimer);
       try { child.stdout.destroy(); } catch (_) {}
       try { child.stderr.destroy(); } catch (_) {}
-      fs.promises.unlink(tmp).catch(() => {});
-      resolve({ code, stdout: stdoutBuf, timedOut });
+      resolve({ code, stdout: stdoutBuf, timedOut, errorCode: processErrorCode,
+        exceptionClass: processExceptionClass, nativeCode: processNativeCode });
     };
     killTimer = setTimeout(() => {
+      if (exitObserved) return;
       timedOut = true;
       try { child.kill('SIGKILL'); } catch (_) {}
       settle(-1);
     }, 30000);
-    child.on('error', () => settle(-1));
+    child.on('error', (err) => {
+      processErrorCode = String((err && (err.code || err.name)) || 'process-error');
+      const metadata = launchCaptureErrorMetadata(err);
+      processExceptionClass = metadata.exceptionClass;
+      processNativeCode = metadata.nativeCode;
+      settle(-1);
+    });
+    child.stdin.on('error', (err) => {
+      // Once the owned launcher has exited, an inherited pipe can report a
+      // late EPIPE before close.  The exit result is authoritative: do not
+      // kill a possibly reused PID or replace that result with a stdin error.
+      if (settled || exitObserved) return;
+      processErrorCode = 'stdin-error';
+      const metadata = launchCaptureErrorMetadata(err);
+      processExceptionClass = metadata.exceptionClass;
+      processNativeCode = metadata.nativeCode;
+      try { child.kill('SIGKILL'); } catch (_) {}
+      settle(-1);
+    });
+    child.stdin.end(windowsTools.prepareScript(scriptContent), 'utf8');
     child.on('exit', (code) => {
+      exitObserved = true;
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
       // PS has exited; give any tail output one short drain race, then
       // stop waiting on pipes Zoom may hold open forever.
       const grace = setTimeout(() => settle(code), 500);
@@ -1233,26 +1514,6 @@ function isElevatedSync() {
   return elevCtl.isElevated().then((r) => r.elevated === true).catch(() => false);
 }
 
-// Bounded: `net user` can stall behind a slow Workstation/NetLogon lookup.
-// On timeout the account is reported as absent, which only makes the fix
-// take its create path — safe, because creation is idempotent.
-const USER_EXISTS_TIMEOUT_MS = 15000;
-function userExists(username) {
-  return new Promise(resolve => {
-    let settled = false;
-    const done = (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
-    const child = spawn('net.exe', ['user', username], { windowsHide: true });
-    const timer = setTimeout(() => {
-      try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
-      done(false);
-    }, USER_EXISTS_TIMEOUT_MS);
-    child.stdout.on('data', () => {});
-    child.stderr.on('data', () => {});
-    child.on('error', () => done(false));
-    child.on('close', code => done(code === 0));
-  });
-}
-
 // ============================================================
 // Preflight: required + optional tool presence, environment sanity.
 // Returns { ok, blockers: [{code,message}], warnings: [{code,message}], info: {...} }.
@@ -1269,9 +1530,12 @@ async function preflightCheck() {
   const probePromise = runPSCapture(`
     $tools = @(${allTools.map(t => `'${t}'`).join(',')})
     $r = @{}
+    $paths = @{}
     foreach ($t in $tools) {
-      try { $r[$t] = [bool](Get-Command $t -EA SilentlyContinue) } catch { $r[$t] = $false }
+      $paths[$t] = Resolve-FixerTool $t
+      $r[$t] = [bool](Test-Path -LiteralPath $paths[$t] -PathType Leaf -ErrorAction Stop)
     }
+    $r['tool_paths'] = $paths
     $svc = Get-Service seclogon -EA SilentlyContinue
     if ($svc) {
       $r['seclogon_status']    = [string]$svc.Status
@@ -1327,36 +1591,29 @@ async function preflightCheck() {
 
   // Required + optional tools + Secondary Logon service (Start-Process -Credential needs it)
   const probe = await probePromise;
-  let presence = null;
-  try {
-    const parsed = JSON.parse((probe.stdout || '').trim() || '{}');
-    if (parsed && typeof parsed === 'object') presence = parsed;
-  } catch (_) { /* presence stays null */ }
-  if (presence === null) {
-    // PS probe failed (or timed out). Treat all required tools as missing.
-    blockers.push({
-      code: probe.timedOut ? 'tool_probe_timeout' : 'tool_probe_failed',
-      message: probe.timedOut
-        ? 'PowerShell probe timed out after 20s — Windows tool inventory unavailable. Antivirus or Defender may be blocking powershell.exe. Add 1132 Fixer to your antivirus exclusions (or pause its script shield), then reopen the app to re-check.'
-        : 'PowerShell probe failed — could not verify Windows tools. Treating powershell.exe as unavailable. Restart the app once; if this repeats, check that Windows PowerShell is installed and not blocked by AppLocker or antivirus, then re-check.'
-    });
-    presence = {};
-    for (const t of REQUIRED_TOOLS) presence[t] = false;
-    for (const t of OPTIONAL_TOOLS) presence[t] = false;
-  }
-  info.tools = presence;
+  const inventory = windowsTools.parseProbe(probe, allTools);
+  info.tools = inventory.tools;
+  info.toolPaths = inventory.tool_paths || {};
+  info.toolProbe = { exitCode: probe.code, errorCode: probe.errorCode || null, timedOut: !!probe.timedOut };
   info.seclogon = {
-    status: presence.seclogon_status || 'not checked',
-    startType: presence.seclogon_starttype || 'not checked',
+    ...inventory.seclogon,
     selfHeal: 'none'
   };
-  for (const t of REQUIRED_TOOLS) {
-    if (!presence[t]) {
-      blockers.push({
-        code: 'missing_tool',
-        message: `Required Windows tool not on PATH: ${t}. It ships with Windows — an aggressive cleanup tool or a broken PATH removed it. Restore ${t} (or repair PATH under System Properties > Environment Variables), then reopen the app to re-check.`
-      });
-    }
+  if (!inventory.ok) {
+    blockers.push({
+      code: inventory.diagnostic.code,
+      message: inventory.diagnostic.code === 'tool_probe_timeout'
+        ? messages.WINDOWS_TOOLS.PROBE_TIMEOUT : messages.WINDOWS_TOOLS.PROBE_FAILED
+    });
+    // No valid inventory means unknown, not absent. Never infer service or
+    // per-tool failures from a failed process or incomplete response.
+    return { ok: false, blockers, warnings, info };
+  }
+  const missingTools = REQUIRED_TOOLS.filter(t => inventory.tools[t] === false);
+  if (missingTools.length) {
+    blockers.push({ code: 'missing_tool', tools: missingTools, message: messages.WINDOWS_TOOLS.MISSING });
+    // A missing dependency cannot be repaired by starting another tool.
+    return { ok: false, blockers, warnings, info };
   }
   // OPTIONAL_TOOLS (quser.exe, logoff.exe) ship on Windows Pro/Enterprise only;
   // absent by design on Home. tryLogoffUser gates on info.tools and falls back
@@ -1369,7 +1626,7 @@ async function preflightCheck() {
   // actually Running: a Stopped-but-startable service gets ONE bounded start
   // attempt right here, and a failed attempt is a blocker, not a warning.
   if (info.seclogon.status === 'MISSING') {
-    warnings.push({
+    blockers.push({
       code: 'seclogon_missing',
       message: 'Secondary Logon service (seclogon) not found. Launching Zoom as user1 will likely fail.'
     });
@@ -1381,7 +1638,7 @@ async function preflightCheck() {
   } else if (info.seclogon.status !== 'Running' && elevated &&
              (info.seclogon.startType === 'Manual' || info.seclogon.startType === 'Automatic')) {
     const heal = await runPSCapture(`
-      $null = & sc.exe start seclogon 2>&1
+      $null = & (Resolve-FixerTool 'sc.exe') start seclogon 2>&1
       $deadline = [DateTime]::UtcNow.AddSeconds(8)
       do {
         try { if ((Get-Service seclogon -EA Stop).Status -eq 'Running') { Write-Output 'SECLOGON_HEAL=RUNNING'; exit 0 } } catch {}
@@ -1391,7 +1648,7 @@ async function preflightCheck() {
       try { $st = [string](Get-Service seclogon -EA Stop).Status } catch { $st = 'unreadable' }
       Write-Output ('SECLOGON_HEAL=FAILED=' + $st)
     `, { timeoutMs: 10000 });
-    if (/SECLOGON_HEAL=RUNNING/.test(heal.stdout || '')) {
+    if (heal.code === 0 && !heal.timedOut && /^SECLOGON_HEAL=RUNNING\s*$/m.test(heal.stdout || '')) {
       info.seclogon.status = 'Running';
       info.seclogon.selfHeal = 'started';
     } else {
@@ -1406,7 +1663,7 @@ async function preflightCheck() {
   } else if (info.seclogon.status !== 'Running') {
     // Residual states only: not elevated (the not_elevated blocker already
     // gates the fix) or an unexpected StartType we cannot self-heal.
-    warnings.push({
+    blockers.push({
       code: 'seclogon_not_running',
       message: `Secondary Logon service is ${info.seclogon.status}/${info.seclogon.startType} and was not started. Launching Zoom as ${FIX_USER} may fail until it runs.`
     });
@@ -1432,7 +1689,7 @@ async function tryLogoffUser(username, toolPresence, send) {
     $u = '${username}'
     $sessions = @()
     try {
-      $raw = quser 2>$null
+      $raw = & (Resolve-FixerTool 'quser.exe') 2>$null
       $lec = $LASTEXITCODE
       if ($lec -ne 0 -and -not $raw) {
         Write-Output ("QUSER_EXIT=" + $lec)
@@ -1454,7 +1711,7 @@ async function tryLogoffUser(username, toolPresence, send) {
     $loggedOff = 0
     foreach ($sid in $sessions) {
       try {
-        logoff $sid 2>&1 | Out-Null
+        & (Resolve-FixerTool 'logoff.exe') $sid 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) { $loggedOff += 1 }
         else { Write-Output ("LOGOFF_FAIL=" + $sid + ":" + $LASTEXITCODE) }
       } catch {
@@ -1495,54 +1752,398 @@ async function tryLogoffUser(username, toolPresence, send) {
 }
 
 // ============================================================
-// Resolve the user's SID via NTAccount translation.
-// Returns '' if not resolvable.
+// Resolve exactly one local-machine account SID. A domain account with the
+// same leaf name is not the helper account. A SID from the deleted account
+// generation is also not valid after recreation.
 // ============================================================
-async function resolveSID(username) {
+async function readLocalAccountIdentity(username) {
+  const failed = { verified: false, exists: false, sid: '' };
+  const userLiteral = String(username || '').replace(/'/g, "''");
   const r = await runPSCapture(`
-    try { (New-Object System.Security.Principal.NTAccount('${username}')).Translate([System.Security.Principal.SecurityIdentifier]).Value }
-    catch { '' }
-  `);
-  return (r.stdout || '').trim();
+    $u = '${userLiteral}'
+    $accounts = @()
+    try {
+      $filter = "Name='" + $u.Replace("'", "''") + "'"
+      $accounts = @(Get-CimInstance Win32_UserAccount -Filter $filter -EA Stop |
+        ForEach-Object {
+          [pscustomobject]@{
+            name = [string]$_.Name
+            domain = [string]$_.Domain
+            localAccount = [bool]$_.LocalAccount
+            sid = [string]$_.SID
+          }
+        })
+    } catch { exit 1 }
+    [pscustomobject]@{
+      machine = [System.Environment]::MachineName
+      accounts = @($accounts)
+    } | ConvertTo-Json -Compress -Depth 3
+  `, { timeoutMs: 15000 });
+  if (r.timedOut || r.code !== 0) return failed;
+  try {
+    const payload = JSON.parse((r.stdout || '').trim());
+    const machine = payload && typeof payload.machine === 'string' ? payload.machine : '';
+    if (!payload || typeof payload !== 'object' || !machine ||
+        !Object.prototype.hasOwnProperty.call(payload, 'accounts')) return failed;
+    const rawAccounts = payload.accounts;
+    const accounts = Array.isArray(rawAccounts)
+      ? rawAccounts
+      : (rawAccounts === null ? [] : [rawAccounts]);
+    if (accounts.some(account => !account || typeof account !== 'object' ||
+        typeof account.name !== 'string' || typeof account.domain !== 'string' ||
+        typeof account.localAccount !== 'boolean' || typeof account.sid !== 'string')) return failed;
+    const matches = accounts.filter(account => account.localAccount === true &&
+      String(account.name || '').toLowerCase() === String(username || '').toLowerCase() &&
+      String(account.domain || '').toLowerCase() === machine.toLowerCase());
+    if (matches.length > 1) return failed;
+    if (matches.length === 0) return { verified: true, exists: false, sid: '' };
+    if (!/^S-1-5-21-(?:[0-9]+-){3}[0-9]+$/i.test(matches[0].sid)) return failed;
+    return { verified: true, exists: true, sid: matches[0].sid };
+  } catch (_) {
+    return failed;
+  }
+}
+
+async function resolveSID(username, staleSid = '') {
+  const identity = await readLocalAccountIdentity(username);
+  if (!identity.verified || !identity.exists) return '';
+  if (staleSid && identity.sid.toLowerCase() === String(staleSid).toLowerCase()) return '';
+  return identity.sid;
+}
+
+// Delete one local account generation by SID. A name is only a receipt
+// field: it never selects the mutation target. The script emits exactly one
+// closed JSON receipt and never copies command errors or account data to it.
+function exactSidLocalUserDeleteScript(expectedSid, expectedName, trustedModuleRoot = '') {
+  const sidLiteral = String(expectedSid || '').replace(/'/g, "''");
+  const nameLiteral = String(expectedName || '').replace(/'/g, "''");
+  const moduleRootLiteral = String(trustedModuleRoot || '').replace(/'/g, "''");
+  const moduleRootExpression = moduleRootLiteral
+    ? `'${moduleRootLiteral}'`
+    : "(Join-Path $PSHOME 'Modules\\Microsoft.PowerShell.LocalAccounts')";
+  return String.raw`
+    $ErrorActionPreference = 'Stop'
+    $expectedSidText = '${sidLiteral}'
+    $expectedName = '${nameLiteral}'
+    $pre = 'unknown'
+    $deletion = 'not-run'
+    $expectedSidPost = 'unknown'
+    $namePost = 'unknown'
+    try {
+      if ($expectedSidText -notmatch '^S-1-5-21-(?:[0-9]+-){3}[0-9]+$') { throw 'invalid SID' }
+      $trustedModuleRoot = [IO.Path]::GetFullPath(${moduleRootExpression}).TrimEnd('\')
+      $trustedPrefix = $trustedModuleRoot + '\'
+      $trustedManifests = @([IO.Directory]::GetFiles(
+        $trustedModuleRoot,
+        'Microsoft.PowerShell.LocalAccounts.psd1',
+        [IO.SearchOption]::AllDirectories) | Where-Object {
+          [IO.Path]::GetFullPath([string]$_).StartsWith($trustedPrefix, [StringComparison]::OrdinalIgnoreCase)
+        })
+      if ($trustedManifests.Count -ne 1) { throw 'trusted LocalAccounts module is unavailable or ambiguous' }
+      $trustedManifest = [IO.Path]::GetFullPath([string]$trustedManifests[0])
+      $trustedModuleBase = [IO.Path]::GetFullPath([IO.Path]::GetDirectoryName($trustedManifest)).TrimEnd('\')
+      if (-not $trustedModuleBase.StartsWith($trustedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'trusted LocalAccounts module escaped its root'
+      }
+      $loaded = @(Import-Module -Name $trustedManifest -Force -PassThru -EA Stop)
+      $exactModules = @($loaded | Where-Object {
+        $_ -and [IO.Path]::GetFullPath([string]$_.ModuleBase).TrimEnd('\') -ieq $trustedModuleBase
+      })
+      if ($exactModules.Count -ne 1) { throw 'trusted LocalAccounts module identity is ambiguous' }
+      $getLocalUser = $exactModules[0].ExportedCommands['Get-LocalUser']
+      $removeLocalUser = $exactModules[0].ExportedCommands['Remove-LocalUser']
+      if ($null -eq $getLocalUser -or $null -eq $removeLocalUser -or
+          [IO.Path]::GetFullPath([string]$getLocalUser.Module.ModuleBase).TrimEnd('\') -ine $trustedModuleBase -or
+          [IO.Path]::GetFullPath([string]$removeLocalUser.Module.ModuleBase).TrimEnd('\') -ine $trustedModuleBase) {
+        throw 'trusted LocalAccounts commands are unavailable'
+      }
+      $expectedSid = [System.Security.Principal.SecurityIdentifier]::new($expectedSidText)
+      $before = @(& $getLocalUser -EA Stop)
+      $sidMatches = @($before | Where-Object { $_.SID -and [string]$_.SID.Value -ieq $expectedSidText })
+      $nameMatches = @($before | Where-Object { [string]$_.Name -ieq $expectedName })
+      if ($sidMatches.Count -eq 1 -and [string]$sidMatches[0].Name -ieq $expectedName -and
+          $nameMatches.Count -eq 1 -and [string]$nameMatches[0].SID.Value -ieq $expectedSidText) {
+        $pre = 'exact'
+        try {
+          & $removeLocalUser -SID $expectedSid -Confirm:$false -EA Stop
+          $deletion = 'success'
+        } catch {
+          $deletion = 'failed'
+        }
+      } else {
+        $pre = 'mismatch'
+      }
+      try {
+        $after = @(& $getLocalUser -EA Stop)
+        $sidAfter = @($after | Where-Object { $_.SID -and [string]$_.SID.Value -ieq $expectedSidText })
+        $nameAfter = @($after | Where-Object { [string]$_.Name -ieq $expectedName })
+        $expectedSidPost = if ($sidAfter.Count -eq 0) { 'absent' } else { 'present' }
+        if ($nameAfter.Count -eq 0) { $namePost = 'absent' }
+        elseif ($nameAfter.Count -ne 1) { $namePost = 'ambiguous' }
+        elseif ([string]$nameAfter[0].SID.Value -ieq $expectedSidText) { $namePost = 'expected' }
+        else { $namePost = 'replacement' }
+      } catch {
+        $expectedSidPost = 'unknown'
+        $namePost = 'unknown'
+      }
+    } catch {
+      $pre = 'unknown'
+    }
+    [ordered]@{
+      marker = 'FIXER_LOCAL_USER_DELETE_V1'
+      pre = $pre
+      deletion = $deletion
+      expectedSidPost = $expectedSidPost
+      namePost = $namePost
+    } | ConvertTo-Json -Compress
+    if ($pre -eq 'exact' -and $deletion -eq 'success' -and
+        $expectedSidPost -eq 'absent' -and $namePost -eq 'absent') { exit 0 }
+    exit 1
+  `;
+}
+
+function exactSidLocalUserDeleteProved(result) {
+  if (!result || result.timedOut || result.code !== 0 || typeof result.stdout !== 'string') return false;
+  const text = result.stdout.trim();
+  if (!text || text.includes('\n') || text.includes('\r')) return false;
+  try {
+    const receipt = JSON.parse(text);
+    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) ||
+        Object.keys(receipt).sort().join(',') !== 'deletion,expectedSidPost,marker,namePost,pre') return false;
+    return receipt.marker === 'FIXER_LOCAL_USER_DELETE_V1' && receipt.pre === 'exact' &&
+      receipt.deletion === 'success' && receipt.expectedSidPost === 'absent' && receipt.namePost === 'absent';
+  } catch (_) {
+    return false;
+  }
+}
+
+// Disable one local account generation by its exact SID before destructive
+// profile work. This keeps the SID as retry authority while preventing a new
+// helper logon from reopening the profile during quarantine. The trusted OS
+// module is bound by its versioned manifest and exported command identities.
+const PS_EXACT_SID_LOCAL_USER_DISABLE_HELPER = String.raw`
+function Disable-FixerLocalUserBySid {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)][string]$ExpectedSid,
+    [Parameter(Mandatory=$true)][string]$ExpectedName,
+    [string]$TrustedModuleRoot = ''
+  )
+  if ($ExpectedSid -notmatch '^S-1-5-21-(?:[0-9]+-){3}[0-9]+$' -or
+      [string]::IsNullOrWhiteSpace($ExpectedName)) {
+    throw 'invalid local account identity'
+  }
+  if ([string]::IsNullOrWhiteSpace($TrustedModuleRoot)) {
+    $TrustedModuleRoot = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.LocalAccounts'
+  }
+  $trustedRoot = [IO.Path]::GetFullPath($TrustedModuleRoot).TrimEnd('\')
+  $trustedPrefix = $trustedRoot + '\'
+  $trustedManifests = @([IO.Directory]::GetFiles(
+    $trustedRoot,
+    'Microsoft.PowerShell.LocalAccounts.psd1',
+    [IO.SearchOption]::AllDirectories) | Where-Object {
+      [IO.Path]::GetFullPath([string]$_).StartsWith($trustedPrefix, [StringComparison]::OrdinalIgnoreCase)
+    })
+  if ($trustedManifests.Count -ne 1) { throw 'trusted LocalAccounts module is unavailable or ambiguous' }
+  $trustedManifest = [IO.Path]::GetFullPath([string]$trustedManifests[0])
+  $trustedModuleBase = [IO.Path]::GetFullPath([IO.Path]::GetDirectoryName($trustedManifest)).TrimEnd('\')
+  if (-not $trustedModuleBase.StartsWith($trustedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'trusted LocalAccounts module escaped its root'
+  }
+  $loaded = @(Import-Module -Name $trustedManifest -Force -PassThru -EA Stop)
+  $exactModules = @($loaded | Where-Object {
+    $_ -and [IO.Path]::GetFullPath([string]$_.ModuleBase).TrimEnd('\') -ieq $trustedModuleBase
+  })
+  if ($exactModules.Count -ne 1) { throw 'trusted LocalAccounts module identity is ambiguous' }
+  $getLocalUser = $exactModules[0].ExportedCommands['Get-LocalUser']
+  $disableLocalUser = $exactModules[0].ExportedCommands['Disable-LocalUser']
+  if ($null -eq $getLocalUser -or $null -eq $disableLocalUser -or
+      [IO.Path]::GetFullPath([string]$getLocalUser.Module.ModuleBase).TrimEnd('\') -ine $trustedModuleBase -or
+      [IO.Path]::GetFullPath([string]$disableLocalUser.Module.ModuleBase).TrimEnd('\') -ine $trustedModuleBase) {
+    throw 'trusted LocalAccounts commands are unavailable'
+  }
+  $before = @(& $getLocalUser -EA Stop)
+  $sidMatches = @($before | Where-Object { $_.SID -and [string]$_.SID.Value -ieq $ExpectedSid })
+  $nameMatches = @($before | Where-Object { [string]$_.Name -ieq $ExpectedName })
+  if ($sidMatches.Count -ne 1 -or [string]$sidMatches[0].Name -ine $ExpectedName -or
+      $nameMatches.Count -ne 1 -or [string]$nameMatches[0].SID.Value -ine $ExpectedSid) {
+    throw 'exact local account identity changed before disable'
+  }
+  $enabledProperty = $sidMatches[0].PSObject.Properties['Enabled']
+  if ($null -eq $enabledProperty -or $enabledProperty.Value -isnot [bool]) {
+    throw 'exact local account enabled state is unavailable'
+  }
+  if ([bool]$enabledProperty.Value) {
+    $expectedSidObject = [System.Security.Principal.SecurityIdentifier]::new($ExpectedSid)
+    & $disableLocalUser -SID $expectedSidObject -Confirm:$false -EA Stop | Out-Null
+  }
+  $after = @(& $getLocalUser -EA Stop)
+  $sidAfter = @($after | Where-Object { $_.SID -and [string]$_.SID.Value -ieq $ExpectedSid })
+  $nameAfter = @($after | Where-Object { [string]$_.Name -ieq $ExpectedName })
+  $enabledAfter = if ($sidAfter.Count -eq 1) { $sidAfter[0].PSObject.Properties['Enabled'] } else { $null }
+  if ($sidAfter.Count -ne 1 -or $null -eq $enabledAfter -or $enabledAfter.Value -isnot [bool] -or
+      [bool]$enabledAfter.Value -or
+      [string]$sidAfter[0].Name -ine $ExpectedName -or $nameAfter.Count -ne 1 -or
+      [string]$nameAfter[0].SID.Value -ine $ExpectedSid) {
+    throw 'exact local account disable was not proved'
+  }
+}
+`;
+
+function exactSidLocalUserDisableScript(expectedSid, expectedName, trustedModuleRoot = '') {
+  const sidLiteral = String(expectedSid || '').replace(/'/g, "''");
+  const nameLiteral = String(expectedName || '').replace(/'/g, "''");
+  const rootLiteral = String(trustedModuleRoot || '').replace(/'/g, "''");
+  const rootArgument = rootLiteral ? ` -TrustedModuleRoot '${rootLiteral}'` : '';
+  return String.raw`
+    ${PS_EXACT_SID_LOCAL_USER_DISABLE_HELPER}
+    $ErrorActionPreference = 'Stop'
+    $pre = 'unknown'
+    $disable = 'not-run'
+    $expectedSidPost = 'unknown'
+    $namePost = 'unknown'
+    try {
+      Disable-FixerLocalUserBySid -ExpectedSid '${sidLiteral}' -ExpectedName '${nameLiteral}'${rootArgument}
+      $pre = 'exact'
+      $disable = 'success'
+      $expectedSidPost = 'disabled'
+      $namePost = 'expected'
+    } catch {}
+    [ordered]@{
+      marker = 'FIXER_LOCAL_USER_DISABLE_V1'
+      pre = $pre
+      disable = $disable
+      expectedSidPost = $expectedSidPost
+      namePost = $namePost
+    } | ConvertTo-Json -Compress
+    if ($pre -eq 'exact' -and $disable -eq 'success' -and
+        $expectedSidPost -eq 'disabled' -and $namePost -eq 'expected') { exit 0 }
+    exit 1
+  `;
+}
+
+function exactSidLocalUserDisableProved(result) {
+  if (!result || result.timedOut || result.code !== 0 || typeof result.stdout !== 'string') return false;
+  const text = result.stdout.trim();
+  if (!text || text.includes('\n') || text.includes('\r')) return false;
+  try {
+    const receipt = JSON.parse(text);
+    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) ||
+        Object.keys(receipt).sort().join(',') !== 'disable,expectedSidPost,marker,namePost,pre') return false;
+    return receipt.marker === 'FIXER_LOCAL_USER_DISABLE_V1' && receipt.pre === 'exact' &&
+      receipt.disable === 'success' && receipt.expectedSidPost === 'disabled' && receipt.namePost === 'expected';
+  } catch (_) {
+    return false;
+  }
+}
+
+// Retain a native Process handle before the second owner-SID check. Windows
+// cannot reuse that process identity while the handle is held, so Kill never
+// acts on a later process that inherited the same numeric PID.
+const PS_EXACT_SID_PROCESS_STOP_HELPER = String.raw`
+function Stop-FixerOwnedProcessBySid {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)]$Candidate,
+    [Parameter(Mandatory=$true)][string]$ExpectedSid
+  )
+  if ($ExpectedSid -notmatch '^S-1-5-21-(?:[0-9]+-){3}[0-9]+$') {
+    throw 'invalid process owner SID'
+  }
+  $processId = [int]$Candidate.ProcessId
+  if ($processId -le 0 -or $null -eq $Candidate.CreationDate) {
+    throw 'process identity is incomplete'
+  }
+  $candidateCreation = ([DateTime]$Candidate.CreationDate).ToUniversalTime().Ticks
+  $heldProcess = $null
+  try {
+    try { $heldProcess = [System.Diagnostics.Process]::GetProcessById($processId) }
+    catch [System.ArgumentException] { return 'GONE' }
+    $heldHandle = $heldProcess.SafeHandle
+    if ($null -eq $heldHandle -or $heldHandle.IsInvalid -or $heldHandle.IsClosed) {
+      throw 'process handle custody is unavailable'
+    }
+    $refreshed = @(Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $processId) -EA Stop)
+    if ($refreshed.Count -eq 0) { return 'GONE' }
+    if ($refreshed.Count -ne 1 -or [int]$refreshed[0].ProcessId -ne $processId -or
+        $null -eq $refreshed[0].CreationDate -or
+        ([DateTime]$refreshed[0].CreationDate).ToUniversalTime().Ticks -ne $candidateCreation) {
+      throw 'process identity changed before termination'
+    }
+    $owner = Invoke-CimMethod -InputObject $refreshed[0] -MethodName GetOwnerSid -EA Stop
+    if (-not $owner -or $owner.ReturnValue -ne 0 -or -not $owner.Sid -or
+        [string]$owner.Sid -ine $ExpectedSid) {
+      throw 'process owner changed before termination'
+    }
+    if ($heldProcess.HasExited) { return 'GONE' }
+    $heldProcess.Kill()
+    if (-not $heldProcess.WaitForExit(2000)) {
+      throw 'owned process termination was not proved'
+    }
+    return 'TERMINATED'
+  } finally {
+    if ($null -ne $heldProcess) { $heldProcess.Dispose() }
+  }
+}
+`;
+
+// After the exact local SID is disabled, the final pass is observation-only.
+// Any residual or uncertain owner keeps cleanup blocked; no bare PID is ever
+// targeted in this race-sensitive window.
+function exactSidFinalDrainScript(expectedSid) {
+  const sidLiteral = String(expectedSid || '').replace(/'/g, "''");
+  return String.raw`
+    $sid = '${sidLiteral}'
+    $deadline = [DateTime]::UtcNow.AddSeconds(6)
+    $state = 'UNKNOWN'
+    try {
+      do {
+        $owned = [System.Collections.Generic.List[object]]::new()
+        $unknown = $false
+        foreach ($process in @(Get-CimInstance Win32_Process -EA Stop)) {
+          $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -EA Stop
+          if (-not $owner -or $owner.ReturnValue -ne 0 -or -not $owner.Sid) {
+            $unknown = $true
+            continue
+          }
+          if ([string]$owner.Sid -ieq $sid) { $owned.Add($process) }
+        }
+        if ($unknown) { throw 'process owner inventory is incomplete' }
+        if ($owned.Count -eq 0) { $state = 'CLEAR'; break }
+        Start-Sleep -Milliseconds 250
+      } while ([DateTime]::UtcNow -lt $deadline)
+      if ($state -ne 'CLEAR') { $state = 'RESIDUAL' }
+    } catch { $state = 'UNKNOWN' }
+    Write-Output ('FIXER_HELPER_FINAL_DRAIN_V1=' + $state)
+    if ($state -eq 'CLEAR') { exit 0 }
+    exit 1
+  `;
 }
 
 // ============================================================
-// Check whether user is in local Administrators (S-1-5-32-544) by SID.
-// Falls back to `net localgroup` parsing. Returns { inGroup, method, raw }.
+// Check whether the exact local-account SID is in Administrators
+// (S-1-5-32-544). Returns an explicit verification state; a same-name domain
+// principal must never stand in for the helper account.
 // user1 must NOT be a member (SEC-A6) — the fix flow uses this to detect
 // a legacy admin user1 and to confirm the membership removal took.
 // ============================================================
-async function verifyAdminMembership(username) {
-  // SID translation happens INSIDE the same PS process — a separate
-  // resolveSID() round trip costs a full powershell.exe startup.
+async function verifyAdminMembership(expectedSid) {
+  const sidLiteral = String(expectedSid || '').replace(/'/g, "''");
   const r = await runPSCapture(`
-    $user = '${username}'
-    $userSid = ''
-    try { $userSid = (New-Object System.Security.Principal.NTAccount($user)).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}
-    $result = 'NO'
+    $userSid = '${sidLiteral}'
+    $result = 'UNKNOWN'
     $method = 'none'
     try {
       $members = Get-LocalGroupMember -SID 'S-1-5-32-544' -EA Stop
       $method = 'Get-LocalGroupMember'
+      $result = 'NO'
       foreach ($m in $members) {
         $mSid = $null
         try { $mSid = $m.SID.Value } catch {}
         if ($mSid -and $userSid -and ($mSid -eq $userSid)) { $result = 'YES'; break }
-        if ($m.Name -ieq $user) { $result = 'YES'; break }
-        if ($m.Name -like ('*\\' + $user)) { $result = 'YES'; break }
       }
     } catch {
-      try {
-        $out = (net localgroup administrators) 2>&1 | Out-String
-        $method = 'net-localgroup'
-        $lines = $out -split "\`r?\`n"
-        foreach ($l in $lines) {
-          $t = $l.Trim()
-          if ($t -ieq $user -or $t -like ('*\\' + $user)) { $result = 'YES'; break }
-        }
-      } catch {
-        $method = 'failed'
-      }
+      $method = 'failed'
     }
     Write-Output ("METHOD=" + $method)
     Write-Output ("RESULT=" + $result)
@@ -1555,93 +2156,771 @@ async function verifyAdminMembership(username) {
     else if (l.startsWith('RESULT=')) result = l.slice(7);
     else if (l.startsWith('SID=')) sid = l.slice(4);
   }
-  return { inGroup: result === 'YES', method, sid };
+  const verified = !r.timedOut && r.code === 0 && method === 'Get-LocalGroupMember' &&
+    (result === 'YES' || result === 'NO') && !!sid &&
+    sid.toLowerCase() === String(expectedSid || '').toLowerCase();
+  return { inGroup: verified && result === 'YES', method, sid, verified };
 }
 
-// ============================================================
-// Profile resolution: registry ProfileImagePath first, folder scan fallback.
-// Polls up to maxWaitSec. One consolidated PS call per iteration to keep
-// total wall-clock close to the target wait.
-// Returns { path, source, checkedPaths, checkedKeys, sid }.
-// ============================================================
-async function resolveUserProfilePath(username, maxWaitSec, send) {
-  const checkedPaths = [];
-  const checkedKeys = [];
-  const literal = `C:\\Users\\${username}`;
+// Resolve a local directory to an OS object identity, not only path text.
+// ProfileList paths are untrusted registry data. The helper rejects UNC and
+// device namespaces, opens every component without following reparse points,
+// and returns the final handle path plus {volume serial, 128-bit file ID}.
+// Empty output means a genuinely absent path. Every other lookup failure is
+// terminating so cleanup never falls back to a name or lexical alias.
+const PS_PROFILE_PATH_IDENTITY_HELPER = String.raw`
+if (-not ('FixerProfileIdentityV1' -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
 
-  // The whole poll loop runs INSIDE one PowerShell process. The old
-  // spawn-per-tick design paid ~0.5-1s of powershell.exe startup per second
-  // of wait, roughly doubling the effective interval and burning up to 30
-  // spawns. Internal loop: one spawn, 500ms ticks, same output protocol.
-  //
-  // Use [System.IO.File]::Exists instead of Test-Path: Test-Path throws on
-  // access-denied NTFS ACLs (which the freshly-created user1 profile commonly
-  // has against the calling admin account), whereas File.Exists returns false.
-  const script = `
-    $u = '${username}'
-    $literal = '${literal.replace(/'/g, "''")}'
-    $deadline = [DateTime]::UtcNow.AddSeconds(${Math.max(1, maxWaitSec)})
-    $sid = ''; $key = ''; $lastReg = ''; $match = ''
+public static class FixerProfileIdentityV1 {
+  private const uint FILE_SHARE_ALL = 0x00000007;
+  private const uint FILE_SHARE_READ_WRITE = 0x00000003;
+  private const uint DELETE_ACCESS = 0x00010000;
+  private const uint FILE_READ_ATTRIBUTES = 0x00000080;
+  private const uint OPEN_EXISTING = 3;
+  private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+  private const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+  private const uint FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
+  private const uint FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
+  private const int FILE_ATTRIBUTE_TAG_INFO_CLASS = 9;
+  private const int FILE_ID_INFO_CLASS = 18;
+  private const int FILE_RENAME_INFO_CLASS = 3;
+  private const int FILE_DISPOSITION_INFO_CLASS = 4;
 
-    function Profile-Has-NTUserDat([string]$dir) {
-      if (-not $dir) { return $false }
-      try { return [System.IO.File]::Exists((Join-Path $dir 'NTUSER.DAT')) } catch { return $false }
+  [StructLayout(LayoutKind.Sequential)]
+  private struct FILE_ATTRIBUTE_TAG_INFO {
+    public uint FileAttributes;
+    public uint ReparseTag;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct FILE_ID_128 {
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+    public byte[] Identifier;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct FILE_ID_INFO {
+    public ulong VolumeSerialNumber;
+    public FILE_ID_128 FileId;
+  }
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern SafeFileHandle CreateFileW(
+    string fileName, uint desiredAccess, uint shareMode, IntPtr securityAttributes,
+    uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
+
+  [DllImport("kernel32.dll", EntryPoint = "GetFileInformationByHandleEx", SetLastError = true)]
+  private static extern bool GetFileAttributeTagInfo(
+    SafeFileHandle handle, int infoClass, out FILE_ATTRIBUTE_TAG_INFO info, uint size);
+
+  [DllImport("kernel32.dll", EntryPoint = "GetFileInformationByHandleEx", SetLastError = true)]
+  private static extern bool GetFileIdInfo(
+    SafeFileHandle handle, int infoClass, out FILE_ID_INFO info, uint size);
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern uint GetFinalPathNameByHandleW(
+    SafeFileHandle handle, StringBuilder path, uint size, uint flags);
+
+  [DllImport("kernel32.dll", EntryPoint = "SetFileInformationByHandle", SetLastError = true)]
+  private static extern bool SetFileInformationByHandle(
+    SafeFileHandle handle, int infoClass, IntPtr info, uint size);
+
+  private static SafeFileHandle OpenNoFollow(string path, out int error) {
+    SafeFileHandle handle = CreateFileW(path, 0, FILE_SHARE_ALL, IntPtr.Zero,
+      OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, IntPtr.Zero);
+    error = handle.IsInvalid ? Marshal.GetLastWin32Error() : 0;
+    return handle;
+  }
+
+  private static string DescribeDirectoryHandle(SafeFileHandle handle, bool includeResolvedPath) {
+    FILE_ATTRIBUTE_TAG_INFO tag;
+    if (!GetFileAttributeTagInfo(handle, FILE_ATTRIBUTE_TAG_INFO_CLASS, out tag,
+        (uint)Marshal.SizeOf(typeof(FILE_ATTRIBUTE_TAG_INFO)))) {
+      throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+    if ((tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+      throw new IOException("profile path contains a reparse point");
+    }
+    if ((tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+      throw new IOException("profile path is not a directory");
+    }
+    FILE_ID_INFO id;
+    if (!GetFileIdInfo(handle, FILE_ID_INFO_CLASS, out id,
+        (uint)Marshal.SizeOf(typeof(FILE_ID_INFO)))) {
+      throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+    if (id.FileId.Identifier == null || id.FileId.Identifier.Length != 16) {
+      throw new IOException("profile file identity is incomplete");
+    }
+    string identity = id.VolumeSerialNumber.ToString("X16") + ":" +
+      BitConverter.ToString(id.FileId.Identifier).Replace("-", String.Empty);
+    if (!includeResolvedPath) return identity;
+    var finalPath = new StringBuilder(32768);
+    uint length = GetFinalPathNameByHandleW(handle, finalPath, (uint)finalPath.Capacity, 0);
+    if (length == 0 || length >= finalPath.Capacity) {
+      throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+    string resolved = finalPath.ToString();
+    if (resolved.StartsWith(@"\\?\", StringComparison.Ordinal)) resolved = resolved.Substring(4);
+    return identity + "|" + resolved;
+  }
+
+  private static string DescribeDirectoryHandle(SafeFileHandle handle) {
+    return DescribeDirectoryHandle(handle, true);
+  }
+
+  private static void RequireIdentity(string actualIdentity, string expectedIdentity) {
+    if (!String.Equals(actualIdentity, expectedIdentity, StringComparison.Ordinal)) {
+      throw new IOException("receipt-identity");
+    }
+  }
+
+  private static void RequireReceipt(string receipt, string expectedIdentity, string expectedResolvedPath) {
+    string[] parts = receipt.Split(new char[] { '|' }, 2);
+    if (parts.Length != 2) throw new IOException("receipt-format");
+    if (!String.Equals(parts[0], expectedIdentity, StringComparison.Ordinal)) {
+      throw new IOException("receipt-identity");
+    }
+    if (!String.Equals(Path.GetFullPath(parts[1]), Path.GetFullPath(expectedResolvedPath),
+        StringComparison.OrdinalIgnoreCase)) throw new IOException("receipt-path");
+  }
+
+  private static void RequireQuarantinedState(
+      SafeFileHandle heldHandle, string expectedIdentity, string originalPath,
+      string plannedQuarantinePath) {
+    RequireIdentity(DescribeDirectoryHandle(heldHandle, false), expectedIdentity);
+    string destinationReceipt = Inspect(plannedQuarantinePath);
+    if (String.IsNullOrEmpty(destinationReceipt)) {
+      throw new IOException("receipt-destination-absent");
+    }
+    RequireReceipt(destinationReceipt, expectedIdentity, plannedQuarantinePath);
+    if (!String.IsNullOrEmpty(Inspect(originalPath))) {
+      throw new IOException("receipt-original-present");
+    }
+  }
+
+  private static bool DirectoryIsEmpty(string path) {
+    using (IEnumerator<string> entries = Directory.EnumerateFileSystemEntries(path).GetEnumerator()) {
+      return !entries.MoveNext();
+    }
+  }
+
+  private static void RenameByHandle(SafeFileHandle handle, string destination) {
+    string fullDestination = Path.GetFullPath(destination);
+    string parent = Path.GetDirectoryName(fullDestination);
+    string leaf = Path.GetFileName(fullDestination);
+    if (String.IsNullOrEmpty(parent) || String.IsNullOrEmpty(leaf) ||
+        leaf.IndexOf(Path.DirectorySeparatorChar) >= 0 ||
+        leaf.IndexOf(Path.AltDirectorySeparatorChar) >= 0 ||
+        !String.Equals(Path.GetFullPath(Path.Combine(parent, leaf)), fullDestination,
+          StringComparison.OrdinalIgnoreCase)) {
+      throw new IOException("profile quarantine destination is invalid");
+    }
+    byte[] name = Encoding.Unicode.GetBytes(fullDestination);
+    int rootOffset = IntPtr.Size == 8 ? 8 : 4;
+    int lengthOffset = rootOffset + IntPtr.Size;
+    int nameOffset = lengthOffset + 4;
+    int structureSize = IntPtr.Size == 8 ? 24 : 16;
+    int bufferSize = structureSize + name.Length;
+    IntPtr buffer = Marshal.AllocHGlobal(bufferSize);
+    try {
+      for (int index = 0; index < bufferSize; index++) Marshal.WriteByte(buffer, index, 0);
+      Marshal.WriteIntPtr(buffer, rootOffset, IntPtr.Zero);
+      Marshal.WriteInt32(buffer, lengthOffset, name.Length);
+      Marshal.Copy(name, 0, IntPtr.Add(buffer, nameOffset), name.Length);
+      if (!SetFileInformationByHandle(handle, FILE_RENAME_INFO_CLASS, buffer, (uint)bufferSize)) {
+        throw new Win32Exception(Marshal.GetLastWin32Error());
+      }
+    } finally {
+      Marshal.FreeHGlobal(buffer);
+    }
+  }
+
+  private static void MarkDeleteByHandle(SafeFileHandle handle) {
+    IntPtr buffer = Marshal.AllocHGlobal(1);
+    try {
+      Marshal.WriteByte(buffer, 0, 1);
+      if (!SetFileInformationByHandle(handle, FILE_DISPOSITION_INFO_CLASS, buffer, 1)) {
+        throw new Win32Exception(Marshal.GetLastWin32Error());
+      }
+    } finally {
+      Marshal.FreeHGlobal(buffer);
+    }
+  }
+
+  public sealed class QuarantineLease : IDisposable {
+    private SafeFileHandle handle;
+    private readonly string originalPath;
+    private readonly string expectedIdentity;
+    private readonly string plannedQuarantinePath;
+    private string quarantinePath;
+    private bool deleteProved;
+
+    internal QuarantineLease(SafeFileHandle heldHandle, string resolvedPath, string identity) {
+      handle = heldHandle;
+      originalPath = Path.GetFullPath(resolvedPath);
+      expectedIdentity = identity;
+      string parent = Path.GetDirectoryName(originalPath);
+      if (String.IsNullOrEmpty(parent)) throw new IOException("profile directory has no parent");
+      plannedQuarantinePath = Path.Combine(
+        parent, ".1132-fixer-quarantine-" + Guid.NewGuid().ToString("N"));
+      quarantinePath = String.Empty;
+      deleteProved = false;
     }
 
-    do {
-      if (-not $sid) {
-        try { $sid = (New-Object System.Security.Principal.NTAccount($u)).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}
-        if ($sid) { $key = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\' + $sid }
-      }
-      $regPath = ''
-      if ($key) {
-        try {
-          $rp = (Get-ItemProperty -Path $key -EA SilentlyContinue).ProfileImagePath
-          if ($rp) { $regPath = $rp; $lastReg = $rp }
-        } catch {}
-      }
-      if ($regPath -and (Profile-Has-NTUserDat $regPath)) { $match = 'registry|' + $regPath; break }
-      if (Profile-Has-NTUserDat $literal) { $match = 'folder|' + $literal; break }
-      try {
-        $suf = Get-ChildItem 'C:\\Users' -Directory -Force -EA 0 |
-          Where-Object { $_.Name -match ('^' + [Regex]::Escape($u) + '\\.') -and (Profile-Has-NTUserDat $_.FullName) } |
-          Select-Object -First 1 -ExpandProperty FullName
-        if ($suf) { $match = 'folder-suffixed|' + $suf; break }
-      } catch {}
-      Start-Sleep -Milliseconds 500
-    } while ([DateTime]::UtcNow -lt $deadline)
+    public string OriginalPath { get { return originalPath; } }
+    public string PlannedQuarantinePath { get { return plannedQuarantinePath; } }
+    public string QuarantinePath { get { return quarantinePath; } }
+    public bool DeleteProved { get { return deleteProved; } }
 
-    Write-Output ("SID=" + $sid)
-    Write-Output ("KEY=" + $key)
-    Write-Output ("REG=" + $lastReg)
-    Write-Output ("MATCH=" + $match)
+    public string Quarantine() {
+      if (handle == null || handle.IsInvalid || handle.IsClosed || !String.IsNullOrEmpty(quarantinePath)) {
+        throw new ObjectDisposedException("profile quarantine lease");
+      }
+      RequireReceipt(DescribeDirectoryHandle(handle), expectedIdentity, originalPath);
+      string destination = plannedQuarantinePath;
+      if (Directory.Exists(destination) || File.Exists(destination)) throw new IOException("profile quarantine collision");
+      RenameByHandle(handle, destination);
+      quarantinePath = destination;
+      RequireQuarantinedState(handle, expectedIdentity, originalPath, plannedQuarantinePath);
+      return quarantinePath;
+    }
+
+    public void DeleteEmpty() {
+      if (handle == null || handle.IsInvalid || handle.IsClosed || String.IsNullOrEmpty(quarantinePath)) {
+        throw new ObjectDisposedException("profile quarantine lease");
+      }
+      RequireQuarantinedState(handle, expectedIdentity, originalPath, plannedQuarantinePath);
+      if (!DirectoryIsEmpty(quarantinePath)) throw new IOException("quarantined profile directory is not empty");
+      RequireQuarantinedState(handle, expectedIdentity, originalPath, plannedQuarantinePath);
+      MarkDeleteByHandle(handle);
+      handle.Dispose();
+      handle = null;
+      if (!String.IsNullOrEmpty(Inspect(quarantinePath)) ||
+          !String.IsNullOrEmpty(Inspect(originalPath))) {
+        throw new IOException("quarantined profile deletion was not proved");
+      }
+      deleteProved = true;
+    }
+
+    public void Dispose() {
+      if (handle != null) {
+        handle.Dispose();
+        handle = null;
+      }
+    }
+  }
+
+  public static QuarantineLease AcquireQuarantineLease(
+      string path, string expectedIdentity, string expectedResolvedPath) {
+    string full = Path.GetFullPath(path);
+    string resolvedFull = Path.GetFullPath(expectedResolvedPath);
+    RequireReceipt(Inspect(full), expectedIdentity, resolvedFull);
+    int error;
+    SafeFileHandle held = CreateFileW(full, DELETE_ACCESS | FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ_WRITE, IntPtr.Zero, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, IntPtr.Zero);
+    error = held.IsInvalid ? Marshal.GetLastWin32Error() : 0;
+    if (held.IsInvalid) {
+      held.Dispose();
+      throw new Win32Exception(error);
+    }
+    try {
+      RequireReceipt(DescribeDirectoryHandle(held), expectedIdentity, resolvedFull);
+      return new QuarantineLease(held, resolvedFull, expectedIdentity);
+    } catch {
+      held.Dispose();
+      throw;
+    }
+  }
+
+  public static string Inspect(string path) {
+    string full = Path.GetFullPath(path);
+    string root = Path.GetPathRoot(full);
+    if (String.IsNullOrEmpty(root)) throw new IOException("profile path has no local root");
+    var components = new List<string>();
+    components.Add(root);
+    string current = root;
+    string relative = full.Substring(root.Length);
+    foreach (string part in relative.Split(new char[] { '\\' }, StringSplitOptions.RemoveEmptyEntries)) {
+      current = Path.Combine(current, part);
+      components.Add(current);
+    }
+
+    for (int index = 0; index < components.Count; index++) {
+      int error;
+      using (SafeFileHandle handle = OpenNoFollow(components[index], out error)) {
+        if (handle.IsInvalid) {
+          if (error == 2 || error == 3) return String.Empty;
+          throw new Win32Exception(error);
+        }
+        FILE_ATTRIBUTE_TAG_INFO tag;
+        if (!GetFileAttributeTagInfo(handle, FILE_ATTRIBUTE_TAG_INFO_CLASS, out tag,
+            (uint)Marshal.SizeOf(typeof(FILE_ATTRIBUTE_TAG_INFO)))) {
+          throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+        if ((tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+          throw new IOException("profile path contains a reparse point");
+        }
+        if (index != components.Count - 1) continue;
+        if ((tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+          throw new IOException("profile path is not a directory");
+        }
+
+        return DescribeDirectoryHandle(handle);
+      }
+    }
+    return String.Empty;
+  }
+}
+'@ -ErrorAction Stop
+}
+
+function Get-FixerProfilePathIdentity {
+  [CmdletBinding()]
+  param([Parameter(Mandatory=$true)][string]$Path)
+
+  if ([string]::IsNullOrWhiteSpace($Path) -or $Path -ne $Path.Trim() -or
+      $Path.Contains('/') -or $Path.IndexOfAny([char[]](0..31)) -ge 0 -or
+      $Path -notmatch '^[A-Za-z]:\\') {
+    throw 'unsafe profile path namespace'
+  }
+  $candidate = $Path
+  while ($candidate.Length -gt 3 -and $candidate.EndsWith('\')) {
+    $candidate = $candidate.Substring(0, $candidate.Length - 1)
+  }
+  $full = [IO.Path]::GetFullPath($candidate)
+  if ($full -ine $candidate) { throw 'profile path is not canonical' }
+  $native = [FixerProfileIdentityV1]::Inspect($full)
+  if (-not $native) {
+    return [pscustomobject]@{
+      pathExists = $false
+      isReparsePoint = $false
+      resolvedPath = $full
+      stableIdentity = ''
+    }
+  }
+  $parts = @($native -split '\|', 2)
+  if ($parts.Count -ne 2 -or $parts[0] -notmatch '^[0-9A-F]{16}:[0-9A-F]{32}$' -or
+      $parts[1] -notmatch '^[A-Za-z]:\\') {
+    throw 'profile identity receipt is malformed'
+  }
+  $resolved = [IO.Path]::GetFullPath([string]$parts[1])
+  while ($resolved.Length -gt 3 -and $resolved.EndsWith('\')) {
+    $resolved = $resolved.Substring(0, $resolved.Length - 1)
+  }
+  return [pscustomobject]@{
+    pathExists = $true
+    isReparsePoint = $false
+    resolvedPath = $resolved
+    stableIdentity = [string]$parts[0]
+  }
+}
+
+function Assert-FixerProfilePathIdentity {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)][string]$Path,
+    [Parameter(Mandatory=$true)][bool]$ExpectedExists,
+    [string]$ExpectedIdentity = '',
+    [string]$ExpectedResolvedPath = ''
+  )
+  $current = Get-FixerProfilePathIdentity -Path $Path
+  if ($ExpectedExists) {
+    if (-not $current.pathExists) {
+      throw 'previously present profile folder disappeared after validation'
+    }
+    if (-not $ExpectedIdentity -or $current.stableIdentity -cne $ExpectedIdentity -or
+        -not $ExpectedResolvedPath -or $current.resolvedPath -ine $ExpectedResolvedPath) {
+      throw 'profile directory identity changed after validation'
+    }
+  } elseif ($current.pathExists) {
+    throw 'previously absent profile folder appeared after validation'
+  }
+  return $current
+}
+`;
+
+// A durable recovery receipt is written to an exact-SID ProfileList key
+// before a handle-bound rename. On restart, only the path that still owns the
+// recorded file identity is authoritative. Missing, malformed, or ambiguous
+// receipts fail closed.
+const PS_PROFILE_RECOVERY_HELPER = String.raw`
+function Resolve-FixerProfileInventoryPath {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)]$Item,
+    [Parameter(Mandatory=$true)][string]$KeyName,
+    [Parameter(Mandatory=$true)][string]$ExpectedSid
+  )
+  $pathProperty = $Item.PSObject.Properties['ProfileImagePath']
+  $pathPresent = [bool]($null -ne $pathProperty)
+  $declaredPath = if ($pathPresent) {
+    [Environment]::ExpandEnvironmentVariables([string]$pathProperty.Value)
+  } else { '' }
+  $recoveryProperty = $Item.PSObject.Properties['FixerProfileQuarantineV1']
+  if ($null -eq $recoveryProperty) {
+    return [pscustomobject]@{
+      profileImagePathPresent = $pathPresent
+      profileImagePath = $declaredPath
+      recoveryPresent = $false
+      recoveryCompleted = $false
+    }
+  }
+  if ([string]::IsNullOrWhiteSpace([string]$recoveryProperty.Value)) {
+    throw 'profile quarantine receipt is malformed'
+  }
+  if (-not $pathPresent -or [string]::IsNullOrWhiteSpace($declaredPath) -or
+      ($KeyName -ine $ExpectedSid -and $KeyName -ine ($ExpectedSid + '.bak'))) {
+    throw 'profile quarantine receipt has no exact-SID path authority'
+  }
+  $receipt = ConvertFrom-Json -InputObject ([string]$recoveryProperty.Value) -EA Stop
+  $receiptNames = @($receipt.PSObject.Properties.Name | Sort-Object)
+  if (($receiptNames -join ',') -cne 'marker,originalPath,phase,quarantinePath,stableIdentity' -or
+      [string]$receipt.marker -cne 'FIXER_PROFILE_QUARANTINE_V1' -or
+      ([string]$receipt.phase -cne 'moving' -and [string]$receipt.phase -cne 'deleting') -or
+      ([string]$receipt.originalPath -ine $declaredPath -and
+       [string]$receipt.quarantinePath -ine $declaredPath) -or
+      [string]$receipt.stableIdentity -notmatch '^[0-9A-F]{16}:[0-9A-F]{32}$') {
+    throw 'profile quarantine receipt is malformed'
+  }
+  $originalPath = [IO.Path]::GetFullPath([string]$receipt.originalPath).TrimEnd('\')
+  $quarantinePath = [IO.Path]::GetFullPath([string]$receipt.quarantinePath).TrimEnd('\')
+  if ([IO.Path]::GetDirectoryName($quarantinePath) -ine [IO.Path]::GetDirectoryName($originalPath) -or
+      [IO.Path]::GetFileName($quarantinePath) -notmatch '^\.1132-fixer-quarantine-[0-9a-f]{32}$') {
+    throw 'profile quarantine receipt path is unsafe'
+  }
+  $originalIdentity = Get-FixerProfilePathIdentity -Path $originalPath
+  $quarantineIdentity = Get-FixerProfilePathIdentity -Path $quarantinePath
+  $originalMatch = [bool]($originalIdentity.pathExists -and
+    [string]$originalIdentity.stableIdentity -ceq [string]$receipt.stableIdentity)
+  $quarantineMatch = [bool]($quarantineIdentity.pathExists -and
+    [string]$quarantineIdentity.stableIdentity -ceq [string]$receipt.stableIdentity)
+  if ($originalMatch -and $quarantineMatch) {
+    throw 'profile quarantine identity is missing or ambiguous'
+  }
+  if (-not $originalMatch -and -not $quarantineMatch) {
+    if ([string]$receipt.phase -ceq 'deleting' -and
+        $declaredPath -ieq $quarantinePath -and
+        -not $quarantineIdentity.pathExists) {
+      return [pscustomobject]@{
+        profileImagePathPresent = $true
+        profileImagePath = $quarantinePath
+        recoveryPresent = $true
+        recoveryCompleted = $true
+      }
+    }
+    throw 'profile quarantine identity is missing or ambiguous'
+  }
+  return [pscustomobject]@{
+    profileImagePathPresent = $true
+    profileImagePath = if ($quarantineMatch) { $quarantinePath } else { $originalPath }
+    recoveryPresent = $true
+    recoveryCompleted = $false
+  }
+}
+`;
+
+// Select only ProfileList records that are bound to one exact local-account
+// SID. Folder names are never identity evidence. The same selector gates old
+// profile cleanup and resolution of the newly-created helper profile.
+function selectSidBoundProfileEntries(entries, expectedSid, purpose = 'resolve') {
+  const sid = String(expectedSid || '');
+  const empty = reason => ({ ok: false, reason, entries: [], keys: [], paths: [], entry: null });
+  if (purpose !== 'resolve' && purpose !== 'cleanup') return empty('invalid_purpose');
+  if (!sid) {
+    return purpose === 'cleanup'
+      ? { ok: true, reason: 'no_trusted_sid', entries: [], keys: [], paths: [], entry: null }
+      : empty('missing_sid');
+  }
+  if (!/^S-1-5-21-(?:[0-9]+-){3}[0-9]+$/i.test(sid) || !Array.isArray(entries)) {
+    return empty('invalid_inventory');
+  }
+
+  const trustedProfilePath = (value) => {
+    if (typeof value !== 'string' || !value || value !== value.trim() || /[\x00-\x1f]/.test(value) || value.includes('/')) return '';
+    const withoutTrailingSlash = value.replace(/\\+$/, '');
+    if (!withoutTrailingSlash || /^(?:\\\\[?.]\\|\\\\)/.test(withoutTrailingSlash)) return '';
+    const normalized = path.win32.normalize(withoutTrailingSlash);
+    if (normalized.toLowerCase() !== withoutTrailingSlash.toLowerCase() ||
+        path.win32.dirname(normalized).toLowerCase() !== 'c:\\users') return '';
+    const leaf = path.win32.basename(normalized);
+    const leafLower = leaf.toLowerCase();
+    const protectedLeaves = new Set(['public', 'default', 'default user', 'all users', 'desktop.ini']);
+    if (!leaf || leaf === '.' || leaf === '..' || /[. ]$/.test(leaf) || /[:*?"<>|]/.test(leaf) ||
+        protectedLeaves.has(leafLower) || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(leaf)) return '';
+    return normalized;
+  };
+  const comparisonPath = (value) => {
+    if (typeof value !== 'string' || !value || /[\x00-\x1f]/.test(value) || /^(?:\\\\[?.]\\|\\\\)/.test(value)) return '';
+    try {
+      const normalized = path.win32.normalize(value.replace(/\//g, '\\')).replace(/\\+$/, '');
+      return path.win32.isAbsolute(normalized) ? normalized.toLowerCase() : '';
+    } catch (_) {
+      return '';
+    }
+  };
+
+  const sidLower = sid.toLowerCase();
+  const records = [];
+  for (const raw of entries) {
+    if (!raw || typeof raw !== 'object' || typeof raw.keyName !== 'string' ||
+        typeof raw.profileImagePath !== 'string' || typeof raw.resolvedPath !== 'string' ||
+        typeof raw.stableIdentity !== 'string' || typeof raw.pathExists !== 'boolean' ||
+        typeof raw.isReparsePoint !== 'boolean' || typeof raw.hasNtUserDat !== 'boolean' ||
+        typeof raw.readable !== 'boolean' || typeof raw.profileImagePathPresent !== 'boolean') {
+      return empty('invalid_inventory_shape');
+    }
+    if (raw.readable !== true) {
+      return empty('unreadable_inventory');
+    }
+    const keyName = raw.keyName;
+    const keyLower = keyName.toLowerCase();
+    const target = keyLower === sidLower || keyLower === `${sidLower}.bak`;
+    const rawPath = typeof raw.profileImagePath === 'string' ? raw.profileImagePath : '';
+    const rawComparisonPath = comparisonPath(rawPath);
+    const resolvedPath = typeof raw.resolvedPath === 'string' ? raw.resolvedPath : '';
+    const resolvedComparisonPath = comparisonPath(resolvedPath);
+    const stableIdentity = typeof raw.stableIdentity === 'string' ? raw.stableIdentity : '';
+    const profilePath = target && rawPath ? trustedProfilePath(rawPath) : '';
+    if (target && (!raw.profileImagePathPresent || !rawPath)) return empty('missing_target_profile_path');
+    if (target && !profilePath) return empty('unsafe_target_path');
+    if (!rawPath && (raw.pathExists !== false || raw.isReparsePoint !== false ||
+        resolvedPath || stableIdentity)) {
+      return empty('invalid_empty_path_identity');
+    }
+    if (rawPath && (!rawComparisonPath || typeof raw.pathExists !== 'boolean' ||
+        typeof raw.isReparsePoint !== 'boolean' || raw.isReparsePoint === true ||
+        !resolvedComparisonPath)) {
+      return empty(target ? 'unsafe_target_directory' : 'unsafe_inventory_directory');
+    }
+    if (target && rawPath && resolvedComparisonPath !== profilePath.toLowerCase()) {
+      return empty('unsafe_target_identity');
+    }
+    if (rawPath && raw.pathExists === true &&
+        !/^[0-9A-F]{16}:[0-9A-F]{32}$/i.test(stableIdentity)) {
+      return empty(target ? 'unsafe_target_identity' : 'unresolved_inventory_identity');
+    }
+    if (rawPath && raw.pathExists === false &&
+        (stableIdentity || resolvedComparisonPath !== rawComparisonPath)) {
+      return empty('invalid_absent_identity');
+    }
+    records.push({
+      keyName,
+      keyLower,
+      target,
+      profilePath,
+      comparisonPath: rawComparisonPath,
+      resolvedComparisonPath,
+      stableIdentity,
+      hasNtUserDat: raw.hasNtUserDat === true,
+      pathExists: raw.pathExists === true
+    });
+  }
+
+  const live = records.filter(record => record.keyLower === sidLower);
+  const backup = records.filter(record => record.keyLower === `${sidLower}.bak`);
+  if (live.length > 1 || backup.length > 1) return empty('ambiguous_keys');
+  if (purpose === 'resolve' && (live.length !== 1 || backup.length !== 0)) return empty('missing_or_ambiguous_live_key');
+
+  const targets = purpose === 'resolve' ? live : [...live, ...backup];
+  if (purpose === 'resolve' && (!targets[0].profilePath || !targets[0].pathExists || !targets[0].hasNtUserDat)) {
+    return empty('profile_not_ready');
+  }
+  const targetPaths = [...new Set(targets.map(record => record.profilePath).filter(Boolean))];
+  const targetIdentities = new Set(targets
+    .filter(record => record.pathExists && record.stableIdentity)
+    .map(record => record.stableIdentity.toLowerCase()));
+  for (const targetPath of targetPaths) {
+    const shared = records.some(record => !record.target && record.comparisonPath === targetPath.toLowerCase());
+    if (shared) return empty('path_owned_by_unrelated_sid');
+  }
+  if (records.some(record => !record.target && record.pathExists &&
+      targetIdentities.has(record.stableIdentity.toLowerCase()))) {
+    return empty('identity_owned_by_unrelated_sid');
+  }
+  return {
+    ok: true,
+    reason: '',
+    entries: targets.map(record => ({
+      keyName: record.keyName,
+      profileImagePath: record.profilePath,
+      profileImagePathPresent: true,
+      pathExists: record.pathExists,
+      resolvedPath: record.resolvedComparisonPath,
+      stableIdentity: record.stableIdentity
+    })),
+    keys: targets.map(record => record.keyName),
+    paths: targetPaths,
+    entry: purpose === 'resolve' ? { keyName: live[0].keyName, profileImagePath: live[0].profilePath } : null
+  };
+}
+
+// Resolve the recreated helper profile only through the exact helper SID's
+// live ProfileList key. A .bak key, shared path, malformed path, missing hive,
+// or any name-only folder is a closed failure.
+async function resolveUserProfilePath(username, maxWaitSec, send, expectedSid = '') {
+  const sid = String(expectedSid || '');
+  const baseKey = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\';
+  const checkedKeys = sid ? [baseKey + sid, baseKey + sid + '.bak'] : [];
+  if (!/^S-1-5-21-(?:[0-9]+-){3}[0-9]+$/i.test(sid)) {
+    return { path: null, source: 'not_found', checkedPaths: [], checkedKeys, sid: '', reason: 'missing_sid' };
+  }
+
+  const sidLiteral = sid.replace(/'/g, "''");
+  const script = `
+    ${PS_PROFILE_PATH_IDENTITY_HELPER}
+    ${PS_PROFILE_RECOVERY_HELPER}
+    $ErrorActionPreference = 'Stop'
+    $sid = '${sidLiteral}'
+    $base = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList'
+    $liveKey = Join-Path $base $sid
+    $bakKey = $liveKey + '.bak'
+    $deadline = [DateTime]::UtcNow.AddSeconds(${Math.max(1, maxWaitSec)})
+    try {
+      do {
+        if (Test-Path -LiteralPath $bakKey) { break }
+        if (Test-Path -LiteralPath $liveKey) {
+          $item = Get-ItemProperty -LiteralPath $liveKey -EA Stop
+          $effectivePath = Resolve-FixerProfileInventoryPath -Item $item -KeyName $sid -ExpectedSid $sid
+          $candidate = [string]$effectivePath.profileImagePath
+          if ($candidate) {
+            $candidateIdentity = Get-FixerProfilePathIdentity -Path $candidate
+            if ($candidateIdentity.pathExists -and
+                [System.IO.File]::Exists((Join-Path $candidateIdentity.resolvedPath 'NTUSER.DAT'))) { break }
+          }
+        }
+        Start-Sleep -Milliseconds 500
+      } while ([DateTime]::UtcNow -lt $deadline)
+
+      $entries = @(Get-ChildItem -LiteralPath $base -EA Stop | ForEach-Object {
+        $item = Get-ItemProperty -LiteralPath $_.PSPath -EA Stop
+        $effectivePath = Resolve-FixerProfileInventoryPath -Item $item -KeyName ([string]$_.PSChildName) -ExpectedSid $sid
+        $profilePathPresent = [bool]$effectivePath.profileImagePathPresent
+        $profilePath = [string]$effectivePath.profileImagePath
+        $pathIdentity = [pscustomobject]@{
+          pathExists = $false
+          isReparsePoint = $false
+          resolvedPath = ''
+          stableIdentity = ''
+        }
+        if ($profilePath) {
+          $pathIdentity = Get-FixerProfilePathIdentity -Path $profilePath
+        }
+        [pscustomobject]@{
+          keyName = [string]$_.PSChildName
+          profileImagePath = $profilePath
+          profileImagePathPresent = $profilePathPresent
+          hasNtUserDat = [bool]($pathIdentity.pathExists -and
+            [System.IO.File]::Exists((Join-Path $pathIdentity.resolvedPath 'NTUSER.DAT')))
+          pathExists = [bool]$pathIdentity.pathExists
+          isReparsePoint = [bool]$pathIdentity.isReparsePoint
+          resolvedPath = [string]$pathIdentity.resolvedPath
+          stableIdentity = [string]$pathIdentity.stableIdentity
+          readable = $true
+        }
+      })
+      [pscustomobject]@{
+        marker = 'FIXER_PROFILELIST_V1'
+        sid = $sid
+        entries = @($entries)
+      } | ConvertTo-Json -Compress -Depth 4
+    } catch { exit 1 }
   `;
 
   const r = await runPSCapture(script, { timeoutMs: (maxWaitSec + 20) * 1000 });
-  let lastSid = '', key = '', regPath = '', matchSrc = '', matchPath = '';
-  for (const line of (r.stdout || '').split(/\r?\n/)) {
-    const t = line.trim();
-    if (t.startsWith('SID=')) lastSid = t.slice(4);
-    else if (t.startsWith('KEY=')) key = t.slice(4);
-    else if (t.startsWith('REG=')) regPath = t.slice(4);
-    else if (t.startsWith('MATCH=')) {
-      const pipe = t.indexOf('|', 6);
-      if (pipe > 0) { matchSrc = t.slice(6, pipe); matchPath = t.slice(pipe + 1); }
+  if (!r || r.timedOut || r.code !== 0) {
+    return { path: null, source: 'not_found', checkedPaths: [], checkedKeys, sid, reason: 'inventory_failed' };
+  }
+  try {
+    const payload = JSON.parse(String(r.stdout || '').trim());
+    if (!payload || payload.marker !== 'FIXER_PROFILELIST_V1' ||
+        String(payload.sid || '').toLowerCase() !== sid.toLowerCase()) throw new Error('invalid receipt');
+    const entries = Array.isArray(payload.entries) ? payload.entries : (payload.entries ? [payload.entries] : []);
+    const selection = selectSidBoundProfileEntries(entries, sid, 'resolve');
+    const checkedPaths = entries
+      .filter(entry => entry && typeof entry.keyName === 'string' &&
+        (entry.keyName.toLowerCase() === sid.toLowerCase() || entry.keyName.toLowerCase() === `${sid.toLowerCase()}.bak`))
+      .map(entry => String(entry.profileImagePath || '')).filter(Boolean);
+    if (!selection.ok || !selection.entry) {
+      return { path: null, source: 'not_found', checkedPaths, checkedKeys, sid, reason: selection.reason };
+    }
+    send(`  Resolved exact SID profile via registry: ${selection.entry.profileImagePath}`, 'out');
+    return {
+      path: selection.entry.profileImagePath,
+      source: 'registry',
+      checkedPaths,
+      checkedKeys,
+      sid
+    };
+  } catch (_) {
+    return { path: null, source: 'not_found', checkedPaths: [], checkedKeys, sid, reason: 'invalid_inventory_receipt' };
+  }
+}
+
+// ============================================================
+// Re-read ProfileList immediately before every mutation. Exact-SID keys with
+// a missing or blank ProfileImagePath are malformed evidence, not equivalent
+// to an absent key.
+// ============================================================
+const PS_PROFILE_INVENTORY_GUARD = String.raw`
+function Assert-FixerProfileInventory {
+  param([object[]]$Plan, [string]$ExpectedSid, [string]$Base)
+  $targets = [System.Collections.Generic.List[object]]::new()
+  $plannedPaths = @($Plan | Where-Object { [bool]$_.pathExists } |
+    ForEach-Object { [string]$_.profileImagePath } | Where-Object { $_ } | Sort-Object -Unique)
+  $plannedIdentities = @($Plan | Where-Object { [bool]$_.pathExists } |
+    ForEach-Object { [string]$_.stableIdentity } | Where-Object { $_ } | Sort-Object -Unique)
+  foreach ($key in @(Get-ChildItem -LiteralPath $Base -EA Stop)) {
+    $name = [string]$key.PSChildName
+    $item = Get-ItemProperty -LiteralPath $key.PSPath -EA Stop
+    $effectivePath = Resolve-FixerProfileInventoryPath -Item $item -KeyName $name -ExpectedSid $ExpectedSid
+    $profilePathPresent = [bool]$effectivePath.profileImagePathPresent
+    $profilePath = [string]$effectivePath.profileImagePath
+    $pathIdentity = $null
+    if ($profilePath) {
+      $pathIdentity = Get-FixerProfilePathIdentity -Path $profilePath
+    }
+    $isTarget = $name -ieq $ExpectedSid -or $name -ieq ($ExpectedSid + '.bak')
+    if ($isTarget) {
+      if (-not $profilePathPresent -or [string]::IsNullOrWhiteSpace($profilePath)) {
+        throw 'exact-SID ProfileImagePath is missing or blank'
+      }
+      $expected = @($Plan | Where-Object { [string]$_.keyName -ieq $name })
+      if ($expected.Count -ne 1 -or -not [bool]$expected[0].profileImagePathPresent -or
+          [string]$expected[0].profileImagePath -ine $profilePath) {
+        throw 'profile identity changed after validation'
+      }
+      if ($profilePath) {
+        $pathIdentity = Assert-FixerProfilePathIdentity -Path $profilePath -ExpectedExists ([bool]$expected[0].pathExists) -ExpectedIdentity ([string]$expected[0].stableIdentity) -ExpectedResolvedPath ([string]$expected[0].resolvedPath)
+      } elseif ([bool]$expected[0].pathExists) {
+        throw 'profile identity changed after validation'
+      }
+      $targets.Add($key)
+      continue
+    }
+    if ($profilePath -and $pathIdentity.pathExists) {
+      if ($plannedIdentities -contains [string]$pathIdentity.stableIdentity) {
+        throw 'profile identity is shared by an unrelated SID'
+      }
+      $otherPath = [IO.Path]::GetFullPath($profilePath).TrimEnd('\')
+      foreach ($plannedPath in $plannedPaths) {
+        if ($otherPath -ieq $plannedPath) { throw 'profile path is shared by an unrelated SID' }
+      }
     }
   }
-  if (key) checkedKeys.push(key);
-  if (regPath) checkedPaths.push(regPath);
-  checkedPaths.push(literal);
-
-  if (matchPath) {
-    if (!checkedPaths.includes(matchPath)) checkedPaths.push(matchPath);
-    if (matchSrc === 'registry')         send(`  Resolved via registry: ${matchPath}`, 'out');
-    else if (matchSrc === 'folder')      send(`  Resolved via folder scan: ${matchPath}`, 'out');
-    else                                 send(`  WARNING: Windows created suffixed profile '${matchPath}'.`, 'out');
-    return { path: matchPath, source: matchSrc, checkedPaths, checkedKeys, sid: lastSid };
-  }
-  return { path: null, source: 'not_found', checkedPaths, checkedKeys, sid: lastSid };
+  if ($targets.Count -ne $Plan.Count) { throw 'profile identity changed after validation' }
+  return $targets.ToArray()
 }
+`;
 
 // ============================================================
 // Robust profile-folder delete helper, inlined into PS scripts that need it.
@@ -1655,7 +2934,7 @@ function Unload-UserHive {
         Write-Host ("    Unloading HKU\\" + $Sid + " (NTUSER.DAT)")
         # GC + collect to release any RegistryKey handles PS may still hold.
         [GC]::Collect(); [GC]::WaitForPendingFinalizers()
-        $rc = Start-Process reg.exe -ArgumentList @('unload', ('HKU\\' + $Sid)) -Wait -WindowStyle Hidden -PassThru
+        $rc = Start-Process -FilePath (Resolve-FixerTool 'reg.exe') -ArgumentList @('unload', ('HKU\\' + $Sid)) -Wait -WindowStyle Hidden -PassThru
         Write-Host ("    reg unload exit: " + $rc.ExitCode)
     }
 }
@@ -1681,8 +2960,8 @@ function Remove-NestedReparsePoints {
         try { $kids = @(Get-ChildItem -LiteralPath $dir -Force -EA Stop) } catch {
             # Enumeration denied: open up THIS directory only (no /R, no /T —
             # nothing recursive that could chase a junction), then retry once.
-            Start-Process takeown.exe -ArgumentList @('/F',$dir,'/A','/D','Y') -Wait -WindowStyle Hidden | Out-Null
-            Start-Process icacls.exe -ArgumentList @($dir,'/grant','*S-1-5-32-544:F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
+            Start-Process -FilePath (Resolve-FixerTool 'takeown.exe') -ArgumentList @('/F',$dir,'/A','/D','Y') -Wait -WindowStyle Hidden | Out-Null
+            Start-Process -FilePath (Resolve-FixerTool 'icacls.exe') -ArgumentList @($dir,'/grant','*S-1-5-32-544:F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
             try { $kids = @(Get-ChildItem -LiteralPath $dir -Force -EA Stop) } catch {
                 Write-Host ("    cannot enumerate " + $dir + " - leaving it for the rd retry")
                 $clean = $false
@@ -1708,19 +2987,55 @@ function Remove-NestedReparsePoints {
     }
     return $clean
 }
+function Protect-FixerProfileQuarantineRoot {
+    param([Parameter(Mandatory=$true)][string]$Path)
+    # The custody handle makes this path name stable while ownership and the
+    # root DACL are replaced. The helper SID gets no access to the private
+    # quarantine; only SYSTEM and elevated Administrators retain full access.
+    $takeown = Start-Process -FilePath (Resolve-FixerTool 'takeown.exe') -ArgumentList @('/F',$Path,'/A') -Wait -WindowStyle Hidden -PassThru
+    if ($takeown.ExitCode -ne 0) { throw 'profile quarantine ownership could not be established' }
+    $privateAcl = [System.Security.AccessControl.DirectorySecurity]::new()
+    $privateAcl.SetSecurityDescriptorSddlForm('O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
+    [System.IO.Directory]::SetAccessControl($Path, $privateAcl)
+    $receipt = [System.IO.Directory]::GetAccessControl(
+      $Path, [System.Security.AccessControl.AccessControlSections]::Access -bor
+        [System.Security.AccessControl.AccessControlSections]::Owner)
+    $owner = $receipt.GetOwner([System.Security.Principal.SecurityIdentifier])
+    if ($null -eq $owner -or [string]$owner.Value -cne 'S-1-5-32-544') {
+        throw 'profile quarantine owner is not Administrators'
+    }
+    if (-not $receipt.AreAccessRulesProtected) { throw 'profile quarantine DACL is not protected' }
+    $rules = @($receipt.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))
+    $expected = @('S-1-5-18','S-1-5-32-544')
+    if ($rules.Count -ne 2) { throw 'profile quarantine DACL is not private' }
+    foreach ($rule in $rules) {
+        if ($expected -notcontains [string]$rule.IdentityReference.Value -or
+            $rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
+            ($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne
+              [System.Security.AccessControl.FileSystemRights]::FullControl) {
+            throw 'profile quarantine DACL is not private'
+        }
+    }
+    foreach ($sid in $expected) {
+        if (-not @($rules | Where-Object { [string]$_.IdentityReference.Value -eq $sid })) {
+            throw 'profile quarantine DACL receipt is incomplete'
+        }
+    }
+}
 function Remove-ProfileFolder {
     param(
         [Parameter(Mandatory=$true)][string]$Path,
-        [string]$Sid = ''
+        [string]$Sid = '',
+        [Parameter(Mandatory=$true)][string]$ExpectedIdentity,
+        [Parameter(Mandatory=$true)][string]$ExpectedResolvedPath,
+        [Parameter(Mandatory=$true)]$Lease
     )
     $ErrorActionPreference = 'Continue'
-    if (-not [System.IO.Directory]::Exists($Path)) { Write-Host "  Already gone: $Path"; return }
+    if (-not $Lease.QuarantinePath -or $Lease.QuarantinePath -ine $Path) { throw 'profile directory lease path mismatch' }
+    $identity = Assert-FixerProfilePathIdentity -Path $Path -ExpectedExists $true -ExpectedIdentity $ExpectedIdentity -ExpectedResolvedPath $ExpectedResolvedPath
+    if (-not $identity.pathExists) { throw 'profile directory custody was lost' }
     Write-Host "  Deleting: $Path"
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-
-    # Unload the user's NTUSER.DAT hive first — otherwise the file is open
-    # and rd /s /q will leave it behind, even with full admin ownership.
-    Unload-UserHive -Sid $Sid
 
     # PASS 1: rd /s /q FIRST.
     # Default Windows user profiles contain XP-compat junction points
@@ -1730,25 +3045,25 @@ function Remove-ProfileFolder {
     # them. Running takeown /R or icacls /T from the profile root FIRST
     # makes both tools chase those junctions back into AppData and stall
     # for many minutes — that was the "hung on delete user1" symptom.
-    $cmdExe = Join-Path $env:SystemRoot 'System32\\cmd.exe'
+    $cmdExe = Resolve-FixerTool 'cmd.exe'
     $rdArgs = '/c rd /s /q "' + $Path + '"'
+    $identity = Assert-FixerProfilePathIdentity -Path $Path -ExpectedExists $true -ExpectedIdentity $ExpectedIdentity -ExpectedResolvedPath $ExpectedResolvedPath
+    if (-not $identity.pathExists) { throw 'profile directory custody was lost' }
     Write-Host "    Pass 1: rd /s /q ..."
     $rc1 = Start-Process -FilePath $cmdExe -ArgumentList $rdArgs -Wait -WindowStyle Hidden -PassThru
     Write-Host ("    rd pass-1 exit: " + $rc1.ExitCode)
-    if (-not [System.IO.Directory]::Exists($Path)) {
-        $sw.Stop()
-        Write-Host ("  RESULT: gone in {0:N1}s (pass 1)" -f $sw.Elapsed.TotalSeconds)
-        return
-    }
+    if (-not [System.IO.Directory]::Exists($Path)) { throw 'profile directory custody was lost' }
 
     # PASS 2: targeted ownership + ACL grant — non-recursive on the root,
     # then walk top-level children explicitly while SKIPPING reparse
     # points. This fixes ACL/ownership on real residue without chasing
     # junctions.
+    $identity = Assert-FixerProfilePathIdentity -Path $Path -ExpectedExists $true -ExpectedIdentity $ExpectedIdentity -ExpectedResolvedPath $ExpectedResolvedPath
+    if (-not $identity.pathExists) { throw 'profile directory custody was lost' }
     Write-Host "    Pass 1 left residue; running targeted takeown/icacls/attrib (no junction chase)..."
-    Start-Process takeown.exe -ArgumentList @('/F',$Path,'/A','/D','Y') -Wait -WindowStyle Hidden | Out-Null
-    Start-Process icacls.exe -ArgumentList @($Path,'/grant','*S-1-5-32-544:(OI)(CI)F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
-    Start-Process attrib.exe -ArgumentList @('-r','-h','-s',$Path,'/D') -Wait -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath (Resolve-FixerTool 'takeown.exe') -ArgumentList @('/F',$Path,'/A','/D','Y') -Wait -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath (Resolve-FixerTool 'icacls.exe') -ArgumentList @($Path,'/grant','*S-1-5-32-544:(OI)(CI)F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath (Resolve-FixerTool 'attrib.exe') -ArgumentList @('-r','-h','-s',$Path,'/D') -Wait -WindowStyle Hidden | Out-Null
 
     $kids = @()
     try {
@@ -1772,36 +3087,39 @@ function Remove-ProfileFolder {
                 # run them once the subtree is confirmed junction-free
                 # (hang guard); otherwise leave the child to the rd retry.
                 if (Remove-NestedReparsePoints -Root $k.FullName) {
-                    Start-Process takeown.exe -ArgumentList @('/F',$k.FullName,'/A','/R','/D','Y') -Wait -WindowStyle Hidden | Out-Null
-                    Start-Process icacls.exe -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:(OI)(CI)F','/T','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
-                    Start-Process attrib.exe -ArgumentList @('-r','-h','-s',$k.FullName,'/S','/D') -Wait -WindowStyle Hidden | Out-Null
+                    Start-Process -FilePath (Resolve-FixerTool 'takeown.exe') -ArgumentList @('/F',$k.FullName,'/A','/R','/D','Y') -Wait -WindowStyle Hidden | Out-Null
+                    Start-Process -FilePath (Resolve-FixerTool 'icacls.exe') -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:(OI)(CI)F','/T','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
+                    Start-Process -FilePath (Resolve-FixerTool 'attrib.exe') -ArgumentList @('-r','-h','-s',$k.FullName,'/S','/D') -Wait -WindowStyle Hidden | Out-Null
                 } else {
                     Write-Host ("    not junction-free; skipping recursive ACL fix for " + $k.Name + " (rd retry still runs)")
                 }
             } else {
-                Start-Process takeown.exe -ArgumentList @('/F',$k.FullName,'/A') -Wait -WindowStyle Hidden | Out-Null
-                Start-Process icacls.exe -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
-                Start-Process attrib.exe -ArgumentList @('-r','-h','-s',$k.FullName) -Wait -WindowStyle Hidden | Out-Null
+                Start-Process -FilePath (Resolve-FixerTool 'takeown.exe') -ArgumentList @('/F',$k.FullName,'/A') -Wait -WindowStyle Hidden | Out-Null
+                Start-Process -FilePath (Resolve-FixerTool 'icacls.exe') -ArgumentList @($k.FullName,'/grant','*S-1-5-32-544:F','/C','/Q') -Wait -WindowStyle Hidden | Out-Null
+                Start-Process -FilePath (Resolve-FixerTool 'attrib.exe') -ArgumentList @('-r','-h','-s',$k.FullName) -Wait -WindowStyle Hidden | Out-Null
             }
         } catch {}
     }
 
     # PASS 3: rd /s /q again now that ACLs are corrected.
+    $identity = Assert-FixerProfilePathIdentity -Path $Path -ExpectedExists $true -ExpectedIdentity $ExpectedIdentity -ExpectedResolvedPath $ExpectedResolvedPath
+    if (-not $identity.pathExists) { throw 'profile directory custody was lost' }
     Write-Host "    Pass 3: rd /s /q (retry) ..."
     $rc2 = Start-Process -FilePath $cmdExe -ArgumentList $rdArgs -Wait -WindowStyle Hidden -PassThru
     Write-Host ("    rd pass-3 exit: " + $rc2.ExitCode)
 
     # PASS 4: final .NET fallback for any single locked file.
     if ([System.IO.Directory]::Exists($Path)) {
+        $null = Assert-FixerProfilePathIdentity -Path $Path -ExpectedExists $true -ExpectedIdentity $ExpectedIdentity -ExpectedResolvedPath $ExpectedResolvedPath
         try { [System.IO.Directory]::Delete($Path,$true) } catch { Write-Host ("    .NET Delete: " + $_.Exception.Message) }
     }
 
+    # The retained handle keeps the private quarantine bound to the validated
+    # object throughout cleanup. Mark only that exact empty handle for delete.
+    $Lease.DeleteEmpty()
+    if (-not $Lease.DeleteProved) { throw 'handle-bound profile deletion was not proved' }
     $sw.Stop()
-    if ([System.IO.Directory]::Exists($Path)) {
-        Write-Host ("  RESULT: STILL PRESENT after {0:N1}s" -f $sw.Elapsed.TotalSeconds)
-    } else {
-        Write-Host ("  RESULT: gone in {0:N1}s" -f $sw.Elapsed.TotalSeconds)
-    }
+    Write-Host ("  RESULT: exact profile identity quarantined and removed in {0:N1}s" -f $sw.Elapsed.TotalSeconds)
 }
 `;
 
@@ -1816,6 +3134,9 @@ ipcMain.handle('preflight', async () => {
 // IPC: run-fix - the destructive flow
 // ============================================================
 ipcMain.handle('run-fix', async (event) => {
+  if (fixInProgress || activeChildren.size > 0) {
+    return { success: false, error: 'repair_in_progress' };
+  }
   // A fix in progress must never be interrupted by an update restart: a
   // ready update is deferred (its countdown cancelled) and the controller's
   // isBusy() blocks any install until the fix has finished.
@@ -1835,7 +3156,7 @@ ipcMain.handle('run-fix', async (event) => {
 async function runFixFlow(event) {
   // Secrets minted mid-run (helper password) are pushed here so every log
   // line is redacted. Presence assertions live in profile-safety-smoke.js;
-  // never print the secret, never put it on CreateProcess argv.
+  // never print the secret or put it in PowerShell's command line.
   const secrets = [];
   const send = (line, kind = 'out') => event.sender.send('fix-log', {
     line: profileSafety.redactSecrets(line, secrets),
@@ -1872,7 +3193,7 @@ async function runFixFlow(event) {
   const pre = await preflightCheck();
   for (const t of REQUIRED_TOOLS) {
     const ok = pre.info.tools && pre.info.tools[t];
-    send(`  ${ok ? 'OK ' : 'MISS'}  ${t}`, ok ? 'out' : 'err');
+    send(`  ${ok === null ? '?  ' : ok ? 'OK ' : 'MISS'}  ${t}`, ok ? 'out' : 'err');
   }
   for (const t of OPTIONAL_TOOLS) {
     const ok = pre.info.tools && pre.info.tools[t];
@@ -1898,222 +3219,402 @@ async function runFixFlow(event) {
     };
   }
 
-  // ============================================================
-  // STEP 1: Kill user1 processes; attempt explicit session logoff
-  //         via quser/logoff (diagnostics surfaced).
-  // ============================================================
-  send(`[1/8] Terminating '${FIX_USER}' processes and sessions...`, 'header');
-  await runProcess('taskkill.exe',
-    ['/F', '/FI', `USERNAME eq ${FIX_USER}`], send);
-  const logoff = await tryLogoffUser(FIX_USER, pre.info.tools, send);
-  // quser_missing is the expected path on Windows Home (no quser.exe shipped);
-  // taskkill alone is sufficient, so it should not raise a warning.
-  const realNotes = logoff.notes.filter(n => n !== 'quser_missing');
-  if (realNotes.length) {
-    warnings.push({
-      code: 'logoff_partial',
-      message: `Session logoff issues: ${realNotes.join(', ')}`
-    });
+  // Resolve the existing LOCAL helper before any process or profile action.
+  // A domain account with the same leaf name must never be stopped or used as
+  // evidence that the local helper is clear.
+  const initialIdentity = await readLocalAccountIdentity(FIX_USER);
+  if (!initialIdentity.verified) {
+    send(`ERROR: could not prove the local '${FIX_USER}' account identity.`, 'err');
+    return { success: false, error: 'helper_sid_unresolved', warnings, steps };
   }
-  // Poll until no user1-owned processes remain, killing stragglers each tick.
-  // Replaces the old fixed sleep(3s) + second taskkill + sleep(2s): positive
-  // confirmation instead of hoping 5s was enough, and the common case
-  // (nothing was running) clears in well under a second.
-  const drain = await runPSCapture(`
-    $u = '${FIX_USER}'
-    $deadline = [DateTime]::UtcNow.AddSeconds(6)
-    $clear = $false
-    do {
-      $procs = @()
-      try {
-        # -IncludeUserName THROWS (terminating) without elevation; the fix
-        # flow is elevation-gated so this is the hot path, but fall back to
-        # the slower CIM GetOwner walk rather than silently reporting clear.
-        $procs = @(Get-Process -IncludeUserName -EA Stop |
-          Where-Object { $_.UserName -and (($_.UserName -split '\\\\')[-1] -ieq $u) } |
-          ForEach-Object { $_.Id })
-      } catch {
-        $procs = @(Get-CimInstance Win32_Process -EA SilentlyContinue |
-          Where-Object {
-            $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner -EA SilentlyContinue
-            $o -and ($o.User -ieq $u)
-          } |
-          ForEach-Object { $_.ProcessId })
-      }
-      if ($procs.Count -eq 0) { $clear = $true; break }
-      $procs | ForEach-Object { Stop-Process -Id $_ -Force -EA SilentlyContinue }
-      Start-Sleep -Milliseconds 250
-    } while ([DateTime]::UtcNow -lt $deadline)
-    if ($clear) { Write-Output 'CLEAR' } else { Write-Output 'RESIDUAL' }
-  `, { timeoutMs: 20000 });
-  if ((drain.stdout || '').includes('RESIDUAL')) {
-    send(`  WARNING: some ${FIX_USER} processes survived repeated kills; continuing.`, 'err');
-    warnings.push({ code: 'kill_residual', message: `Some ${FIX_USER} processes were still alive after 6s of kill attempts.` });
-  }
-  if (drain.timedOut) {
-    // Previously a timed-out drain probe read as "all clear" — fail-loud now.
-    send(`  WARNING: could not confirm all ${FIX_USER} processes exited (check timed out).`, 'err');
-    warnings.push({ code: 'kill_check_timeout', message: `Could not confirm every ${FIX_USER} process exited — the check timed out after 20s.` });
-  }
-  const step1Issues = [];
-  if (realNotes.length) step1Issues.push('session logoff issues');
-  if ((drain.stdout || '').includes('RESIDUAL')) step1Issues.push('some processes survived kill attempts');
-  if (drain.timedOut) step1Issues.push('process check timed out');
-  step('close-sessions', `Close ${FIX_USER} programs and sessions`, step1Issues.length ? 'warn' : 'ok', step1Issues.join('; '));
+  const accountExisted = initialIdentity.exists;
+  const preDeleteSid = initialIdentity.sid;
 
   // ============================================================
-  // STEP 2: Pre-clean any leftover suffixed profile folders
-  //         (e.g. user1.MACHINENAME) from earlier botched resets.
+  // STEP 1: Stop only processes owned by the exact local helper SID.
   // ============================================================
-  send('[2/8] Removing leftover suffixed profile folders...', 'header');
-  const suffixSweep = await runPSScript(`
-    ${PS_REMOVE_PROFILE_HELPER}
-    $u = '${FIX_USER}'
-    $folders = Get-ChildItem 'C:\\Users' -Directory -Force -EA 0 | Where-Object { $_.Name -match ('^' + [Regex]::Escape($u) + '\\.') }
-    if (-not $folders) { Write-Host '  None found.'; return }
-    foreach ($f in $folders) {
-      Write-Host "  Found: $($f.FullName)"
-      Remove-ProfileFolder -Path $f.FullName
+  send(`[1/8] Terminating '${FIX_USER}' processes and sessions...`, 'header');
+  // Poll until no process with the exact SID remains. GetOwnerSid is the
+  // authority; GetOwner().User and DOMAIN\user leaf-name matches are not.
+  const drain = await runPSCapture(`
+    ${PS_EXACT_SID_PROCESS_STOP_HELPER}
+    $sid = '${preDeleteSid}'
+    if (-not $sid) { Write-Output 'FIXER_HELPER_INITIAL_DRAIN_V1=CLEAR'; exit 0 }
+    $deadline = [DateTime]::UtcNow.AddSeconds(6)
+    $state = 'UNKNOWN'
+    try {
+      do {
+        $procs = [System.Collections.Generic.List[object]]::new()
+        $unknown = $false
+        foreach ($p in @(Get-CimInstance Win32_Process -EA Stop)) {
+          $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -EA Stop
+          if (-not $o -or $o.ReturnValue -ne 0 -or -not $o.Sid) { $unknown = $true; continue }
+          if ([string]$o.Sid -ieq $sid) { $procs.Add($p) }
+        }
+        if ($unknown) { throw 'process owner inventory is incomplete' }
+        if ($procs.Count -eq 0) { $state = 'CLEAR'; break }
+        foreach ($process in $procs) {
+          $outcome = Stop-FixerOwnedProcessBySid -Candidate $process -ExpectedSid $sid
+          if ($outcome -cne 'TERMINATED' -and $outcome -cne 'GONE') {
+            throw 'owned process termination was not proved'
+          }
+        }
+        Start-Sleep -Milliseconds 250
+      } while ([DateTime]::UtcNow -lt $deadline)
+      if ($state -ne 'CLEAR') { $state = 'RESIDUAL' }
+    } catch { $state = 'UNKNOWN' }
+    Write-Output ('FIXER_HELPER_INITIAL_DRAIN_V1=' + $state)
+    if ($state -eq 'CLEAR') { exit 0 }
+    exit 1
+  `, { timeoutMs: 20000 });
+  const drainReceipt = String(drain.stdout || '').trim();
+  if (drain.code !== 0 || drain.timedOut ||
+      drainReceipt !== 'FIXER_HELPER_INITIAL_DRAIN_V1=CLEAR') {
+    send(`ERROR: could not prove all local '${FIX_USER}' processes stopped.`, 'err');
+    step('close-sessions', `Close ${FIX_USER} programs and sessions`, 'fail',
+      'Exact SID process ownership or termination could not be proved.');
+    return { success: false, error: 'helper_process_custody_unresolved', warnings, steps };
+  }
+  step('close-sessions', `Close ${FIX_USER} programs and sessions`, 'ok', '');
+
+  // ============================================================
+  // STEP 2: Bind all later profile cleanup to the exact prior local SID.
+  // A folder named user1 (or user1.*) is not proof of ownership.
+  // ============================================================
+  send('[2/8] Binding old profile cleanup to the prior local account identity...', 'header');
+  if (preDeleteSid) {
+    send('  Prior local SID verified. Only its ProfileList records may be removed.', 'out');
+  } else {
+    send('  No prior local SID exists. No profile key or folder will be removed by name.', 'out');
+  }
+
+  let profileCleanupPlan = selectSidBoundProfileEntries([], preDeleteSid, 'cleanup');
+  if (preDeleteSid) {
+    const profileInventory = await runPSCapture(`
+      ${PS_PROFILE_PATH_IDENTITY_HELPER}
+      ${PS_PROFILE_RECOVERY_HELPER}
+      $ErrorActionPreference = 'Stop'
+      $base = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList'
+      try {
+        $entries = @(Get-ChildItem -LiteralPath $base -EA Stop | ForEach-Object {
+          $item = Get-ItemProperty -LiteralPath $_.PSPath -EA Stop
+          $effectivePath = Resolve-FixerProfileInventoryPath -Item $item -KeyName ([string]$_.PSChildName) -ExpectedSid '${preDeleteSid}'
+          $profilePathPresent = [bool]$effectivePath.profileImagePathPresent
+          $profilePath = [string]$effectivePath.profileImagePath
+          $pathIdentity = [pscustomobject]@{
+            pathExists = $false
+            isReparsePoint = $false
+            resolvedPath = ''
+            stableIdentity = ''
+          }
+          if ($profilePath) {
+            $pathIdentity = Get-FixerProfilePathIdentity -Path $profilePath
+          }
+          [pscustomobject]@{
+            keyName = [string]$_.PSChildName
+            profileImagePath = $profilePath
+            profileImagePathPresent = $profilePathPresent
+            hasNtUserDat = [bool]($pathIdentity.pathExists -and
+              [System.IO.File]::Exists((Join-Path $pathIdentity.resolvedPath 'NTUSER.DAT')))
+            pathExists = [bool]$pathIdentity.pathExists
+            isReparsePoint = [bool]$pathIdentity.isReparsePoint
+            resolvedPath = [string]$pathIdentity.resolvedPath
+            stableIdentity = [string]$pathIdentity.stableIdentity
+            readable = $true
+          }
+        })
+        [pscustomobject]@{
+          marker = 'FIXER_PROFILELIST_V1'
+          sid = '${preDeleteSid}'
+          entries = @($entries)
+        } | ConvertTo-Json -Compress -Depth 4
+      } catch { exit 1 }
+    `, { timeoutMs: 30000 });
+
+    profileCleanupPlan = null;
+    if (!profileInventory.timedOut && profileInventory.code === 0) {
+      try {
+        const payload = JSON.parse(String(profileInventory.stdout || '').trim());
+        const entries = Array.isArray(payload && payload.entries)
+          ? payload.entries
+          : (payload && payload.entries ? [payload.entries] : []);
+        if (payload && payload.marker === 'FIXER_PROFILELIST_V1' &&
+            String(payload.sid || '').toLowerCase() === preDeleteSid.toLowerCase()) {
+          profileCleanupPlan = selectSidBoundProfileEntries(entries, preDeleteSid, 'cleanup');
+        }
+      } catch (_) { /* fail closed below */ }
     }
-  `, send, { heartbeatMs: 5000, heartbeatLabel: 'suffixed-profile cleanup', timeoutMs: 300000 });
-  tallyRemovals(suffixSweep);
+    if (!profileCleanupPlan || !profileCleanupPlan.ok) {
+      send('ERROR: old profile ownership could not be proved from the exact prior SID.', 'err');
+      step('data-clear', `Clear old ${FIX_USER} profile data`, 'fail',
+        'ProfileList ownership was missing, ambiguous, unreadable, redirected, or unsafe. No account, profile key, or folder was removed.');
+      return { success: false, error: 'profile_cleanup_identity_unresolved', warnings, steps };
+    }
+  }
 
   // ============================================================
   // STEP 3: Delete the existing user1 account, profile folder,
   //         and ProfileList registry entries.
   // ============================================================
   send('[3/8] Removing existing account and profile...', 'header');
-  const accountExisted = await userExists(FIX_USER);
-
-  // Resolve SID BEFORE deleting the account. Once `net user /delete` runs,
-  // NTAccount lookup fails. We still need the SID to unload the user's
-  // NTUSER.DAT hive before deleting the profile folder.
-  let preDeleteSid = '';
-  if (accountExisted) {
-    preDeleteSid = await resolveSID(FIX_USER);
-    send(`  Resolved SID: ${preDeleteSid || '(none)'}`, 'out');
-  }
 
   // SECURITY (SEC-A6): the helper account is no longer an administrator —
   // every privileged repair step runs under this app's own elevated token,
   // and user1 only runs Zoom. A user1 left in Administrators by an older
   // version gets the membership removed here, BEFORE the delete→recreate,
-  // so even a failed delete leaves no admin rights behind. Removal is
-  // SID-first with a net-localgroup fallback (same technique the old
-  // add-path used); a failed removal warns — never fails the run — because
-  // the recreate in STEP 4 builds a standard account either way.
+  // so even a failed delete leaves no admin rights behind. Detection,
+  // removal, and readback all use the exact local-account SID. If that proof
+  // is unavailable, stop before touching a same-name principal.
   if (accountExisted) {
-    const legacyAdmin = await verifyAdminMembership(FIX_USER);
+    const legacyAdmin = await verifyAdminMembership(preDeleteSid);
+    if (!legacyAdmin.verified) {
+      send(`ERROR: could not verify administrator membership for the local '${FIX_USER}' SID.`, 'err');
+      step('remove-admin-rights', `Remove administrator rights from ${FIX_USER}`, 'fail',
+        'Exact SID group membership could not be verified.');
+      return { success: false, error: 'helper_admin_membership_unresolved', warnings, steps };
+    }
     if (legacyAdmin.inGroup) {
       send(`  '${FIX_USER}' is in the Administrators group — removing rights it no longer needs...`, 'out');
-      await runPSScript(`
-        try { Remove-LocalGroupMember -SID 'S-1-5-32-544' -Member '${FIX_USER}' -EA Stop; Write-Host '  Remove-LocalGroupMember OK.' }
-        catch {
-          Write-Host ('  Remove-LocalGroupMember failed: ' + $_.Exception.Message)
-          $r = net localgroup Administrators '${FIX_USER}' /delete 2>&1
-          Write-Host ('  net localgroup fallback: ' + ($r | Out-String).Trim())
-        }
+      const adminRemoval = await runPSScript(`
+        $targetSid = '${preDeleteSid}'
+        try {
+          $matches = @(Get-LocalGroupMember -SID 'S-1-5-32-544' -EA Stop |
+            Where-Object { $_.SID -and ([string]$_.SID.Value -ieq $targetSid) })
+          if ($matches.Count -ne 1) { throw 'exact SID membership was not unique' }
+          Remove-LocalGroupMember -SID 'S-1-5-32-544' -Member $matches[0] -EA Stop
+          Write-Host '  Exact SID administrator membership removed.'
+        } catch { exit 1 }
       `, send, { heartbeatMs: 5000, heartbeatLabel: 'admin-rights removal', timeoutMs: 60000 });
-      const adminRecheck = await verifyAdminMembership(FIX_USER);
-      if (!adminRecheck.inGroup) {
+      const adminRecheck = await verifyAdminMembership(preDeleteSid);
+      if (adminRemoval.code === 0 && !adminRemoval.timedOut && adminRecheck.verified && !adminRecheck.inGroup) {
         send('  Removed administrator rights the helper account no longer needs.', 'out');
         step('remove-admin-rights', `Remove administrator rights from ${FIX_USER}`, 'ok',
           'Removed administrator rights the helper account no longer needs');
       } else {
-        send(`  WARNING: could not remove '${FIX_USER}' from the Administrators group.`, 'err');
-        send('  The account is deleted and rebuilt as a standard user below either way.', 'err');
-        step('remove-admin-rights', `Remove administrator rights from ${FIX_USER}`, 'warn',
-          `'${FIX_USER}' was still visible in the Administrators group after the removal attempt — the rebuilt account is created without admin rights regardless`);
+        send(`ERROR: could not prove removal of '${FIX_USER}' from the Administrators group.`, 'err');
+        step('remove-admin-rights', `Remove administrator rights from ${FIX_USER}`, 'fail',
+          'Exact SID membership removal or readback failed.');
+        return { success: false, error: 'helper_admin_removal_unproved', warnings, steps };
       }
     }
   }
 
+  // Keep the exact SID as retry evidence, but prevent a new helper logon
+  // from acquiring profile handles during destructive cleanup. Then repeat
+  // the exact-SID process drain. Any disable or owner uncertainty stops
+  // before a profile folder, ProfileList key, or account is mutated.
   if (accountExisted) {
-    const del = await runProcess('net.exe', ['user', FIX_USER, '/delete'], send,
-      { heartbeatMs: 5000, heartbeatLabel: 'net user /delete', timeoutMs: 60000 });
-    if (del.code !== 0) {
-      send(`ERROR: failed to delete account '${FIX_USER}'.`, 'err');
+    const disable = await runPSScript(
+      exactSidLocalUserDisableScript(preDeleteSid, FIX_USER), send,
+      { heartbeatMs: 5000, heartbeatLabel: 'exact-SID local user disable', timeoutMs: 60000 });
+    if (!exactSidLocalUserDisableProved(disable)) {
+      send(`ERROR: exact-SID disable of local account '${FIX_USER}' was not proved.`, 'err');
+      return { success: false, error: 'helper_disable_unproved', warnings, steps };
+    }
+
+    const finalDrain = await runPSCapture(
+      exactSidFinalDrainScript(preDeleteSid), { timeoutMs: 20000 });
+    const finalDrainReceipt = String(finalDrain.stdout || '').trim();
+    if (finalDrain.code !== 0 || finalDrain.timedOut ||
+        finalDrainReceipt !== 'FIXER_HELPER_FINAL_DRAIN_V1=CLEAR') {
+      send(`ERROR: final local '${FIX_USER}' process drain was not proved.`, 'err');
+      return { success: false, error: 'helper_final_drain_unproved', warnings, steps };
+    }
+  }
+
+  // Keep the local account and its SID alive until every selected folder is
+  // absent and every exact-SID ProfileList key is removed. A failed cleanup
+  // then remains recoverable on the next run through the same trusted SID.
+  let plSweep = { code: 0, timedOut: false, stdout: '' };
+  if (preDeleteSid) {
+    const cleanupPlanJson = JSON.stringify(profileCleanupPlan.entries).replace(/'/g, "''");
+    plSweep = await runPSScript(`
+        ${PS_PROFILE_PATH_IDENTITY_HELPER}
+        ${PS_PROFILE_RECOVERY_HELPER}
+        ${PS_PROFILE_INVENTORY_GUARD}
+        ${PS_REMOVE_PROFILE_HELPER}
+        $ErrorActionPreference = 'Stop'
+        $expectedSid = '${preDeleteSid}'
+        $base = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList'
+        $plan = @(ConvertFrom-Json -InputObject '${cleanupPlanJson}')
+
+        try {
+          $currentTargets = @(Assert-FixerProfileInventory -Plan $plan -ExpectedSid $expectedSid -Base $base)
+          $plannedFolders = @($plan | Where-Object { [bool]$_.pathExists } |
+            Group-Object -Property stableIdentity | ForEach-Object { $_.Group[0] })
+          foreach ($plannedFolder in $plannedFolders) {
+            # Revalidate every ProfileList path immediately before touching one
+            # selected directory. This closes alias and mutation-time drift.
+            $currentTargets = @(Assert-FixerProfileInventory -Plan $plan -ExpectedSid $expectedSid -Base $base)
+            $profilePath = [string]$plannedFolder.profileImagePath
+            $profileIdentity = Assert-FixerProfilePathIdentity -Path $profilePath -ExpectedExists $true -ExpectedIdentity ([string]$plannedFolder.stableIdentity) -ExpectedResolvedPath ([string]$plannedFolder.resolvedPath)
+            if ($profileIdentity.pathExists) {
+              Write-Host "  Removing exact-SID profile folder: $profilePath"
+              # A loaded hive can hold the profile tree open without delete
+              # sharing. Release it before acquiring the long-lived custody
+              # handle; after acquisition no path-only root mutation is
+              # authoritative.
+              Unload-UserHive -Sid $expectedSid
+              $lease = [FixerProfileIdentityV1]::AcquireQuarantineLease(
+                $profilePath,
+                [string]$plannedFolder.stableIdentity,
+                [string]$plannedFolder.resolvedPath)
+              try {
+                # The held handle has proved that this resolved path is the
+                # same object as the raw registry alias. From this point on,
+                # receipts and mutations use only the resolved identity.
+                $profilePath = [string]$lease.OriginalPath
+                $folderPlans = @($plan | Where-Object {
+                  [string]$_.stableIdentity -ceq [string]$plannedFolder.stableIdentity
+                })
+                $folderKeys = [System.Collections.Generic.List[object]]::new()
+                foreach ($folderPlan in $folderPlans) {
+                  $matchingKeys = @($currentTargets | Where-Object {
+                    [string]$_.PSChildName -ieq [string]$folderPlan.keyName
+                  })
+                  if ($matchingKeys.Count -ne 1) { throw 'exact-SID ProfileList recovery key is unavailable' }
+                  $folderKeys.Add($matchingKeys[0])
+                  # Normalize a resumed receipt to the currently authenticated
+                  # file identity before writing the next durable transition.
+                  Set-ItemProperty -LiteralPath $matchingKeys[0].PSPath -Name 'ProfileImagePath' -Value $profilePath -EA Stop
+                  $pathItem = Get-ItemProperty -LiteralPath $matchingKeys[0].PSPath -EA Stop
+                  $pathProperty = $pathItem.PSObject.Properties['ProfileImagePath']
+                  if ($null -eq $pathProperty -or [string]$pathProperty.Value -ine $profilePath) {
+                    throw 'exact-SID ProfileList source path was not proved'
+                  }
+                }
+                $quarantinePath = [string]$lease.PlannedQuarantinePath
+                $recoveryJson = [ordered]@{
+                  marker = 'FIXER_PROFILE_QUARANTINE_V1'
+                  phase = 'moving'
+                  originalPath = $profilePath
+                  quarantinePath = $quarantinePath
+                  stableIdentity = [string]$plannedFolder.stableIdentity
+                } | ConvertTo-Json -Compress
+                foreach ($folderKey in $folderKeys) {
+                  New-ItemProperty -LiteralPath $folderKey.PSPath -Name 'FixerProfileQuarantineV1' -Value $recoveryJson -PropertyType String -Force -EA Stop | Out-Null
+                  $recoveryItem = Get-ItemProperty -LiteralPath $folderKey.PSPath -EA Stop
+                  $recoveryProperty = $recoveryItem.PSObject.Properties['FixerProfileQuarantineV1']
+                  if ($null -eq $recoveryProperty -or [string]$recoveryProperty.Value -cne $recoveryJson) {
+                    throw 'exact-SID profile quarantine receipt was not proved'
+                  }
+                }
+                # The exact-SID durable receipt now identifies both sides of
+                # the transition. A timeout before or after the handle rename
+                # can be recovered by physical file identity on the next run.
+                Protect-FixerProfileQuarantineRoot -Path $profilePath
+                $actualQuarantinePath = $lease.Quarantine()
+                if ($actualQuarantinePath -ine $quarantinePath) {
+                  throw 'handle-bound quarantine destination changed'
+                }
+                foreach ($folderPlan in $folderPlans) {
+                  $matchingKeys = @($folderKeys | Where-Object {
+                    [string]$_.PSChildName -ieq [string]$folderPlan.keyName
+                  })
+                  if ($matchingKeys.Count -ne 1) { throw 'exact-SID ProfileList recovery key is unavailable' }
+                  Set-ItemProperty -LiteralPath $matchingKeys[0].PSPath -Name 'ProfileImagePath' -Value $quarantinePath -EA Stop
+                  $recoveryItem = Get-ItemProperty -LiteralPath $matchingKeys[0].PSPath -EA Stop
+                  $recoveryProperty = $recoveryItem.PSObject.Properties['ProfileImagePath']
+                  if ($null -eq $recoveryProperty -or [string]$recoveryProperty.Value -ine $quarantinePath) {
+                    throw 'exact-SID ProfileList recovery path was not proved'
+                  }
+                  $folderPlan.profileImagePath = $quarantinePath
+                  $folderPlan.profileImagePathPresent = $true
+                  $folderPlan.resolvedPath = $quarantinePath
+                  $folderPlan.pathExists = $true
+                }
+                $null = @(Assert-FixerProfileInventory -Plan $plan -ExpectedSid $expectedSid -Base $base)
+                $deletingRecoveryJson = [ordered]@{
+                  marker = 'FIXER_PROFILE_QUARANTINE_V1'
+                  phase = 'deleting'
+                  originalPath = $profilePath
+                  quarantinePath = $quarantinePath
+                  stableIdentity = [string]$plannedFolder.stableIdentity
+                } | ConvertTo-Json -Compress
+                foreach ($folderKey in $folderKeys) {
+                  Set-ItemProperty -LiteralPath $folderKey.PSPath -Name 'FixerProfileQuarantineV1' -Value $deletingRecoveryJson -EA Stop
+                  $deletingItem = Get-ItemProperty -LiteralPath $folderKey.PSPath -EA Stop
+                  $deletingProperty = $deletingItem.PSObject.Properties['FixerProfileQuarantineV1']
+                  if ($null -eq $deletingProperty -or [string]$deletingProperty.Value -cne $deletingRecoveryJson) {
+                    throw 'profile quarantine delete receipt was not proved'
+                  }
+                }
+                Remove-ProfileFolder -Path $quarantinePath -Sid $expectedSid -ExpectedIdentity ([string]$plannedFolder.stableIdentity) -ExpectedResolvedPath $quarantinePath -Lease $lease
+                if (-not $lease.DeleteProved) { throw 'handle-bound profile deletion was not proved' }
+                foreach ($folderPlan in $folderPlans) {
+                  $folderPlan.pathExists = $false
+                  $folderPlan.stableIdentity = ''
+                  $folderPlan.resolvedPath = $quarantinePath
+                }
+                foreach ($folderKey in $folderKeys) {
+                  Remove-ItemProperty -LiteralPath $folderKey.PSPath -Name 'FixerProfileQuarantineV1' -Force -EA Stop
+                  $recoveryItem = Get-ItemProperty -LiteralPath $folderKey.PSPath -EA Stop
+                  if ($null -ne $recoveryItem.PSObject.Properties['FixerProfileQuarantineV1']) {
+                    throw 'profile quarantine receipt removal was not proved'
+                  }
+                }
+              } finally {
+                if ($null -ne $lease) { $lease.Dispose() }
+              }
+              $after = Assert-FixerProfilePathIdentity -Path $quarantinePath -ExpectedExists $false
+              if ($after.pathExists) { throw 'profile folder remains after cleanup' }
+            }
+          }
+          # Keep exact-SID keys as ownership evidence until every selected
+          # folder is absent and the complete inventory is safe again.
+          $currentTargets = @(Assert-FixerProfileInventory -Plan $plan -ExpectedSid $expectedSid -Base $base)
+          foreach ($plannedFolder in $plannedFolders) {
+            $after = Assert-FixerProfilePathIdentity -Path ([string]$plannedFolder.profileImagePath) -ExpectedExists ([bool]$plannedFolder.pathExists) -ExpectedIdentity ([string]$plannedFolder.stableIdentity) -ExpectedResolvedPath ([string]$plannedFolder.resolvedPath)
+            if ($after.pathExists) { throw 'profile folder remains after cleanup' }
+          }
+          foreach ($key in $currentTargets) {
+            Write-Host ("  Removing exact-SID ProfileList entry: " + $key.PSChildName)
+            Remove-Item -LiteralPath $key.PSPath -Recurse -Force -EA Stop
+          }
+          $remainingTargets = @(Get-ChildItem -LiteralPath $base -EA Stop |
+            Where-Object { $_.PSChildName -ieq $expectedSid -or $_.PSChildName -ieq ($expectedSid + '.bak') })
+          if ($remainingTargets.Count -ne 0) { throw 'ProfileList cleanup was not proved' }
+        } catch { exit 1 }
+    `, send, { heartbeatMs: 5000, heartbeatLabel: 'exact-SID profile cleanup', timeoutMs: 480000 });
+    tallyRemovals(plSweep);
+    if (plSweep.timedOut) {
+      send('ERROR: exact-SID profile cleanup timed out. Reboot and try again.', 'err');
+      return { success: false, error: 'delete_profile_timeout', warnings, steps };
+    }
+    if (plSweep.code !== 0) {
+      send('ERROR: exact-SID profile cleanup did not complete safely. No name-only fallback was attempted.', 'err');
+      return { success: false, error: 'delete_profile_failed', warnings, steps };
+    }
+    if (profileCleanupPlan.entries.length === 0) {
+      send('  No ProfileList entry belongs to the prior local SID. Name-only folders were preserved.', 'out');
+    }
+  }
+
+  if (accountExisted) {
+    // The folder/key mutation used preDeleteSid as its authority. Re-read the
+    // local account immediately before deletion, then pass that exact SID to
+    // Remove-LocalUser. The account name never selects this mutation.
+    const deleteIdentity = await readLocalAccountIdentity(FIX_USER);
+    if (!deleteIdentity.verified || !deleteIdentity.exists ||
+        deleteIdentity.sid.toLowerCase() !== preDeleteSid.toLowerCase()) {
+      send(`ERROR: local '${FIX_USER}' identity changed before account deletion.`, 'err');
+      return { success: false, error: 'helper_identity_changed_before_delete', warnings, steps };
+    }
+    const del = await runPSScript(exactSidLocalUserDeleteScript(preDeleteSid, FIX_USER), send,
+      { heartbeatMs: 5000, heartbeatLabel: 'exact-SID local user deletion', timeoutMs: 60000 });
+    if (!exactSidLocalUserDeleteProved(del)) {
+      send(`ERROR: exact-SID deletion of local account '${FIX_USER}' was not proved.`, 'err');
       return { success: false, error: 'delete_user_failed', warnings, steps };
+    }
+    const deletedIdentity = await readLocalAccountIdentity(FIX_USER);
+    if (!deletedIdentity.verified || deletedIdentity.exists) {
+      send(`ERROR: could not prove that local account '${FIX_USER}' was deleted.`, 'err');
+      return { success: false, error: 'delete_user_unproved', warnings, steps };
     }
     send('  Account deleted.', 'out');
   } else {
     send('  Account does not exist - skipping account delete.', 'out');
   }
-
-  const sourceProfile = `C:\\Users\\${FIX_USER}`;
-  const profileFolderExisted = fs.existsSync(sourceProfile);
-  if (profileFolderExisted) {
-    send(`  Removing profile folder ${sourceProfile} (rd /s /q first; ACL fix only on residue)...`, 'out');
-    const delProfile = await runPSScript(`
-      ${PS_REMOVE_PROFILE_HELPER}
-      $p = '${sourceProfile}'
-      $sid = '${preDeleteSid}'
-      Remove-ProfileFolder -Path $p -Sid $sid
-      if (Test-Path $p) {
-        Write-Host "  ERROR: $p still exists - a handle may still be open."
-        Write-Host "         Reboot once and re-run."
-        exit 1
-      }
-      Write-Host "  Profile folder deleted."
-    `, send, { heartbeatMs: 5000, heartbeatLabel: 'profile delete', timeoutMs: 480000 });
-    if (delProfile.timedOut) {
-      send('ERROR: profile delete timed out after 8 minutes. A handle is likely still open (Zoom, antivirus, search indexer).', 'err');
-      send('  Try: reboot, then re-run the fix.', 'err');
-      return { success: false, error: 'delete_profile_timeout', warnings, steps };
-    }
-    if (delProfile.code !== 0) {
-      send('ERROR: profile folder could not be removed. Reboot and try again.', 'err');
-      return { success: false, error: 'delete_profile_failed', warnings, steps };
-    }
-    tallyRemovals(delProfile);
-  } else {
-    send(`  ${sourceProfile} did not exist - nothing to delete.`, 'out');
-  }
-
-  // Wider ProfileList sweep. Match entries TWO ways:
-  //   1. ProfileImagePath points at C:\Users\user1 (or user1.SOMETHING).
-  //   2. PSChildName == preDeleteSid OR preDeleteSid + ".bak".
-  //
-  // The second match catches the post-1132-reset failure mode where UPS
-  // renamed the live <sid> key to <sid>.bak (Event 1515) and minted a
-  // fresh <sid> key whose ProfileImagePath now references
-  // C:\Users\TEMP.<machine>.NNN. A path-only match misses the broken
-  // primary key, leaving Windows to keep falling back to TEMP profiles.
-  //
-  // Folder sweep also widened: any ProfileImagePath we removed becomes
-  // an orphan folder candidate, regardless of name shape.
-  const plSweep = await runPSScript(`
-    ${PS_REMOVE_PROFILE_HELPER}
-    $u = '${FIX_USER}'
-    $preDeleteSid = '${preDeleteSid}'
-    $base = 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList'
-    $cleaned = 0
-    $orphanPaths = New-Object System.Collections.Generic.HashSet[string]
-    Get-ChildItem $base -EA SilentlyContinue | ForEach-Object {
-      $name = $_.PSChildName
-      $p = (Get-ItemProperty $_.PSPath -EA SilentlyContinue).ProfileImagePath
-      $matchByPath = $p -and ($p -ieq ('C:\\Users\\' + $u) -or $p -like ('C:\\Users\\' + $u + '.*'))
-      $matchBySid  = $preDeleteSid -and ($name -ieq $preDeleteSid -or $name -ieq ($preDeleteSid + '.bak'))
-      if ($matchByPath -or $matchBySid) {
-        if ($p) { [void]$orphanPaths.Add($p) }
-        Write-Host "  Removing ProfileList entry: $name  ->  $p"
-        Remove-Item $_.PSPath -Recurse -Force -EA SilentlyContinue
-        $cleaned += 1
-      }
-    }
-    Write-Host ("  Cleaned $cleaned ProfileList entries.")
-    foreach ($orphan in $orphanPaths) {
-      if (Test-Path $orphan) {
-        Write-Host "  Removing orphan folder (from ProfileList): $orphan"
-        Remove-ProfileFolder -Path $orphan
-      }
-    }
-    Get-ChildItem 'C:\\Users' -Directory -Force -EA 0 | Where-Object { $_.Name -ieq $u -or $_.Name -match ('^' + [Regex]::Escape($u) + '\\.') } | ForEach-Object {
-      Write-Host "  Removing leftover: $($_.FullName)"
-      Remove-ProfileFolder -Path $_.FullName
-    }
-  `, send, { heartbeatMs: 5000, heartbeatLabel: 'leftover cleanup', timeoutMs: 300000 });
-  tallyRemovals(plSweep);
 
   // Aggregate data-clear outcome across every removal pass above. A counted
   // leftover ("app only deleted 1 file" class) fails the step -> partial;
@@ -2123,7 +3624,7 @@ async function runFixFlow(event) {
     const clearRec = deletionOutcome(deletedCount, clearAttempts);
     let clearOutcome = clearRec.outcome;
     let clearDetail = clearRec.detail;
-    if (clearOutcome === 'ok' && (clearTimedOut || suffixSweep.code !== 0 || plSweep.code !== 0)) {
+    if (clearOutcome === 'ok' && (clearTimedOut || plSweep.code !== 0)) {
       clearOutcome = 'warn';
       clearDetail += clearTimedOut
         ? ' — but the cleanup step timed out before it could re-check, so a leftover may remain'
@@ -2166,9 +3667,9 @@ async function runFixFlow(event) {
           $refreshOk = $true
         } catch {
           Write-Host ('  Restart-Service failed: ' + $_.Exception.Message)
-          $stop  = & sc.exe stop  ProfSvc 2>&1
+          $stop  = & (Resolve-FixerTool 'sc.exe') stop  ProfSvc 2>&1
           Start-Sleep -Seconds 2
-          $start = & sc.exe start ProfSvc 2>&1
+          $start = & (Resolve-FixerTool 'sc.exe') start ProfSvc 2>&1
           Write-Host ('  sc.exe stop output:  ' + (($stop  | Out-String).Trim()))
           Write-Host ('  sc.exe start output: ' + (($start | Out-String).Trim()))
           # sc.exe start reports START_PENDING immediately; poll the actual
@@ -2189,7 +3690,7 @@ async function runFixFlow(event) {
     }
     # Belt-and-suspenders: flush HKLM hive writes so the next logon
     # reads fresh ProfileList data, not cached.
-    & reg.exe flush HKLM 2>&1 | Out-Null
+    & (Resolve-FixerTool 'reg.exe') flush HKLM 2>&1 | Out-Null
     Write-Host '  HKLM flushed.'
     Write-Output ($(if ($refreshOk) { 'PROFSVC_REFRESH=OK' } else { 'PROFSVC_REFRESH=FAILED' }))
   `, send, { heartbeatMs: 5000, heartbeatLabel: 'profsvc flush', timeoutMs: 60000 });
@@ -2200,7 +3701,8 @@ async function runFixFlow(event) {
   // the script exits 0 despite both restart paths failing (P1-B).
   const flushMarker = profsvcRefreshResult(flush.stdout);
   if (flush.timedOut || flush.code !== 0 || flushMarker !== 'OK') {
-    const profsvcNeeded = accountExisted || profileFolderExisted;
+    const profsvcNeeded = accountExisted ||
+      profileCleanupPlan.entries.some(entry => entry.pathExists === true);
     const why = flush.timedOut          ? 'timed out after 60 seconds'
       : flush.code !== 0                ? `did not finish cleanly (exit ${flush.code})`
       : flushMarker === 'FAILED'        ? 'could not restart the service'
@@ -2231,9 +3733,10 @@ async function runFixFlow(event) {
   // plain text.
   const fixPass = helperCred.generateHelperPassword();
   secrets.push(fixPass);
-  // Password rides in a tmp PowerShell file (same residual as Zoom launch)
-  // — never as a net.exe CreateProcess argument, which Win32_Process would
-  // enumerate. /y auto-answers net.exe's ">14 characters" DOS-compat prompt.
+  // Password reaches PowerShell through stdin (same as Zoom launch), without
+  // a temporary script or a PowerShell command-line secret. The native net.exe
+  // account API still receives it in its arguments. /y answers the long-password
+  // DOS compatibility prompt; the log sanitizer removes the generated secret.
   const create = await runPSScript(
     profileSafety.accountCreateScript(FIX_USER, fixPass),
     send,
@@ -2243,6 +3746,13 @@ async function runFixFlow(event) {
     send(`ERROR: failed to create '${FIX_USER}'.`, 'err');
     send('  Common cause: password complexity policy rejected the password.', 'err');
     return { success: false, error: 'create_user_failed', warnings, steps };
+  }
+  const helperSID = await resolveSID(FIX_USER, preDeleteSid);
+  if (!helperSID) {
+    send(`ERROR: Windows did not return one fresh local SID for '${FIX_USER}'.`, 'err');
+    step('create-account', `Create fresh ${FIX_USER} account`, 'fail',
+      'The new local account identity was missing, ambiguous, malformed, or unchanged.');
+    return { success: false, error: 'created_helper_sid_unproved', warnings, steps };
   }
   // Invalidate-at-rotation: the OLD password just died with the recreate, so
   // any blob/launcher from a previous run is unusable from this instant.
@@ -2280,48 +3790,99 @@ async function runFixFlow(event) {
     send(`ERROR: ${zoomDetect.zoomStatusMessage(zi)}`, 'err');
     return { success: false, error: 'zoom_not_found', warnings };
   }
-  // fixPass is interpolated into a single-quoted PS string inside a tmp
-  // script file (runPSScriptLaunchCapture) — never onto a command line where
-  // Win32_Process could enumerate it. The tmp file is unlinked after the run;
-  // its seconds-long lifetime is the accepted residual (see PR notes).
+  // fixPass is interpolated into a single-quoted PowerShell string and sent
+  // through stdin — never on a command line or in a temporary file.
   const launchPs = `
-    $pw = ConvertTo-SecureString '${fixPass}' -AsPlainText -Force
-    $cred = New-Object System.Management.Automation.PSCredential('${FIX_USER}', $pw)
     try {
+      $ErrorActionPreference = 'Stop'
+      $fixerLaunchPhase = 'credential'
+      $pw = [System.Security.SecureString]::new()
+      $fixerPasswordChars = '${fixPass}'.ToCharArray()
+      try {
+        foreach ($fixerPasswordChar in $fixerPasswordChars) {
+          $pw.AppendChar($fixerPasswordChar)
+        }
+      } finally {
+        $fixerPasswordChar = $null
+        [Array]::Clear($fixerPasswordChars, 0, $fixerPasswordChars.Length)
+      }
+      $pw.MakeReadOnly()
+      $fixerLocalUser = [System.Environment]::MachineName + '\\${FIX_USER}'
+      $cred = [System.Management.Automation.PSCredential]::new($fixerLocalUser, $pw)
+      Write-Output 'FIXER_LAUNCH_PHASE_V1 phase=credential outcome=success exceptionClass=none hresult=none nativeCode=none'
+      $fixerLaunchPhase = 'start_process'
       Start-Process -FilePath '${zi.path}' -WorkingDirectory '${zi.dir}' -Credential $cred -EA Stop
       Write-Host '  Zoom launched as ${FIX_USER}.'
+      Write-Output 'FIXER_LAUNCH_PHASE_V1 phase=start_process outcome=success exceptionClass=none hresult=none nativeCode=none'
+      exit 0
     } catch {
-      Write-Host ('  Launch failed: ' + $_.Exception.Message)
+      $fixerFailurePhase = 'pre_launch'
+      try {
+        if (($fixerLaunchPhase -eq 'credential') -or ($fixerLaunchPhase -eq 'start_process')) {
+          $fixerFailurePhase = [string]$fixerLaunchPhase
+        }
+      } catch {}
+      $fixerExceptionClass = 'unknown'
+      try {
+        $fixerClassCandidate = [string]$_.Exception.GetType().FullName
+        if ($fixerClassCandidate -match '^[A-Za-z][A-Za-z0-9_.]{0,127}$') {
+          $fixerExceptionClass = $fixerClassCandidate
+        }
+      } catch {}
+      $fixerHResult = 'none'
+      try {
+        $fixerHResultValue = [int64]$_.Exception.HResult
+        if (($fixerHResultValue -ge -2147483648) -and ($fixerHResultValue -le 4294967295)) {
+          $fixerHResult = [string]$fixerHResultValue
+        }
+      } catch {}
+      $fixerNativeCode = 'none'
+      try {
+        $fixerErrorObject = $_.Exception
+        for ($fixerDepth = 0; ($fixerDepth -lt 3) -and ($null -ne $fixerErrorObject); $fixerDepth++) {
+          $fixerNativeProperty = $fixerErrorObject.PSObject.Properties['NativeErrorCode']
+          if (($null -ne $fixerNativeProperty) -and ($null -ne $fixerNativeProperty.Value)) {
+            $fixerNativeValue = [int64]$fixerNativeProperty.Value
+            if (($fixerNativeValue -ge -2147483648) -and ($fixerNativeValue -le 4294967295)) {
+              $fixerNativeCode = [string]$fixerNativeValue
+            }
+            break
+          }
+          $fixerErrorObject = $fixerErrorObject.InnerException
+        }
+      } catch {}
+      try {
+        Write-Output ('FIXER_LAUNCH_PHASE_V1 phase={0} outcome=failure exceptionClass={1} hresult={2} nativeCode={3}' -f $fixerFailurePhase, $fixerExceptionClass, $fixerHResult, $fixerNativeCode)
+      } catch {}
       exit 1
     }
   `;
   send(`  Dispatching Zoom launch (detached) ...`, 'out');
   const launch = await runPSScriptLaunchCapture(launchPs);
-  // The launcher writes '  Zoom launched as user1.' on success or
-  // '  Launch failed: <exception>' before exit 1 — captured now,
-  // so the exact Start-Process error reaches the log instead of a guess-list.
-  const launchFailLine = (launch.stdout || '').split(/\r?\n/)
-    .map(s => s.trim()).find(l => l.startsWith('Launch failed: ')) || '';
+  const launchDiagnostics = formatLaunchDiagnostics(launch);
+  for (const diagnostic of launchDiagnostics) {
+    send(`  ${diagnostic}`, diagnostic.includes(' outcome=success ') ? 'out' : 'err');
+  }
   if (launch.code !== 0 && launch.code !== null) {
     send(`  Launch script exited with code ${launch.code}; verifying via Win32_Process...`, 'err');
   }
 
   // Verify Zoom is actually running as user1. With stdio:'ignore' on the
   // launcher we have no other signal. Use Win32_Process via Get-CimInstance
-  // + Invoke-CimMethod GetOwner (CimInstance has NO GetOwner method itself —
-  // earlier code used $_.GetOwner() which always threw and forced a false
-  // negative). Poll up to ~10s INSIDE one PS process — the old spawn-per-tick
+  // + Invoke-CimMethod GetOwnerSid. The SID binds this proof to the exact
+  // recreated local account generation. Poll up to ~10s INSIDE one PS process — the old spawn-per-tick
   // loop paid a powershell.exe startup for each of up to 12 checks, and the
   // 400ms internal tick also spots Zoom sooner.
   const zpoll = await runPSCapture(`
+    $sid = '${helperSID}'
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     $hit = $false
     do {
       try {
         $procs = Get-CimInstance Win32_Process -Filter "Name='Zoom.exe'" -EA SilentlyContinue
         foreach ($p in $procs) {
-          $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwner -EA SilentlyContinue
-          if ($owner -and ($owner.User -ieq '${FIX_USER}')) { $hit = $true; break }
+          $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -EA SilentlyContinue
+          if ($owner -and $owner.ReturnValue -eq 0 -and ([string]$owner.Sid -ieq $sid)) { $hit = $true; break }
         }
       } catch {}
       if ($hit) { break }
@@ -2332,14 +3893,8 @@ async function runFixFlow(event) {
   const zoomSeen = (zpoll.stdout || '').includes('YES');
   if (!zoomSeen) {
     send(`ERROR: Zoom.exe is not running as '${FIX_USER}' after launch.`, 'err');
-    if (launchFailLine) {
-      // The exact exception beats the guess-list; messages.js
-      // launch_failed copy already points the user at this log line.
-      send(`  PowerShell launcher reported: ${launchFailLine}`, 'err');
-    } else {
-      send('  Likely causes: Secondary Logon disabled, password policy mismatch, or Zoom crashed on startup.', 'err');
-      send('  Try: sc.exe config seclogon start= demand && sc.exe start seclogon', 'err');
-    }
+    send('  Likely causes: Secondary Logon disabled, password policy mismatch, or Zoom crashed on startup.', 'err');
+    send('  Try: sc.exe config seclogon start= demand && sc.exe start seclogon', 'err');
     return { success: false, error: 'launch_failed', warnings, steps };
   }
   send(`  Confirmed: Zoom.exe is running as ${FIX_USER}.`, 'out');
@@ -2420,11 +3975,11 @@ async function runFixFlow(event) {
   }
 
   // ============================================================
-  // STEP 6: Resolve the new user1 profile via registry first,
-  //         folder fallback. Deploy firstrun + desktop shortcut.
+  // STEP 6: Resolve the new user1 profile from the exact helper SID's
+  //         ProfileList key. Deploy firstrun + desktop shortcut.
   // ============================================================
   send('[6/8] Resolving new user1 profile path...', 'header');
-  const profile = await resolveUserProfilePath(FIX_USER, 30, send);
+  const profile = await resolveUserProfilePath(FIX_USER, 30, send, helperSID);
   if (!profile.path) {
     send('  Checked registry keys:', 'err');
     profile.checkedKeys.forEach(k => send(`    - ${k}`, 'err'));
@@ -2436,12 +3991,10 @@ async function runFixFlow(event) {
       message: `user1 profile did not appear within 30s. Registry keys checked: ${profile.checkedKeys.join('; ') || '(none)'}. Folders checked: ${profile.checkedPaths.join('; ') || '(none)'}.`
     });
     // Everything the fix exists to deliver per-user (consent, dark mode,
-    // helper script) was skipped — that is a partial outcome, not a green run.
+    // helper script) was skipped. Identity is unresolved, so fail closed.
     step('profile-setup', `Set up the ${FIX_USER} profile`, 'fail',
-      `The ${FIX_USER} profile did not appear within 30 seconds, so Zoom settings, camera/microphone consent, and the helper script were skipped. Sign into Zoom once as ${FIX_USER}, then run the fix again.`);
-    send('Fix finished, but some outcomes need attention - see the summary below.', 'err');
-    const earlyVerdict = computeRunVerdict(steps, warnings, []);
-    return { success: true, partial: earlyVerdict.partial, steps, warnings, receipt: null };
+      `The exact ${FIX_USER} SID did not resolve to one trusted local profile, so no per-user file or ACL change was made.`);
+    return { success: false, error: 'profile_identity_unresolved', steps, warnings, receipt: null };
   }
   const newUserProfile = profile.path;
   send(`  Profile source: ${profile.source}, path: ${newUserProfile}`, 'out');
@@ -2494,9 +4047,9 @@ async function runFixFlow(event) {
   // Raw-SID grants (icacls `*` prefix) survive even if the account is
   // later deleted; NTAccount lookup fails for deleted accounts but the
   // ACE itself remains valid for the same SID on recreate.
-  if (profile.sid) {
+  if (profile.sid && profile.sid.toLowerCase() === helperSID.toLowerCase()) {
     await runPSScript(`
-      $sid = '${profile.sid}'
+      $sid = '${helperSID}'
       $base = '${newUserProfile}'
       $targets = @(
         (Join-Path $base 'NTUSER.DAT'),
@@ -2504,7 +4057,7 @@ async function runFixFlow(event) {
       )
       foreach ($f in $targets) {
         if (Test-Path $f) {
-          $out = & icacls.exe $f /grant ('*' + $sid + ':(F)') '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' 2>&1
+          $out = & (Resolve-FixerTool 'icacls.exe') $f /grant ('*' + $sid + ':(F)') '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' 2>&1
           Write-Host ('  icacls ' + $f + ': ' + (($out | Out-String).Trim()))
         } else {
           Write-Host ('  (skipped, not yet present: ' + $f + ')')
@@ -2540,7 +4093,7 @@ async function runFixFlow(event) {
       const shortcutPs = `
         $ws = New-Object -ComObject WScript.Shell
         $lnk = $ws.CreateShortcut('${esc(shortcutPath)}')
-        $lnk.TargetPath = 'powershell.exe'
+        $lnk.TargetPath = Resolve-FixerTool 'powershell.exe'
         $lnk.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "${firstRunDst}"'
         $lnk.WorkingDirectory = '${esc(path.join(newUserProfile, 'Documents'))}'
         $lnk.IconLocation = '${esc(iconForShortcut)},0'
@@ -2555,8 +4108,8 @@ async function runFixFlow(event) {
         warnings.push({ code: 'shortcut_failed', message: 'Could not create Apply Zoom Settings shortcut on user1 desktop.' });
       }
       await Promise.all([
-        runProcess('icacls.exe', [firstRunDst, '/grant', `${FIX_USER}:(R)`, '/C'], noop),
-        runProcess('icacls.exe', [shortcutPath, '/grant', `${FIX_USER}:(RX)`, '/C'], noop)
+        runProcess('icacls.exe', [firstRunDst, '/grant', `*${helperSID}:(R)`, '/C'], noop),
+        runProcess('icacls.exe', [shortcutPath, '/grant', `*${helperSID}:(RX)`, '/C'], noop)
       ]);
     } catch (err) {
       send(`    WARNING: firstrun deploy failed: ${err.message}`, 'err');
@@ -2584,15 +4137,15 @@ async function runFixFlow(event) {
   // ============================================================
   send('[7/8] Configuring per-user Zoom preferences...', 'header');
 
-  const userSID = profile.sid || (await resolveSID(FIX_USER));
+  const userSID = helperSID;
   if (userSID) {
     await runPSScript(`
       $sid = '${userSID}'
-      $null = reg query "HKU\\$sid" 2>$null
+      $null = & (Resolve-FixerTool 'reg.exe') query "HKU\\$sid" 2>$null
       if ($LASTEXITCODE -eq 0) {
         Write-Host "  Setting Windows dark mode for '${FIX_USER}'..."
-        reg add "HKU\\$sid\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize" /v AppsUseLightTheme   /t REG_DWORD /d 0 /f | Out-Null
-        reg add "HKU\\$sid\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize" /v SystemUsesLightTheme /t REG_DWORD /d 0 /f | Out-Null
+        & (Resolve-FixerTool 'reg.exe') add "HKU\\$sid\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize" /v AppsUseLightTheme   /t REG_DWORD /d 0 /f | Out-Null
+        & (Resolve-FixerTool 'reg.exe') add "HKU\\$sid\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize" /v SystemUsesLightTheme /t REG_DWORD /d 0 /f | Out-Null
         Write-Host "  Dark mode set."
       } else {
         Write-Host "  WARNING: HKU\\$sid not loaded; skipping Windows dark mode."
@@ -2738,33 +4291,49 @@ async function runFixFlow(event) {
   // tree is confirmed gone — positive exit confirmation means file handles
   // (Zoom.us.ini) are released, typically within ~1s instead of always 4s.
   const zoomClose = await runPSCapture(`
-    $u = '${FIX_USER}'
+    ${PS_EXACT_SID_PROCESS_STOP_HELPER}
+    $sid = '${helperSID}'
     $names = @('Zoom.exe','CptHost.exe','CptControl.exe','ZoomWebhook.exe',
                'Zoom_launcher.exe','ZoomTeamChat.exe','airhost.exe')
     $deadline = [DateTime]::UtcNow.AddSeconds(8)
+    $clear = $false
+    $unknown = $false
     do {
-      $targets = @(Get-CimInstance Win32_Process -EA SilentlyContinue |
-        Where-Object {
+      $targets = [System.Collections.Generic.List[object]]::new()
+      try {
+        $candidates = @(Get-CimInstance Win32_Process -EA Stop | Where-Object {
           ($names -contains $_.Name) -or
           ($_.ExecutablePath -and $_.ExecutablePath -like '*\\Zoom\\*')
-        } |
-        Where-Object {
-          $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner -EA SilentlyContinue
-          $o -and ($o.User -ieq $u)
         })
-      if ($targets.Count -eq 0) { break }
-      $targets | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
+        foreach ($candidate in $candidates) {
+          $o = Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid -EA SilentlyContinue
+          if (-not $o -or $o.ReturnValue -ne 0 -or -not $o.Sid) { $unknown = $true; continue }
+          if ([string]$o.Sid -ieq $sid) { $targets.Add($candidate) }
+        }
+      } catch { $unknown = $true }
+      if ($unknown) { break }
+      if ($targets.Count -eq 0) { $clear = $true; break }
+      try {
+        foreach ($target in $targets) {
+          $outcome = Stop-FixerOwnedProcessBySid -Candidate $target -ExpectedSid $sid
+          if ($outcome -cne 'TERMINATED' -and $outcome -cne 'GONE') {
+            throw 'owned Zoom process termination was not proved'
+          }
+        }
+      } catch { $unknown = $true; break }
       Start-Sleep -Milliseconds 300
     } while ([DateTime]::UtcNow -lt $deadline)
-    if ($targets.Count -eq 0) { Write-Output 'CLEAR' } else { Write-Output ('RESIDUAL=' + $targets.Count) }
+    if ($unknown) { Write-Output 'UNKNOWN' }
+    elseif ($clear) { Write-Output 'CLEAR' }
+    else { Write-Output ('RESIDUAL=' + $targets.Count) }
   `, { timeoutMs: 30000 });
-  if ((zoomClose.stdout || '').includes('CLEAR')) {
+  if (zoomClose.code === 0 && !zoomClose.timedOut && (zoomClose.stdout || '').trim() === 'CLEAR') {
     send('  Zoom closed.', 'out');
   } else {
-    // Previously "Zoom closed." printed unconditionally — the ini write below
-    // can silently lose against a still-open Zoom.us.ini handle.
-    send('  WARNING: some Zoom processes may still be running for user1.', 'err');
-    warnings.push({ code: 'zoom_close_residual', message: 'Some Zoom processes were still running when preferences were written — the dark-mode setting may not stick.' });
+    send(`ERROR: could not prove every Zoom process for '${FIX_USER}' stopped.`, 'err');
+    step('zoom-config', 'Apply Zoom preferences', 'fail',
+      'Exact SID process ownership or termination could not be proved.');
+    return { success: false, error: 'zoom_process_custody_unresolved', warnings, steps };
   }
 
   if (fs.existsSync(zoomIni)) {
@@ -2815,7 +4384,7 @@ async function runFixFlow(event) {
       send('    NOTE: no preference files were copied (none present in source).', 'out');
     }
     await runProcess('icacls.exe',
-      [newZoomDir, '/grant', `${FIX_USER}:(OI)(CI)F`, '/T', '/C'], noop);
+      [newZoomDir, '/grant', `*${helperSID}:(OI)(CI)F`, '/T', '/C'], noop);
   } else {
     send(`  NOTE: ${srcZoomDir} not found. Skipping prefs copy.`, 'out');
   }
@@ -2833,12 +4402,14 @@ async function runFixFlow(event) {
   // ============================================================
   send(`[8/8] Relaunching Zoom as '${FIX_USER}'...`, 'header');
   const relaunch = await runPSScriptLaunchCapture(launchPs);
+  const relaunchDiagnostics = formatLaunchDiagnostics(relaunch);
+  for (const diagnostic of relaunchDiagnostics) {
+    send(`  ${diagnostic}`, diagnostic.includes(' outcome=success ') ? 'out' : 'err');
+  }
   if (relaunch.code !== 0 && relaunch.code !== null) {
-    const relaunchFailLine = (relaunch.stdout || '').split(/\r?\n/)
-      .map(s => s.trim()).find(l => l.startsWith('Launch failed: ')) || '';
     warnings.push({
       code: 'relaunch_failed',
-      message: `Initial launch succeeded but the relaunch ${relaunchFailLine ? `failed — ${relaunchFailLine}` : `exited with code ${relaunch.code}`}. Open Zoom manually.`
+      message: `Initial launch succeeded but the relaunch exited with code ${relaunch.code}. Open Zoom manually.`
     });
   }
 
@@ -2854,7 +4425,6 @@ async function runFixFlow(event) {
   send('[V] Verifying fix outcomes...', 'header');
   const verify = await runPSCapture(`
     $sid = '${userSID || ''}'
-    $u = '${FIX_USER}'
     function ConsentVal([string]$p) {
       try { return [string](Get-ItemProperty -Path $p -Name 'Value' -EA Stop).Value } catch { return '' }
     }
@@ -2865,7 +4435,7 @@ async function runFixFlow(event) {
     }
     $hkuLoaded = $false
     if ($sid) {
-      $null = reg query "HKU\\$sid" 2>$null
+      $null = & (Resolve-FixerTool 'reg.exe') query "HKU\\$sid" 2>$null
       if ($LASTEXITCODE -eq 0) { $hkuLoaded = $true }
     }
     Write-Output ('VERIFY_HKU_LOADED=' + $(if ($hkuLoaded) { 'YES' } else { 'NO' }))
@@ -2885,8 +4455,8 @@ async function runFixFlow(event) {
       try {
         $procs = Get-CimInstance Win32_Process -Filter "Name='Zoom.exe'" -EA SilentlyContinue
         foreach ($p in $procs) {
-          $o = Invoke-CimMethod -InputObject $p -MethodName GetOwner -EA SilentlyContinue
-          if ($o -and ($o.User -ieq $u)) { $hit = $true; break }
+          $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -EA SilentlyContinue
+          if ($o -and $o.ReturnValue -eq 0 -and ([string]$o.Sid -ieq $sid)) { $hit = $true; break }
         }
       } catch {}
       if ($hit) { break }
@@ -3278,7 +4848,7 @@ ipcMain.handle('create-shortcut', async () => {
   const ps = [
     "$s = New-Object -ComObject WScript.Shell",
     `$sc = $s.CreateShortcut('${escape(shortcutPath)}')`,
-    "$sc.TargetPath = 'powershell.exe'",
+    "$sc.TargetPath = Resolve-FixerTool 'powershell.exe'",
     `$sc.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${escape(scriptPath)}"'`,
     `$sc.IconLocation = '${escape(iconPath)}'`,
     `$sc.WorkingDirectory = [Environment]::GetFolderPath('UserProfile')`,
@@ -3286,66 +4856,71 @@ ipcMain.handle('create-shortcut', async () => {
     "$sc.Save()"
   ].join('; ');
 
-  return new Promise((resolve) => {
-    const child = spawn('powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps],
-      { windowsHide: true }
-    );
-    let stderr = '';
-    let settled = false;
-    const settle = (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
-    // Bounded: WScript.Shell COM can hang behind a stuck Explorer session.
-    const timer = setTimeout(() => {
-      try { spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
-      settle({ success: false, error: 'Creating the shortcut took too long. Try again.' });
-    }, 30000);
-    child.stderr.on('data', d => { stderr += d.toString(); });
-    child.on('error', err => settle({ success: false, error: err.message }));
-    child.on('close', async code => {
-      if (settled) return;
-      if (code !== 0) {
-        return settle({ success: false, error: stderr.trim() || `Exit ${code}` });
-      }
-      // Only after the renamed shortcut exists do we clear the old one, so a
-      // failed create never leaves the user with no shortcut at all. Cleanup
-      // failure is reported, never fatal.
-      const cleanup = await removeLegacyShortcuts();
-      resolve({
-        success: true,
-        path: shortcutPath,
-        legacyRemoved: cleanup.removed,
-        legacyRemovalFailed: cleanup.failed
-      });
-    });
-  });
+  // Reuse the trusted runner so the child tree has one custody, timeout and
+  // settlement policy. WScript.Shell COM can hang behind a stuck Explorer
+  // session, so keep the existing 30-second bound.
+  const result = await runPSScript(ps, () => {}, { timeoutMs: 30000 });
+  if (result.timedOut) {
+    return { success: false, error: 'Creating the shortcut took too long. Try again.' };
+  }
+  if (result.code !== 0) {
+    return { success: false, error: result.stderr.trim() || `Exit ${result.code}` };
+  }
+  // Only after the renamed shortcut exists do we clear the old one, so a
+  // failed create never leaves the user with no shortcut at all. Cleanup
+  // failure is reported, never fatal.
+  const cleanup = await removeLegacyShortcuts();
+  return {
+    success: true,
+    path: shortcutPath,
+    legacyRemoved: cleanup.removed,
+    legacyRemovalFailed: cleanup.failed
+  };
 });
 
 // "Open Zoom" on the Fix-complete screen — runs the SAME launcher script
 // the desktop shortcut points at (it unseals the DPAPI credential blob
 // itself; no secret rides in argv). Refuses honestly when the pair from
 // the last fix run is not on disk.
-ipcMain.handle('launch-zoom-helper', async () => {
+async function launchZoomHelper() {
   const scriptPath = LAUNCHER_SCRIPT_PATH();
   if (!fs.existsSync(scriptPath) || !fs.existsSync(CRED_BLOB_PATH())) {
     return { success: false, reason: 'no stored helper sign-in — run the fix first' };
   }
+  const helperSID = await resolveSID(FIX_USER);
+  if (!helperSID) {
+    return { success: false, reason: 'local helper identity is unavailable — run the fix first' };
+  }
   // Completion already launched Zoom as user1. Do not start a second copy.
   const already = await runPSCapture(`
+    $sid = '${helperSID}'
     $hit = $false
+    $unknown = $false
     try {
-      $procs = Get-CimInstance Win32_Process -Filter "Name='Zoom.exe'" -EA SilentlyContinue
+      $procs = @(Get-CimInstance Win32_Process -Filter "Name='Zoom.exe'" -EA Stop)
       foreach ($p in $procs) {
-        $o = Invoke-CimMethod -InputObject $p -MethodName GetOwner -EA SilentlyContinue
-        if ($o -and ($o.User -ieq '${FIX_USER}')) { $hit = $true; break }
+        try {
+          $o = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -EA Stop
+          if (-not $o -or $o.ReturnValue -ne 0 -or -not $o.Sid) { $unknown = $true; continue }
+          if ([string]$o.Sid -ieq $sid) { $hit = $true }
+        } catch { $unknown = $true }
       }
-    } catch {}
-    if ($hit) { Write-Output 'YES' } else { Write-Output 'NO' }
+    } catch { $unknown = $true }
+    if ($unknown) { $result = 'UNKNOWN' }
+    elseif ($hit) { $result = 'YES' }
+    else { $result = 'NO' }
+    Write-Output ('FIXER_ZOOM_DEDUP_V1=' + $result)
   `, { timeoutMs: 15000 });
-  if ((already.stdout || '').includes('YES')) {
+  const lines = String(already && already.stdout || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const marker = lines.length === 1 ? /^FIXER_ZOOM_DEDUP_V1=(YES|NO|UNKNOWN)$/.exec(lines[0]) : null;
+  if (!already || already.timedOut || already.code !== 0 || !marker || marker[1] === 'UNKNOWN') {
+    return { success: false, reason: 'could not verify helper Zoom process ownership — try again' };
+  }
+  if (marker[1] === 'YES') {
     return { success: true, alreadyRunning: true };
   }
   try {
-    const child = spawn('powershell.exe',
+    const child = spawnWindowsTool('powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', scriptPath],
       { windowsHide: true, detached: true, stdio: 'ignore' });
     child.unref();
@@ -3353,7 +4928,8 @@ ipcMain.handle('launch-zoom-helper', async () => {
   } catch (err) {
     return { success: false, reason: err.message };
   }
-});
+}
+ipcMain.handle('launch-zoom-helper', launchZoomHelper);
 
 ipcMain.handle('shortcut-exists', async () => {
   const found = await findExistingShortcuts();
@@ -3449,104 +5025,20 @@ ipcMain.handle('get-system-info', async () => {
   };
 });
 
-// Feedback is relayed through feedback-proxy/, which holds the GitHub token
-// server-side. The app ships NO credential: it posts plain JSON to a public
-// url. Anything embedded here would be extractable from app.asar in the
-// shipped installer, which is exactly how the old hardcoded token leaked.
-// The proxy builds the issue title/body/labels itself, so a tampered client
-// can't forge labels or issue content.
-// Attach-screenshot UI gate (#141): the renderer shows the control ONLY when
-// the proxy advertises the capability — anything else would be a dead button
-// while the support platform is dark.
+// Local feature gate only: opening the form never contacts the service.
 ipcMain.handle('feedback-capabilities', () => supportClient.capabilities(config));
 
-ipcMain.handle('submit-feedback', async (event, type, text, screenshot) => {
-  try {
-    const version = app.getVersion();
-    const endpoint = config.FEEDBACK_PROXY_URL;
-    if (!endpoint) {
-      return { success: false, error: 'Feedback service not configured' };
-    }
-
-    // A report carrying a screenshot goes through the /v1 support API — the
-    // legacy /feedback contract caps bodies at 8 KB and cannot carry an
-    // image. Screenshot bytes are never logged.
-    if (screenshot && screenshot.bytes && screenshot.bytes.length) {
-      return supportClient.submitBugWithScreenshot({
-        config,
-        userDataDir: app.getPath('userData'),
-        safeStorage,
-        version,
-        osLabel: `Windows ${os.release()}`,
-        text,
-        screenshot: {
-          bytes: Buffer.from(screenshot.bytes),
-          mediaType: String(screenshot.mediaType || ''),
-        },
-      });
-    }
-
-    let url;
-    try {
-      url = new URL('/feedback', endpoint);
-    } catch (_) {
-      return { success: false, error: 'Feedback service misconfigured' };
-    }
-    // Refuse to send user text over plaintext http (localhost aside, for dev).
-    if (url.protocol !== 'https:' && url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') {
-      return { success: false, error: 'Feedback service must use https' };
-    }
-
-    const postData = JSON.stringify({
-      type,
-      text,
-      version,
-      os: `Windows ${os.release()}`
-    });
-
-    return new Promise((resolve) => {
-      const transport = url.protocol === 'https:' ? https : require('http');
-      const req = transport.request({
-        hostname: url.hostname,
-        port: url.port || (url.protocol === 'https:' ? 443 : 80),
-        path: url.pathname,
-        method: 'POST',
-        timeout: 15000,
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': `1132Fixer/${version}`,
-          'Content-Length': Buffer.byteLength(postData)
-        }
-      }, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          if (res.statusCode === 201) return resolve({ success: true });
-          if (res.statusCode === 429) return resolve({ success: false, error: 'Too many submissions — try again later.' });
-          if (res.statusCode === 503) return resolve({ success: false, error: 'Feedback service not configured' });
-          if (res.statusCode === 413) return resolve({ success: false, error: 'Message too large — shorten it and try again.' });
-          if (res.statusCode === 502) return resolve({ success: false, error: 'Feedback service could not reach GitHub — try again later.' });
-          if (res.statusCode === 400) {
-            let code = '';
-            try { code = JSON.parse(data).error || ''; } catch (_) { /* generic below */ }
-            if (code === 'bad_type') return resolve({ success: false, error: 'The support service can\'t accept this message type yet — please try again later.' });
-            if (code === 'empty_text') return resolve({ success: false, error: 'Message is empty — write something first.' });
-            return resolve({ success: false, error: 'Submission rejected — check the message and try again.' });
-          }
-          resolve({ success: false, error: 'Submission failed' });
-        });
-      });
-      req.on('timeout', () => { req.destroy(); resolve({ success: false, error: 'Feedback service timed out' }); });
-      req.on('error', () => resolve({ success: false, error: 'Network error' }));
-      req.write(postData);
-      req.end();
-    });
-  } catch (err) {
-    // Never surface a raw exception as the whole message — the renderer shows
-    // this string verbatim in the feedback modal.
-    console.warn('submit-feedback failed before the request was sent:', err && err.message);
-    return { success: false, error: 'Could not send right now. Check your internet connection and try again in a minute.' };
-  }
+// User-triggered submissions use one neutral, credential-free adapter.
+// Version is the only automatic metadata; optional diagnostics are user chosen.
+ipcMain.handle('submit-feedback', async (event, type, text, screenshot, rating) => {
+  return supportClient.submitFeedback({
+    config,
+    type,
+    text,
+    version: app.getVersion(),
+    screenshot,
+    rating,
+  });
 });
 
 // ============================================================
@@ -3583,25 +5075,29 @@ ipcMain.handle('preflight-scan', async () => {
       $out['fs_status']    = 'MISSING'
       $out['fs_starttype'] = 'MISSING'
     }
-    # HKU hive — informational only (renderer maps to 'will load temp' vs 'already loaded')
+    # Bind the read-only inventory to the exact local account. NTAccount(name)
+    # can select a same-name domain principal on joined machines.
     $sid = $null
-    try { $sid = (New-Object Security.Principal.NTAccount('${FIX_USER}')).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
+    $localUser = $null
+    try { $localUser = Get-LocalUser -Name '${FIX_USER}' -EA Stop } catch {}
+    if ($localUser) {
+      try { $sid = [string]$localUser.SID.Value } catch { $sid = $null }
+    }
+    $out['user1_exists'] = [bool]$localUser
+    $out['user1_identity_verified'] = [bool]($localUser -and $sid)
+    # HKU hive — informational only (renderer maps to 'will load temp' vs 'already loaded')
     if ($sid) {
-      $null = reg query "HKU\\$sid" 2>$null
+      $null = & (Resolve-FixerTool 'reg.exe') query "HKU\\$sid" 2>$null
       $out['hku_loaded'] = ($LASTEXITCODE -eq 0)
       $out['hku_sid']    = $sid
     } else {
       $out['hku_loaded'] = $false
       $out['hku_sid']    = ''
     }
-    # Helper-account health: existence, plus Administrators membership to
-    # detect a LEGACY admin user1 that FIX NOW must strip (SEC-A6 — membership
-    # is no longer created and no longer healthy). SID-based, same technique
-    # as verifyAdminMembership — Get-LocalGroupMember chokes on orphaned SIDs,
-    # so fall back to net localgroup parsing.
-    $out['user1_exists'] = $false
-    try { if (Get-LocalUser -Name '${FIX_USER}' -EA SilentlyContinue) { $out['user1_exists'] = $true } } catch {}
+    # Helper-account health: existence, plus exact-SID Administrators
+    # membership to detect a LEGACY admin helper that FIX NOW must strip.
     $out['user1_admin'] = $false
+    $out['user1_admin_verified'] = -not $out['user1_exists']
     # Read-only helper-profile inventory (TEMP identification, ProfileList,
     # ownership). Never deletes TEMP folders, the helper profile, or registry keys.
     $out['profile_image_path'] = ''
@@ -3628,19 +5124,12 @@ ipcMain.handle('preflight-scan', async () => {
         foreach ($m in (Get-LocalGroupMember -SID 'S-1-5-32-544' -EA Stop)) {
           $mSid = $null
           try { $mSid = $m.SID.Value } catch {}
-          if (($sid -and $mSid -and ($mSid -eq $sid)) -or ($m.Name -ieq '${FIX_USER}') -or ($m.Name -like ('*\\' + '${FIX_USER}'))) {
+          if ($sid -and $mSid -and ($mSid -eq $sid)) {
             $out['user1_admin'] = $true; break
           }
         }
-      } catch {
-        try {
-          $lg = (net localgroup administrators) 2>&1 | Out-String
-          foreach ($l in ($lg -split "\`r?\`n")) {
-            $t = $l.Trim()
-            if ($t -ieq '${FIX_USER}' -or $t -like ('*\\' + '${FIX_USER}')) { $out['user1_admin'] = $true; break }
-          }
-        } catch {}
-      }
+        $out['user1_admin_verified'] = [bool]$sid
+      } catch {}
     }
     $out | ConvertTo-Json -Compress
   `, { timeoutMs: 20000 });
@@ -3675,6 +5164,10 @@ ipcMain.handle('preflight-scan', async () => {
     } catch (_) {
       probeFailed = true;
     }
+  }
+  if (!probeFailed && probeData.user1_exists &&
+      (probeData.user1_identity_verified !== true || probeData.user1_admin_verified !== true)) {
+    probeFailed = true;
   }
   const probeFailMsg = probe.timedOut
     ? 'Probe timed out after 20s — Windows Defender or another AV may be holding PowerShell. FIX NOW can still run. To clear this, add 1132 Fixer to your antivirus exclusions; the checklist re-scans when you come back to this window.'
@@ -3744,7 +5237,7 @@ ipcMain.handle('preflight-scan', async () => {
       };
     } else if (sl.status === 'MISSING') {
       cards.seclogon = {
-        status: 'warning', label: 'Secondary Logon',
+        status: 'blocked', label: 'Secondary Logon',
         message: 'Service not found on this Windows build — launching Zoom as user1 will likely fail.'
       };
     } else if (sl.status === 'not checked') {
@@ -3897,6 +5390,14 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
     md.push(`- Warnings: ${preflight.warnings.length} — ${preflight.warnings.map(w => w.code).join(', ') || 'none'}`);
     if (preflight.info && preflight.info.seclogon) {
       md.push(`- Secondary Logon: ${preflight.info.seclogon.status} / ${preflight.info.seclogon.startType}`);
+    }
+    const probe = preflight.info && preflight.info.toolProbe;
+    if (probe) {
+      md.push(`- Windows tool check: exit ${probe.exitCode === null ? 'unknown' : probe.exitCode}; timeout ${probe.timedOut === true}; error ${probe.errorCode || 'none'}`);
+      md.push(`- App architecture: ${process.arch}`);
+      for (const [name, toolPath] of Object.entries(preflight.info.toolPaths || {})) {
+        md.push(`- ${name}: ${sanitize(toolPath)}`);
+      }
     }
     md.push('');
   }

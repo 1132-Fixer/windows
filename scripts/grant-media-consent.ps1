@@ -103,6 +103,10 @@ function Test-ConsentValue {
 }
 
 try {
+  # This bundled script also runs directly with -File. Resolve reg.exe from
+  # Windows itself, without depending on PATH or an inherited app function.
+  $fixerRegExe = Join-Path ([Environment]::SystemDirectory) 'reg.exe'
+
   # ----- GPO check -----
   # HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy
   #   LetAppsAccessCamera     (REG_DWORD) 1 = Force Allow, 2 = Force Deny, 0 = User in control
@@ -129,7 +133,7 @@ try {
   $hkuLoaded     = $false
   $hkuLoadedHere = $false   # true only if WE loaded it (we must unload)
   if ($Sid) {
-    $null = reg query "HKU\$Sid" 2>$null
+    $null = & $fixerRegExe query "HKU\$Sid" 2>$null
     if ($LASTEXITCODE -eq 0) { $hkuLoaded = $true }
   }
   if ($hkuLoaded) {
@@ -151,7 +155,7 @@ try {
       # `reg load` writes NTUSER.DAT to the live registry under HKU\<key>.
       # On success the NTUSER.DAT file is opened with an exclusive handle
       # until `reg unload` runs — so we MUST unload in the finally clause.
-      $loadResult = & reg.exe load "HKU\$Sid" "$ntUser" 2>&1
+      $loadResult = & $fixerRegExe load "HKU\$Sid" "$ntUser" 2>&1
       if ($LASTEXITCODE -eq 0) {
         $hkuLoaded     = $true
         $hkuLoadedHere = $true
@@ -223,7 +227,7 @@ try {
       # (Get-ItemProperty / New-ItemProperty cache). Force a GC so reg
       # unload doesn't fail with "process cannot access the file".
       [GC]::Collect(); [GC]::WaitForPendingFinalizers()
-      $unloadResult = & reg.exe unload "HKU\$Sid" 2>&1
+      $unloadResult = & $fixerRegExe unload "HKU\$Sid" 2>&1
       if ($LASTEXITCODE -eq 0) {
         Write-Output 'HKU_UNLOAD_OK=YES'
       } else {

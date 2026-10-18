@@ -18,23 +18,34 @@
  * Run:  node tools/packaged-acceptance.js [--exe <path>] [--out <dir>]
  *                                         [--scales 1,1.25,1.5]
  *                                         [--fix-timeout-ms 360000]
- *                                         [--skip-fix]
+ *                                         [--skip-fix] [--test-copy]
+ *                                         [--package <Setup-or-Portable.exe>]
+ *                                         [--artifact-kind setup|portable]
+ *                                         [--artifact-head <sha>] [--expected-head <sha>]
+ *                                         [--expected-exe-sha256 <sha256>]
+ *                                         [--expected-support-endpoint <https-url>]
+ *                                         [--expected-config-revision <sha256>]
+ *                                         [--operator-attestation <json-file>]
  *
- * Exit code 1 when any case fails. Cases that do not run do not fail the
- * driver by themselves; the report says so and the release gate reads it.
+ * Exit code 1 when any case fails or a mandatory case does not run. Optional
+ * not-run cases remain explicit in the report without changing the exit code.
  *
- * Host expectations: Windows, an elevated (administrator) session, no Smart
- * App Control enforcement (it blocks the unsigned host binary before
- * Electron starts — see docs/security/code-signing.md). GitHub-hosted
- * windows runners satisfy all three.
+ * Native release-evidence expectations: disposable Windows, UAC enabled, an
+ * elevated (administrator) session, no Smart App Control enforcement, exact
+ * artifact identity and an operator attestation. GitHub-hosted runners use
+ * --test-copy for non-interactive diagnostic automation; that modified-manifest
+ * run is never native final-artifact acceptance.
  */
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const screenActions = require(path.join(ROOT, 'screen-actions.js'));
+const windowsTools = require(path.join(ROOT, 'src', 'main', 'windows-tools.js'));
+const supportClient = require(path.join(ROOT, 'src', 'main', 'support-client.js'));
 const args = process.argv.slice(2);
 const argOf = (flag, dflt) => {
   const i = args.indexOf(flag);
@@ -45,15 +56,159 @@ const has = (flag) => args.includes(flag);
 const SHIPPED_EXE = path.resolve(argOf('--exe', path.join(ROOT, 'dist', 'win-unpacked', '1132 Fixer.exe')));
 const OUT = path.resolve(argOf('--out', path.join(ROOT, 'acceptance-evidence')));
 // --test-copy: drive a throwaway copy of the unpacked app whose exe manifest
-// is stamped asInvoker. Needed on hosts with UAC disabled (GitHub-hosted
-// runners): there, CreateProcess of a requireAdministrator image from the
-// Chromium sandbox's restricted token fails (SBOX_ERROR_CREATE_PROCESS = 18)
-// and no renderer ever starts. The shipped artifact is not modified. The
-// report records which binary was driven.
+// is stamped asInvoker. This lets non-interactive automation drive packaged
+// code without claiming to exercise the shipped requireAdministrator manifest
+// or an operator's UAC choice. The shipped artifact is not modified. The report
+// records which binary was driven.
 const TEST_COPY = has('--test-copy');
 const SCALES = String(argOf('--scales', '1,1.25,1.5')).split(',').map(Number).filter((n) => n > 0);
 const FIX_TIMEOUT_MS = Number(argOf('--fix-timeout-ms', 360000));
 const SKIP_FIX = has('--skip-fix');
+const PACKAGE_ARG = argOf('--package', '');
+const PACKAGE_PATH = PACKAGE_ARG ? path.resolve(PACKAGE_ARG) : '';
+const ACCEPTANCE_MODE = TEST_COPY && SKIP_FIX
+  ? 'diagnostic-test-copy-skip-fix'
+  : TEST_COPY
+    ? 'diagnostic-test-copy'
+    : SKIP_FIX
+      ? 'diagnostic-skip-fix'
+      : 'native-candidate';
+
+function normalizeHead(value) {
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return /^[a-f0-9]{40}$/.test(text) ? text : '';
+}
+
+function normalizeSha256(value) {
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return /^[a-f0-9]{64}$/.test(text) ? text : '';
+}
+
+function normalizeArtifactKind(value) {
+  return value === 'setup' || value === 'portable' ? value : '';
+}
+
+function inferPackageKind(fileName) {
+  if (/^1132-Fixer-Setup-[0-9]/i.test(fileName || '') && /\.exe$/i.test(fileName || '')) return 'setup';
+  if (/^1132-Fixer-Portable-[0-9]/i.test(fileName || '') && /\.exe$/i.test(fileName || '')) return 'portable';
+  return '';
+}
+
+function loadOperatorAttestation(file) {
+  const empty = { present: !!file, valid: false };
+  if (!file) return empty;
+  try {
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const allowed = [
+      'artifactHead', 'disposableWindowsBoundary', 'packageFileName', 'packageKind',
+      'packageSha256', 'packageToRuntimeOperation', 'packageToRuntimeReceiptSha256',
+      'runtimeExecutableSha256', 'runtimeLaunchObserved', 'schemaVersion',
+      'supportConfigRevision', 'uacAcceptObserved', 'uacCancelObserved', 'uacEnabled',
+      'unmodifiedRequireAdministrator'
+    ];
+    const keys = value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.keys(value).sort()
+      : [];
+    const exactShape = keys.length === allowed.length &&
+      keys.every((key, index) => key === allowed[index]);
+    const safe = {
+      present: true,
+      valid: exactShape && value.schemaVersion === 2 &&
+        !!normalizeArtifactKind(value.packageKind) && !!normalizeHead(value.artifactHead) &&
+        typeof value.packageFileName === 'string' && path.basename(value.packageFileName) === value.packageFileName &&
+        inferPackageKind(value.packageFileName) === value.packageKind &&
+        !!normalizeSha256(value.packageSha256) && !!normalizeSha256(value.runtimeExecutableSha256) &&
+        !!normalizeSha256(value.packageToRuntimeReceiptSha256) && !!normalizeSha256(value.supportConfigRevision) &&
+        value.packageToRuntimeOperation === (value.packageKind === 'setup' ? 'install' : 'extract') &&
+        value.runtimeLaunchObserved === true && value.unmodifiedRequireAdministrator === true &&
+        value.uacEnabled === true && value.uacAcceptObserved === true &&
+        value.uacCancelObserved === true && value.disposableWindowsBoundary === true
+    };
+    if (!safe.valid) return safe;
+    return {
+      ...safe,
+      schemaVersion: 2,
+      packageKind: normalizeArtifactKind(value.packageKind),
+      packageFileName: value.packageFileName,
+      artifactHead: normalizeHead(value.artifactHead),
+      packageSha256: normalizeSha256(value.packageSha256),
+      runtimeExecutableSha256: normalizeSha256(value.runtimeExecutableSha256),
+      packageToRuntimeOperation: value.packageToRuntimeOperation,
+      packageToRuntimeReceiptSha256: normalizeSha256(value.packageToRuntimeReceiptSha256),
+      runtimeLaunchObserved: true,
+      unmodifiedRequireAdministrator: true,
+      supportConfigRevision: normalizeSha256(value.supportConfigRevision),
+      uacEnabled: true,
+      uacAcceptObserved: true,
+      uacCancelObserved: true,
+      disposableWindowsBoundary: true
+    };
+  } catch (_) {
+    return empty;
+  }
+}
+
+function nativeReleaseEligibility(facts, cases) {
+  const reasons = [];
+  const add = reason => { if (!reasons.includes(reason)) reasons.push(reason); };
+  const rows = Array.isArray(cases) ? cases : [];
+  if (facts.testCopy) add('test-copy');
+  if (facts.skipFix) add('skip-fix');
+  if (facts.platform !== 'win32') add('non-windows-host');
+  if (facts.enableLUA !== 1) add('uac-not-enabled');
+  if (!normalizeArtifactKind(facts.packageKind)) add('package-kind-unverified');
+  if (facts.declaredArtifactKind && facts.declaredArtifactKind !== facts.packageKind) add('caller-artifact-kind-mismatch');
+  if (facts.packagePresent !== true || !normalizeSha256(facts.packageSha256)) add('package-hash-missing');
+  if (facts.packageKind && inferPackageKind(facts.packageFileName) !== facts.packageKind) add('package-kind-unverified');
+  if (facts.packageToRuntimeVerified !== true) add('package-runtime-unbound');
+  if (facts.runtimeManifestExecutionLevel !== 'requireAdministrator') add('runtime-manifest-not-require-admin');
+  if (!normalizeHead(facts.artifactHead) || !normalizeHead(facts.expectedHead)) add('head-unbound');
+  else if (facts.artifactHead !== facts.expectedHead) add('mixed-head');
+  if (!normalizeSha256(facts.expectedExeSha256)) add('expected-binary-hash-missing');
+  if (!normalizeSha256(facts.shippedExeSha256) || !normalizeSha256(facts.drivenExeSha256) ||
+      facts.shippedExeSha256 !== facts.drivenExeSha256 ||
+      facts.shippedExeSha256 !== facts.expectedExeSha256) add('binary-hash-mismatch');
+  if (facts.supportConfigSource !== 'bundled') add('support-config-not-bundled');
+  if (facts.supportConfigIntegrity !== true) add('support-config-invalid');
+  if (!facts.expectedSupportEndpoint) add('support-endpoint-unbound');
+  else if (facts.effectiveSupportEndpoint !== facts.expectedSupportEndpoint) add('support-endpoint-mismatch');
+  if (!normalizeSha256(facts.expectedSupportConfigRevision) ||
+      !normalizeSha256(facts.supportConfigRevision) ||
+      facts.supportConfigRevision !== facts.expectedSupportConfigRevision) add('support-config-revision-mismatch');
+  if (facts.runtimeConfigConsistent !== true) add('runtime-config-inconsistent');
+  const attestation = facts.operatorAttestation;
+  if (!attestation || !attestation.present) add('operator-attestation-missing');
+  else if (!attestation.valid) add('operator-attestation-invalid');
+  else if (attestation.packageKind !== facts.packageKind ||
+      attestation.packageFileName !== facts.packageFileName ||
+      attestation.artifactHead !== facts.artifactHead ||
+      attestation.packageSha256 !== facts.packageSha256 ||
+      attestation.runtimeExecutableSha256 !== facts.shippedExeSha256 ||
+      attestation.packageToRuntimeOperation !== (facts.packageKind === 'setup' ? 'install' : 'extract') ||
+      !normalizeSha256(attestation.packageToRuntimeReceiptSha256) ||
+      attestation.runtimeLaunchObserved !== true ||
+      attestation.unmodifiedRequireAdministrator !== true ||
+      attestation.supportConfigRevision !== facts.supportConfigRevision ||
+      attestation.uacEnabled !== true || attestation.uacAcceptObserved !== true ||
+      attestation.uacCancelObserved !== true || attestation.disposableWindowsBoundary !== true) {
+    add('operator-attestation-identity-mismatch');
+  }
+  if (!rows.length) add('acceptance-cases-missing');
+  if (rows.some(testCase => testCase.status === 'failed')) add('acceptance-case-failed');
+  if (rows.some(testCase => testCase.status === 'not-run' && testCase.mandatory === true)) {
+    add('mandatory-case-not-run');
+  }
+  return { eligible: reasons.length === 0, reasons };
+}
+
+const DECLARED_ARTIFACT_KIND = normalizeArtifactKind(argOf('--artifact-kind', ''));
+const ARTIFACT_HEAD = normalizeHead(argOf('--artifact-head', ''));
+const EXPECTED_HEAD = normalizeHead(argOf('--expected-head', ''));
+const EXPECTED_EXE_SHA256 = normalizeSha256(argOf('--expected-exe-sha256', ''));
+const expectedEndpointUrl = supportClient.endpointUrl(argOf('--expected-support-endpoint', ''));
+const EXPECTED_SUPPORT_ENDPOINT = expectedEndpointUrl ? expectedEndpointUrl.href : '';
+const EXPECTED_CONFIG_REVISION = normalizeSha256(argOf('--expected-config-revision', ''));
+const OPERATOR_ATTESTATION = loadOperatorAttestation(argOf('--operator-attestation', ''));
 
 // Startup contract (renderer STARTUP_DEADLINE_MS is 8 s; main's whoami probe
 // is bounded at 2.5 s). The packaged app must leave Checking well inside this.
@@ -63,7 +218,40 @@ const DISCLOSURE = 'Independent project. Not affiliated with Zoom.';
 const TERMINAL_STATES = ['success', 'error', 'notice', 'cancelled', 'blocked', 'ready'];
 
 let EXE = SHIPPED_EXE;
-const report = { exe: EXE, shippedExe: SHIPPED_EXE, testCopy: TEST_COPY, startedAt: new Date().toISOString(), host: {}, cases: [] };
+const report = {
+  exe: EXE,
+  shippedExe: SHIPPED_EXE,
+  testCopy: TEST_COPY,
+  mode: ACCEPTANCE_MODE,
+  evidenceClass: 'diagnostic',
+  releaseGateEligible: false,
+  releaseEligibilityReasons: [],
+  acceptanceIdentity: {
+    declaredArtifactKind: DECLARED_ARTIFACT_KIND,
+    packageKind: '',
+    packageFileName: '',
+    packagePresent: false,
+    packageSha256: '',
+    packageToRuntimeVerified: false,
+    runtimeManifestExecutionLevel: '',
+    artifactHead: ARTIFACT_HEAD,
+    expectedHead: EXPECTED_HEAD,
+    expectedExeSha256: EXPECTED_EXE_SHA256,
+    expectedSupportEndpoint: EXPECTED_SUPPORT_ENDPOINT,
+    expectedSupportConfigRevision: EXPECTED_CONFIG_REVISION,
+    shippedExeSha256: '',
+    drivenExeSha256: '',
+    effectiveSupportEndpoint: '',
+    supportConfigRevision: '',
+    supportConfigSource: '',
+    supportConfigIntegrity: false,
+    runtimeConfigConsistent: false,
+    operatorAttestation: OPERATOR_ATTESTATION
+  },
+  startedAt: new Date().toISOString(),
+  host: {},
+  cases: []
+};
 function record(id, status, detail, extra) {
   const row = { id, status, detail: detail || '', ...(extra || {}) };
   report.cases.push(row);
@@ -75,6 +263,30 @@ const passed = (id, detail, extra) => record(id, 'passed', detail, extra);
 const failed = (id, detail, extra) => record(id, 'failed', detail, extra);
 const notRun = (id, detail, extra) => record(id, 'not-run', detail, extra);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function fixJourneySucceeded(state) {
+  return state === 'success';
+}
+
+function acceptanceExitCode(cases) {
+  for (const testCase of cases) {
+    if (testCase.status === 'failed') return 1;
+    if (testCase.status === 'not-run' && testCase.mandatory === true) return 1;
+  }
+  return 0;
+}
+
+// Keep only the closed launch marker. Free-form process output, exception
+// messages, account data and unrelated repair output never enter the artifact.
+function selectFixLaunchTrace(entries) {
+  if (!Array.isArray(entries)) return [];
+  const allowed = /^Launch diagnostic: phase=(?:pre_launch|credential|start_process) outcome=(?:success|failure) exceptionClass=(?:none|[A-Za-z][A-Za-z0-9_.]{0,127}) hresult=(?:none|-?\d{1,12}) nativeCode=(?:none|-?\d{1,12}) exitCode=(?:none|-?\d{1,12}) timeout=(?:true|false) markerPresent=(?:true|false)$/;
+  return entries.map((entry) => typeof entry === 'string' ? entry : entry && entry.line)
+    .filter((line) => typeof line === 'string')
+    .map((line) => line.trim().slice(0, 512))
+    .filter((line) => allowed.test(line))
+    .slice(0, 8);
+}
 
 let playwright;
 try {
@@ -179,14 +391,171 @@ async function keyboardFacts(page) {
   });
 }
 
-async function launch(scale) {
+async function runtimeAuthority(app, tag, fakeRoot) {
+  // This callback executes in the actual packaged Electron main process.
+  // Return narrow runtime evidence only, never a diagnostic report.
+  const proof = await app.evaluate(({ app }, fakeRoot) => {
+    const facts = { packaged: app.isPackaged, electron: process.versions.electron,
+      node: process.versions.node, arch: process.arch,
+      reportAvailable: !!(process.report && typeof process.report.getReport === 'function') };
+    if (!facts.reportAvailable) return { ...facts, stage: 'report-unavailable' };
+    if (typeof process.getBuiltinModule !== 'function') return { ...facts, stage: 'builtin-api-unavailable' };
+    const path = process.getBuiltinModule('path');
+    const load = process.getBuiltinModule('module').createRequire(path.join(app.getAppPath(), 'package.json'));
+    const runtimeConfig = load('./src/main/config.js');
+    const runtimeSupport = load('./src/main/support-client.js');
+    const runtimeEndpoint = runtimeSupport.endpointUrl(runtimeConfig.FEEDBACK_PROXY_URL);
+    Object.assign(facts, {
+      effectiveSupportEndpoint: runtimeEndpoint ? runtimeEndpoint.href : '',
+      supportConfigRevision: typeof runtimeConfig.FEEDBACK_CONFIG_REVISION === 'string'
+        ? runtimeConfig.FEEDBACK_CONFIG_REVISION.toLowerCase()
+        : '',
+      supportConfigSource: runtimeConfig.FEEDBACK_CONFIG_SOURCE,
+      supportConfigIntegrity: runtimeConfig.FEEDBACK_CONFIG_INTEGRITY === true
+    });
+    const environmentKey = /^(?:systemroot|windir|path|processor_architew6432|comspec)$/i;
+    const forgedEnvironment = fakeRoot ? { SystemRoot: fakeRoot, WINDIR: fakeRoot, PATH: '', PROCESSOR_ARCHITEW6432: 'FORGED',
+      ComSpec: path.join(fakeRoot, 'System32', 'cmd.exe') } : null;
+    const originalEnvironment = { ...(process.env || {}) };
+    const savedEnvironment = Object.entries(originalEnvironment).filter(([key]) => environmentKey.test(key));
+    let forgedEnvironmentApplied = !fakeRoot;
+    let proof;
+    try {
+      if (fakeRoot) {
+        for (const key of Object.keys(process.env)) {
+          if (environmentKey.test(key)) delete process.env[key];
+        }
+        Object.assign(process.env, forgedEnvironment);
+        forgedEnvironmentApplied = Object.entries(forgedEnvironment).every(([key, value]) => process.env[key] === value);
+      }
+      const tools = load('./src/main/windows-tools.js');
+      const api = process.report;
+      const changed = [];
+      let sharedObjects;
+      try {
+        for (const flag of ['excludeEnv', 'excludeNetwork']) {
+          if (flag in api) { changed.push([flag, api[flag]]); api[flag] = true; }
+        }
+        let diagnostic = api.getReport();
+        sharedObjects = diagnostic && diagnostic.sharedObjects;
+        diagnostic = null;
+      } finally {
+        for (const [flag, value] of changed.reverse()) api[flag] = value;
+      }
+      const root = tools.resolveSystemRoot();
+      const freshRoot = tools.createToolResolver({ getReport: () => ({ sharedObjects }), arch: process.arch }).resolveSystemRoot();
+      if (!root || !freshRoot || root.toLowerCase() !== freshRoot.toLowerCase()) {
+        proof = { ...facts, stage: 'root-unverified', forgedEnvironmentApplied };
+      } else {
+        const powershell = tools.resolveTool('powershell.exe');
+        const cmd = tools.resolveTool('cmd.exe');
+        const coreDlls = sharedObjects.filter(value => /^(?:ntdll|kernel32|kernelbase)\.dll$/i.test(path.basename(value)));
+        const resolvedPathsTrusted = !fakeRoot || ![root, powershell, cmd].some(value => value.toLowerCase().startsWith(fakeRoot.toLowerCase()));
+        const coreLibrariesTrusted = !fakeRoot || (coreDlls.length >= 3 && !coreDlls.some(value => value.toLowerCase().startsWith(fakeRoot.toLowerCase())));
+        if (!resolvedPathsTrusted || !coreLibrariesTrusted) {
+          proof = { ...facts, stage: 'untrusted-paths', appPath: app.getAppPath(), root, powershell, cmd, coreDlls,
+            exitCode: null, trusted: false, resolvedPathsTrusted, coreLibrariesTrusted,
+            forgedEnvironmentApplied, nativeEnvironmentApplied: false, nativePathTrusted: false, commandMatches: false };
+        } else {
+          // PowerShell starts with the untouched host environment. Only after
+          // bootstrap does the proof apply all five hostile values.
+          const powershellEnv = fakeRoot ? {
+            ...originalEnvironment,
+            FIXER_TEST_FORGED_ENV: JSON.stringify(forgedEnvironment)
+          } : process.env;
+          const applyForgedEnvironment = fakeRoot
+            ? "$fixerTestEnvironment = $env:FIXER_TEST_FORGED_ENV | ConvertFrom-Json; Remove-Item Env:FIXER_TEST_FORGED_ENV; $fixerTestSystemRoot = [string]$fixerTestEnvironment.SystemRoot; $env:SystemRoot = $fixerTestSystemRoot; $env:WINDIR = [string]$fixerTestEnvironment.WINDIR; $env:PATH = [string]$fixerTestEnvironment.PATH; $env:PROCESSOR_ARCHITEW6432 = [string]$fixerTestEnvironment.PROCESSOR_ARCHITEW6432; $env:ComSpec = [string]$fixerTestEnvironment.ComSpec; $fixerTestForged = ($env:SystemRoot -eq $fixerTestSystemRoot -and $env:WINDIR -eq [string]$fixerTestEnvironment.WINDIR -and [string]::IsNullOrEmpty($env:PATH) -and $env:PROCESSOR_ARCHITEW6432 -eq [string]$fixerTestEnvironment.PROCESSOR_ARCHITEW6432 -and $env:ComSpec -eq [string]$fixerTestEnvironment.ComSpec); "
+            : "$fixerTestSystemRoot = ''; $fixerTestForged = $true; ";
+          const nativeCommand = "$fixerTestCmd = Resolve-FixerTool 'cmd.exe'; $fixerTestNativePathTrusted = ([string]::IsNullOrEmpty($fixerTestSystemRoot) -or -not $fixerTestCmd.StartsWith($fixerTestSystemRoot, [StringComparison]::OrdinalIgnoreCase)); $fixerTestMarker = if ($fixerTestNativePathTrusted) { & $fixerTestCmd /d /c 'echo FIXER_TRUSTED_RUNTIME' } else { $null }; $r = @{ systemDir = [Environment]::SystemDirectory; marker = $fixerTestMarker; forgedEnvironment = $fixerTestForged; nativePathTrusted = $fixerTestNativePathTrusted }; $r | ConvertTo-Json -Compress";
+          const result = process.getBuiltinModule('child_process').spawnSync(powershell, tools.PS_STDIN_ARGS, {
+            input: Buffer.from(tools.prepareScript(applyForgedEnvironment + nativeCommand), 'utf8'),
+            env: powershellEnv, windowsHide: true, timeout: 15000, encoding: 'utf8'
+          });
+          let command;
+          try { command = JSON.parse((result.stdout || '').trim()); } catch (_) {}
+          const nativeSystemDir = command && typeof command.systemDir === 'string' ? command.systemDir : '';
+          const nativeMarker = !!(command && command.marker === 'FIXER_TRUSTED_RUNTIME');
+          const nativeEnvironmentApplied = !fakeRoot || !!(command && command.forgedEnvironment === true);
+          const nativePathTrusted = !fakeRoot || !!(command && command.nativePathTrusted === true);
+          // Sysnative is the caller's WOW64 alias; native PowerShell reports
+          // the same physical directory as System32.
+          const expectedDir = path.join(root, 'System32');
+          proof = { ...facts, stage: 'checked', appPath: app.getAppPath(), root, powershell, cmd, coreDlls,
+            nativeSystemDir, exitCode: result.status, trusted: true, resolvedPathsTrusted, coreLibrariesTrusted,
+            forgedEnvironmentApplied, nativeEnvironmentApplied, nativePathTrusted,
+            commandMatches: result.status === 0 && !result.error && nativeMarker && nativeEnvironmentApplied &&
+              nativePathTrusted && nativeSystemDir.toLowerCase() === expectedDir.toLowerCase() };
+        }
+      }
+    } catch (_) {
+      proof = { ...facts, stage: 'proof-error', forgedEnvironmentApplied };
+    } finally {
+      if (fakeRoot && process.env) {
+        for (const key of Object.keys(process.env)) {
+          if (environmentKey.test(key)) delete process.env[key];
+        }
+        for (const [key, value] of savedEnvironment) process.env[key] = value;
+        const restoredKeys = Object.keys(process.env).filter(key => environmentKey.test(key));
+        proof.environmentRestored = restoredKeys.length === savedEnvironment.length &&
+          savedEnvironment.every(([key, value]) => process.env[key] === value);
+      } else if (fakeRoot) {
+        proof.environmentRestored = false;
+      }
+    }
+    return proof;
+  }, fakeRoot || null);
+  const observedEndpointUrl = supportClient.endpointUrl(proof.effectiveSupportEndpoint);
+  const observedEndpoint = observedEndpointUrl ? observedEndpointUrl.href : '';
+  const observedRevision = normalizeSha256(proof.supportConfigRevision);
+  const configShapeValid = (proof.effectiveSupportEndpoint === '' || !!observedEndpointUrl) &&
+    !!observedRevision && ['bundled', 'development'].includes(proof.supportConfigSource) &&
+    proof.supportConfigIntegrity === true;
+  const identity = report.acceptanceIdentity;
+  if (!identity.runtimeConfigObserved) {
+    identity.runtimeConfigObserved = true;
+    identity.effectiveSupportEndpoint = observedEndpoint;
+    identity.supportConfigRevision = observedRevision;
+    identity.supportConfigSource = proof.supportConfigSource || '';
+    identity.supportConfigIntegrity = proof.supportConfigIntegrity === true;
+    identity.runtimeConfigConsistent = configShapeValid;
+  } else if (identity.effectiveSupportEndpoint !== observedEndpoint ||
+      identity.supportConfigRevision !== observedRevision ||
+      identity.supportConfigSource !== proof.supportConfigSource ||
+      identity.supportConfigIntegrity !== (proof.supportConfigIntegrity === true)) {
+    identity.runtimeConfigConsistent = false;
+  }
+  const expectedConfigMatches = (!EXPECTED_SUPPORT_ENDPOINT || observedEndpoint === EXPECTED_SUPPORT_ENDPOINT) &&
+    (!EXPECTED_CONFIG_REVISION || observedRevision === EXPECTED_CONFIG_REVISION);
+  (configShapeValid && identity.runtimeConfigConsistent && expectedConfigMatches ? passed : failed)(
+    `${tag}.support-config-identity`,
+    `source=${proof.supportConfigSource || 'invalid'}, configured=${!!observedEndpoint}, revision=${observedRevision || 'invalid'}, consistent=${identity.runtimeConfigConsistent}`,
+    { supportConfig: { endpoint: observedEndpoint, revision: observedRevision,
+      source: proof.supportConfigSource || '', integrity: proof.supportConfigIntegrity === true } }
+  );
+
+  const expectedElectron = require('electron/package.json').version;
+  const expectedArchive = path.join(path.dirname(EXE), 'resources', 'app.asar');
+  const forgedProof = !fakeRoot || (proof.forgedEnvironmentApplied && proof.environmentRestored &&
+    proof.resolvedPathsTrusted && proof.coreLibrariesTrusted && proof.nativeEnvironmentApplied && proof.nativePathTrusted);
+  const ok = proof.packaged && proof.electron === expectedElectron && proof.reportAvailable &&
+    proof.stage === 'checked' && proof.trusted && proof.commandMatches && forgedProof &&
+    path.resolve(proof.appPath || '').toLowerCase() === expectedArchive.toLowerCase();
+  (ok ? passed : failed)(`${tag}.os-tool-authority`,
+    `actual main: Electron ${proof.electron}, Node ${proof.node}, stage=${proof.stage}, report=${proof.reportAvailable}, trusted command=${!!proof.commandMatches}`,
+    { runtime: proof });
+  return ok;
+}
+
+async function launch(scale, env) {
   const launchArgs = [];
   if (scale && scale !== 1) launchArgs.push(`--force-device-scale-factor=${scale}`);
   const t0 = Date.now();
-  const app = await electron.launch({ executablePath: EXE, args: launchArgs, timeout: WINDOW_DEADLINE_MS });
-  const page = await app.firstWindow({ timeout: WINDOW_DEADLINE_MS });
-  await page.waitForLoadState('domcontentloaded', { timeout: WINDOW_DEADLINE_MS }).catch(() => {});
-  return { app, page, ms: Date.now() - t0 };
+  const app = await electron.launch({ executablePath: EXE, args: launchArgs, env, timeout: WINDOW_DEADLINE_MS });
+  try {
+    const page = await app.firstWindow({ timeout: WINDOW_DEADLINE_MS });
+    await page.waitForLoadState('domcontentloaded', { timeout: WINDOW_DEADLINE_MS }).catch(() => {});
+    return { app, page, ms: Date.now() - t0 };
+  } catch (err) { await app.close().catch(() => {}); throw err; }
 }
 
 async function runLanding(scale, tag) {
@@ -195,6 +564,7 @@ async function runLanding(scale, tag) {
     const l = await launch(scale);
     app = l.app;
     const page = l.page;
+    await runtimeAuthority(app, tag);
     passed(`${tag}.window-visible`, `first window in ${l.ms} ms`);
     const first = await stateOf(page);
     const firstShot = await shot(page, `${tag}-01-first-paint-${first || 'unknown'}`);
@@ -237,12 +607,35 @@ async function runLanding(scale, tag) {
   }
 }
 
+async function runForgedRoot() {
+  const fakeRoot = fs.mkdtempSync(path.join(require('os').tmpdir(), 'fixer-fake-windows-'));
+  let app;
+  try {
+    const system32 = path.join(fakeRoot, 'System32');
+    const psHome = path.join(system32, 'WindowsPowerShell', 'v1.0');
+    fs.mkdirSync(psHome, { recursive: true });
+    const names = windowsTools.WINDOWS_TOOLS;
+    for (const name of names) fs.writeFileSync(path.join(name === 'powershell.exe' ? psHome : system32, name), 'invalid fake executable; must never run');
+    // Bootstrap Electron with the real host environment. runtimeAuthority
+    // applies the hostile fixture only inside the packaged main-process proof.
+    const launched = await launch(1);
+    app = launched.app;
+    await runtimeAuthority(app, 'forged-root', fakeRoot);
+    const left = await waitForState(launched.page, state => state && state !== 'checking', CHECKING_DEADLINE_MS, 'forged-root startup');
+    (left.ok ? passed : failed)('forged-root.leaves-checking', `state=${left.state || 'checking'} after ${left.ms} ms`);
+  } catch (_) { failed('forged-root.os-tool-authority', 'could not verify the actual packaged main process with forged root variables and empty PATH'); }
+  finally { if (app) await app.close().catch(() => {}); fs.rmSync(fakeRoot, { recursive: true, force: true }); }
+}
+
 // View details opens the in-place Details view (Back in the header, plain
 // English, nothing scrolls) and Back restores the exact prior screen with
 // focus on View details.
 async function runDetailsRoundTrip(page, tag, state) {
   const hasDetails = await page.evaluate(() => { const b = document.getElementById('detailsBtn'); return !!b && !b.hidden && getComputedStyle(b).display !== 'none'; });
-  if (!hasDetails) { notRun(`${tag}.details-round-trip`, `View details is not offered on "${state}"`); return; }
+  if (!hasDetails) {
+    notRun(`${tag}.details-round-trip`, `View details is not offered on "${state}"`, { mandatory: true });
+    return;
+  }
   const checkboxBefore = await page.evaluate(() => { const c = document.getElementById('shortcutOptInput'); return c ? c.checked : null; });
   await page.click('#detailsBtn');
   await sleep(300);
@@ -296,17 +689,51 @@ async function runDetailsRoundTrip(page, tag, state) {
   (after.checkbox === checkboxBefore ? passed : failed)(`${tag}.details-back-preserves-option`, `shortcut option ${checkboxBefore} -> ${after.checkbox}`);
 }
 
+// Keep the original ChildProcess object until its exit. A timeout does not
+// authorize a later numeric-PID kill: custody remains unresolved and blocks
+// every later launch and completion path.
+const unresolvedSecondInstanceCustody = new Set();
+function observeSecondInstance(exe, launch = spawn, armDeadline = setTimeout, clearDeadline = clearTimeout) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = launch(exe, [], { windowsHide: true, stdio: 'ignore' });
+    } catch (_) {
+      resolve({ launchFailed: true, timedOut: false, terminationProved: true });
+      return;
+    }
+    if (!child || typeof child.once !== 'function') {
+      resolve({ launchFailed: true, timedOut: false, terminationProved: true });
+      return;
+    }
+    unresolvedSecondInstanceCustody.add(child);
+    let settled = false;
+    let timer = null;
+    const settle = (receipt) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearDeadline(timer);
+      if (receipt.terminationProved) unresolvedSecondInstanceCustody.delete(child);
+      resolve(receipt);
+    };
+    child.once('exit', code => settle({ code, timedOut: false, terminationProved: true }));
+    child.once('error', () => {
+      const noProcessIdentity = !Number.isSafeInteger(child.pid) || child.pid <= 0;
+      settle({ launchFailed: true, timedOut: false, terminationProved: noProcessIdentity });
+    });
+    timer = armDeadline(() => settle({ timedOut: true, terminationProved: false }), 15000);
+  });
+}
+
 async function runSecondInstance(page) {
   const t0 = Date.now();
-  const child = spawn(EXE, [], { windowsHide: true, stdio: 'ignore' });
-  const exit = await new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ timedOut: true }), 15000);
-    child.on('exit', (code) => { clearTimeout(timer); resolve({ code }); });
-    child.on('error', (err) => { clearTimeout(timer); resolve({ error: err.message }); });
-  });
-  if (exit.timedOut) {
-    try { child.kill(); } catch (_) {}
+  const exit = await observeSecondInstance(EXE);
+  if (!exit.terminationProved) {
     failed('single-instance.second-launch-exits', 'second instance still running after 15 s');
+    console.error('packaged-acceptance: second-instance custody is unresolved; blocking further launches and completion');
+    await new Promise(() => {});
+  } else if (exit.launchFailed) {
+    failed('single-instance.second-launch-exits', 'second instance could not be launched safely');
   } else {
     passed('single-instance.second-launch-exits', `second instance exited in ${Date.now() - t0} ms (code ${exit.code})`);
   }
@@ -317,7 +744,7 @@ async function runSecondInstance(page) {
 async function runFixJourney(page) {
   const state = await stateOf(page);
   if (state !== 'ready') {
-    notRun('fix.journey', `landing state is "${state}", not ready (Zoom Workplace not detected on this host?) — Fix now cannot be exercised here`);
+    notRun('fix.journey', `landing state is "${state}", not ready (Zoom Workplace not detected on this host?) — Fix now cannot be exercised here`, { mandatory: true });
     await page.click('#detailsBtn').catch(() => {});
     await sleep(300);
     await shot(page, '03-details-' + state);
@@ -352,17 +779,46 @@ async function runFixJourney(page) {
   const afterEsc = await page.evaluate(() => ({ hidden: document.getElementById('fixConfirmOverlay').hidden, focused: document.activeElement && document.activeElement.id }));
   (afterEsc.hidden ? passed : failed)('fix.confirm-escape-goes-back', `overlay hidden=${afterEsc.hidden}`);
   (afterEsc.focused === 'fixBtn' ? passed : failed)('fix.confirm-focus-returns', `focus on #${afterEsc.focused}`);
-  if (SKIP_FIX) { notRun('fix.run', '--skip-fix'); return; }
+  if (SKIP_FIX) {
+    notRun('fix.run', '--skip-fix is diagnostic-only; required Fix now acceptance did not run', {
+      mandatory: true,
+      acceptanceResult: 'non-acceptance'
+    });
+    return;
+  }
 
   // Real run: click Fix now, Continue, and follow the orchestrator to a
   // terminal state. Rapid double-click must not start two repairs.
+  await page.evaluate(() => {
+    if (typeof window.__fixerAcceptanceStopFixLog === 'function') window.__fixerAcceptanceStopFixLog();
+    window.__fixerAcceptanceFixLog = [];
+    window.__fixerAcceptanceStopFixLog = window.electronAPI.onFixLog((entry) => {
+      if (!entry || typeof entry.line !== 'string') return;
+      const line = entry.line.trim();
+      const launchLine = /^Launch diagnostic: phase=(?:pre_launch|credential|start_process) outcome=(?:success|failure) exceptionClass=(?:none|[A-Za-z][A-Za-z0-9_.]{0,127}) hresult=(?:none|-?\d{1,12}) nativeCode=(?:none|-?\d{1,12}) exitCode=(?:none|-?\d{1,12}) timeout=(?:true|false) markerPresent=(?:true|false)$/.test(line);
+      if (launchLine && window.__fixerAcceptanceFixLog.length < 32) {
+        window.__fixerAcceptanceFixLog.push({ line, kind: entry.kind || '' });
+      }
+    });
+  });
+  const stopFixLogCapture = async () => selectFixLaunchTrace(await page.evaluate(() => {
+    const entries = Array.isArray(window.__fixerAcceptanceFixLog) ? window.__fixerAcceptanceFixLog.slice() : [];
+    if (typeof window.__fixerAcceptanceStopFixLog === 'function') window.__fixerAcceptanceStopFixLog();
+    delete window.__fixerAcceptanceStopFixLog;
+    delete window.__fixerAcceptanceFixLog;
+    return entries;
+  }));
   await page.click('#fixBtn');
   await page.waitForSelector('#fixConfirmOverlay:not([hidden])', { timeout: 5000 });
   await page.click('#fixConfirmContinue');
   await page.click('#fixConfirmContinue', { force: true }).catch(() => {});
   const fixing = await waitForState(page, (s) => s === 'fixing' || s === 'cancelling' || s === 'success' || s === 'error' || s === 'notice', 15000, 'fixing');
-  (fixing.ok ? passed : failed)('fix.starts', `state=${fixing.state} after ${fixing.ms} ms`);
-  if (!fixing.ok) return;
+  const fixingCase = (fixing.ok ? passed : failed)('fix.starts', `state=${fixing.state} after ${fixing.ms} ms`);
+  if (!fixing.ok) {
+    const launchTrace = await stopFixLogCapture();
+    if (launchTrace.length) fixingCase.launchTrace = launchTrace;
+    return;
+  }
   const fixingShot = await shot(page, '04-fixing');
   const progress = await page.evaluate(() => {
     const p = document.querySelector('#stepLine[role="progressbar"], .compact-step-line[role="progressbar"]');
@@ -374,8 +830,20 @@ async function runFixJourney(page) {
   (progress.aria ? passed : failed)('fix.progress-announced', `progress: ${progress.aria || 'none'}`);
   const done = await waitForState(page, (s) => ['success', 'error', 'notice', 'cancelled'].includes(s), FIX_TIMEOUT_MS, 'terminal');
   const endShot = await shot(page, `05-end-${done.state || 'timeout'}`);
-  if (!done.ok) { failed('fix.reaches-terminal-state', `still "${done.state}" after ${done.ms} ms — no terminal state`, { screenshot: endShot }); return; }
+  const launchTrace = await stopFixLogCapture();
+  if (!done.ok) {
+    failed('fix.reaches-terminal-state', `still "${done.state}" after ${done.ms} ms — no terminal state`, {
+      screenshot: endShot,
+      ...(launchTrace.length ? { launchTrace } : {})
+    });
+    return;
+  }
   passed('fix.reaches-terminal-state', `state=${done.state} after ${done.ms} ms`, { screenshot: endShot });
+  (fixJourneySucceeded(done.state) ? passed : failed)(
+    'fix.completes-successfully',
+    `state=${done.state}`,
+    { screenshot: endShot, ...(launchTrace.length ? { launchTrace } : {}) }
+  );
   const endFacts = await page.evaluate(() => {
     const launch = document.getElementById('launchBtn');
     const title = document.querySelector('.wiz-pane.active h2, .wiz-pane.active h1');
@@ -400,7 +868,7 @@ async function runFixJourney(page) {
 
 function readEnableLua() {
   try {
-    const r = require('child_process').spawnSync('reg.exe', ['query', 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System', '/v', 'EnableLUA'], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    const r = require('child_process').spawnSync(windowsTools.resolveTool('reg.exe'), ['query', 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System', '/v', 'EnableLUA'], { encoding: 'utf8', timeout: 5000, windowsHide: true });
     const m = /EnableLUA\s+REG_DWORD\s+0x([0-9a-f]+)/i.exec(r.stdout || '');
     return m ? parseInt(m[1], 16) : null;
   } catch (_) { return null; }
@@ -417,23 +885,60 @@ async function prepareTestCopy() {
   return { exe, how };
 }
 
-// Raw launch without the debugger: the app's own stderr for 12 s, so a
-// renderer/GPU child launch failure is visible in the report even when the
-// driver cannot attach.
-async function rawLaunchProbe(exe) {
-  return new Promise((resolve) => {
-    let out = '';
-    const child = spawn(exe, ['--enable-logging=stderr'], { windowsHide: true });
-    const done = (why) => {
-      try { require('child_process').spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 8000 }); } catch (_) {}
-      resolve({ why, out: out.slice(-4000) });
+// Playwright owns this diagnostic launch from creation through close. This
+// avoids ever converting custody into a numeric PID that could be reused.
+// A close failure retains the adapter object and the caller blocks before any
+// later launch or process exit.
+const unresolvedRawLaunchCustody = new Set();
+async function rawLaunchProbe(exe, launcher = electron, delay = sleep) {
+  let app = null;
+  let child = null;
+  let out = '';
+  let exitObserved = false;
+  let exitCode = null;
+  let appClosed = false;
+  try {
+    app = await launcher.launch({
+      executablePath: exe,
+      args: ['--enable-logging=stderr'],
+      timeout: 30000
+    });
+    unresolvedRawLaunchCustody.add(app);
+    app.on('close', () => { appClosed = true; });
+    child = app.process();
+    if (!child || typeof child.on !== 'function') {
+      try { await app.close(); } catch (_) { /* retained below */ }
+      if (appClosed) unresolvedRawLaunchCustody.delete(app);
+      return { why: 'error:managed-process-unavailable', timedOut: false,
+        terminationProved: appClosed, out: out.slice(-4000) };
+    }
+    if (child.stdout && typeof child.stdout.on === 'function') child.stdout.on('data', data => { out += data; });
+    if (child.stderr && typeof child.stderr.on === 'function') child.stderr.on('data', data => { out += data; });
+    child.on('exit', code => { exitObserved = true; exitCode = code; });
+    await delay(12000);
+    const reachedDeadline = !exitObserved;
+    try {
+      if (!appClosed) await app.close();
+    } catch (_) {
+      return { why: 'managed-close-failed', timedOut: reachedDeadline,
+        terminationProved: false, out: out.slice(-4000) };
+    }
+    unresolvedRawLaunchCustody.delete(app);
+    return {
+      why: reachedDeadline ? 'managed deadline' : `exited ${exitCode}`,
+      timedOut: reachedDeadline,
+      terminationProved: true,
+      out: out.slice(-4000)
     };
-    const timer = setTimeout(() => done('timeout'), 12000);
-    child.stdout.on('data', (d) => { out += d; });
-    child.stderr.on('data', (d) => { out += d; });
-    child.on('error', (e) => { clearTimeout(timer); resolve({ why: `error: ${e.message}`, out }); });
-    child.on('exit', (code) => { clearTimeout(timer); resolve({ why: `exited ${code}`, out: out.slice(-4000) }); });
-  });
+  } catch (_) {
+    if (!app) return { why: 'error:launch', timedOut: false, terminationProved: true, out: out.slice(-4000) };
+    return { why: 'managed-close-failed', timedOut: false,
+      terminationProved: false, out: out.slice(-4000) };
+  }
+}
+
+function rawLaunchSucceeded(receipt, fatalOutput) {
+  return !!receipt && receipt.timedOut === true && receipt.terminationProved === true && fatalOutput !== true;
 }
 
 (async () => {
@@ -453,9 +958,94 @@ async function rawLaunchProbe(exe) {
       return;
     }
   }
+  const digest = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  report.acceptanceIdentity.shippedExeSha256 = digest(SHIPPED_EXE);
+  report.acceptanceIdentity.drivenExeSha256 = digest(EXE);
+  const runtimeManifest = require('../scripts/verify-exe-manifest').inspectExeManifest(SHIPPED_EXE);
+  report.acceptanceIdentity.runtimeManifestExecutionLevel = runtimeManifest.requestedExecutionLevel || '';
+  (runtimeManifest.requestedExecutionLevel === 'requireAdministrator' ? passed : failed)(
+    'runtime-require-administrator-manifest',
+    runtimeManifest.requestedExecutionLevel === 'requireAdministrator'
+      ? 'the unmodified shipped runtime requests administrator elevation'
+      : 'the unmodified shipped runtime does not request administrator elevation'
+  );
+  passed('executable-hash-recorded', TEST_COPY
+    ? 'recorded distinct shipped and diagnostic-copy executable identities'
+    : 'the driven executable is the byte-identical shipped executable', {
+    executableIdentity: {
+      shippedSha256: report.acceptanceIdentity.shippedExeSha256,
+      drivenSha256: report.acceptanceIdentity.drivenExeSha256
+    }
+  });
+  const packageMandatory = !TEST_COPY && !SKIP_FIX;
+  if (!PACKAGE_PATH) {
+    notRun('package-to-runtime-identity', 'no Setup or Portable package was supplied', { mandatory: packageMandatory });
+  } else if (!fs.existsSync(PACKAGE_PATH) || !fs.statSync(PACKAGE_PATH).isFile()) {
+    failed('package-to-runtime-identity', 'the supplied package file is unavailable');
+  } else {
+    const packageFileName = path.basename(PACKAGE_PATH);
+    const packageKind = inferPackageKind(packageFileName);
+    const packageSha256 = digest(PACKAGE_PATH);
+    Object.assign(report.acceptanceIdentity, {
+      packagePresent: true,
+      packageFileName,
+      packageKind,
+      packageSha256
+    });
+    const attestation = OPERATOR_ATTESTATION;
+    const expectedOperation = packageKind === 'setup' ? 'install' : packageKind === 'portable' ? 'extract' : '';
+    const verified = !!packageKind && attestation.valid === true &&
+      attestation.packageKind === packageKind && attestation.packageFileName === packageFileName &&
+      attestation.packageSha256 === packageSha256 &&
+      attestation.runtimeExecutableSha256 === report.acceptanceIdentity.shippedExeSha256 &&
+      attestation.packageToRuntimeOperation === expectedOperation &&
+      attestation.runtimeLaunchObserved === true &&
+      attestation.unmodifiedRequireAdministrator === true &&
+      runtimeManifest.requestedExecutionLevel === 'requireAdministrator';
+    report.acceptanceIdentity.packageToRuntimeVerified = verified;
+    (verified ? passed : failed)(
+      'package-to-runtime-identity',
+      verified
+        ? `${packageKind} package hash, ${expectedOperation} receipt, launched runtime hash and elevation manifest are bound`
+        : 'the package-to-runtime receipt does not match the supplied package and launched runtime'
+    );
+  }
+  if (EXPECTED_EXE_SHA256) {
+    (report.acceptanceIdentity.shippedExeSha256 === EXPECTED_EXE_SHA256 ? passed : failed)(
+      'executable-expected-hash',
+      report.acceptanceIdentity.shippedExeSha256 === EXPECTED_EXE_SHA256
+        ? 'shipped executable matches the independently supplied SHA-256'
+        : 'shipped executable does not match the independently supplied SHA-256'
+    );
+  }
+  if (ARTIFACT_HEAD && EXPECTED_HEAD) {
+    (ARTIFACT_HEAD === EXPECTED_HEAD ? passed : failed)(
+      'artifact-head-identity',
+      ARTIFACT_HEAD === EXPECTED_HEAD
+        ? 'artifact head matches the acceptance target head'
+        : 'artifact head does not match the acceptance target head'
+    );
+  }
+  const shippedArchive = path.join(path.dirname(SHIPPED_EXE), 'resources', 'app.asar');
+  const drivenArchive = path.join(path.dirname(EXE), 'resources', 'app.asar');
+  if (!fs.existsSync(shippedArchive) || !fs.existsSync(drivenArchive)) {
+    failed('shipped-archive', 'the shipped and driven app.asar archives are required for runtime proof');
+    finish(); return;
+  }
+  const archiveSha256 = digest(shippedArchive);
+  if (digest(drivenArchive) !== archiveSha256) {
+    failed('shipped-archive', 'the driven archive differs from the shipped archive');
+    finish(); return;
+  }
+  passed('shipped-archive', 'actual main process will load the byte-identical shipped app.asar', { archiveSha256 });
   const raw = await rawLaunchProbe(EXE);
   const rawFatal = /render-process-gone|GPU process launch failed|FATAL/.test(raw.out);
-  (!rawFatal ? passed : failed)('raw-launch', `${raw.why}; ${rawFatal ? 'renderer/GPU launch failure in stderr' : 'no fatal child-launch error in 12 s'}`, { stderrTail: raw.out.split(/\r?\n/).filter(Boolean).slice(-12) });
+  const rawOk = rawLaunchSucceeded(raw, rawFatal);
+  (rawOk ? passed : failed)('raw-launch', `${raw.why}; terminationProved=${raw.terminationProved}; ${rawFatal ? 'renderer/GPU launch failure in stderr' : 'no fatal child-launch error in 12 s'}`, { stderrTail: raw.out.split(/\r?\n/).filter(Boolean).slice(-12) });
+  if (!raw.terminationProved) {
+    console.error('packaged-acceptance: managed launch custody is unresolved; blocking further launches and completion');
+    await new Promise(() => {});
+  }
 
   const main = await runLanding(1, 'scale100');
   if (main) {
@@ -468,6 +1058,7 @@ async function rawLaunchProbe(exe) {
     const r = await runLanding(s, tag);
     if (r) await r.app.close().catch(() => {});
   }
+  await runForgedRoot();
   finish();
 })().catch((err) => {
   failed('driver', `crashed: ${err && err.stack || err}`);
@@ -479,13 +1070,46 @@ function finish() {
   const counts = { passed: 0, failed: 0, 'not-run': 0 };
   for (const c of report.cases) counts[c.status]++;
   report.counts = counts;
+  report.blockingNotRun = report.cases.filter(c => c.status === 'not-run' && c.mandatory === true).length;
+  const exitCode = acceptanceExitCode(report.cases);
+  const releaseEligibility = nativeReleaseEligibility({
+    ...report.acceptanceIdentity,
+    testCopy: report.testCopy,
+    skipFix: SKIP_FIX,
+    platform: report.host.platform,
+    enableLUA: report.host.enableLUA
+  }, report.cases);
+  report.releaseGateEligible = releaseEligibility.eligible;
+  report.releaseEligibilityReasons = releaseEligibility.reasons;
+  report.evidenceClass = releaseEligibility.eligible ? 'native-final-artifact' : 'diagnostic';
+  report.executionResult = exitCode === 0 ? 'passed' : 'failed';
+  report.acceptanceResult = releaseEligibility.eligible
+    ? 'passed'
+    : (!TEST_COPY && !SKIP_FIX && exitCode !== 0 ? 'failed' : 'non-acceptance');
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
-  const lines = ['# Packaged acceptance', '', `Executable driven: \`${report.exe}\``, `Shipped executable: \`${report.shippedExe}\` (${report.testCopy ? 'driven through an asInvoker-stamped copy because the host has UAC disabled' : 'driven directly'})`, `Host: ${report.host.platform} ${report.host.release}, EnableLUA=${report.host.enableLUA}`, `Run: ${report.startedAt} → ${report.finishedAt}`, '',
-    `Passed ${counts.passed} · Failed ${counts.failed} · Not run ${counts['not-run']}`, '',
+  const lines = ['# Packaged acceptance', '', `Executable driven: \`${report.exe}\``, `Shipped executable: \`${report.shippedExe}\` (${report.testCopy ? 'packaged code driven through a manifest-modified asInvoker diagnostic copy; shipped executable untouched' : 'driven directly'})`, `Host: ${report.host.platform} ${report.host.release}, EnableLUA=${report.host.enableLUA}`, `Run: ${report.startedAt} → ${report.finishedAt}`, '',
+    `Mode: ${report.mode} · Evidence: ${report.evidenceClass} · Execution: ${report.executionResult} · Release gate eligible: ${report.releaseGateEligible} · Result: ${report.acceptanceResult}`,
+    `Release eligibility blockers: ${report.releaseEligibilityReasons.join(', ') || 'none'}`, '',
+    '## Acceptance identity', '',
+    `- Verified package kind / caller label: ${report.acceptanceIdentity.packageKind || 'unbound'} / ${report.acceptanceIdentity.declaredArtifactKind || 'unset'}`,
+    `- Package file / SHA-256: ${report.acceptanceIdentity.packageFileName || 'unbound'} / ${report.acceptanceIdentity.packageSha256 || 'unbound'}`,
+    `- Package-to-runtime receipt verified: ${report.acceptanceIdentity.packageToRuntimeVerified}`,
+    `- Artifact head / expected head: ${report.acceptanceIdentity.artifactHead || 'unbound'} / ${report.acceptanceIdentity.expectedHead || 'unbound'}`,
+    `- Shipped executable SHA-256 / expected: ${report.acceptanceIdentity.shippedExeSha256 || 'unavailable'} / ${report.acceptanceIdentity.expectedExeSha256 || 'unbound'}`,
+    `- Shipped runtime execution level: ${report.acceptanceIdentity.runtimeManifestExecutionLevel || 'unavailable'}`,
+    `- Effective support endpoint: ${report.acceptanceIdentity.effectiveSupportEndpoint || 'unset'}`,
+    `- Support configuration revision / expected: ${report.acceptanceIdentity.supportConfigRevision || 'unavailable'} / ${report.acceptanceIdentity.expectedSupportConfigRevision || 'unbound'}`,
+    `- Support configuration source/integrity: ${report.acceptanceIdentity.supportConfigSource || 'unavailable'} / ${report.acceptanceIdentity.supportConfigIntegrity}`,
+    `- Operator attestation: ${report.acceptanceIdentity.operatorAttestation.present ? (report.acceptanceIdentity.operatorAttestation.valid ? 'valid' : 'invalid') : 'missing'}`, '',
+    `Passed ${counts.passed} · Failed ${counts.failed} · Not run ${counts['not-run']} · Mandatory not run ${report.blockingNotRun}`, '',
     '| Case | Result | Detail | Evidence |', '|---|---|---|---|'];
   const cell = (s) => String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
-  for (const c of report.cases) lines.push(`| ${c.id} | ${c.status} | ${cell(c.detail)} | ${c.screenshot ? c.screenshot : ''} |`);
+  for (const c of report.cases) {
+    const evidence = [c.screenshot || '', Array.isArray(c.launchTrace) && c.launchTrace.length
+      ? `launch trace: ${c.launchTrace.join(' ⟶ ')}` : ''].filter(Boolean).join(' · ');
+    lines.push(`| ${c.id} | ${c.status} | ${cell(c.detail)} | ${cell(evidence)} |`);
+  }
   fs.writeFileSync(path.join(OUT, 'report.md'), lines.join('\n') + '\n');
-  console.log(`packaged-acceptance: passed=${counts.passed} failed=${counts.failed} not-run=${counts['not-run']} → ${OUT}`);
-  process.exit(counts.failed ? 1 : 0);
+  console.log(`packaged-acceptance: execution=${report.executionResult} evidence=${report.evidenceClass} releaseEligible=${report.releaseGateEligible} passed=${counts.passed} failed=${counts.failed} not-run=${counts['not-run']} → ${OUT}`);
+  process.exit(exitCode);
 }

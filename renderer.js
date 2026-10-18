@@ -1897,22 +1897,44 @@ supportBtn.addEventListener('click', () => openSupportReport());
 const ratings = { ease: 0, resolved: 0, recommend: 0, overall: 0 };
 let feedbackMode = '';
 let releaseFeedbackTrap = null;
+let feedbackGen = 0;
+const feedbackSending = new Set();
+const feedbackEditorLocks = new WeakMap();
 
 function showSection(id) {
   document.querySelectorAll('.fb-section').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
 }
+function returnToFeedbackChooser() {
+  feedbackGen++;
+  feedbackMode = '';
+  showSection('fbChoose');
+}
 function openFeedback() {
+  feedbackGen++;
+  document.querySelectorAll('.fb-section textarea, .fb-section input, .fb-section button').forEach(el => {
+    feedbackEditorLocks.delete(el);
+    el.disabled = false;
+  });
+  document.getElementById('fbRatingSubmit').disabled = true;
+  document.getElementById('fbContactSubmit').disabled = true;
   const overlay = document.getElementById('fbOverlay');
   overlay.classList.add('show');
   showSection('fbChoose');
   feedbackMode = '';
   document.querySelectorAll('.fb-textarea').forEach(t => { t.value = ''; });
   attachGen++;
+  attachReportBusy = false;
   const attachBtn = document.getElementById('fbAttachReport');
   attachBtn.disabled = false;
   attachBtn.textContent = 'Attach Support Report';
-  document.querySelectorAll('.fb-rating-btn').forEach(b => b.classList.remove('selected'));
+  document.querySelectorAll('.fb-rating-btns').forEach(group => {
+    group.querySelectorAll('.fb-rating-btn').forEach((btn, index) => {
+      btn.classList.remove('selected');
+      btn.setAttribute('aria-checked', 'false');
+      btn.tabIndex = index === 0 ? 0 : -1;
+    });
+  });
   document.querySelectorAll('.fb-status').forEach(s => { s.textContent = ''; s.className = s.className.includes('fb-shot-status') ? 'fb-status fb-shot-status' : 'fb-status'; });
   Object.keys(ratings).forEach(k => { ratings[k] = 0; });
   clearScreenshot();
@@ -1927,16 +1949,11 @@ function closeFeedback() {
 
 async function loadSysInfo() {
   try {
-    const info = await window.electronAPI.getSystemInfo();
+    const version = await window.electronAPI.getVersion();
     const el = document.getElementById('fbSysInfo');
-    // Tri-state: true / false / null. null means the elevation probe itself
-    // failed — reported as Unknown, not folded into "No" and certainly not
-    // into "Yes" (which is what this line printed unconditionally before,
-    // because main hardcoded admin: true).
-    const admin = info.admin === true ? 'Yes' : info.admin === false ? 'No' : 'Unknown (could not check)';
-    el.textContent = `Version: ${info.version}\nOS: ${info.os}\nAdmin: ${admin}`;
+    el.textContent = FEEDBACK.VERSION_PREFIX + version;
   } catch (_) {
-    document.getElementById('fbSysInfo').textContent = 'Could not load system info';
+    document.getElementById('fbSysInfo').textContent = FEEDBACK.VERSION_UNAVAILABLE;
   }
 }
 
@@ -2186,13 +2203,16 @@ exploreOverlay.addEventListener('keydown', (e) => {
   document.getElementById(id).addEventListener('click', closeFeedback);
 });
 ['fbBugBack', 'fbRatingBack', 'fbContactBack'].forEach(id => {
-  document.getElementById(id).addEventListener('click', () => showSection('fbChoose'));
+  document.getElementById(id).addEventListener('click', returnToFeedbackChooser);
 });
 document.querySelectorAll('.fb-choice').forEach(el => {
   const activate = () => {
     feedbackMode = el.dataset.mode;
     if      (feedbackMode === 'bug')     showSection('fbBug');
-    else if (feedbackMode === 'rating')  showSection('fbRating');
+    else if (feedbackMode === 'rating') {
+      showSection('fbRating');
+      if (ratings.overall === 0) document.getElementById('fbRatingStatus').textContent = FEEDBACK.RATING_REQUIRED;
+    }
     else if (feedbackMode === 'contact') showSection('fbContact');
   };
   el.addEventListener('click', activate);
@@ -2202,19 +2222,42 @@ document.querySelectorAll('.fb-choice').forEach(el => {
 });
 document.querySelectorAll('.fb-rating-btns').forEach(group => {
   const cat = group.dataset.cat;
-  group.querySelectorAll('.fb-rating-btn').forEach(btn => {
+  const buttons = [...group.querySelectorAll('.fb-rating-btn')];
+  if (cat === 'overall') group.setAttribute('aria-required', 'true');
+  buttons.forEach((btn, index) => {
+    btn.setAttribute('role', 'radio');
+    btn.setAttribute('aria-checked', 'false');
+    btn.tabIndex = index === 0 ? 0 : -1;
     btn.addEventListener('click', () => {
       ratings[cat] = parseInt(btn.dataset.val);
-      group.querySelectorAll('.fb-rating-btn').forEach(b => b.classList.remove('selected'));
+      buttons.forEach(b => {
+        b.classList.remove('selected');
+        b.setAttribute('aria-checked', 'false');
+        b.tabIndex = -1;
+      });
       btn.classList.add('selected');
-      const filled = Object.values(ratings).filter(v => v > 0).length;
-      document.getElementById('fbRatingSubmit').disabled = filled === 0;
+      btn.setAttribute('aria-checked', 'true');
+      btn.tabIndex = 0;
+      document.getElementById('fbRatingSubmit').disabled = feedbackSending.has('fbRatingStatus') || ratings.overall === 0;
+      document.getElementById('fbRatingStatus').textContent = ratings.overall === 0 ? FEEDBACK.RATING_REQUIRED : '';
     });
+  });
+  group.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+    const index = buttons.indexOf(document.activeElement);
+    if (index < 0) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 :
+      (index + (event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length;
+    if (!buttons[next].disabled) {
+      buttons[next].click();
+      buttons[next].focus();
+    }
   });
 });
 document.getElementById('fbBugText').addEventListener('input', refreshBugSubmit);
 document.getElementById('fbContactText').addEventListener('input', (e) => {
-  document.getElementById('fbContactSubmit').disabled = e.target.value.trim().length < 50;
+  document.getElementById('fbContactSubmit').disabled = feedbackSending.has('fbContactStatus') || e.target.value.trim().length < 50;
 });
 
 document.getElementById('fbViewReport').addEventListener('click', openSupportReport);
@@ -2222,16 +2265,19 @@ document.getElementById('fbViewReport').addEventListener('click', openSupportRep
 // Bug-report attach flow: pull the sanitized report into the bug description
 // so one submission carries both. attachGen invalidates an in-flight build
 // when the modal is closed/reopened (openFeedback bumps it), so a stale IPC
-// completion can't write into a fresh form. Budget leaves headroom under the
-// proxy's 4,000-char MAX_TEXT_CHARS for the auto-appended system-info block.
-const MAX_ATTACH_CHARS = 3700;
+// completion can't write into a fresh form. The full report must fit the
+// service's UTF-8 byte limit; keep the draft intact instead of cutting it.
+const FEEDBACK_TEXT_MAX_BYTES = 100 * 1024;
 let attachGen = 0;
+let attachReportBusy = false;
 document.getElementById('fbAttachReport').addEventListener('click', async () => {
   const btn = document.getElementById('fbAttachReport');
   const status = document.getElementById('fbBugStatus');
   status.textContent = '';
   btn.disabled = true;
   btn.textContent = 'Attaching…';
+  attachReportBusy = true;
+  refreshBugSubmit();
   const gen = attachGen;
   try {
     const result = await window.electronAPI.supportReport({
@@ -2244,11 +2290,13 @@ document.getElementById('fbAttachReport').addEventListener('click', async () => 
     if (!md) throw new Error('report unavailable');
     const ta = document.getElementById('fbBugText');
     const userText = ta.value.trim();
-    let combined = userText ? userText + '\n\n---\n' + md : md;
-    if (combined.length > MAX_ATTACH_CHARS) {
-      const marker = '\n…[report trimmed to fit the 4,000-character limit]';
-      combined = combined.slice(0, MAX_ATTACH_CHARS - marker.length) + marker;
-      status.textContent = 'The report was trimmed to fit the 4,000-character limit.';
+    const combined = userText ? userText + '\n\n---\n' + md : md;
+    if (new TextEncoder().encode(combined).length > FEEDBACK_TEXT_MAX_BYTES) {
+      btn.disabled = false;
+      btn.textContent = 'Attach Support Report';
+      status.textContent = FEEDBACK.ATTACH_TOO_LARGE;
+      status.className = 'fb-status err';
+      return;
     }
     ta.value = combined;
     ta.dispatchEvent(new Event('input'));
@@ -2258,14 +2306,19 @@ document.getElementById('fbAttachReport').addEventListener('click', async () => 
     btn.disabled = false;
     btn.textContent = 'Attach Support Report';
     status.textContent = 'Could not build the report — try again.';
+  } finally {
+    if (gen === attachGen) {
+      attachReportBusy = false;
+      refreshBugSubmit();
+    }
   }
 });
 
 // ============================================================
 // Bug-report screenshot attach (#141).
 //
-// The whole block stays hidden unless the proxy advertises the screenshots
-// capability — a control that cannot deliver is a dead button. Validation
+// The block appears only for a locally configured public support endpoint.
+// Opening the dialog sends no capability request. Validation
 // runs client-side first (type by magic bytes, 5 MB cap) for immediate
 // honest feedback; the proxy re-validates server-side regardless.
 // ============================================================
@@ -2297,7 +2350,7 @@ function shotStatus(msg, isError) {
 function refreshBugSubmit() {
   const btn = document.getElementById('fbBugSubmit');
   const len = document.getElementById('fbBugText').value.trim().length;
-  btn.disabled = shotReadBusy || len < 50;
+  btn.disabled = shotReadBusy || attachReportBusy || feedbackSending.has('fbBugStatus') || len < 50;
 }
 
 function clearScreenshot() {
@@ -2324,6 +2377,7 @@ async function refreshScreenshotCapability() {
 }
 
 async function setScreenshot(fileOrBlob, name) {
+  if (feedbackSending.has('fbBugStatus')) return shotStatus(FEEDBACK.BUSY, true);
   // Selecting ANY replacement — even one that will be rejected — must
   // invalidate a still-in-flight earlier read, or that older file could
   // attach after the rejection message. The generation bumps first; every
@@ -2446,23 +2500,23 @@ document.addEventListener('paste', (e) => {
 
 document.getElementById('fbBugSubmit').addEventListener('click', async () => {
   const text = document.getElementById('fbBugText').value.trim();
-  const sysInfo = document.getElementById('fbSysInfo').textContent;
-  const body = `${text}\n\n---\n**System Info**\n${sysInfo.split('\n').map(l => '- ' + l).join('\n')}`;
-  await submitFeedback('Bug Report', body, 'fbBugStatus', bugScreenshot);
+  await submitFeedback('Bug Report', text, 'fbBugStatus', bugScreenshot);
 });
 document.getElementById('fbRatingSubmit').addEventListener('click', async () => {
-  const filled = Object.entries(ratings).filter(([,v]) => v > 0);
-  const avg = (filled.reduce((s,[,v]) => s + v, 0) / filled.length).toFixed(1);
+  if (ratings.overall < 1 || ratings.overall > 5) {
+    document.getElementById('fbRatingStatus').textContent = FEEDBACK.RATING_REQUIRED;
+    return;
+  }
   const comments = document.getElementById('fbRatingText').value.trim();
+  const score = key => ratings[key] > 0 ? `${ratings[key]}/5` : FEEDBACK.NOT_ANSWERED;
   let body = `## User Rating Survey\n\n| Category | Score |\n|----------|-------|\n`;
-  body += `| Ease of Use | ${ratings.ease}/5 |\n`;
-  body += `| Issue Resolved | ${ratings.resolved}/5 |\n`;
-  body += `| Recommend | ${ratings.recommend}/5 |\n`;
-  body += `| Overall | ${ratings.overall}/5 |\n`;
-  body += `| **Average** | **${avg}/5** |\n`;
+  body += `| Ease of Use | ${score('ease')} |\n`;
+  body += `| Issue Resolved | ${score('resolved')} |\n`;
+  body += `| Recommend | ${score('recommend')} |\n`;
+  body += `| Overall | ${score('overall')} |\n`;
   if (comments) body += `\n### Comments\n${comments}\n`;
-  body += `\n---\n_Submitted via 1132 Fixer app_\n\n<!-- RATING_DATA:${JSON.stringify({...ratings, avg: parseFloat(avg)})} -->`;
-  await submitFeedback('User Rating', body, 'fbRatingStatus');
+  body += '\n---\n_Submitted via 1132 Fixer app_';
+  await submitFeedback('User Rating', body, 'fbRatingStatus', undefined, ratings.overall);
 });
 document.getElementById('fbContactSubmit').addEventListener('click', async () => {
   const text = document.getElementById('fbContactText').value.trim();
@@ -2473,34 +2527,79 @@ const SUBMIT_BTN_FOR_STATUS = {
   fbBugStatus: 'fbBugSubmit', fbRatingStatus: 'fbRatingSubmit', fbContactStatus: 'fbContactSubmit',
 };
 
-async function submitFeedback(type, text, statusId, screenshot) {
+async function submitFeedback(type, text, statusId, screenshot, rating) {
   const statusEl = document.getElementById(statusId);
-  // One submission at a time: a second click during the request would send a
-  // duplicate report (the legacy path has no server-side idempotency).
+  // One user-triggered exchange at a time. Drafts remain intact on failure.
   const submitBtn = document.getElementById(SUBMIT_BTN_FOR_STATUS[statusId]);
+  if (feedbackSending.has(statusId)) return;
   if (submitBtn.disabled) return;
+  if (new TextEncoder().encode(text).length > FEEDBACK_TEXT_MAX_BYTES) {
+    statusEl.textContent = FEEDBACK.TEXT_TOO_LARGE;
+    statusEl.className = 'fb-status err';
+    return;
+  }
+  const gen = feedbackGen;
+  feedbackSending.add(statusId);
+  // Keep the submitted draft stable until the exchange ends. Cancel and Back
+  // remain available; reopening creates a fresh generation and unlocks editors.
+  const editors = [...submitBtn.closest('.fb-section').querySelectorAll('textarea, input, button')]
+    .filter(el => el !== submitBtn && !/(Cancel|Back)$/.test(el.id));
+  const snapshots = editors.map(el => ({ el, disabled: el.disabled }));
+  editors.forEach(el => {
+    feedbackEditorLocks.set(el, gen);
+    el.disabled = true;
+  });
+  const restoreEditors = () => {
+    snapshots.forEach(({ el, disabled }) => {
+      if (feedbackEditorLocks.get(el) !== gen) return;
+      feedbackEditorLocks.delete(el);
+      el.disabled = disabled;
+    });
+  };
+  const releaseBusy = () => {
+    feedbackSending.delete(statusId);
+    restoreEditors();
+    if (gen !== feedbackGen) {
+      if (statusEl.textContent === FEEDBACK.SENDING) {
+        statusEl.textContent = '';
+        statusEl.className = 'fb-status';
+      }
+      if (statusId === 'fbBugStatus') refreshBugSubmit();
+      else if (statusId === 'fbRatingStatus') submitBtn.disabled = ratings.overall === 0;
+      else submitBtn.disabled = document.getElementById('fbContactText').value.trim().length < 50;
+    }
+  };
+  let awaitingClose = false;
   submitBtn.disabled = true;
-  statusEl.textContent = screenshot ? 'Submitting report + screenshot...' : 'Submitting...';
+  statusEl.textContent = FEEDBACK.SENDING;
   statusEl.className = 'fb-status';
   try {
-    // The screenshot rides only when present; success below means the proxy
-    // accepted the WHOLE submission (report + screenshot in one request), so
-    // "Submitted successfully" can never overstate what was sent.
+    // This is an outbound acknowledgement only. No delivery or follow-up UI.
     const shotPayload = screenshot
       ? { bytes: screenshot.bytes, mediaType: screenshot.mediaType }
       : undefined;
-    const result = await window.electronAPI.submitFeedback(type, text, shotPayload);
+    const result = await window.electronAPI.submitFeedback(type, text, shotPayload, rating);
+    if (gen !== feedbackGen) return;
     if (result.success) {
-      statusEl.textContent = 'Submitted successfully!';
+      statusEl.textContent = FEEDBACK.SENT;
       statusEl.className = 'fb-status ok';
-      setTimeout(closeFeedback, 1500);
+      awaitingClose = true;
+      setTimeout(() => {
+        if (gen === feedbackGen) closeFeedback();
+        releaseBusy();
+      }, 1500);
       return; // stays disabled until the modal closes — nothing left to send
     }
     statusEl.textContent = result.error || FEEDBACK_FALLBACK;
     statusEl.className = 'fb-status err';
   } catch (err) {
+    if (gen !== feedbackGen) return;
     statusEl.textContent = FEEDBACK_NETWORK;
     statusEl.className = 'fb-status err';
+  } finally {
+    if (!awaitingClose) {
+      releaseBusy();
+    }
   }
   submitBtn.disabled = false; // failed: let the user retry
   if (statusId === 'fbBugStatus') refreshBugSubmit(); // re-apply length/read gates

@@ -1,0 +1,59 @@
+# 1132 Fixer - immutable release receipt issuer
+name: Release evidence issuer
+
+on:
+  workflow_dispatch:
+    inputs:
+      receipt_kind:
+        description: Receipt type to validate and retain
+        required: true
+        type: choice
+        options:
+          - native
+          - support
+      receipt_base64:
+        description: Base64-encoded non-secret JSON receipt bytes
+        required: true
+        type: string
+
+concurrency:
+  group: release-evidence-${{ github.sha }}-${{ inputs.receipt_kind }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  issue:
+    name: Issue immutable receipt
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact protected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22'
+
+      - name: Validate receipt bytes
+        id: receipt
+        env:
+          RELEASE_RECEIPT_KIND: ${{ inputs.receipt_kind }}
+          RELEASE_RECEIPT_BASE64: ${{ inputs.receipt_base64 }}
+        run: node scripts/issue-release-evidence.mjs --out receipt-out
+
+      - name: Retain immutable receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ${{ steps.receipt.outputs.artifact_name }}
+          path: receipt-out/${{ steps.receipt.outputs.file_name }}
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+          include-hidden-files: false

@@ -102,8 +102,10 @@ check(html.includes('id="ubTitle"') && html.includes('id="ubMsg"') && html.inclu
 check(!/quitAndInstall|elevate\.exe/.test(renderer), 'renderer never names updater internals');
 
 console.log('updater-handoff-smoke: release pipeline');
-check(/finalize-update-metadata\.mjs --dist dist --expect-version/.test(releaseYml), 'release.yml finalizes latest.yml against the tag before upload');
-check(releaseYml.indexOf('finalize-update-metadata') < releaseYml.indexOf('Create GitHub Release'), 'finalize runs before the release is created');
+check(/finalize-update-metadata\.mjs --check --dist dist --expect-version/.test(releaseYml),
+  'release.yml verifies the retained latest.yml against the authorized version without mutating accepted bytes');
+check(releaseYml.indexOf('finalize-update-metadata') < releaseYml.indexOf('Draft, verify and publish exact assets'),
+  'retained updater metadata verification runs before the draft publication transaction');
 check(/finalize-update-metadata\.mjs --dist dist/.test(ciYml), 'ci.yml runs the same finalize step');
 check(/isAdminRightsRequired/.test(validate) && /sha512/.test(validate) && /matches tag/.test(validate), 'validate-release-assets checks flag, hash and tag on the published latest.yml');
 check(fs.existsSync(path.join(ROOT, 'scripts', 'finalize-update-metadata.mjs')), 'finalize-update-metadata.mjs exists');

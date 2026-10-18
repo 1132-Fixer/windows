@@ -1,8 +1,10 @@
 # Release process and trust chain
 
-A release of 1132 Fixer for Windows is produced by pushing a `v*` tag reachable
-from `main`. That runs [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
-on a hosted `windows-latest` runner.
+A release of 1132 Fixer for Windows is produced by pushing a `v*` tag on the
+exact current `main` commit. That runs
+[`.github/workflows/release.yml`](../../.github/workflows/release.yml). The
+read-only authorization job must pass before the write-capable publication job
+can start.
 
 This document describes the chain a user's download depends on, link by link,
 and states honestly which links exist today.
@@ -12,23 +14,26 @@ and states honestly which links exist today.
 ## The chain
 
 ```
-source  ->  CI tests  ->  build  ->  security checks  ->  signing
-        ->  signature verification  ->  checksums  ->  SBOM
-        ->  GitHub Release  ->  updater metadata
+source/review  ->  required checks  ->  exact CI candidate
+               ->  native Setup + Portable acceptance
+               ->  support clearance  ->  draft upload/readback
+               ->  GitHub Release/latest
 ```
 
 | # | Link | Status | Where |
 | --- | --- | --- | --- |
-| 1 | Source | present | `main`, tag reachable from it |
-| 2 | CI tests | present | `ci.yml` — smoke suites, feedback-proxy suites, both build targets |
-| 3 | Build | present | `release.yml` — `electron-builder --win --x64 -p never` |
-| 4 | Security checks | present | `npm audit` advisory-only in CI; packaging inventory + allowlist enforced in both CI and release |
+| 1 | Source and review | present | tag is the current protected `main`; exact reviewed PR head/base and independent code-owner approval are read back |
+| 2 | Required checks | present | all seven repository-rule contexts, with their required GitHub Actions integration, are green on the exact SHA |
+| 3 | Build | present | `ci.yml` builds and retains one exact-SHA candidate; `release.yml` does not rebuild accepted packages |
+| 4 | Security checks | present | blocking `npm audit --audit-level=high`; packaging inventory + allowlist enforced while producing the CI candidate |
 | 5 | Signing | **absent** | no certificate configured — see [`../security/code-signing.md`](../security/code-signing.md) |
 | 6 | Signature verification | present, and currently reports UNSIGNED | `scripts/check-signature-state.mjs` |
 | 7 | Checksums | present | `checksums-sha256.txt`, generated from `dist/*.exe` |
 | 8 | SBOM | present | `scripts/generate-sbom.mjs` — SPDX 2.3 JSON, attached to the release |
-| 9 | GitHub Release | present | `softprops/action-gh-release`, assets attached |
-| 10 | Updater metadata | present | `latest.yml`, validated by `scripts/validate-release-assets.mjs` |
+| 9 | GitHub Release | present | `scripts/publish-release.mjs`, draft-first with per-asset digest readback before publication/latest |
+| 10 | Updater metadata | present | `latest.yml`, bound into the exact candidate by `scripts/release-candidate.mjs` and checked again before draft publication |
+| 11 | Native acceptance | external release gate | disposable Windows receipts bind both package hashes to installed/extracted runtime hashes and unmodified UAC accept/cancel behavior |
+| 12 | Support clearance | external release gate | immutable backend revision, destination/acknowledgement fingerprints, and six Setup/Portable live journeys |
 
 A link marked absent or planned is not a defect being hidden; it is the reason
 this document exists. Nothing downstream may claim a property that an absent
@@ -39,26 +44,55 @@ link would have provided.
 ### 1. Source
 
 Tag format is validated first: `v1.2.3` or `v1.2.3-rc.1`. Anything else fails
-before checkout. All release runs share one concurrency group, so re-running an
-old tag cannot race the current one.
+before checkout. The push must create a new tag: `created=true`, `forced=false`,
+and an all-zero before SHA. The preflight reads `git/ref/tags/<tag>`, requires
+an annotated tag object, dereferences it through `git/tags/<object-sha>`, and
+requires its commit to equal current `main`. It does not use a Release object's
+`target_commitish` as tag identity.
+
+The preflight also requires `package.json` to equal the tag version, the active
+branch rules to retain all seven named checks and every review control,
+including required thread resolution, and each check to be green on that SHA
+under its required integration. It paginates reviews and review threads to
+exhaustion. Every thread must be resolved. No current blocking review can
+remain. Exact-head approval must come from a code owner who is not the PR
+author. GitHub must also return the PR's current `reviewDecision` as `APPROVED`;
+that provider decision enforces the last-PR-push rule. The tag pusher is not
+treated as the last PR pusher. All release runs share one concurrency group.
 
 ### 2. CI tests
 
 `ci.yml` runs on every push and pull request to `main`: the Node smoke suites
-from `npm test`, the feedback-proxy suites (both the Postgres-backed framework
-suite and the legacy no-database suite), and both Windows build targets.
+from `npm test` and both Windows build targets. On a push to `main`, it also
+writes `release-candidate.json` and uploads the exact executables, updater
+metadata, checksum manifest, inventory, signature state, SBOM and provenance
+as `release-candidate-<SHA>`. Artifact upload failure fails the check.
 
-`release.yml` does **not** re-run the test suite. A tag is expected to point at
-a commit CI has already validated on `main`.
+`release.yml` does **not** re-run the suite or rebuild. It reads the exact-SHA
+required checks, downloads the one candidate artifact named in the native
+acceptance receipt, verifies the artifact archive digest and every candidate
+file, and refuses any different package hash.
+
+Native and support evidence is not accepted from JSON-valued release
+variables. An independent code owner uses the `Release evidence issuer`
+workflow on protected `main`. That workflow validates the exact non-secret
+receipt bytes and stores one immutable Actions artifact. The release variables
+contain only those artifact IDs. Preflight fetches each artifact and its
+workflow run, checks the issuer, source SHA, workflow, event and archive digest,
+then hashes and validates the retrieved receipt bytes. It binds the source
+head, both package hashes, installed or extracted runtime hashes, UAC evidence,
+support deployment revision, destination and acknowledgement fingerprints,
+and all six support journeys. Support issue #2 must be closed or carry the
+explicit durable supersession marker. Preflight fetches every referenced issue
+in a bounded chain and requires the final issue to be closed before it reads
+candidate metadata. Preflight and the publisher also require immutable releases
+to be enabled before either can create a draft.
 
 ### 3. Build
 
-`npm ci` from the committed lockfile, then `node scripts/inject-config.js` to
-write `src/main/config.generated.js`, then `electron-builder --win --x64 -p never`.
-
-`-p never` is deliberate: the workflow creates the GitHub Release itself, and
-letting electron-builder publish as well would produce a duplicate release and
-race the asset upload.
+The CI Build & Test job runs `npm ci`, writes the validated public support
+configuration, and runs the Portable and NSIS electron-builder targets. The
+tag workflow reuses those accepted bytes. It never invokes electron-builder.
 
 `CSC_IDENTITY_AUTO_DISCOVERY: false` is set workflow-wide so electron-builder
 cannot pick up an unrelated certificate present on a runner.
@@ -68,9 +102,11 @@ The build step then verifies at least two `.exe` files exist, one matching
 
 ### 4. Security checks
 
-`npm audit --audit-level=high` runs in CI, advisory only.
+`npm audit --audit-level=high` is a required Security job. A high or critical
+finding fails the check and therefore fails release preflight.
 
-`scripts/package-inventory.mjs` runs in both CI and the release job. It walks
+`scripts/package-inventory.mjs` runs while CI creates the exact release
+candidate. It walks
 `dist/win-unpacked`, reads the `resources/app.asar` header, writes
 `dist/package-inventory.json`, and fails the build when a file with a denied
 extension appears without a path-exact entry in
@@ -143,13 +179,17 @@ sha256sum -c checksums-sha256.txt
 
 Three gates enforce this. `tools/release-checksums-smoke.js` (in `npm test`)
 inspects the generated bytes (CR count, BOM, final LF, hex, order, hash
-match) and runs `sha256sum -c` on the unmodified file. `ci.yml` and
-`release.yml` both run the generator, its `--verify` mode, and `sha256sum -c`
-on the build output. `scripts/validate-release-assets.mjs` re-checks the file
-as attached to the published release. Releases up to 6.3.3 were written with
-CRLF by a PowerShell cmdlet; those manifests verify only after stripping the
-carriage returns (`tr -d '\r' < checksums-sha256.txt | sha256sum -c -`).
-Published assets are immutable, so 6.3.3 is not re-cut for this.
+match), runs `sha256sum -c` on the unmodified file, and proves that a wrong
+digest or changed binary fails that real tool. `ci.yml` generates and verifies
+the manifest against the built output. `release.yml` verifies the retained
+manifest and every accepted package again before it creates a draft.
+`scripts/validate-release-assets.mjs` remains a read-only audit tool for an
+already published release. Releases up to 6.3.3 were written with
+CRLF by a PowerShell cmdlet. [GNU Coreutils 9.0 added CRLF checksum support](https://lists.gnu.org/archive/html/coreutils-announce/2021-09/msg00000.html);
+older tools can require removing carriage returns
+(`tr -d '\r' < checksums-sha256.txt | sha256sum -c -`). The repository verifier
+requires LF bytes on every supported platform, even when an installed tool
+accepts CRLF. Published assets are immutable, so 6.3.3 is not re-cut for this.
 
 Scope of the guarantee: this detects corruption and truncation. It is **not**
 proof of origin. The checksum file is published on the same release as the
@@ -189,15 +229,22 @@ this change. Recorded as the obvious next step.
 
 ### 9. GitHub Release
 
-`softprops/action-gh-release` creates the release and attaches:
+`scripts/publish-release.mjs` creates a non-latest draft and uploads this exact
+machine-checked set:
 
+<!-- release-assets:start -->
 `1132-Fixer-Setup-<version>.exe` · `1132-Fixer-Portable-<version>.exe` ·
 `checksums-sha256.txt` · `latest.yml` · `*.blockmap` · `signature-state.json` ·
-`package-inventory.json` · `sbom.spdx.json` · `provenance.json`
+`package-inventory.json` · `sbom.spdx.json` · `provenance.json` ·
+`release-candidate.json` · `native-acceptance.json` · `support-clearance.json`
+<!-- release-assets:end -->
 
-The Actions artifact upload that follows is a convenience copy only. It is
-`continue-on-error: true` because Actions artifact storage is a quota-limited
-bucket, and exhausting it must not red a release that has already shipped.
+The script downloads each draft asset and checks its SHA-256, then checks the
+complete asset set. Only after all readbacks pass does it publish the release
+and, for a stable version, mark it latest. A failed upload or readback leaves a
+draft and cannot change the public update feed. The workflow also retains the
+complete transaction inputs as an Actions artifact before any draft is
+created. That retention step is mandatory; storage failure stops publication.
 
 ### 10. Updater metadata
 
@@ -220,12 +267,13 @@ tried to run that missing helper and never installed anything — and it fails
 the run if `latest.yml`'s version, installer name, size or SHA-512 disagree
 with the bytes in `dist/` or with the tag.
 
-`scripts/validate-release-assets.mjs` then re-reads the published release from
-the GitHub API and confirms every filename referenced by `latest.yml` resolves
-to an attached asset, that the flag is absent, that the version equals the tag,
-and that the uploaded installer hashes to the SHA-512 in `latest.yml` at the
-recorded size — catching a release whose metadata and binary disagree, or a
-draft that would serve stale metadata.
+Before publication, `scripts/release-candidate.mjs` confirms every filename
+referenced by `latest.yml` is in the accepted candidate, that the flag is
+absent, that the version equals the tag, and that the installer hashes to the
+SHA-512 in `latest.yml` at the recorded size. The draft publisher then reads
+back the exact bytes of every uploaded asset. The separate
+`scripts/validate-release-assets.mjs` command can audit the same contract on an
+already published release.
 
 Differential (blockmap) downloads are disabled in the client
 (`autoUpdater.disableDifferentialDownload = true`) after repeated field reports
@@ -246,36 +294,44 @@ job that publishes executables to users. A SHA cannot be repointed.
 | Action | Pinned SHA | Tag | Party |
 | --- | --- | --- | --- |
 | `actions/checkout` | `3d3c42e5aac5ba805825da76410c181273ba90b1` | `v7` | GitHub |
-| `actions/setup-node` | `820762786026740c76f36085b0efc47a31fe5020` | `v7` | GitHub |
-| `actions/upload-artifact` | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | `v7` | GitHub |
-| `softprops/action-gh-release` | `3d0d9888cb7fd7b750713d6e236d1fcb99157228` | `v3.0.2` | third party |
+| `actions/setup-node` | `949feb2413d6458794dcd2491c4babbbce0c15c1` | `v7` | GitHub |
+| `actions/upload-artifact` | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` | `v7` | GitHub |
 
-`softprops/action-gh-release` is the only third-party action in the release
-path. Audited 2026-08-14: MIT, ~5.7k stars, actively maintained, not archived,
-not a fork. It is owned by a **personal account** rather than an organisation,
-which makes it the single highest-leverage external dependency in this pipeline
-— one account compromise would otherwise reach every release. That is the
-specific risk the SHA pin addresses.
-
-Note that `v3.0.2` is an *annotated* tag: it resolves to a tag object
-(`fe965f7a…`), not a commit. The pin above is the commit that tag points at.
-Pinning the tag object instead is a common and easy mistake.
+The release path uses only GitHub-owned actions. Publication uses the checked-in
+Node script and the GitHub API instead of a third-party release action.
+All release REST callers use the shared `scripts/github-rest.mjs` transport,
+send API version `2026-03-10`, follow pagination links to exhaustion, and read
+back each mutation. Ordinary JSON and metadata REST calls reject redirects.
+Only bounded artifact-archive and release-asset byte downloads follow redirects
+to GitHub download storage; the caller limits their size and verifies their
+recorded digest. Review threads use a cursor-paginated GraphQL query and fail
+closed on any incomplete page.
 
 Dependabot is configured for `github-actions` weekly, so it raises pull
 requests to move these pins forward. Review those like any other dependency
 bump: check what changed between the two SHAs, not just that the version number
 went up.
 
-`ci.yml` is not pinned. It uses only GitHub-owned actions and cannot publish
-anything — the trade is deliberate and worth revisiting if CI ever gains write
-access to a release.
+`ci.yml`, `release.yml`, and the other operational workflows pin every action
+to a full commit SHA. The regression suite compares this inventory to the
+workflow bytes and rejects a tag or abbreviated SHA.
 
 ## Publishing a release
 
-1. Land the change on `main`; CI green.
+1. Land the version change on protected `main`; all seven required checks must
+   be green and the exact merged head must retain independent code-owner
+   approval.
 2. `npm version <patch|minor|major>` or `node scripts/bump-version.js`, then
    commit.
-3. Tag and push:
+3. Let CI retain the exact candidate. Complete disposable native Windows Setup
+   and Portable acceptance for those package hashes. Complete the six live
+   support journeys against the immutable backend revision. Close support
+   issue #2 or record its explicit supersession.
+4. Have an independent code owner run `Release evidence issuer` on protected
+   `main` once for `native` and once for `support`. Put only the resulting
+   immutable artifact IDs in `NATIVE_ACCEPTANCE_ARTIFACT_ID` and
+   `SUPPORT_CLEARANCE_ARTIFACT_ID`. Do not put receipt JSON in a variable.
+5. Create a new annotated tag on the exact current `main` commit and push it:
 
 ```bash
 git tag -a v5.6.1 -m "v5.6.1"
@@ -285,21 +341,21 @@ git tag -a v5.6.1 -m "v5.6.1"
 git push origin v5.6.1
 ```
 
-4. Watch the run. If it stops at the signature-state check, read the failure
-   before changing anything — that check exists to prevent an unrecoverable
-   update channel, and its failures are not to be worked around by loosening it.
-5. After the run completes, confirm on the Releases page: both `.exe` assets,
+6. Watch the run. A preflight failure means no build, draft, or publication has
+   started. Do not work around it by weakening a required check or evidence
+   receipt.
+7. After the run completes, confirm on the Releases page: both `.exe` assets,
    `checksums-sha256.txt`, `latest.yml`, `signature-state.json`.
-6. Confirm the published `latest.yml` carries no `isAdminRightsRequired` line
-   and that its `version` is the tag (the "Validate published release assets"
-   step fails otherwise). A release is not done until that step is green.
+8. Confirm the published `latest.yml` carries no `isAdminRightsRequired` line
+   and that its `version` is the tag. The candidate and draft-readback gates
+   fail before publication if either condition is false.
 
 The version is bumped in exactly one place, `package.json` (`npm version` or
 `scripts/bump-version.js`); the packaged executable, `latest.yml`, the
-installer filename and the Add/Remove entry all derive from it. Never publish
-a draft or prerelease to stable users: `action-gh-release` runs with
-`draft: false` and `make_latest: true`, and a prerelease tag (`v6.4.0-rc.1`)
-produces a `latest.yml` that stable clients refuse.
+installer filename and the Add/Remove entry all derive from it. The workflow
+uses a private draft as a transaction boundary. It publishes only after every
+asset readback succeeds. A prerelease tag (`v6.4.0-rc.1`) is published as a
+prerelease and is not marked latest; stable clients refuse its `latest.yml`.
 
 ## Rolling back
 
