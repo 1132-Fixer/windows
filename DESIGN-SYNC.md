@@ -58,7 +58,7 @@ URL — not even a different path on an approved host.
 
 | # | id | Name | Description | Category | URL |
 |--:|----|------|-------------|----------|-----|
-| 1 | `fixer` | 1132 Fixer | Project website | featured | `https://1132-fixer.xyz/` |
+| 1 | `fixer` | 1132 Fixer | Project website | featured | `https://botify-network.com/apps/1132-fixer` |
 | 2 | `botify` | Botify Network | Network home | organizations | `https://botify-network.com/` |
 | 3 | `primeHosting` | Prime Hosting | Hosting and developer services | organizations | `https://primehosting.dev/` |
 | 4 | `gifDirectory` | GIF Directory | Organize and discover GIFs | organizations | `https://gif.directory/` |

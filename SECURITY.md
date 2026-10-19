@@ -10,7 +10,7 @@ Security fixes land on the latest published Windows release of 1132 Fixer. Older
 
 Use [GitHub private vulnerability reporting](https://github.com/1132-Fixer/windows/security/advisories/new) on this repository.
 
-If private vulnerability reporting is unavailable, use the contact path on [1132-fixer.xyz](https://1132-fixer.xyz/) and write **Security** in the subject. Include:
+If private vulnerability reporting is unavailable, use the contact path on [1132 Fixer](https://botify-network.com/apps/1132-fixer) and write **Security** in the subject. Include:
 
 - the app version (About, or the release tag)
 - Windows edition and build

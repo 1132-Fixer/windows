@@ -22,7 +22,7 @@
 <p align="center">
   <a href="https://github.com/1132-Fixer/windows/releases/latest"><strong>Download the latest release</strong></a>
   &nbsp;┬╖&nbsp;
-  <a href="https://1132-fixer.xyz/"><strong>Website</strong></a>
+  <a href="https://botify-network.com/apps/1132-fixer"><strong>Website</strong></a>
   &nbsp;┬╖&nbsp;
   <a href="CONTRIBUTING.md"><strong>Contribute</strong></a>
   &nbsp;┬╖&nbsp;

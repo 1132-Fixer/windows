@@ -89,7 +89,6 @@ const UPDATER_CDN_HOSTS = new Set([
   'github-releases.githubusercontent.com',
 ]);
 const WEBSITE_HOSTS = new Set([
-  '1132-fixer.xyz', 'www.1132-fixer.xyz',
   'botify-network.com', 'www.botify-network.com',
   'gif.directory', 'www.gif.directory',
   // Prime Hosting (Explore redesign, issue #185). Exact host only — no
@@ -104,7 +103,7 @@ const ZOOM_HOSTS = new Set(['zoom.us', 'www.zoom.us']);
 // not even a different path on an approved host. Every URL must also pass
 // isAllowedExternalUrl — the map is not a bypass.
 const EXPLORE_DESTINATIONS = Object.freeze({
-  fixer: 'https://1132-fixer.xyz/',
+  fixer: 'https://botify-network.com/apps/1132-fixer',
   botify: 'https://botify-network.com/',
   gifDirectory: 'https://gif.directory/',
   kickbot: 'https://botify-network.com/apps/botifykickbot',
