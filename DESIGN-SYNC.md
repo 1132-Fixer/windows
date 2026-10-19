@@ -32,7 +32,7 @@ Explore the network
 ORGANIZATIONS & SERVICES
   Botify Network      Prime Hosting       GIF Directory
 BOTS
-  BotifyKickBot       BotifyModBot
+  BotifyKickBot       Botify Guard
 CREATIVE TOOLS
   Emoji Generator     Make It GIF
 ```
@@ -58,16 +58,19 @@ URL — not even a different path on an approved host.
 
 | # | id | Name | Description | Category | URL |
 |--:|----|------|-------------|----------|-----|
-| 1 | `fixer` | 1132 Fixer | Project website | featured | `https://1132-fixer.xyz/` |
+| 1 | `fixer` | 1132 Fixer | Project website | featured | `https://botify-network.com/apps/1132-fixer` |
 | 2 | `botify` | Botify Network | Network home | organizations | `https://botify-network.com/` |
 | 3 | `primeHosting` | Prime Hosting | Hosting and developer services | organizations | `https://primehosting.dev/` |
 | 4 | `gifDirectory` | GIF Directory | Organize and discover GIFs | organizations | `https://gif.directory/` |
 | 5 | `kickbot` | BotifyKickBot | Moderation bot | bots | `https://botify-network.com/apps/botifykickbot` |
-| 6 | `modbot` | BotifyModBot | Community management bot | bots | `https://botify-network.com/apps/botifymodbot` |
+| 6 | `modbot` | Botify Guard | Community management bot | bots | `https://botify-network.com/apps/botify-guard` |
 | 7 | `emojiGenerator` | Emoji Generator | Create custom emoji | creative-tools | `https://botify-network.com/apps/emoji-generator-bot` |
 | 8 | `makeItGif` | Make It GIF | Create and convert GIFs | creative-tools | `https://botify-network.com/apps/makeitgif` |
 
-Prime Hosting is the only URL added. Every other destination is unchanged, and
+The product website destinations were updated in October 2026: 1132 Fixer
+uses its canonical app page, and Botify ModBot is now publicly named Botify
+Guard at `/apps/botify-guard`. The internal `modbot` destination key and icon
+path remain stable; they are not API endpoints or public product names.
 `tools/electron-security-smoke.js` pins the whole table so a silent edit fails.
 
 `primehosting.dev` is allowlisted as an **exact host** — `*.primehosting.dev` is
@@ -140,7 +143,8 @@ unreachable.
 
 - Dialog accessible name `Explore`; `role="dialog"`, `aria-modal="true"`.
 - Escape closes; close control is a 40×40 target though the glyph is 13px.
-- Focus is trapped while open and returns to the Explore trigger on close.
+- Focus is trapped while open. Closing Explore also closes About and returns
+  focus to the footer About control (landing decision, 2026-09-05).
 - Every destination exposes `Open <product> in your default browser`.
 - Focus is an **outline**, hover is a **fill** — never the same signal, and the
   focus ring is never clipped by a card container.
@@ -288,6 +292,9 @@ block in `index.html`, recorded in the design system as the Windows overlay
   Support · Feedback · About as `.footer-link` (12/600, 32px, hover fill,
   pressed, ring). The line stays on one row at 520px and may wrap to two rows
   only below 480px; it never clips.
+  Footer links use 4px horizontal padding and a 4px inter-link gap, with 8px
+  between groups, so the full disclosure fits alongside version and links
+  at 520px without reducing typography or touch-target height.
 - Spacing uses only 4/8/12/16/24/32 (`--s-1…--s-4`, `--s-6`, `--s-7`); `20`
   and `40` remain defined for the Explore and feedback surfaces.
 - Motion: `wiz-in` 200ms on pane and Details entry, 150ms hover/press

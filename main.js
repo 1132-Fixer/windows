@@ -300,10 +300,9 @@ ipcMain.handle('update-app-ready', () => {
 // updater uses), compare versions, and surface a "download it" banner.
 // URLs mirror build.publish in package.json: the feed is this repository's
 // public GitHub Releases (1132-Fixer/windows latest.yml). HTTPS only;
-// first hop and every redirect must pass isAllowedUpdaterUrl. The leftover
-// PrimeUpYourLife/1132-Fixer-Windows-Releases channel is still live for
-// residual v5.5.1 clients and must not be deleted. Current builds do not
-// fetch it - that GitHub path is not on the allowlist.
+// first hop and every redirect must pass isAllowedUpdaterUrl. Builds <=5.5.1
+// point at a deleted legacy repository and require manual recovery; current
+// builds never fetch that GitHub path.
 // ============================================================
 const RELEASES_LATEST_URL = 'https://github.com/1132-Fixer/windows/releases/latest';
 const LATEST_YML_URL = 'https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml';

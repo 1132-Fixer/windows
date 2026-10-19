@@ -206,10 +206,12 @@ size. The client re-hashes the downloaded installer against that SHA-512 and
 size before it will install it. The feed is this repository:
 `https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml`;
 every install from v6.1.0 on polls it (v5.6.0 installs poll the
-`botify-network.com` broker and `<=5.5.1` installs poll the old Releases repo,
-because the feed is fixed by `build.publish` in the commit each build came
-from). `tools/updater-channel-smoke.js` asserts that file's `version` equals
-`package.json`, and that the broker has not diverged from it. See
+`botify-network.com` broker). Builds `<=5.5.1` have a deleted Releases
+repository baked in and cannot automatically discover this channel; see the
+manual recovery instructions in [`../user/installation.md`](../user/installation.md).
+`tools/updater-channel-smoke.js` asserts that file's `version` equals
+`package.json`, the broker has not diverged from it, and the canonical v6.0.0
+recovery assets retain their published SHA-256 digests. See
 [`updater-channel.md`](updater-channel.md).
 
 `scripts/finalize-update-metadata.mjs` runs right after the build, before any

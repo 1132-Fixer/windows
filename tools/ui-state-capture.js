@@ -336,7 +336,7 @@ async function renderScenario(pageUrl, scenario, variant, fileName, meta) {
     const problems = [];
     if (exp.explore) {
       if (got.exploreOpen !== true) { ok = false; problems.push('explore modal not open'); }
-      const wantNames = '1132 Fixer|Botify Network|BotifyKickBot|BotifyModBot|Emoji Generator Bot|Make It GIF|GIF Directory';
+      const wantNames = messages.EXPLORE_VIEW.map(destination => destination.name).join('|');
       if (got.exploreNames.join('|') !== wantNames) {
         ok = false; problems.push(`destinations: ${JSON.stringify(got.exploreNames)}`);
       }

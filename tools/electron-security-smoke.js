@@ -117,11 +117,11 @@ console.log('electron-security-smoke: Explore destinations (directive 2026-08-23
   // map in the Explore redesign (issue #185); every other URL is
   // unchanged, and this table is what proves it.
   const WANT = {
-    fixer: 'https://1132-fixer.xyz/',
+    fixer: 'https://botify-network.com/apps/1132-fixer',
     botify: 'https://botify-network.com/',
     gifDirectory: 'https://gif.directory/',
     kickbot: 'https://botify-network.com/apps/botifykickbot',
-    modbot: 'https://botify-network.com/apps/botifymodbot',
+    modbot: 'https://botify-network.com/apps/botify-guard',
     emojiGenerator: 'https://botify-network.com/apps/emoji-generator-bot',
     makeItGif: 'https://botify-network.com/apps/makeitgif',
     primeHosting: 'https://primehosting.dev/',
@@ -188,7 +188,7 @@ console.log('electron-security-smoke: Explore destinations (directive 2026-08-23
     primeHosting:   ['Prime Hosting',   'Hosting and developer services',  'organizations'],
     gifDirectory:   ['GIF Directory',   'Organize and discover GIFs',      'organizations'],
     kickbot:        ['BotifyKickBot',   'Moderation bot',                  'bots'],
-    modbot:         ['BotifyModBot',    'Community management bot',        'bots'],
+    modbot:         ['Botify Guard',    'Community management bot',        'bots'],
     emojiGenerator: ['Emoji Generator', 'Create custom emoji',             'creative-tools'],
     makeItGif:      ['Make It GIF',     'Create and convert GIFs',         'creative-tools'],
   };
@@ -307,11 +307,12 @@ console.log('electron-security-smoke: updater URL is not arbitrary');
 console.log('electron-security-smoke: openExternal and navigation');
 {
   check(es.isAllowedExternalUrl('https://github.com/1132-Fixer/windows/releases/latest'), 'releases page allowed');
-  check(es.isAllowedExternalUrl('https://1132-fixer.xyz/'), 'product site allowed');
-  check(es.isAllowedExternalUrl('https://www.1132-fixer.xyz/'), 'product site www allowed');
+  check(es.isAllowedExternalUrl('https://botify-network.com/apps/1132-fixer'), 'product site allowed');
+  check(es.isAllowedExternalUrl('https://www.botify-network.com/apps/1132-fixer'), 'product site www allowed');
+  check(!es.isAllowedExternalUrl('https://1132-fixer.xyz/'), 'former product site rejected');
   check(es.isAllowedExternalUrl('https://botify-network.com/'), 'Botify Network site allowed');
   check(es.isAllowedExternalUrl('https://www.botify-network.com/'), 'Botify Network www allowed');
-  check(!es.isAllowedExternalUrl('http://1132-fixer.xyz/'), 'http product site rejected');
+  check(!es.isAllowedExternalUrl('http://botify-network.com/apps/1132-fixer'), 'http product site rejected');
   check(!es.isAllowedExternalUrl('http://botify-network.com/'), 'http Botify site rejected');
   check(!es.isAllowedExternalUrl('https://evil.botify-network.com/'), 'unapproved Botify subdomain rejected');
   check(!es.isAllowedExternalUrl('https://botify-network.com.evil.example/'), 'Botify suffix host rejected');
@@ -402,8 +403,8 @@ console.log('electron-security-smoke: path validation and PS quoting');
   const blocked = await es.openExternalSafe(async () => { throw new Error('should not open'); }, 'https://evil.example/');
   check(blocked.success === false && blocked.reason === 'url not allowed', 'openExternalSafe blocks arbitrary URL');
   let opened = '';
-  const allowed = await es.openExternalSafe(async (u) => { opened = u; }, 'https://1132-fixer.xyz/');
-  check(allowed.success === true && opened === 'https://1132-fixer.xyz/', 'openExternalSafe allows catalog URL');
+  const allowed = await es.openExternalSafe(async (u) => { opened = u; }, 'https://botify-network.com/apps/1132-fixer');
+  check(allowed.success === true && opened === 'https://botify-network.com/apps/1132-fixer', 'openExternalSafe allows catalog URL');
 
   // A sandboxed preload can require only Electron's shim modules. A local
   // require throws "module not found" at load time, which aborts the whole

@@ -54,4 +54,5 @@ interoperability.
 
 If you are unsure whether a particular use is allowed, ask before you ship it.
 Open a [question/support issue](https://github.com/1132-Fixer/windows/issues/new/choose)
-or use the contact path on [1132-fixer.xyz](https://1132-fixer.xyz/).
+or use the contact path on
+[1132 Fixer](https://botify-network.com/apps/1132-fixer).

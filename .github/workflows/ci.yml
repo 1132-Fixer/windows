@@ -23,8 +23,17 @@ jobs:
       # app's tokens match the recorded Windows overlay at that pin.
       - name: Checkout code
         uses: actions/checkout@v7
-        with:
-          submodules: true
+
+      # design-system is private; DESIGN_SYSTEM_TOKEN is a read-only token
+      # scoped to that repository and is not persisted into git config.
+      - name: Fetch design-system submodule
+        shell: bash
+        env:
+          DESIGN_SYSTEM_TOKEN: ${{ secrets.DESIGN_SYSTEM_TOKEN }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$DESIGN_SYSTEM_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" submodule update --init --depth=1
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
