@@ -1,0 +1,10 @@
+# Manual scripts only. npm.cmd avoids PowerShell's npm.ps1 execution policy.
+scripts:
+  - name: Install dependencies
+    command: npm.cmd ci
+  - name: Test
+    command: npm.cmd test
+  - name: Build portable (Windows x64)
+    command: npm.cmd run build
+  - name: Build installer (Windows x64)
+    command: npm.cmd run build:installer

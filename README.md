@@ -178,6 +178,14 @@ Build (Windows x64):
 npm run build:all
 ```
 
+The GitHub Copilot app reads [`.github/github-app.yml`](.github/github-app.yml)
+after you review and accept the repository configuration. It provides manual
+dependency installation, tests, portable builds and installer builds. Nothing
+runs automatically on session creation or archive. Commands use `npm.cmd` to
+avoid PowerShell's `npm.ps1` execution-policy restriction on Windows. Builds
+retain `--publish never`; these scripts do not publish releases or launch the
+repair app.
+
 Version bump:
 
 ```bash
