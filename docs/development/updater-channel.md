@@ -217,21 +217,25 @@ app's allowlist, which is deliberate — the *app* must not poll it) and fails
 if the broker is unreachable, or if its `version`, `sha512`, `path` or `size`
 diverge from the channel `main` publishes to.
 
-## Residual old channel — deletion blocked
+## Legacy builds (v5.5.1 and earlier)
 
-`PrimeUpYourLife/1132-Fixer-Windows-Releases` is **not** deleted. v5.5.1 and
-earlier clients still poll its `latest.yml`; the pinned transition release
-there is v6.0.0. **Read its counts through the REST release object, never by
-GETting the asset** — an asset GET increments the `download_count` that the
-retirement decision reads.
+These builds have `PrimeUpYourLife/1132-Fixer-Windows-Releases` compiled into
+their updater configuration. That repository was deleted, so these clients
+cannot automatically discover the current channel; changing this repository's
+feed does not change an already-installed binary. Manual recovery: install the
+latest Setup over the existing copy, or replace an old Portable build with the
+latest Portable build. Do not describe this as an automatic migration.
 
-`isAllowedUpdaterUrl` **rejects** the old GitHub path, the generic
+The canonical v6.0.0 release remains available in this repository for recovery.
+`tools/updater-channel-smoke.js` verifies its `latest.yml`, Setup, and blockmap
+SHA-256 digests against the known published artifacts without querying the
+deleted repository. This verifies recovery artifacts only; it does not restore
+legacy auto-update compatibility.
+
+`isAllowedUpdaterUrl` rejects the deleted GitHub path, the generic
 `botify-network.com/downloads/1132-fixer` broker, `http:`, other repos, and
-arbitrary hosts. Residual clients keep working only because their *already
-installed* binary has the old URL baked in.
-
-**Archive over delete.** If that repository is ever retired, archive it so
-legacy updater checks keep resolving instead of 404ing. See
+arbitrary hosts. The historical decision and old feed measurements are
+preserved, with this later outcome recorded in
 [`../history/release-migration-2026-08.md`](../history/release-migration-2026-08.md).
 
 ## Related

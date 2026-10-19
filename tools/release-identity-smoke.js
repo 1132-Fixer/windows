@@ -8,9 +8,8 @@
 //      exact failure this migration must avoid.
 //   3. The current updater channel is github/1132-Fixer/windows and stays
 //      unsigned-compatible (verifyUpdateCodeSignature false).
-//   4. The legacy compatibility bridge is still wired: the code and docs must
-//      keep referencing PrimeUpYourLife/1132-Fixer-Windows-Releases so a future
-//      edit cannot silently drop the feed that <=5.5.1 clients still poll.
+//   4. The deleted legacy endpoint is not treated as a live dependency; docs
+//      explain manual recovery for builds that still have it baked in.
 //
 // Exit 0 PASS / 1 FAIL.
 'use strict';
@@ -31,7 +30,6 @@ const FROZEN = {
   publisherName: 'High Texas',
 };
 const CANONICAL = '1132-Fixer/windows';
-const LEGACY_FEED_REPO = 'PrimeUpYourLife/1132-Fixer-Windows-Releases';
 
 let failures = 0;
 function check(cond, name) {
@@ -81,19 +79,17 @@ console.log('release-identity-smoke: current channel + signing posture');
 check(b.publish && b.publish.provider === 'github' && b.publish.owner === '1132-Fixer' && b.publish.repo === 'windows', 'build.publish is github/1132-Fixer/windows (current channel)');
 check(b.win && b.win.verifyUpdateCodeSignature === false, 'verifyUpdateCodeSignature stays false (installed clients accept unsigned updates)');
 
-console.log('release-identity-smoke: legacy compatibility bridge is still wired');
+console.log('release-identity-smoke: deleted legacy endpoint and recovery contract');
 const smoke = fs.readFileSync(path.join(ROOT, 'tools', 'updater-channel-smoke.js'), 'utf8');
-check(smoke.includes(LEGACY_FEED_REPO), `updater-channel-smoke still references the legacy feed ${LEGACY_FEED_REPO}`);
+check(!smoke.includes('/repos/PrimeUpYourLife/1132-Fixer-Windows-Releases/'), 'updater-channel-smoke does not query the deleted repository');
+check(smoke.includes('canonical v${TRANSITION_VERSION} recovery assets') && /sha256:[a-f0-9]{64}/.test(smoke),
+  'updater-channel-smoke validates canonical transition asset digests');
 const migDoc = path.join(ROOT, 'docs', 'history', 'release-migration-2026-08.md');
 const mig = fs.existsSync(migDoc) ? fs.readFileSync(migDoc, 'utf8') : '';
-check(mig.includes(LEGACY_FEED_REPO) && /compatibility bridge/i.test(mig), 'migration doc documents the legacy compatibility bridge');
-check(!/migrate by manual reinstall|manually reinstall/i.test(mig) || /not an acceptable|no longer policy|not acceptable/i.test(mig), 'migration doc does not present manual reinstall as the migration strategy');
-// Pinned-transition policy: the doc must describe v6.0.0 as a one-time pinned
-// transition and must NOT claim every future release is mirrored to the legacy
-// feed (release.yml does not do that). Keeps code and docs in agreement.
-check(/pinned/i.test(mig) && mig.includes('6.0.0') && /not[^.]*mirror|one-time|do not mirror/i.test(mig), 'migration doc describes v6.0.0 as a one-time pinned transition (not an every-release mirror)');
+check(mig.includes('was intentionally deleted') && /cannot automatically discover/i.test(mig), 'migration history records deletion and lost automatic discovery');
+check(/Manual recovery/i.test(mig) && /v6\.0\.0/i.test(mig), 'migration history documents manual recovery and canonical transition release');
 const relYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
-check(!relYml.includes(LEGACY_FEED_REPO), 'release.yml does not publish to the legacy feed (docs must not claim it does)');
+check(!relYml.includes('PrimeUpYourLife/1132-Fixer-Windows-Releases'), 'release.yml publishes only to the canonical repository');
 // checksums-sha256.txt must be written LF / no BOM so `sha256sum -c` accepts
 // it. Out-File writes CRLF on Windows; 6.3.3 shipped that way.
 check(!/checksums-sha256\.txt[^\n]*\n?[^\n]*Out-File/.test(relYml) && !/Out-File[^\n]*checksums-sha256\.txt/.test(relYml),
