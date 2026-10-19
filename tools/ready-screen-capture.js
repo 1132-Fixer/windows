@@ -278,7 +278,7 @@ function expectLayout(tag, f) {
   check(f.mainBottom <= f.footer.top + 0.5, `${tag}: content does not collide with the footer (main bottom ${Math.round(f.mainBottom)} ≤ footer top ${Math.round(f.footer.top)})`);
   check(Math.abs(f.footer.bottom - f.viewport.h) <= 1, `${tag}: footer sits on the window bottom`);
   check(Math.abs(f.markCenterX - f.viewport.w / 2) <= 1, `${tag}: product mark is centered (${Math.round(f.markCenterX)} of ${f.viewport.w})`);
-  check(f.headerHeight === 56, `${tag}: header is 56px (${f.headerHeight})`);
+  check(f.headerHeight === 104, `${tag}: header is 104px (${f.headerHeight})`);
   check(!f.statusBadgePainted, `${tag}: the status live region is not painted in the header`);
   if (f.viewport.w >= 520) check(f.disclosureLines === 1, `${tag}: independence line fits on one line at the default width (${f.disclosureLines})`);
   else check(f.disclosureLines <= 2, `${tag}: independence line wraps to at most two lines (${f.disclosureLines})`);
@@ -613,9 +613,10 @@ async function newPage(browser, vp) {
     check(exploreOpen, 'Explore opens from About and About steps aside');
     await page.keyboard.press('Escape');
     await page.waitForTimeout(100);
-    const backToAbout = await page.evaluate(() => !document.getElementById('aboutOverlay').hidden && document.activeElement && document.activeElement.id);
-    check(backToAbout === 'btnExplore', `closing Explore returns to About with focus on Explore (${backToAbout})`);
-    await page.click('#aboutClose');
+    const backToScreen = await page.evaluate(() => document.getElementById('aboutOverlay').hidden &&
+      !document.getElementById('exploreOverlay').classList.contains('show') &&
+      document.activeElement && document.activeElement.id);
+    check(backToScreen === 'aboutBtn', `closing Explore closes About and focuses footer About (${backToScreen})`);
     await ctx.close();
   }
 

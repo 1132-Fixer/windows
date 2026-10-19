@@ -143,7 +143,8 @@ unreachable.
 
 - Dialog accessible name `Explore`; `role="dialog"`, `aria-modal="true"`.
 - Escape closes; close control is a 40×40 target though the glyph is 13px.
-- Focus is trapped while open and returns to the Explore trigger on close.
+- Focus is trapped while open. Closing Explore also closes About and returns
+  focus to the footer About control (landing decision, 2026-09-05).
 - Every destination exposes `Open <product> in your default browser`.
 - Focus is an **outline**, hover is a **fill** — never the same signal, and the
   focus ring is never clipped by a card container.
@@ -291,6 +292,9 @@ block in `index.html`, recorded in the design system as the Windows overlay
   Support · Feedback · About as `.footer-link` (12/600, 32px, hover fill,
   pressed, ring). The line stays on one row at 520px and may wrap to two rows
   only below 480px; it never clips.
+  Footer links use 4px horizontal padding and a 4px inter-link gap, with 8px
+  between groups, so the full disclosure fits alongside version and links
+  at 520px without reducing typography or touch-target height.
 - Spacing uses only 4/8/12/16/24/32 (`--s-1…--s-4`, `--s-6`, `--s-7`); `20`
   and `40` remain defined for the Explore and feedback surfaces.
 - Motion: `wiz-in` 200ms on pane and Details entry, 150ms hover/press
