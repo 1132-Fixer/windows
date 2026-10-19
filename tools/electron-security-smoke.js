@@ -121,7 +121,7 @@ console.log('electron-security-smoke: Explore destinations (directive 2026-08-23
     botify: 'https://botify-network.com/',
     gifDirectory: 'https://gif.directory/',
     kickbot: 'https://botify-network.com/apps/botifykickbot',
-    modbot: 'https://botify-network.com/apps/botifymodbot',
+    modbot: 'https://botify-network.com/apps/botify-guard',
     emojiGenerator: 'https://botify-network.com/apps/emoji-generator-bot',
     makeItGif: 'https://botify-network.com/apps/makeitgif',
     primeHosting: 'https://primehosting.dev/',
@@ -188,7 +188,7 @@ console.log('electron-security-smoke: Explore destinations (directive 2026-08-23
     primeHosting:   ['Prime Hosting',   'Hosting and developer services',  'organizations'],
     gifDirectory:   ['GIF Directory',   'Organize and discover GIFs',      'organizations'],
     kickbot:        ['BotifyKickBot',   'Moderation bot',                  'bots'],
-    modbot:         ['BotifyModBot',    'Community management bot',        'bots'],
+    modbot:         ['Botify Guard',    'Community management bot',        'bots'],
     emojiGenerator: ['Emoji Generator', 'Create custom emoji',             'creative-tools'],
     makeItGif:      ['Make It GIF',     'Create and convert GIFs',         'creative-tools'],
   };

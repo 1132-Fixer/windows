@@ -32,7 +32,7 @@ Explore the network
 ORGANIZATIONS & SERVICES
   Botify Network      Prime Hosting       GIF Directory
 BOTS
-  BotifyKickBot       BotifyModBot
+  BotifyKickBot       Botify Guard
 CREATIVE TOOLS
   Emoji Generator     Make It GIF
 ```
@@ -63,11 +63,14 @@ URL — not even a different path on an approved host.
 | 3 | `primeHosting` | Prime Hosting | Hosting and developer services | organizations | `https://primehosting.dev/` |
 | 4 | `gifDirectory` | GIF Directory | Organize and discover GIFs | organizations | `https://gif.directory/` |
 | 5 | `kickbot` | BotifyKickBot | Moderation bot | bots | `https://botify-network.com/apps/botifykickbot` |
-| 6 | `modbot` | BotifyModBot | Community management bot | bots | `https://botify-network.com/apps/botifymodbot` |
+| 6 | `modbot` | Botify Guard | Community management bot | bots | `https://botify-network.com/apps/botify-guard` |
 | 7 | `emojiGenerator` | Emoji Generator | Create custom emoji | creative-tools | `https://botify-network.com/apps/emoji-generator-bot` |
 | 8 | `makeItGif` | Make It GIF | Create and convert GIFs | creative-tools | `https://botify-network.com/apps/makeitgif` |
 
-Prime Hosting is the only URL added. Every other destination is unchanged, and
+The product website destinations were updated in October 2026: 1132 Fixer
+uses its canonical app page, and Botify ModBot is now publicly named Botify
+Guard at `/apps/botify-guard`. The internal `modbot` destination key and icon
+path remain stable; they are not API endpoints or public product names.
 `tools/electron-security-smoke.js` pins the whole table so a silent edit fails.
 
 `primehosting.dev` is allowlisted as an **exact host** — `*.primehosting.dev` is

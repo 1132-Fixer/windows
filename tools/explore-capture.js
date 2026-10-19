@@ -160,6 +160,8 @@ const OPENED = [];   // destination ids the mocked IPC was asked to open
     const EXPECT_ORDER = ['fixer', 'botify', 'primeHosting', 'gifDirectory', 'kickbot', 'modbot', 'emojiGenerator', 'makeItGif'];
 
     if (JSON.stringify(m.order) !== JSON.stringify(EXPECT_ORDER)) fail(`order ${JSON.stringify(m.order)}`);
+    const guard = await page.locator('[data-explore="modbot"]').innerText();
+    if (!guard.includes('Botify Guard') || guard.includes('BotifyModBot')) fail(`Guard marketing name "${guard}"`);
     if (m.heroName !== '1132 Fixer') fail(`hero name "${m.heroName}"`);
     if (m.heroDesc !== 'Project website') fail(`hero desc "${m.heroDesc}"`);
     if (m.heroNote !== messages.DISCLOSURE.INDEPENDENCE) fail(`hero note "${m.heroNote}"`);

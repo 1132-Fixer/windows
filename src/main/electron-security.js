@@ -107,7 +107,7 @@ const EXPLORE_DESTINATIONS = Object.freeze({
   botify: 'https://botify-network.com/',
   gifDirectory: 'https://gif.directory/',
   kickbot: 'https://botify-network.com/apps/botifykickbot',
-  modbot: 'https://botify-network.com/apps/botifymodbot',
+  modbot: 'https://botify-network.com/apps/botify-guard',
   emojiGenerator: 'https://botify-network.com/apps/emoji-generator-bot',
   makeItGif: 'https://botify-network.com/apps/makeitgif',
   // Prime Hosting (Explore addendum 2026-08-25). Exact origin, no

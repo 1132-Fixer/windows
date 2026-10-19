@@ -369,7 +369,7 @@ const EXPLORE_VIEW = [
   { id: 'primeHosting',   name: 'Prime Hosting',   description: 'Hosting and developer services', category: 'organizations', icon: 'assets/explore/prime-hosting.png', accent: 'violet', featured: false },
   { id: 'gifDirectory',   name: 'GIF Directory',   description: 'Organize and discover GIFs', category: 'organizations',  icon: 'assets/explore/gif-directory.png',  accent: 'purple', featured: false },
   { id: 'kickbot',        name: 'BotifyKickBot',   description: 'Moderation bot',             category: 'bots',           icon: 'assets/explore/kickbot.png',        accent: null,     featured: false },
-  { id: 'modbot',         name: 'BotifyModBot',    description: 'Community management bot',   category: 'bots',           icon: 'assets/explore/modbot.png',         accent: null,     featured: false },
+  { id: 'modbot',         name: 'Botify Guard',    description: 'Community management bot',   category: 'bots',           icon: 'assets/explore/modbot.png',         accent: null,     featured: false },
   { id: 'emojiGenerator', name: 'Emoji Generator', description: 'Create custom emoji',        category: 'creative-tools', icon: 'assets/explore/emojiGenerator.png', accent: null,     featured: false },
   { id: 'makeItGif',      name: 'Make It GIF',     description: 'Create and convert GIFs',    category: 'creative-tools', icon: 'assets/explore/make-it-gif.png',    accent: null,     featured: false }
 ];
