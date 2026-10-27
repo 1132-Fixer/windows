@@ -5524,9 +5524,9 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
       const safeUser = escRe(currentUser);
       out = out.replace(new RegExp(`C:\\\\Users\\\\${safeUser}`, 'gi'), 'C:\\Users\\<you>');
       if (safeToRedactBareUser) {
-        // Bare username at word boundary. Guarded above so we never strip
-        // the public 'user1' helper-account name from the log.
-        out = out.replace(new RegExp(`\\b${safeUser}\\b`, 'gi'), '<you>');
+        // Bare username without adjacent Unicode letters, numbers, marks
+        // or underscore. The helper-account guard above still applies.
+        out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}\\p{M}_])${safeUser}(?![\\p{L}\\p{N}\\p{M}_])`, 'giu'), '<you>');
       }
     }
     // Machine name — appears in stale "user1.MACHINENAME" profile-folder
