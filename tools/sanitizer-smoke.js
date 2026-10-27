@@ -215,7 +215,11 @@ async function main() {
   process.exitCode = failed ? 1 : 0;
 }
 
-main().catch(() => {
-  console.log('FAIL harness.production-handler-execution');
-  process.exitCode = 1;
-});
+module.exports = { fixture, loadHandler, report };
+
+if (require.main === module) {
+  main().catch(() => {
+    console.log('FAIL harness.production-handler-execution');
+    process.exitCode = 1;
+  });
+}
