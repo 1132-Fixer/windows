@@ -5600,5 +5600,5 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
     md.push(sanitize(tail));
     md.push('```');
   }
-  return { success: true, markdown: md.join('\n') };
+  return { success: true, markdown: sanitize(md.join('\n')) };
 });
