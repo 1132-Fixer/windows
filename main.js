@@ -16,7 +16,8 @@ const zoomDetect = require('./zoom-detect');
 const messages = require('./messages');
 const helperCred = require('./helper-credential');
 const profileSafety = require('./profile-safety');
-const { computeRunVerdict, deletionOutcome, consentOutcome, profsvcRefreshResult } = require('./run-verdict');
+const { computeRunVerdict, deletionOutcome, consentOutcome } = require('./run-verdict');
+const { checkProfileServiceHealth } = require('./src/main/profile-service-health');
 
 const updaterMod = require('./src/main/updater');
 const { createUpdaterLog } = require('./src/main/updater-log');
@@ -1898,6 +1899,15 @@ async function runFixFlow(event) {
     };
   }
 
+  // Refuse teardown if the shared Windows profile services are already
+  // unavailable. No helper processes, accounts or profiles are changed by
+  // this read-only gate. Detailed cleanup safety remains tracked in #252.
+  const profileServiceStart = await checkProfileServiceHealth(runPSCapture);
+  if (!profileServiceStart.ok) {
+    send('ERROR: Windows profile services could not be verified. Repair stopped before helper cleanup.', 'err');
+    return { success: false, error: profileServiceStart.code, warnings, steps };
+  }
+
   // ============================================================
   // STEP 1: Kill user1 processes; attempt explicit session logoff
   //         via quser/logoff (diagnostics surfaced).
@@ -2136,84 +2146,18 @@ async function runFixFlow(event) {
   }
 
   // ============================================================
-  // STEP 3b: Flush retained User Profile Service hive handles.
-  //
-  // ProfSvc (User Profile Service, hosted under svchost.exe) caches
-  // loaded registry hives. After a delete+recreate cycle, a stale
-  // handle into the deleted C:\Users\user1\AppData\Local\Microsoft\
-  // Windows\UsrClass.dat can survive and block the NEXT user1 logon's
-  // hive load (Event 1509: "Windows was unable to load ... UsrClass.dat").
-  // UPS responds by renaming the SID key to <sid>.bak and minting a
-  // TEMP profile (Event 1511/1515). Restarting ProfSvc forces it to
-  // drop every retained hive handle. Tolerate failure - ProfSvc lives
-  // in a shared svchost group; restart can be denied. Fall back to
-  // sc.exe stop/start, then reg flush as last resort.
+  // STEP 3b: Verify profile services without restarting them. ProfSvc
+  // manages every signed-in profile. Stopping it during a helper repair
+  // can disrupt the operator's desktop and dependent services (#252).
   // ============================================================
-  send('[3b/8] Flushing User Profile Service hive cache...', 'header');
-  const flush = await runPSScript(`
-    # PROFSVC_REFRESH is a structured success marker (P1-B): OK is emitted
-    # only when a refresh path VERIFIABLY succeeded — Restart-Service without
-    # throwing, the sc.exe fallback observed back to Running, or the service
-    # was not running (no retained hive handles to drop). Exit code alone
-    # cannot carry this: the catches below deliberately keep the script alive.
-    $refreshOk = $false
-    try {
-      $svc = Get-Service ProfSvc -EA Stop
-      if ($svc.Status -eq 'Running') {
-        try {
-          Restart-Service ProfSvc -Force -EA Stop
-          Write-Host '  ProfSvc restarted via Restart-Service.'
-          $refreshOk = $true
-        } catch {
-          Write-Host ('  Restart-Service failed: ' + $_.Exception.Message)
-          $stop  = & sc.exe stop  ProfSvc 2>&1
-          Start-Sleep -Seconds 2
-          $start = & sc.exe start ProfSvc 2>&1
-          Write-Host ('  sc.exe stop output:  ' + (($stop  | Out-String).Trim()))
-          Write-Host ('  sc.exe start output: ' + (($start | Out-String).Trim()))
-          # sc.exe start reports START_PENDING immediately; poll the actual
-          # service state for evidence the fallback worked.
-          $deadline = [DateTime]::UtcNow.AddSeconds(5)
-          do {
-            try { if ((Get-Service ProfSvc -EA Stop).Status -eq 'Running') { $refreshOk = $true; break } } catch {}
-            Start-Sleep -Milliseconds 500
-          } while ([DateTime]::UtcNow -lt $deadline)
-        }
-      } else {
-        Write-Host ('  ProfSvc status=' + $svc.Status + '; nothing to flush.')
-        # Not running = no retained hive handles to drop; goal already met.
-        $refreshOk = $true
-      }
-    } catch {
-      Write-Host ('  WARNING: could not inspect ProfSvc: ' + $_.Exception.Message)
-    }
-    # Belt-and-suspenders: flush HKLM hive writes so the next logon
-    # reads fresh ProfileList data, not cached.
-    & reg.exe flush HKLM 2>&1 | Out-Null
-    Write-Host '  HKLM flushed.'
-    Write-Output ($(if ($refreshOk) { 'PROFSVC_REFRESH=OK' } else { 'PROFSVC_REFRESH=FAILED' }))
-  `, send, { heartbeatMs: 5000, heartbeatLabel: 'profsvc flush', timeoutMs: 60000 });
-  // A ProfSvc flush that timed out, died, or self-swallowed its failure used
-  // to vanish into a green run (#90). When a previous user1 existed the flush
-  // is what prevents the TEMP-profile relapse, so its failure invalidates the
-  // fix's purpose. The structured marker catches the self-swallow case where
-  // the script exits 0 despite both restart paths failing (P1-B).
-  const flushMarker = profsvcRefreshResult(flush.stdout);
-  if (flush.timedOut || flush.code !== 0 || flushMarker !== 'OK') {
-    const profsvcNeeded = accountExisted || profileFolderExisted;
-    const why = flush.timedOut          ? 'timed out after 60 seconds'
-      : flush.code !== 0                ? `did not finish cleanly (exit ${flush.code})`
-      : flushMarker === 'FAILED'        ? 'could not restart the service'
-      :                                   'did not confirm success';
-    const detail = `The Windows profile service refresh ${why}. Windows may give ${FIX_USER} a temporary profile — if Error 1132 comes back, reboot once and run the fix again.`;
-    send(`  WARNING: ${detail}`, 'err');
-    step('profsvc-flush', 'Refresh Windows profile service', profsvcNeeded ? 'fail' : 'warn', detail);
-    if (!profsvcNeeded) {
-      warnings.push({ code: 'profsvc_flush_failed', message: detail });
-    }
-  } else {
-    step('profsvc-flush', 'Refresh Windows profile service', 'ok', '');
+  send('[3b/8] Checking Windows profile services...', 'header');
+  const profileServiceEnd = await checkProfileServiceHealth(runPSCapture);
+  if (!profileServiceEnd.ok) {
+    send('ERROR: Windows profile services could not be verified. Repair stopped; no service restart was attempted.', 'err');
+    step('profile-service-health', 'Check Windows profile services', 'fail', profileServiceEnd.code);
+    return { success: false, error: profileServiceEnd.code, warnings, steps };
   }
+  step('profile-service-health', 'Check Windows profile services', 'ok', '');
 
   // ============================================================
   // STEP 4: Recreate the account as a STANDARD user — no

@@ -98,3 +98,19 @@ real Windows profile.
 Brand-guard CI is not packaged visual proof. Packaged Electron screenshots of
 Checking, Ready, Fixing, Success, and Failure belong under this repository
 when they are captured from the shipped `.exe`.
+
+## Profile service regression (#252)
+
+`node tools/profile-service-health-smoke.js` verifies the read-only service
+probe, rejects timeouts, nonzero exits, missing/contradictory output and adapter
+errors, and exercises both repair gates with mocked adapters. It also rejects
+service restart/stop commands in the repair source. `npm test` includes it.
+
+These tests do not establish native crash causation or Windows recovery. Before
+merge or release, use a disposable Windows Home installation to verify healthy
+repair, unhealthy-service refusal, ordinary app launch and elevation afterward,
+and absence of new UserManager crashes. Capture the installed version/hash,
+service states and Application/System events before and after. Do not reproduce
+by resetting a helper account on the affected everyday workstation. The
+remaining loaded-profile/teardown safety work is tracked in #252; this patch
+must not be described as full incident resolution.

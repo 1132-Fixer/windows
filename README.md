@@ -86,6 +86,15 @@ Longer user and contributor guides: [docs/README.md](docs/README.md).
 > [!IMPORTANT]
 > 1132 Fixer deletes and recreates the local `user1` helper account. Anything stored in that helper profile is removed. It does not delete files or Zoom data from your normal Windows profile. Do not run it while signed in to Windows as `user1`.
 
+The source change associated with [incident #252](https://github.com/1132-Fixer/windows/issues/252)
+removes the global User Profile Service restart from helper repairs. It checks
+`ProfSvc` and `UserManager` before cleanup and before creating the new account.
+An unavailable, stopped, pending or unverified service blocks the repair; the app
+does not try to recover it by stopping Windows services. This source change has
+not yet passed packaged Windows acceptance or been released. The separate
+account/profile teardown safety defect in #252 remains open. Do not deliberately
+reproduce the incident on an everyday workstation.
+
 The app manages this local account:
 
 ```text
