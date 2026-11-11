@@ -7,6 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
 const elev = require('../src/main/elevation');
@@ -19,6 +20,13 @@ const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
 const security = fs.readFileSync(path.join(ROOT, 'src', 'main', 'electron-security.js'), 'utf8');
 const shell = fs.readFileSync(path.join(ROOT, 'src', 'preload', 'compact-shell.js'), 'utf8');
 const afterPack = fs.readFileSync(path.join(ROOT, 'scripts', 'after-pack-verify-manifest.js'), 'utf8');
+
+function functionSource(name) {
+  const start = main.indexOf(`function ${name}(`);
+  if (start < 0) return '';
+  const end = main.indexOf('\n}\n', start);
+  return end < 0 ? '' : main.slice(start, end + 2);
+}
 
 let failures = 0;
 function check(cond, name) {
@@ -33,7 +41,10 @@ check(main.includes('if (!elevated)') && main.includes('relaunchElevated()'),
 {
   const elevSrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'elevation.js'), 'utf8');
   check(/Start-Process[\s\S]*-Verb RunAs/.test(elevSrc), 'relaunch uses Windows runas');
-  check(elevSrc.includes("-Command") && elevSrc.includes('WindowsPowerShell'),
+  const resolvedPowerShell = elev.systemPowerShell({ arch: 'x64',
+    getReport: () => ({ sharedObjects: ['ntdll.dll', 'kernel32.dll', 'kernelbase.dll'].map(name => `D:\\Windows\\System32\\${name}`) }) });
+  check(elevSrc.includes("-Command") && elevSrc.includes("windowsTools.resolveTool('powershell.exe'") &&
+    resolvedPowerShell === 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     'relaunch uses System32 PowerShell -Command');
   check(!elevSrc.includes('fixer-elev-') && !/['"]-File['"]/.test(elevSrc) && !/writeFileSync|os\.tmpdir/.test(elevSrc),
     'relaunch does not write a temp .ps1 (SAC blocks unknown scripts)');
@@ -56,6 +67,31 @@ check(html.includes('Restart as administrator'), 'primary Restart as administrat
 check(html.includes('id="closeBtn"') && html.includes('>Close<'), 'Close secondary exists');
 check(renderer.includes('showAdminRequired()'), 'renderer has admin-required state');
 check(renderer.includes("status.state === 'need-elevation'"), 'startup-status need-elevation drives that state');
+
+console.log('elevation-startup-smoke: released-lock race fails closed');
+{
+  const shutdownCalls = [];
+  const context = {
+    app: { requestSingleInstanceLock: () => false },
+    shutdown: { REASONS: { SECOND_INSTANCE: 'second_instance' }, request: reason => shutdownCalls.push(reason) }
+  };
+  vm.createContext(context);
+  vm.runInContext([
+    'let singleInstanceLockOwned = false;',
+    'let lastRelaunchOutcome = null;',
+    functionSource('reacquireSingleInstanceLock'),
+    'this.reacquire = reacquireSingleInstanceLock;',
+    'this.state = () => ({ singleInstanceLockOwned, lastRelaunchOutcome });'
+  ].join('\n'), context);
+  const acquired = context.reacquire();
+  const state = context.state();
+  check(acquired === false && state.singleInstanceLockOwned === false && state.lastRelaunchOutcome === 'lock-lost' &&
+    shutdownCalls.length === 1 && shutdownCalls[0] === 'second_instance',
+  'failed lock reacquisition requests shutdown and never claims live-instance ownership');
+  const guard = main.indexOf('if (!singleInstanceLockOwned) return;');
+  const create = main.indexOf('createWindow();', guard);
+  check(guard >= 0 && create > guard, 'startup cannot create an unlocked window after a lost-lock race');
+}
 
 console.log('elevation-startup-smoke: elevation cannot remain Admin rights unknown');
 check(!renderer.includes('Admin rights unknown'), 'renderer never paints Admin rights unknown');

@@ -5,16 +5,25 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: brand-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   brand-assets:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          submodules: true
+          persist-credentials: false
+      - name: Fetch pinned private design-system
+        env:
+          DESIGN_SYSTEM_TOKEN: ${{ secrets.DESIGN_SYSTEM_TOKEN }}
+        run: node .github/scripts/fetch-design-system.js
       - name: Check shipped brand assets
         shell: bash
         run: |

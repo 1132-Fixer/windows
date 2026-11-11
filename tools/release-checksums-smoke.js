@@ -9,8 +9,10 @@
 // wrong hash, a missing record and an unsorted manifest.
 //
 // Why: release.yml used to build this file through a PowerShell cmdlet that
-// writes CRLF on Windows, and every published manifest up to 6.3.3 failed
-// `sha256sum -c` with "No such file or directory" on each line.
+// writes CRLF on Windows. Coreutils 9.0 added CRLF checksum support, so
+// standard-tool acceptance is not a byte-format gate. Our verifier requires
+// deterministic LF bytes; the real tool separately proves valid hashes pass
+// and mismatched hashes or changed payloads fail.
 
 const fs = require('fs');
 const os = require('os');
@@ -28,7 +30,7 @@ function check(cond, name) {
 // usr/bin. Fail closed if none is found — the whole point is proving the
 // published file works with the standard tool.
 function findSha256sum() {
-  const direct = spawnSync('sha256sum', ['--version'], { encoding: 'utf8' });
+  const direct = spawnSync('sha256sum', ['--version'], { encoding: 'utf8', timeout: 10000 });
   if (!direct.error && direct.status === 0) return { cmd: 'sha256sum', args: [] };
   const candidates = [
     'C:\\Program Files\\Git\\usr\\bin\\sha256sum.exe',
@@ -80,14 +82,33 @@ function findSha256sum() {
   const tool = findSha256sum();
   check(!!tool, `sha256sum available (${tool ? tool.cmd : 'not found'})`);
   if (tool) {
-    const r = spawnSync(tool.cmd, [...tool.args, '-c', gen.MANIFEST_NAME], { cwd: dist, encoding: 'utf8' });
+    const opts = { cwd: dist, encoding: 'utf8', timeout: 15000, env: { ...process.env, LC_ALL: 'C' } };
+    const r = spawnSync(tool.cmd, [...tool.args, '-c', gen.MANIFEST_NAME], opts);
     check(r.status === 0, `sha256sum -c exit ${r.status}`);
     check(/Portable-9\.9\.9\.exe: OK/.test(r.stdout) && /Setup-9\.9\.9\.exe: OK/.test(r.stdout), `sha256sum reports OK for both assets`);
-    // Negative control: the CRLF shape that shipped in 6.3.3 fails the same tool.
-    const crlf = path.join(dist, 'crlf.txt');
-    fs.writeFileSync(crlf, Buffer.from(bytes.toString('utf8').replace(/\n/g, '\r\n'), 'utf8'));
-    const bad = spawnSync(tool.cmd, [...tool.args, '-c', 'crlf.txt'], { cwd: dist, encoding: 'utf8' });
-    check(bad.status !== 0, `sha256sum -c rejects the CRLF manifest (exit ${bad.status})`);
+    // Real-tool negative controls must be hash failures, independent of how
+    // a particular checksum-tool release handles CRLF. The byte verifier
+    // below still rejects CRLF, BOMs and every other forbidden format.
+    const wrongHash = bytes.toString('utf8').replace(/^[0-9a-f]/, digit => digit === '0' ? '1' : '0');
+    fs.writeFileSync(path.join(dist, 'wrong-hash.txt'), Buffer.from(wrongHash, 'utf8'));
+    const badHash = spawnSync(tool.cmd, [...tool.args, '-c', 'wrong-hash.txt'], opts);
+    check(!badHash.error && badHash.status !== null && badHash.status !== 0 &&
+      /Portable-9\.9\.9\.exe: FAILED/.test(badHash.stdout) && /Setup-9\.9\.9\.exe: OK/.test(badHash.stdout),
+      `sha256sum rejects a wrong digest while verifying the unaffected asset (exit ${badHash.status})`);
+
+    const changedAsset = path.join(dist, assets[0]);
+    const original = fs.readFileSync(changedAsset);
+    const tampered = Buffer.from(original);
+    tampered[tampered.length - 1] ^= 1;
+    try {
+      fs.writeFileSync(changedAsset, tampered);
+      const badPayload = spawnSync(tool.cmd, [...tool.args, '-c', gen.MANIFEST_NAME], opts);
+      check(!badPayload.error && badPayload.status !== null && badPayload.status !== 0 &&
+        /Portable-9\.9\.9\.exe: FAILED/.test(badPayload.stdout) && /Setup-9\.9\.9\.exe: OK/.test(badPayload.stdout),
+        `sha256sum rejects a changed payload under the original LF manifest (exit ${badPayload.status})`);
+    } finally {
+      fs.writeFileSync(changedAsset, original);
+    }
   }
 
   console.log('release-checksums-smoke: verifier rejects bad manifests');
@@ -113,8 +134,10 @@ function findSha256sum() {
   console.log('release-checksums-smoke: workflows call the generator');
   const rel = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
   const ci = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
-  check(rel.includes('node scripts/generate-checksums.mjs --dist dist') && rel.includes('node scripts/generate-checksums.mjs --verify --dist dist'),
-    'release.yml generates and verifies through scripts/generate-checksums.mjs');
+  check(rel.includes('node scripts/generate-checksums.mjs --verify --dist dist') &&
+    !rel.includes('node scripts/generate-checksums.mjs --dist dist\n') &&
+    rel.includes('sha256sum -c checksums-sha256.txt'),
+  'release.yml verifies the retained CI checksum manifest without rewriting accepted bytes');
   check(!/Out-File[^\n]*checksums|checksums[^\n]*Out-File|Set-Content[^\n]*checksums/.test(rel), 'release.yml has no other checksum writer');
   check(ci.includes('node scripts/generate-checksums.mjs --dist dist') && ci.includes('sha256sum -c checksums-sha256.txt'),
     'ci.yml exercises the same generator and runs sha256sum -c on its output');

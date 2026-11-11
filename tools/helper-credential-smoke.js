@@ -68,7 +68,9 @@ console.log('helper-credential-smoke: launcherScriptContent');
   check(/DataProtectionScope\]::CurrentUser/.test(script), 'DPAPI CurrentUser scope (primary-user shortcut context)');
   check(script.includes(hc.CRED_BLOB_NAME), 'reads the co-located credential blob');
   check(/\$PSScriptRoot/.test(script), 'blob resolved relative to the script (co-located)');
-  check(/PSCredential\('user1', \$p\)/.test(script), 'signs in as the helper user');
+  check(script.includes("$localUser = [System.Environment]::MachineName + '\\user1'") &&
+    script.includes('$c = [System.Management.Automation.PSCredential]::new($localUser, $p)'),
+  'signs in through an explicit local-machine helper credential');
   check(zd.extractLauncherZoomPath(script) === zoomPath, 'Start-Process shape parseable by zoom-detect staleness reader');
   check(script.includes(`-WorkingDirectory '${zoomDir}'`), 'working directory baked (per-user-NSIS cwd trap)');
   check(/FIX NOW/.test(script), 'catch branch tells the user to re-run FIX NOW');

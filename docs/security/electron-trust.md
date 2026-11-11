@@ -91,8 +91,8 @@ file dialog and is re-validated in the main process.
 `https:` with no userinfo, on:
 
 - `github.com/1132-Fixer/windows/...` (releases page)
-- `1132-fixer.xyz` / `www.1132-fixer.xyz`
-- `botify-network.com` / `www.botify-network.com` (Explore destinations)
+- `botify-network.com` / `www.botify-network.com` (Explore destinations,
+  including the 1132 Fixer page)
 - `gif.directory` / `www.gif.directory` (Explore destination)
 - `zoom.us` / `www.zoom.us` (the catalog admin download)
 
@@ -123,10 +123,8 @@ that. Note that the value is fixed at build time: the shipped v5.6.0 binaries
 were built at a tag whose `build.publish` is the generic `botify-network.com`
 broker, so they poll the broker, not this repository.
 
-Live channel, residual old-channel clients, and the version-match test are
+Live channels, legacy-client limitations, and the version-match test are
 recorded in [`../development/updater-channel.md`](../development/updater-channel.md).
-`PrimeUpYourLife/1132-Fixer-Windows-Releases` is still serving v5.5.1
-`latest.yml` and must not be deleted; if retired, archive it.
 
 `verifyUpdateCodeSignature` stays `false` until a release is actually signed.
 Enabling it while artifacts are unsigned permanently breaks the update

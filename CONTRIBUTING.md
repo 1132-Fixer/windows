@@ -32,7 +32,7 @@ Public docs live under [docs/README.md](docs/README.md).
 
 ## What is testable without Zoom
 
-`npm test` and `node feedback-proxy/test.js` do not need a Zoom install.
+`npm test` does not need a Zoom install. The separate support service has its own test suite.
 
 ## What needs Windows
 
@@ -113,7 +113,7 @@ What does **not** belong here:
 
 - The macOS app (`1132-Fixer/macos`).
 - The browser extension for Chrome, Edge, Brave, and Firefox (`1132-Fixer/browser`).
-- The public website at https://1132-fixer.xyz/.
+- The public website at https://botify-network.com/apps/1132-fixer.
 - Secrets or production service credentials.
 
 ## Releases

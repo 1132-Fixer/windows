@@ -37,9 +37,10 @@ Center if it is not already installed.
   reopens by itself as the new version. Updates on **6.3.1 to 6.3.3** close
   the app without installing; install the newest release once by hand.
 - **v5.6.0** polls the Botify broker, which serves the same current installer.
-- **v5.5.1 and earlier** still poll
-  `PrimeUpYourLife/1132-Fixer-Windows-Releases`. That feed remains for those
-  clients. Install a current release from this repository once to move off it.
+- **v5.5.1 and earlier** point to a deleted legacy Releases repository and
+  cannot automatically discover updates. For manual recovery, install the
+  latest Setup from this repository over the existing copy; replace old
+  Portable builds with the latest Portable build.
 
 The update location is fixed when a build is made. An existing install cannot
 be pointed somewhere else remotely.

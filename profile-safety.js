@@ -248,35 +248,22 @@ function argvContainsSecret(argv, secrets) {
   return false;
 }
 
-// Account-create body for a tmp PowerShell file (same residual as Zoom
-// launch: secret lives in the unlinked tmp script, never on CreateProcess
-// argv / Win32_Process CommandLine). net.exe /y answers the ">14 char"
-// DOS-compat prompt.
+// Account-create body for the shared in-memory PowerShell stdin transport.
+// The credential stays off PowerShell argv and temporary script files.
+// net.exe still receives it as a native process argument during account
+// creation; this transport does not hide that argument from local process
+// inspection. /y answers the ">14 char" DOS-compatibility prompt.
 function accountCreateScript(username, password) {
   const u = psSingleQuote(username);
   const p = psSingleQuote(password);
   return [
     `$u = ${u}`,
     `$p = ${p}`,
-    `$out = & net.exe user $u $p /add /y 2>&1`,
+    `$out = & (Resolve-FixerTool 'net.exe') user $u $p /add /y 2>&1`,
     `Write-Host (($out | Out-String).Trim())`,
     `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`,
     `Write-Host 'ACCOUNT_CREATE=OK'`
   ].join('\r\n');
-}
-
-// Spawn argv for that create script: powershell -File <tmp>. The password
-// must never appear here.
-function accountCreateArgv(scriptPath) {
-  return [
-    'powershell.exe',
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-File',
-    scriptPath
-  ];
 }
 
 const DEFAULT_ZOOM_CANDIDATES = [
@@ -463,7 +450,6 @@ module.exports = {
   redactSecrets,
   argvContainsSecret,
   accountCreateScript,
-  accountCreateArgv,
   discoverZoomExe,
   shortcutSpec,
   classifyPrivilegeState,

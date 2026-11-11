@@ -36,7 +36,7 @@ individual is representing the project in public spaces.
 If you experience or witness unacceptable behaviour, report it privately to the
 maintainers:
 
-- Use the contact path on [1132-fixer.xyz](https://1132-fixer.xyz/) with
+- Use the contact path on [1132 Fixer](https://botify-network.com/apps/1132-fixer) with
   **Code of Conduct** in the subject, or
 - For conduct concerns tied to a security-sensitive report, use
   [GitHub private vulnerability reporting](https://github.com/1132-Fixer/windows/security/advisories/new).

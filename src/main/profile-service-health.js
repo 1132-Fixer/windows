@@ -20,7 +20,7 @@ async function checkProfileServiceHealth(runCapture) {
   } catch (_) {
     return { ok: false, code: 'profile_service_probe_failed' };
   }
-  if (!result || result.timedOut === true) {
+  if (!result || result.timedOut !== false) {
     return { ok: false, code: result ? 'profile_service_probe_timeout' : 'profile_service_probe_failed' };
   }
   if (result.code !== 0 || String(result.stdout || '').trim() !== 'PROFILE_SERVICES=RUNNING' ||

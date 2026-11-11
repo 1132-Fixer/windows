@@ -48,12 +48,13 @@ async function mainTest() {
   const functionStart = main.indexOf('async function runFixFlow');
   const startGate = main.indexOf('  const profileServiceStart = ', functionStart);
   const step1 = main.indexOf('  // STEP 1:', startGate);
+  const startGateEnd = main.indexOf('  // Resolve the existing LOCAL helper', startGate);
   const endGate = main.indexOf("  send('[3b/8] Checking Windows profile services...", step1);
   const step4 = main.indexOf('  // STEP 4:', endGate);
   check(startGate > functionStart && startGate < step1 && endGate > step1 && step4 > endGate,
     'service gates wrap helper teardown before account creation');
 
-  for (const [start, end] of [[startGate, step1], [endGate, step4]]) {
+  for (const [start, end] of [[startGate, startGateEnd], [endGate, step4]]) {
     const gate = new AsyncFunction('checkProfileServiceHealth', 'runPSCapture', 'send', 'step', 'warnings', 'steps',
       main.slice(start, end) + '\nreturn { continued: true };');
     for (const ok of [false, true]) {
