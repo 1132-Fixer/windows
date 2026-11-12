@@ -63,4 +63,58 @@ for (const [fetchError, code] of [
   check(!JSON.stringify(failed.result).includes(token) && failed.calls.length === 3,
     'classified failure discloses no diagnostic or secret and performs no retry');
 }
+// Read-only deploy key transport: preferred when present, never mixed with the token.
+{
+  const fs = require('fs');
+  const keyText = '-----BEGIN OPENSSH PRIVATE KEY-----\nfixture-opaque-key-material\n-----END OPENSSH PRIVATE KEY-----';
+  const calls = [];
+  let keyFileDuringFetch = null;
+  let keyBodyDuringFetch = null;
+  const env = { DESIGN_SYSTEM_DEPLOY_KEY: keyText, DESIGN_SYSTEM_TOKEN: token, GIT_SSH_COMMAND: 'ssh -v', GIT_SSH: 'unexpected' };
+  const result = fetchDesignSystem({ env, run: (exe, args, settings) => {
+    calls.push({ exe, args, env: { ...settings.env } });
+    if (calls.length === 3) {
+      const match = /-i "([^"]+)"/.exec(settings.env.GIT_CONFIG_VALUE_1 || '');
+      keyFileDuringFetch = match && match[1];
+      keyBodyDuringFetch = keyFileDuringFetch && fs.readFileSync(keyFileDuringFetch, 'utf8');
+    }
+    return { status: 0, stdout: calls.length === 1 ? canonical : pin };
+  } });
+  check(result.ok && calls.length === 4, 'deploy-key fetch is followed by exact-head readback');
+  check(calls.every(call => !('DESIGN_SYSTEM_DEPLOY_KEY' in call.env) && !('DESIGN_SYSTEM_TOKEN' in call.env) &&
+    !('GIT_SSH_COMMAND' in call.env) && !('GIT_SSH' in call.env)),
+    'neither credential nor an inherited ssh override enters a git child environment');
+  check(calls.every(call => !JSON.stringify(call.args).includes('fixture-opaque-key-material') && !call.args.includes('-c')),
+    'key material never enters command arguments');
+  check(calls[2].env.GIT_CONFIG_COUNT === '2' &&
+    calls[2].env.GIT_CONFIG_KEY_0 === 'url.git@github.com:1132-Fixer/design-system.git.insteadOf' &&
+    calls[2].env.GIT_CONFIG_VALUE_0 === canonical && calls[2].env.GIT_CONFIG_KEY_1 === 'core.sshCommand',
+    'only the canonical design URL is rewritten to the deploy-key transport');
+  check(!JSON.stringify(calls[2].env).includes('x-access-token') && !JSON.stringify(calls[2].env).includes('extraheader'),
+    'the token header is not sent when the deploy key is used');
+  const ssh = calls[2].env.GIT_CONFIG_VALUE_1;
+  check(/-o StrictHostKeyChecking=yes/.test(ssh) && /-o IdentitiesOnly=yes/.test(ssh) && /-o BatchMode=yes/.test(ssh) &&
+    /-F none/.test(ssh) && /UserKnownHostsFile="/.test(ssh) && !ssh.includes('fixture-opaque-key-material'),
+    'ssh pins the host key, uses only the staged key and cannot prompt');
+  check(keyBodyDuringFetch === keyText + '\n', 'the staged key file holds the exact key with one trailing newline');
+  check(keyFileDuringFetch && !fs.existsSync(keyFileDuringFetch), 'the staged key is removed after the fetch');
+  check(calls.slice(0, 2).concat(calls.slice(3)).every(call => !('GIT_CONFIG_VALUE_1' in call.env) && !('GIT_CONFIG_VALUE_0' in call.env)),
+    'local checks and readback receive no transport configuration');
+  let leaked = null;
+  const failed = fetchDesignSystem({ env: { DESIGN_SYSTEM_DEPLOY_KEY: keyText }, run: (exe, args, settings) => {
+    if (args[0] === 'config') return { status: 0, stdout: canonical };
+    if (args[0] === 'rev-parse') return { status: 0, stdout: pin };
+    leaked = (/-i "([^"]+)"/.exec(settings.env.GIT_CONFIG_VALUE_1 || '') || [])[1];
+    return { status: 128, stderr: 'git@github.com: Permission denied (publickey). fixture-opaque-key-material' };
+  } });
+  check(!failed.ok && failed.code === 'DESIGN_FETCH_ACCESS_UNAVAILABLE' && !JSON.stringify(failed).includes('fixture-opaque-key-material'),
+    'a refused deploy key is classified without disclosing diagnostics');
+  check(leaked && !fs.existsSync(leaked), 'the staged key is removed after a failed fetch');
+  const hostKey = fetchDesignSystem({ env: { DESIGN_SYSTEM_DEPLOY_KEY: keyText }, run: (exe, args) => {
+    if (args[0] === 'config') return { status: 0, stdout: canonical };
+    if (args[0] === 'rev-parse') return { status: 0, stdout: pin };
+    return { status: 128, stderr: 'Host key verification failed.' };
+  } });
+  check(!hostKey.ok && hostKey.code === 'DESIGN_FETCH_CONNECTION_FAILED', 'a changed host key blocks the fetch');
+}
 console.log(`design-fetch-smoke: ${checks} checks passed`);

@@ -219,6 +219,13 @@ submodule URL and exact consumer pin before a credentialed fetch. The private
 header is passed only in the git child's environment, with tracing disabled;
 it is not written to disk or command arguments. Missing credentials, an
 unavailable repository/commit, or a mismatched checkout fail the required gate.
+
+The preferred credential is `DESIGN_SYSTEM_DEPLOY_KEY`: a read-only deploy key
+registered on `1132-Fixer/design-system` only. When it is set, the token is not
+used. The script rewrites only the canonical design URL to SSH, pins GitHub's
+published Ed25519 host key, and writes the key to a private temporary directory
+that it removes after the fetch. To rotate it, add a new read-only deploy key to
+the design repository, set the secret, then delete the old deploy key.
 There is no public/anonymous or alternate-design fallback. Test the boundary
 with `node tools/design-fetch-smoke.js`; mocked success does not prove that
 CI currently has the required private repository access.

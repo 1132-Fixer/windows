@@ -89,6 +89,7 @@ jobs:
       # The design gate still blocks all candidate builds.
       - name: Fetch pinned private design-system
         env:
+          DESIGN_SYSTEM_DEPLOY_KEY: ${{ secrets.DESIGN_SYSTEM_DEPLOY_KEY }}
           DESIGN_SYSTEM_TOKEN: ${{ secrets.DESIGN_SYSTEM_TOKEN }}
         run: node .github/scripts/fetch-design-system.js
 
