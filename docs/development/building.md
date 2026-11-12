@@ -1,13 +1,14 @@
 # Building 1132 Fixer locally
 
-Release builds are produced by CI (`release.yml`, tag-triggered) — that is the
-release of record. Local builds exist for validation matrices and development.
+CI produces exact candidate Setup and Portable bytes. After native acceptance
+binds their hashes, `release.yml` publishes those retained bytes without a rebuild.
+Local builds serve development and validation; they do not establish release acceptance.
 
 ## Commands
 
 ```
 npm ci
-npm test          # seven smoke suites; must be green before any build you intend to use
+npm test          # complete current suite; required before a candidate is qualified
 npm run build     # portable only
 npm run build:installer
 npm run build:all # both targets, dist/

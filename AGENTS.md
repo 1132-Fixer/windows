@@ -32,7 +32,7 @@ this file.
 | Security | `src/main/electron-security.js` | IPC channel allowlist, navigation/new-window denial, URL allowlist for Explore, path validation. Do not weaken it to fix a UI or startup problem. |
 | Preload | `preload.js`, `src/preload/compact-shell.js` | `contextIsolation` on, `nodeIntegration` off; exposes only the `window.electronAPI` surface. The compact shell maps renderer panes onto `body[data-compact-state]` (`checking`, `ready`, `blocked`, `fixing`, `cancelling`, `cancelled`, `success`, `error`, `notice`). |
 | Renderer | `index.html`, `renderer.js`, `messages.js` | All user-facing copy lives in `messages.js`; `index.html` design tokens are the single `:root` block. |
-| Repair | `main.js` (`run-fix`) | The real orchestrator: confirm once → refuse while signed in as the helper → stop helper Zoom → remove account/profile → recreate → configure → launch → verify → report. Idempotent; a second run repairs a partial run. |
+| Repair | `main.js` (`run-fix`) | Confirm effects → read-only preflight → verify exact helper SID and unloaded profile → stop only owned helper processes → remove the proved account/profile → recreate → configure → launch → verify → report. Cancellation occurs at explicit checkpoints; completed changes remain. A failed or interrupted run requires fresh inspection. No whole-run replay or rollback guarantee exists. |
 
 ## Design
 
@@ -95,7 +95,7 @@ this file.
 
 ```bash
 npm ci
-npm test                       # all tools/*-smoke.js, node only, no Electron needed
+npm test                       # required core/native suites, then exact design-pin suites
 node tools/support-submission-smoke.js # desktop's stateless support boundary
 node tools/support-release-smoke.js    # public endpoint readiness contract
 npm run build                  # portable exe   (electron-builder)
@@ -113,8 +113,11 @@ node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out
   Details round trip on the shipped binary.
 - The packaged acceptance driver needs an elevated Windows session **without**
   Smart App Control enforcement (SAC blocks the unsigned host binary before
-  Electron starts). CI runs it on the `windows-latest` runner and uploads the
-  `packaged-acceptance` artifact (screenshots + `report.md`) with `--test-copy`.
+  Electron starts). Only an explicit `workflow_dispatch.run_packaged_ui` request
+  runs this diagnostic on `windows-latest`; normal PR/push runs record it not run.
+  The diagnostic uploads the `packaged-acceptance` artifact (screenshots +
+  `report.md`) with `--test-copy`. Operator restrictions on UI automation apply
+  before invoking any capture or acceptance driver.
   That modified-manifest run is diagnostic only: it may pass its executed cases
   but can never be native/final-artifact release evidence. A case that cannot
   run is reported `not-run`, never `passed`.

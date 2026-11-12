@@ -17,8 +17,7 @@
 
 const os = require('os');
 const { spawnSync } = require('child_process');
-const { PS_STDIN_ARGS } = require('../src/main/windows-tools');
-const { nativePowerShell7, prepareNativeScript } = require('./native-powershell');
+const { NATIVE_PS_STDIN_ARGS, nativePowerShell7, prepareNativeScript } = require('./native-powershell');
 
 if (process.platform !== 'win32') {
   console.log('ps-encoding-smoke: not-run (native PowerShell 7 verification requires Windows)');
@@ -32,7 +31,7 @@ if (process.platform !== 'win32') {
 const SAMPLE = 'C:\\Users\\José\\OneDrive\\Área de Trabalho — Рабочий стол — デスクトップ';
 
 function runPS(scriptContent) {
-  const r = spawnSync(nativePowerShell7(), PS_STDIN_ARGS,
+  const r = spawnSync(nativePowerShell7(), NATIVE_PS_STDIN_ARGS,
     // A stale inherited working directory must not affect the test. Empty
     // PATH also proves the shared absolute executable contract.
     { input: Buffer.from(prepareNativeScript(scriptContent), 'utf8'),

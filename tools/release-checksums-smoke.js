@@ -139,8 +139,10 @@ function findSha256sum() {
     rel.includes('sha256sum -c checksums-sha256.txt'),
   'release.yml verifies the retained CI checksum manifest without rewriting accepted bytes');
   check(!/Out-File[^\n]*checksums|checksums[^\n]*Out-File|Set-Content[^\n]*checksums/.test(rel), 'release.yml has no other checksum writer');
-  check(ci.includes('node scripts/generate-checksums.mjs --dist dist') && ci.includes('sha256sum -c checksums-sha256.txt'),
-    'ci.yml exercises the same generator and runs sha256sum -c on its output');
+  check(ci.includes('node scripts/generate-checksums.mjs --dist dist') &&
+    ci.includes('& $sha256Tool -c checksums-sha256.txt') && ci.includes("Git/usr/bin/sha256sum.exe") &&
+    /name: Verify checksum manifest with sha256sum\r?\n\s+shell: pwsh/.test(ci),
+    'ci.yml exercises the same generator and standard verifier under native PowerShell');
 
   fs.rmSync(dist, { recursive: true, force: true });
   if (failures) {

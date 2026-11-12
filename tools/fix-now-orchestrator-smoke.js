@@ -58,11 +58,11 @@ check(main.includes('alreadyRunning'), 'Open Zoom skips a duplicate helper Zoom 
 console.log('fix-now-orchestrator-smoke: copy contract');
 check(messages.WIZARD.READY_TITLE === 'Ready to fix Zoom', 'ready title');
 check(messages.WIZARD.READY_SUB.includes('Start Zoom with a fresh setup.'), 'ready description starts the fresh setup');
-check(messages.WIZARD.READY_SUB.includes('Your personal files won’t be changed.'), 'ready description does not claim personal files change');
+check(messages.WIZARD.READY_SUB.includes('Review the helper account and profile changes'), 'ready description requires effect review');
 check(!/Everything looks good/.test(messages.WIZARD.READY_TITLE), 'not a false all-good title');
-check(messages.WIZARD.CONFIRM_BODY.includes('helper account and helper profile'), 'confirm names helper account replacement');
-check(messages.WIZARD.CONFIRM_BODY.includes('personal files will not be changed'), 'confirm protects the signed-in user');
-check(messages.WIZARD.CONFIRM_BODY.includes('cancel only at safe checkpoints'), 'confirm names cancellation bounds');
+check(messages.WIZARD.CONFIRM_BODY.includes('replace user1') && messages.WIZARD.CONFIRM_BODY.includes('including files saved there'), 'confirm names actual account and profile effects');
+check(messages.WIZARD.CONFIRM_BODY.includes('under the Windows account running this app'), 'confirm names operator-side sign-in files');
+check(messages.WIZARD.CONFIRM_BODY.includes('completed changes remain'), 'confirm names cancellation bounds without rollback promise');
 check(messages.WIZARD.SUCCESS_TITLE === 'Complete', 'success title');
 check(messages.WIZARD.FAIL_TITLE === "Couldn't complete the fix", 'failure title');
 

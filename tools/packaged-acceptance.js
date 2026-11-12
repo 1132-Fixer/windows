@@ -448,12 +448,12 @@ async function runtimeAuthority(app, tag, fakeRoot) {
         proof = { ...facts, stage: 'root-unverified', forgedEnvironmentApplied };
       } else {
         const powershell = path.join(path.parse(root).root, 'Program Files', 'PowerShell', '7', 'pwsh.exe');
-        const cmd = tools.resolveTool('cmd.exe');
+        const whoami = tools.resolveTool('whoami.exe');
         const coreDlls = sharedObjects.filter(value => /^(?:ntdll|kernel32|kernelbase)\.dll$/i.test(path.basename(value)));
-        const resolvedPathsTrusted = !fakeRoot || ![root, powershell, cmd].some(value => value.toLowerCase().startsWith(fakeRoot.toLowerCase()));
+        const resolvedPathsTrusted = !fakeRoot || ![root, powershell, whoami].some(value => value.toLowerCase().startsWith(fakeRoot.toLowerCase()));
         const coreLibrariesTrusted = !fakeRoot || (coreDlls.length >= 3 && !coreDlls.some(value => value.toLowerCase().startsWith(fakeRoot.toLowerCase())));
         if (!resolvedPathsTrusted || !coreLibrariesTrusted) {
-          proof = { ...facts, stage: 'untrusted-paths', appPath: app.getAppPath(), root, powershell, cmd, coreDlls,
+          proof = { ...facts, stage: 'untrusted-paths', appPath: app.getAppPath(), root, powershell, whoami, coreDlls,
             exitCode: null, trusted: false, resolvedPathsTrusted, coreLibrariesTrusted,
             forgedEnvironmentApplied, nativeEnvironmentApplied: false, nativePathTrusted: false, commandMatches: false };
         } else {
@@ -466,8 +466,9 @@ async function runtimeAuthority(app, tag, fakeRoot) {
           const applyForgedEnvironment = fakeRoot
             ? "$fixerTestEnvironment = $env:FIXER_TEST_FORGED_ENV | ConvertFrom-Json; Remove-Item Env:FIXER_TEST_FORGED_ENV; $fixerTestSystemRoot = [string]$fixerTestEnvironment.SystemRoot; $env:SystemRoot = $fixerTestSystemRoot; $env:WINDIR = [string]$fixerTestEnvironment.WINDIR; $env:PATH = [string]$fixerTestEnvironment.PATH; $env:PROCESSOR_ARCHITEW6432 = [string]$fixerTestEnvironment.PROCESSOR_ARCHITEW6432; $env:ComSpec = [string]$fixerTestEnvironment.ComSpec; $fixerTestForged = ($env:SystemRoot -eq $fixerTestSystemRoot -and $env:WINDIR -eq [string]$fixerTestEnvironment.WINDIR -and [string]::IsNullOrEmpty($env:PATH) -and $env:PROCESSOR_ARCHITEW6432 -eq [string]$fixerTestEnvironment.PROCESSOR_ARCHITEW6432 -and $env:ComSpec -eq [string]$fixerTestEnvironment.ComSpec); "
             : "$fixerTestSystemRoot = ''; $fixerTestForged = $true; ";
-          const nativeCommand = "if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 is required' }; $fixerTestCmd = Resolve-FixerTool 'cmd.exe'; $fixerTestNativePathTrusted = ([string]::IsNullOrEmpty($fixerTestSystemRoot) -or -not $fixerTestCmd.StartsWith($fixerTestSystemRoot, [StringComparison]::OrdinalIgnoreCase)); $fixerTestMarker = if ($fixerTestNativePathTrusted) { & $fixerTestCmd /d /c 'echo FIXER_TRUSTED_RUNTIME' } else { $null }; $r = @{ systemDir = [Environment]::SystemDirectory; marker = $fixerTestMarker; forgedEnvironment = $fixerTestForged; nativePathTrusted = $fixerTestNativePathTrusted }; $r | ConvertTo-Json -Compress";
-          const result = process.getBuiltinModule('child_process').spawnSync(powershell, tools.PS_STDIN_ARGS, {
+          const nativeCommand = "if ($PSVersionTable.PSVersion.Major -lt 7 -or $PSVersionTable.PSEdition -ne 'Core') { throw 'PowerShell 7 is required' }; $fixerTestWhoami = Resolve-FixerTool 'whoami.exe'; $fixerTestNativePathTrusted = ([string]::IsNullOrEmpty($fixerTestSystemRoot) -or -not $fixerTestWhoami.StartsWith($fixerTestSystemRoot, [StringComparison]::OrdinalIgnoreCase)); $fixerTestMarker = $null; if ($fixerTestNativePathTrusted) { $fixerTestOwner = & $fixerTestWhoami /user /fo csv /nh; if ($LASTEXITCODE -eq 0 -and ([string]$fixerTestOwner).Contains([string][Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) { $fixerTestMarker = 'FIXER_TRUSTED_RUNTIME' } }; $r = @{ systemDir = [Environment]::SystemDirectory; marker = $fixerTestMarker; forgedEnvironment = $fixerTestForged; nativePathTrusted = $fixerTestNativePathTrusted }; $r | ConvertTo-Json -Compress";
+          const nativeArgs = ['-NoProfile', '-NonInteractive', '-Command', tools.PS_STDIN_ARGS.at(-1)];
+          const result = process.getBuiltinModule('child_process').spawnSync(powershell, nativeArgs, {
             input: Buffer.from(tools.prepareScript(applyForgedEnvironment + nativeCommand), 'utf8'),
             env: powershellEnv, windowsHide: true, timeout: 15000, encoding: 'utf8'
           });
@@ -480,7 +481,7 @@ async function runtimeAuthority(app, tag, fakeRoot) {
           // Sysnative is the caller's WOW64 alias; native PowerShell reports
           // the same physical directory as System32.
           const expectedDir = path.join(root, 'System32');
-          proof = { ...facts, stage: 'checked', appPath: app.getAppPath(), root, powershell, cmd, coreDlls,
+          proof = { ...facts, stage: 'checked', appPath: app.getAppPath(), root, powershell, whoami, coreDlls,
             nativeSystemDir, exitCode: result.status, trusted: true, resolvedPathsTrusted, coreLibrariesTrusted,
             forgedEnvironmentApplied, nativeEnvironmentApplied, nativePathTrusted,
             commandMatches: result.status === 0 && !result.error && nativeMarker && nativeEnvironmentApplied &&

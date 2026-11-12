@@ -101,13 +101,17 @@ console.log('run-verdict-smoke: warn steps never partial');
 console.log('run-verdict-smoke: consent outcome (P1-A — HKU is the toggle Zoom reads)');
 {
   check(rv.consentOutcome('OK', false, 'YES') === 'OK', 'per-user readback Allow -> OK');
-  check(rv.consentOutcome('UNVERIFIED', false, 'YES') === 'OK', 'readback upgrades marker-lost UNVERIFIED to OK');
+  check(rv.consentOutcome('UNVERIFIED', false, 'YES') === 'UNVERIFIED', 'later readback cannot replace missing identity-bound proof');
   check(rv.consentOutcome('OK', false, 'NO') === 'UNVERIFIED', 'HKLM-only OK with per-user value absent -> UNVERIFIED (never OK)');
   check(rv.consentOutcome('OK', false, '') === 'UNVERIFIED', 'HKLM-only OK, hive unreadable, no per-user write proof -> UNVERIFIED');
   check(rv.consentOutcome('OK', true, '') === 'OK', 'verified per-user write stands when hive is unreadable at verify');
-  check(rv.consentOutcome('UNVERIFIED', true, '') === 'OK', 'verified per-user write also rescues a marker-degraded status');
+  check(rv.consentOutcome('UNVERIFIED', true, '') === 'UNVERIFIED', 'a partial write marker cannot replace a complete identity-bound receipt');
   check(rv.consentOutcome('UNVERIFIED', false, '') === 'UNVERIFIED', 'nothing verified anywhere -> UNVERIFIED');
   check(rv.consentOutcome('POLICY-BLOCKED', true, 'YES') === 'POLICY-BLOCKED', 'policy block always stands');
+  check(rv.consentOutcome('MACHINE-BLOCKED', true, 'YES') === 'MACHINE-BLOCKED', 'machine block cannot be upgraded by per-user values');
+  for (const unknown of [undefined, null, '', 'ALLOW', 'unverified']) {
+    check(rv.consentOutcome(unknown, true, 'YES') === 'UNVERIFIED', 'unknown script status remains unverified');
+  }
   const v = rv.computeRunVerdict(
     [{ id: 'consent', label: 'Grant camera and microphone access', outcome: 'fail',
        detail: 'camera=UNVERIFIED, microphone=OK — sign in as user1, open Settings > Privacy & security > Camera (and Microphone), and toggle access on manually.' }],
@@ -115,22 +119,17 @@ console.log('run-verdict-smoke: consent outcome (P1-A — HKU is the toggle Zoom
   check(v.partial === true, 'unconfirmed consent -> partial run');
 }
 
-console.log('run-verdict-smoke: bundled consent native-tool boundary');
+console.log('run-verdict-smoke: bundled consent isolation boundary');
 {
   const consent = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'grant-media-consent.ps1'), 'utf8');
-  function usesTrustedRegForHiveOperations(script) {
-    const trustedBinding = /\$fixerRegExe\s*=\s*Join-Path\s+\(\[Environment\]::SystemDirectory\)\s+'reg\.exe'/.test(script);
-    const operations = Array.from(script.matchAll(/^\s*\$\w+\s*=\s*&\s*\$fixerRegExe\s+(query|load|unload)\b/gim), match => match[1]);
-    return trustedBinding && operations.length === 3 && ['query', 'load', 'unload'].every(operation => operations.includes(operation));
+  function hasNoHiveOrServiceMutation(script) {
+    return !/\b(?:reg(?:\.exe)?\s+(?:load|unload)|Set-Service|Start-Service|Stop-Service|Restart-Service|Start-Process)\b/i.test(script);
   }
-  check(usesTrustedRegForHiveOperations(consent),
-    'hive query, load and unload all use Windows API system-directory reg.exe');
+  check(hasNoHiveOrServiceMutation(consent), 'consent never mounts/unmounts a hive or changes a service');
   check(!consent.includes('Resolve-FixerTool') && !consent.includes('$env:SystemRoot'),
     'bundled -File script works without an inherited helper or environment-root lookup');
-  for (const operation of ['query', 'load', 'unload']) {
-    const unsafe = consent.replace(`& $fixerRegExe ${operation}`, `& reg.exe ${operation}`);
-    check(!usesTrustedRegForHiveOperations(unsafe),
-      `negative control rejects a PATH-dependent hive ${operation}`);
+  for (const mutation of ['reg.exe load', 'reg.exe unload', 'Set-Service', 'Start-Process']) {
+    check(!hasNoHiveOrServiceMutation(consent + '\n' + mutation), 'negative control rejects ' + mutation);
   }
 }
 

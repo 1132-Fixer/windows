@@ -2,14 +2,12 @@
 
 const CANCEL_CODE = 'ERR_1132_FIX_CANCELLED';
 
-// Cancellation is cooperative. These are the repair boundaries where the
-// current step has finished and no account/profile transaction is half-built.
-// Steps 3 -> 6 intentionally form one atomic recovery section: once account
-// teardown starts, cancellation waits until the new helper profile is stable.
-function isSafeFixCancelBoundary(line) {
-  const text = String(line || '').trim();
-  return /^\[(?:1|2|3|7|8)\/8\]\s/.test(text) || /^\[V\]\s/.test(text);
-}
+// These explicit engine checkpoints follow completed work. Cancellation
+// waits through account/profile rebuilding; this does not provide rollback.
+const FIX_CHECKPOINTS = Object.freeze([
+  'before-close-helper', 'before-profile-plan', 'before-profile-rebuild',
+  'before-preferences', 'before-relaunch', 'before-verification'
+]);
 
 function makeCancelledError() {
   const error = new Error('Fix cancelled at a safe boundary');
@@ -46,35 +44,24 @@ function createFixCancelBroker() {
     const originalSender = event && event.sender;
     if (!originalSender || typeof originalSender.send !== 'function') return event;
 
-    const sender = new Proxy(originalSender, {
-      get(target, prop) {
-        if (prop === 'send') {
-          return (channel, payload, ...rest) => {
-            const line = channel === 'fix-log' && payload && typeof payload === 'object'
-              ? payload.line
-              : '';
-            if (session && session.requested && isSafeFixCancelBoundary(line)) {
-              try {
-                target.send('fix-log', {
-                  line: 'Fix cancelled safely — no further changes will be made.',
-                  kind: 'header'
-                });
-              } catch (_) { /* renderer may already be gone */ }
-              throw makeCancelledError();
-            }
-            return target.send(channel, payload, ...rest);
-          };
-        }
-        const value = Reflect.get(target, prop, target);
-        return typeof value === 'function' ? value.bind(target) : value;
-      }
-    });
-
+    const ownedSession = session;
     const wrapped = Object.create(event || null);
-    Object.defineProperty(wrapped, 'sender', {
-      configurable: true,
-      enumerable: true,
-      value: sender
+    Object.defineProperty(wrapped, 'fixCheckpoint', {
+      value(name) {
+        if (session !== ownedSession || !FIX_CHECKPOINTS.includes(name)) {
+          throw new Error('Invalid repair checkpoint');
+        }
+        if (ownedSession.requested) {
+          ownedSession.stoppedBefore = name;
+          try {
+            originalSender.send('fix-log', {
+              line: 'Repair cancelled after the current step. Completed changes remain; no further steps will run.',
+              kind: 'header'
+            });
+          } catch (_) { /* keep engine cancellation when renderer is gone */ }
+          throw makeCancelledError();
+        }
+      }
     });
     return wrapped;
   }
@@ -99,7 +86,7 @@ function createFixCancelBroker() {
       return result;
     } catch (error) {
       if (error && error.code === CANCEL_CODE) {
-        return { success: false, cancelled: true, error: 'cancelled' };
+        return { success: false, cancelled: true, error: 'cancelled', stoppedBefore: session.stoppedBefore };
       }
       throw error;
     } finally {
@@ -116,6 +103,6 @@ function createFixCancelBroker() {
 
 module.exports = {
   CANCEL_CODE,
-  isSafeFixCancelBoundary,
+  FIX_CHECKPOINTS,
   createFixCancelBroker
 };

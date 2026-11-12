@@ -2,6 +2,54 @@
 
 ## Repair refusal and recovery (#252)
 
+Repair confirmation names both effect scopes: replacing the `user1` account
+and its profile (including files saved there), and writing helper launch/sign-in
+files under the Windows account running the app. It does not promise that all
+personal files remain unchanged. Missing confirmation controls refuse repair.
+
+Cancellation is accepted at explicit engine checkpoints. Completed changes
+remain; cancellation is not rollback. Failure and cancellation offer **Check
+again**, which runs a read-only preflight. They do not immediately repeat the
+destructive repair. Closing the window during repair explains why the window
+must stay open. Update installation waits for repair and child-process custody
+to finish, including when the app exits normally.
+
+The app does not start Secondary Logon during a check, change machine privacy
+settings, restart shared profile services, mount a profile hive, or send
+untargeted keystrokes. Unavailable services and unverified helper settings
+remain blockers or unresolved outcomes. Expected profile paths are labelled
+as expected; they are not presented as measurements from the launched Zoom
+process. Copying error details requires the sanitized support report and never
+falls back to raw logs.
+
+Recovery text does not infer a locked file, password policy, antivirus action,
+or successful rollback from a failed process. It asks for a new read-only check
+and a support report before another reset. Optional shortcut failure does not
+claim that no launcher files were written. Setup waits for application-owned
+exit and refuses busy or unknown process state; it does not force-close repair.
+Legacy per-user installation data is preserved until a separate verified
+migration can establish its ownership.
+
+The app must prove that its token belongs to the user signed into its Windows
+session before repair or launcher writes. A different administrator supplied
+at the Windows prompt is a blocker, since its Desktop and encrypted launcher
+storage would belong to a different person. The helper SID is checked again
+before teardown and before shortcut or launch actions.
+
+Profile descendants are writable by the helper. Elevated code does not write
+through those paths or grant recursive permissions. First-run deployment and
+Zoom dark mode run only under the verified standard helper token. The app no
+longer copies preference files or encrypted Zoom databases from the operator's
+profile. Windows desktop theme changes are removed. Unknown helper-program
+exit blocks another reset, updates and normal app shutdown. Fatal interface
+recovery must preserve that same boundary. Native credential launch remains
+an acceptance requirement; inert adapters do not qualify this change.
+
+Repair, shortcut creation and helper launch share one admission lock across
+their asynchronous identity checks. Only one can mutate state at a time. A
+failed Windows Desktop lookup does not create a guessed folder; the known
+folder is read again so redirection changes are respected.
+
 The existing failure screen names an in-use or unverified prior Zoom setup in
 plain English and directs the user to close Zoom or use Support Report. An
 unverified Windows profile-service state offers recovery guidance. These
@@ -10,8 +58,10 @@ profile or service evidence cannot produce Complete or Open Zoom.
 
 This uses the existing notice, details and recovery controls. The shared design
 pin and product assets are retained. Source/mocked checks are recorded on
-PR #254; canonical design-source access, rendered integration and packaged
-Windows acceptance remain required before release.
+PR #254. The canonical design pin was read locally. CI credential access,
+rendered integration and packaged Windows acceptance remain required before
+release. Current operator instructions prohibit UI automation in this session;
+rendered checks remain not run, rather than waived or reported as passed.
 
 Visual source of truth for this repository is the separate
 [1132-Fixer/design-system](https://github.com/1132-Fixer/design-system) repo

@@ -2,7 +2,7 @@
 /** Download one preflight-authorized Actions artifact and verify its archive digest. */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { Readable, Transform } from 'node:stream';
+import { Readable, Transform, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -205,8 +205,16 @@ export async function downloadReleaseCandidate({
         callback(null, chunk);
       }
     });
-    await pipeline(Readable.fromWeb(archive.body), tee,
-      partialHandle.createWriteStream({ autoClose: false }));
+    // Keep the FileHandle under this function's ownership. A FileHandle-backed
+    // stream with autoClose:false retains a reference after finish and can leave
+    // FileHandle.close() pending forever. The sink serializes complete writes
+    // without taking a second ownership reference or closing the handle on error.
+    const sink = new Writable({
+      write(chunk, _encoding, callback) {
+        partialHandle.writeFile(chunk).then(() => callback(), callback);
+      }
+    });
+    await pipeline(Readable.fromWeb(archive.body), tee, sink);
     if (size !== expectedSize) fail('candidate-download-size');
     const digest = `sha256:${hash.digest('hex')}`;
     if (digest !== expectedDigest) fail('candidate-download-digest');

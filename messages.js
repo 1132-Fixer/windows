@@ -38,6 +38,10 @@ const WINDOWS_TOOLS = {
 const PROFILE_SERVICE_FAILURE = 'Windows profile services could not be verified, so the repair stopped. Save your work and restart Windows. If this happens again, use Support Report.';
 
 const FRIENDLY_ERRORS = {
+  operator_identity_unverified: 'The app could not verify the signed-in Windows account. Repair stopped before changes. Use Support Report.',
+  operator_identity_mismatch: 'The app is running under a different account from the signed-in Windows user. Repair stopped before changes. Sign in with the administrator account that will own the helper launcher, then check again.',
+  operator_is_helper: 'The signed-in account is the helper that this repair would replace. Repair stopped before changes. Use your usual Windows administrator account.',
+  helper_settings_custody_unverified: 'The app could not confirm that its helper settings program stopped. Another reset and update are blocked. Save your work and use Support Report before restarting Windows.',
   helper_profile_busy_or_unverified: 'Windows is still using the previous Zoom setup, or the app could not verify that it is free. Close Zoom, then try again. If this repeats, use Support Report.',
   helper_profile_identity_unverified: 'The previous Zoom setup could not be identified safely. Repair stopped. Use Support Report before trying to reset it again.',
   profile_services_unverified: PROFILE_SERVICE_FAILURE,
@@ -47,17 +51,17 @@ const FRIENDLY_ERRORS = {
   running_as_target:        'You are currently signed in as user1. Sign in as a different administrator and try again.',
   preflight_failed:         'The repair could not start because a required check did not pass. Try again. If this repeats, use Support Report.',
   missing_tool:             WINDOWS_TOOLS.MISSING,
-  create_user_failed:       'Could not create the user1 account. Make sure the app is running as Administrator and that password policy allows the password.',
-  delete_user_failed:       'Could not delete the existing user1 account. Make sure the app is running as Administrator.',
-  delete_profile_failed:    'The user1 profile folder could not be removed — a file handle is still open. Reboot once and run the fix again.',
-  delete_profile_timeout:   'Deleting the old user1 profile folder timed out — a program is still holding it open (Zoom, antivirus, or the search indexer are the usual suspects). Reboot once, then run the fix again.',
+  create_user_failed:       'The new helper account could not be verified. Earlier changes may remain. Use Check again and Support Report before another reset.',
+  delete_user_failed:       'Removal of the prior helper account could not be verified. Earlier changes may remain. Use Check again and Support Report before another reset.',
+  delete_profile_failed:    'The prior helper profile could not be removed safely. Earlier changes may remain. Use Check again and Support Report before another reset.',
+  delete_profile_timeout:   'The prior helper profile cleanup timed out. Its completion could not be verified. Use Check again and Support Report before another reset.',
   zoom_not_found:           'No machine-wide Zoom Workplace install was found on this PC. Install the machine-wide Zoom Workplace MSI (not the per-user installer) — download it from zoom.us/download under "Zoom Workplace for IT admins" — then try again.',
-  launch_failed:            'Zoom could not be started in the fresh setup. Nothing else was changed. Press Try again. If it happens again, restart Windows, run Fix now once more, and use Support Report if it still fails. The exact reason is under View details.',
-  seclogon_disabled:        'The Secondary Logon service is disabled. It is required to launch processes under another local account. Run this from an admin shell and retry:  sc.exe config seclogon start= demand  &  sc.exe start seclogon',
+  launch_failed:            'Zoom could not be started. Earlier repair steps may have replaced the helper account and removed its old profile. Use Check again before another repair. View details and Support Report show the available evidence.',
+  seclogon_disabled:        'Windows Secondary Logon is disabled. A Windows administrator must review its configuration before the helper can start. The app has not changed this service.',
   profile_not_materialized: 'The user1 profile did not appear in time. The account was created and Zoom was launched, but the per-user profile setup was skipped.',
-  temp_or_suffixed_profile: 'Windows did not land Zoom in the real C:\\Users\\user1 profile — it fell back to a TEMP or suffixed profile. The 1132 identity may not be clean. Reboot once, then run the fix again. 1132 Fixer does not delete TEMP folders by name guessing.',
-  temp_profile_fallback:    'Windows gave user1 a temporary profile instead of C:\\Users\\user1. The 1132 identity may not be clean. Reboot once, then run the fix again.',
-  suffixed_profile:         'Windows created a suffixed profile (user1.MACHINE) instead of C:\\Users\\user1. Reboot once, then run the fix again.',
+  temp_or_suffixed_profile: 'The helper profile does not match its expected path. Do not use the unresolved setup. Use Check again and Support Report before another reset. The app does not delete TEMP folders by name.',
+  temp_profile_fallback:    'Windows gave the helper a temporary profile. Do not use that setup. Use Check again and Support Report before another reset.',
+  suffixed_profile:         'Windows created an unexpected suffixed helper profile. Use Check again and Support Report before another reset.',
   tool_probe_failed:        WINDOWS_TOOLS.PROBE_FAILED,
   tool_probe_timeout:       WINDOWS_TOOLS.PROBE_TIMEOUT
 };
@@ -66,17 +70,17 @@ function friendlyError(code) {
   if (FRIENDLY_ERRORS[code]) return FRIENDLY_ERRORS[code];
   if (code) {
     return `Something went wrong and the fix could not finish (code: ${code}). ` +
-      'It is safe to run the fix again. If it keeps failing, send us the code with Feedback & Report.';
+      'Completed changes may remain. Use Check again before another repair, or send this code with Feedback & Report.';
   }
   return 'Something went wrong and the fix could not finish. ' +
-    'It is safe to run the fix again. If it keeps failing, tell us what happened with Feedback & Report.';
+    'Completed changes may remain. Use Check again before another repair, or use Feedback & Report.';
 }
 
 // The fix flow threw before returning a result (IPC or renderer helper).
-// The fix is idempotent by design — re-running is always safe.
+// An interrupted repair is not proof of either rollback or safe repetition.
 function unexpectedFixFailure(err) {
   const detail = err && err.message ? String(err.message) : '';
-  return 'The fix stopped before it could finish. It is safe to run the fix again.' +
+  return 'The fix stopped before it could finish. Completed changes may remain. Use Check again before another repair.' +
     (detail ? ` If this keeps happening, send us this detail with Feedback & Report: ${detail}` : '');
 }
 
@@ -93,7 +97,7 @@ function scanFailureMessage(err) {
 // exit code — useful to support, useless alone.
 function shortcutFailureMessage(rawError) {
   const detail = rawError ? String(rawError) : '';
-  return 'Could not create the shortcut. Nothing else was changed — you can try again with the ' +
+  return 'Could not create the shortcut. Helper launcher files may have been written. You can retry with the ' +
     '"Create desktop shortcut" button.' +
     (detail ? ` Detail for support: ${detail}` : '');
 }
@@ -104,19 +108,20 @@ function shortcutFailureMessage(rawError) {
 const HKU_STATES = {
   'session':   { txt: 'Active user1 session — consent written live',                                icon: 'info' },
   'temp-load': { txt: 'NTUSER.DAT loaded to write consent, then unloaded cleanly',                  icon: 'info' },
-  'skipped':   { txt: 'Per-user write skipped — only HKLM floor applied (firstrun retries)',        icon: 'warn' }
+  'skipped':   { txt: 'Per-user consent was not verified for this run',                           icon: 'warn' },
+  'unverified': { txt: 'Helper identity or its loaded hive could not be verified',                icon: 'warn' }
 };
 
 const FRAME_SERVER_STATES = {
   'ok':                     { txt: 'Running normally',                                              icon: 'ok'   },
   'restored-from-disabled': { txt: 'Was Disabled — restored to Manual',                             icon: 'ok'   },
-  'disabled-unfixable':     { txt: 'Disabled and could not be re-enabled — cameras will not work',  icon: 'fail' },
+  'disabled-unfixable':     { txt: 'Disabled — this repair leaves the shared service unchanged',  icon: 'fail' },
   'missing':                { txt: 'Service not present — cameras may not enumerate',               icon: 'fail' }
 };
 
 function describeUnrecognized(value, whatBroken) {
   if (!value) {
-    return { txt: `Not recorded for this run. If ${whatBroken} is not working, run the fix again and send a support report.`, icon: 'info' };
+    return { txt: `Not recorded for this run. If ${whatBroken} is not working, use Check again and Support Report before another reset.`, icon: 'info' };
   }
   return { txt: `Unrecognized state ("${value}") — this version does not know it. If ${whatBroken} is not working, send a support report and include this line.`, icon: 'warn' };
 }
@@ -135,6 +140,8 @@ function receiptStatusFor(status) {
       return { text: 'GRANTED', status: 'ok' };
     case 'POLICY-BLOCKED':
       return { text: 'BLOCKED BY WINDOWS POLICY — your IT admin / device management blocks access. 1132 Fixer cannot override this.', status: 'fail' };
+    case 'MACHINE-BLOCKED':
+      return { text: 'BLOCKED IN WINDOWS PRIVACY SETTINGS — review camera or microphone access in Settings. This repair leaves shared settings unchanged.', status: 'fail' };
     case 'UNVERIFIED':
       return { text: 'UNVERIFIED — registry write did not confirm. Open Settings > Privacy & security under user1 and toggle on manually.', status: 'warn' };
     default: {
@@ -279,7 +286,7 @@ const WIZARD = {
   // Ready means the tool can run the repair. It is NOT a claim that Zoom
   // error 1132 is absent, that the helper account works, or that Zoom is healthy.
   READY_TITLE:    'Ready to fix Zoom',
-  READY_SUB:      'Start Zoom with a fresh setup.\nYour personal files won’t be changed.',
+  READY_SUB:      'Start Zoom with a fresh setup.\nReview the helper account and profile changes before continuing.',
   CHECKING_TITLE: 'Checking…',
   CHECKING_SUB:   'Making sure everything is ready.',
   READY_WARN_TITLE: 'Ready, with warnings',
@@ -311,13 +318,13 @@ const WIZARD = {
   WARNINGS_SUB:   'The fix finished with warnings. Open View details to read them.',
   FAIL_TITLE:     "Couldn't complete the fix",
   CONFIRM_TITLE:  'Before we start',
-  CONFIRM_BODY:   '1132 Fixer will replace its helper account and helper profile. Your signed-in Windows account and personal files will not be changed. Zoom will open in the fresh helper environment. You can cancel only at safe checkpoints.',
+  CONFIRM_BODY:   '1132 Fixer will replace user1 and delete its verified old profile, including files saved there. It will create sign-in files for its Zoom shortcut under the Windows account running this app. Zoom will open in the new helper profile. Cancellation waits for the current step; completed changes remain.',
   CONFIRM_CONTINUE: 'Continue',
   CONFIRM_CANCEL: 'Go back',
   SHORTCUT_NOT_READY_TITLE: "Shortcut isn't ready yet",
   SHORTCUT_NOT_READY_SUB:   'Run the repair once before creating the Zoom Helper shortcut — it stores the sign-in the shortcut needs.',
   SHORTCUT_FAILED_TITLE:    "The shortcut couldn't be created",
-  SHORTCUT_FAILED_SUB:      'Nothing else was changed — you can try again. The technical detail is under Advanced details.',
+  SHORTCUT_FAILED_SUB:      'Helper launcher files may have been written. You can retry shortcut creation. The technical detail is under Advanced details.',
   SHORTCUT_DONE_TITLE:      'Shortcut created',
   SHORTCUT_DONE_SUB:        "It's on your desktop — double-click it to start Zoom as the helper."
 };

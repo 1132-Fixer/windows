@@ -11,6 +11,13 @@ on:
   # verification — one built on top of unreviewed work — was the one that
   # shipped unverified.
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run_packaged_ui:
+        description: 'Operator-authorized disposable UI diagnostics (does not satisfy native release acceptance)'
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -61,11 +68,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Fetch pinned private design-system
-        env:
-          DESIGN_SYSTEM_TOKEN: ${{ secrets.DESIGN_SYSTEM_TOKEN }}
-        run: node .github/scripts/fetch-design-system.js
-
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
@@ -75,13 +77,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests
+      - name: Run core tests
         # tools/updater-channel-smoke.js reads GitHub release metadata; the
         # unauthenticated API rate limit is shared by every runner and
         # returned 403 mid-run. The token is read-only here.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm test
+        run: npm run test:core
+
+      # Private access failure must not hide independent native repair tests.
+      # The design gate still blocks all candidate builds.
+      - name: Fetch pinned private design-system
+        env:
+          DESIGN_SYSTEM_TOKEN: ${{ secrets.DESIGN_SYSTEM_TOKEN }}
+        run: node .github/scripts/fetch-design-system.js
+
+      - name: Verify pinned design source
+        run: npm run test:design
 
       - name: Build portable executable
         env:
@@ -106,12 +118,13 @@ jobs:
       # if that download fails the driver still runs and reports the fix
       # journey as not-run rather than passed. See tools/packaged-acceptance.js.
       - name: Install Zoom Workplace for the acceptance run
+        if: github.event_name == 'workflow_dispatch' && inputs.run_packaged_ui == true
         continue-on-error: true
         shell: pwsh
         run: |
           $msi = Join-Path $env:RUNNER_TEMP 'ZoomInstallerFull.msi'
           Invoke-WebRequest -Uri 'https://zoom.us/client/latest/ZoomInstallerFull.msi?archType=x64' -OutFile $msi -TimeoutSec 300
-          $p = Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -Wait -PassThru
+          $p = Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -WindowStyle Hidden -Wait -PassThru
           Write-Host "msiexec exit $($p.ExitCode)"
           if ($p.ExitCode -ne 0) { exit $p.ExitCode }
           Get-ChildItem 'C:\Program Files\Zoom\bin\Zoom.exe' -ErrorAction SilentlyContinue | Select-Object FullName, Length
@@ -122,7 +135,16 @@ jobs:
       # and the installers are untouched and the report records which binary
       # ran.
       - name: Packaged acceptance (launch, states, keyboard, scaling, Fix now)
+        if: github.event_name == 'workflow_dispatch' && inputs.run_packaged_ui == true
         run: node tools/packaged-acceptance.js --exe "dist/win-unpacked/1132 Fixer.exe" --out acceptance-evidence --test-copy --artifact-head "${{ github.event.pull_request.head.sha || github.sha }}" --expected-head "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - name: Record UI diagnostics not run
+        if: github.event_name != 'workflow_dispatch' || inputs.run_packaged_ui != true
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path acceptance-evidence -Force | Out-Null
+          @{ status = 'not-run'; releaseEligible = $false; reason = 'Operator-authorized disposable UI diagnostics were not requested. Native exact-artifact acceptance remains required.' } |
+            ConvertTo-Json | Set-Content -LiteralPath acceptance-evidence/not-run.json -Encoding utf8
 
       - name: Upload packaged acceptance evidence
         if: always()
@@ -164,9 +186,13 @@ jobs:
           node scripts/generate-checksums.mjs --verify --dist dist
 
       - name: Verify checksum manifest with sha256sum
-        shell: bash
+        shell: pwsh
         working-directory: dist
-        run: sha256sum -c checksums-sha256.txt
+        run: |
+          $sha256Tool = Join-Path $env:ProgramFiles 'Git/usr/bin/sha256sum.exe'
+          if (-not (Test-Path -LiteralPath $sha256Tool -PathType Leaf)) { throw 'SHA256SUM_REQUIRED_NOT_AVAILABLE' }
+          & $sha256Tool -c checksums-sha256.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # The tag workflow reuses these exact bytes. It never rebuilds after the
       # native Setup/Portable acceptance manifest has bound their hashes.

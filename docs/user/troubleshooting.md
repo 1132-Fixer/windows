@@ -8,9 +8,11 @@
 | The Windows tool check fails or takes too long | Press **Try again**. If it repeats, use **Support Report**. A failed check does not prove that Windows tools are missing. |
 | Version 6.4.0 lists several missing Windows tools after **Fix now**, in Setup or Portable | That version can turn one failed check into several missing-tool messages. Use **Support Report** and include the version and build type. Those messages do not prove that PATH is damaged. |
 | The app could not find a required tool in the Windows system folder | Use **Support Report** for the checked paths. Do not download replacement Windows tools from an unofficial site. |
-| Security software blocks the fix | Allow the app to create the local helper account and start Zoom. |
+| Security software blocks the fix | Review the reported block with your Windows administrator. Do not disable protections or add a broad exception to force the repair. |
 | Camera or microphone is missing in Zoom | Check Windows privacy settings **as user1**, the hardware shutter, the camera driver, and any antivirus webcam shield. |
-| The app says the helper profile is temporary | Run **Fix now** again. Do not use Zoom from a TEMP profile. |
+| The app says the helper profile is temporary | Do not use that setup. Run **Check again** and use **Support Report** before another reset. Completed changes from the earlier attempt may remain. |
+| Start menu, desktop icons, administrator launches or Snipping Tool fail after using 6.4.0 | Save work and record the time and app version. Avoid another **Fix now** reset. A reboot may restore the session but does not prove the cause is fixed. Include Windows service, Explorer and profile events in the investigation; see issue [#252](https://github.com/1132-Fixer/windows/issues/252). |
+| Setup says 1132 Fixer is still running | Let any repair finish, close the app, then run Setup again. Setup refuses to force-close a repair. A same-name instance in another account can also block it. |
 | You are signed in as `user1` | Sign out of that account first. 1132 Fixer cannot run while the helper account is the active Windows session. |
 | SmartScreen warns | Current releases are unsigned. See [code signing](../security/code-signing.md). |
 | Windows says Smart App Control blocked the app | Smart App Control only opens apps with a trusted publisher signature. Current releases are unsigned, so it blocks 1132 Fixer, and it does not offer a per-app exception. Do not turn Smart App Control off for this. Use a PC where it is off or in evaluation mode, or wait for a signed release. Details: [code signing](../security/code-signing.md#11-smart-app-control). |

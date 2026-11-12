@@ -9,6 +9,7 @@ const path = require('path');
 const vm = require('vm');
 const { spawnSync } = require('child_process');
 const windowsTools = require('../src/main/windows-tools');
+const { NATIVE_PS_STDIN_ARGS, nativePowerShell7, prepareNativeScript } = require('./native-powershell');
 
 let checks = 0;
 function check(condition, name) {
@@ -204,9 +205,9 @@ if (process.platform === 'win32') {
     for (const name of ['powershell.exe', 'cmd.exe', 'net.exe']) {
       fs.writeFileSync(path.join(temp, name), 'fake executable: must never be launched');
     }
-    const exe = windowsTools.resolveTool('powershell.exe');
-    const run = (script) => spawnSync(exe, windowsTools.PS_STDIN_ARGS, {
-      input: Buffer.from(windowsTools.prepareScript(script), 'utf8'),
+    const exe = nativePowerShell7();
+    const run = (script) => spawnSync(exe, NATIVE_PS_STDIN_ARGS, {
+      input: Buffer.from(prepareNativeScript(script), 'utf8'),
       cwd: temp, env: { ...process.env, PATH: '' }, windowsHide: true, timeout: 30000
     });
     const sample = "C:\\Users\\José\\Área de Trabalho — Рабочий стол — デスクトップ';$`";
@@ -216,14 +217,15 @@ if (process.platform === 'win32') {
     const blocks = run("$items = @(); foreach ($i in @(1, 2, 3)) {\n  if ($i -gt 1) { $items += $i }\n}; Write-Output ($items -join '|')");
     check(blocks.status === 0 && blocks.stdout.toString('utf8').trim() === '2|3',
       'compound blocks execute with no final newline');
-    const native = run("& (Resolve-FixerTool 'cmd.exe') /d /c 'echo TRUSTED_CMD'");
-    check(native.status === 0 && native.stdout.toString('utf8').trim() === 'TRUSTED_CMD',
+    const native = run("$owner = & (Resolve-FixerTool 'whoami.exe') /user /fo csv /nh; if ($LASTEXITCODE -ne 0 -or -not ([string]$owner).Contains([string][Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) { throw 'trusted identity tool failed' }; Write-Output 'TRUSTED_WHOAMI'");
+    check(native.status === 0 && native.stdout.toString('utf8').trim() === 'TRUSTED_WHOAMI',
       'embedded native command resolves independently of PATH and fake CWD');
-    const paths = run("$r = @{}; foreach ($name in @('powershell.exe','cmd.exe')) { $r[$name] = Resolve-FixerTool $name }; $r | ConvertTo-Json -Compress");
+    const paths = run("$r = @{}; foreach ($name in @('whoami.exe','cmd.exe')) { $r[$name] = Resolve-FixerTool $name }; $r | ConvertTo-Json -Compress");
     let realPaths = null;
     try { realPaths = JSON.parse(paths.stdout.toString('utf8').trim()); } catch (_) {}
-    const nativePs = path.win32.join(windowsTools.resolveSystemRoot(), 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    check(paths.status === 0 && realPaths && realPaths['powershell.exe'].toLowerCase() === nativePs.toLowerCase() &&
+    check(paths.status === 0 && realPaths &&
+      realPaths['whoami.exe'].toLowerCase() === windowsTools.resolveTool('whoami.exe').toLowerCase() &&
+      realPaths['cmd.exe'].toLowerCase() === windowsTools.resolveTool('cmd.exe').toLowerCase() &&
       !Object.values(realPaths).some(value => value.includes(temp)),
       'PowerShell and Node select the same system tools');
     const finalLine = run("Write-Output 'FINAL_LINE'");
@@ -267,6 +269,7 @@ if (process.platform === 'win32') {
         receipt.stage = 'load-module';
         phase(receipt.stage);
         const tools = require(process.argv[1]);
+        const nativeTools = require(process.argv[2]);
         receipt.root = tools.resolveSystemRoot();
         if (!receipt.root && receipt.reportAvailable) {
           const reportApi = process.report;
@@ -288,7 +291,8 @@ if (process.platform === 'win32') {
         }
         receipt.stage = 'resolve-executable';
         phase(receipt.stage);
-        receipt.exe = tools.resolveTool('powershell.exe');
+        receipt.exe = nativeTools.nativePowerShell7({ systemRoot: receipt.root });
+        receipt.executionPolicyUnchanged = !nativeTools.NATIVE_PS_STDIN_ARGS.some(value => /executionpolicy|bypass/i.test(value));
         receipt.stage = 'run-powershell';
         phase(receipt.stage);
         const powershellEnv = forged ? {
@@ -298,15 +302,16 @@ if (process.platform === 'win32') {
         const applyForgedEnvironment = forged
           ? "$fixerTestSystemRoot = $env:FIXER_TEST_FORGED_SYSTEM_ROOT; $fixerTestWindir = $env:FIXER_TEST_FORGED_WINDIR; Remove-Item Env:FIXER_TEST_FORGED_SYSTEM_ROOT; Remove-Item Env:FIXER_TEST_FORGED_WINDIR; $env:SystemRoot = $fixerTestSystemRoot; $env:WINDIR = $fixerTestWindir; $env:PATH = ''; "
           : '';
-        const result = require('child_process').spawnSync(receipt.exe, tools.PS_STDIN_ARGS, {
-          input: Buffer.from(tools.prepareScript(applyForgedEnvironment + "& (Resolve-FixerTool 'cmd.exe') /d /c 'echo FIXER_TRUSTED'; [Environment]::SystemDirectory"), 'utf8'),
+        const result = require('child_process').spawnSync(receipt.exe, nativeTools.NATIVE_PS_STDIN_ARGS, {
+          input: Buffer.from(nativeTools.prepareNativeScript(applyForgedEnvironment + "$owner = & (Resolve-FixerTool 'whoami.exe') /user /fo csv /nh; if ($LASTEXITCODE -ne 0 -or -not ([string]$owner).Contains([string][Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) { throw 'trusted identity tool failed' }; Write-Output 'FIXER_TRUSTED'; Write-Output ('FIXER_NATIVE_HOST=' + $PSVersionTable.PSVersion.Major + ':' + $PSVersionTable.PSEdition); [Environment]::SystemDirectory"), 'utf8'),
           env: powershellEnv, windowsHide: true, timeout: 15000, encoding: 'utf8'
         });
         const lines = (result.stdout || '').trim().split(/\\r?\\n/);
         receipt.exitCode = result.status;
         receipt.signal = result.signal;
         receipt.markerMatches = lines[0] === 'FIXER_TRUSTED';
-        receipt.systemDirMatches = lines[1]?.toLowerCase() === require('path').win32.join(receipt.root, 'System32').toLowerCase();
+        receipt.nativeHostVerified = /^FIXER_NATIVE_HOST=(?:[7-9]|[1-9][0-9]+):Core$/.test(lines[1] || '');
+        receipt.systemDirMatches = lines[2]?.toLowerCase() === require('path').win32.join(receipt.root, 'System32').toLowerCase();
         receipt.stderrBytes = Buffer.byteLength(result.stderr || '');
         receipt.errorCode = typeof result.error?.code === 'string' ? result.error.code : null;
         receipt.stage = 'complete';
@@ -317,7 +322,7 @@ if (process.platform === 'win32') {
       write(JSON.stringify(receipt));
     `;
     const childProof = (env, label) => {
-      const realChild = spawnSync(process.execPath, ['-e', childSource, require.resolve('../src/main/windows-tools')], {
+      const realChild = spawnSync(process.execPath, ['-e', childSource, require.resolve('../src/main/windows-tools'), require.resolve('./native-powershell')], {
         cwd: temp, env, windowsHide: true, timeout: 30000, encoding: 'utf8'
       });
       let proof;
@@ -341,18 +346,20 @@ if (process.platform === 'win32') {
     const baseline = childProof(baselineEnv, 'native-child-baseline');
     const { realChild, proof } = childProof(forgedEnv, 'native-child-forged-root');
     check(baseline.realChild.status === 0 && baseline.proof?.stage === 'complete' && baseline.proof.reportAvailable &&
-      baseline.proof.markerMatches && baseline.proof.systemDirMatches && baseline.proof.exitCode === 0,
+      baseline.proof.markerMatches && baseline.proof.systemDirMatches && baseline.proof.exitCode === 0 &&
+      baseline.proof.nativeHostVerified && baseline.proof.executionPolicyUnchanged,
       'actual Windows Node child baseline executes the shared tool transport');
     check(realChild.status === 0 && proof?.stage === 'complete' && proof.reportAvailable && proof.root.toLowerCase() === windowsTools.resolveSystemRoot().toLowerCase() &&
       proof.exe.toLowerCase() === exe.toLowerCase() && !proof.exe.toLowerCase().startsWith(fakeRoot.toLowerCase()),
       'actual Windows Node child ignores forged roots and real fake executable folders');
-    check(proof.exitCode === 0 && proof.markerMatches && proof.systemDirMatches,
-      'real PowerShell and embedded native command run with forged roots and empty PATH');
+    check(proof.exitCode === 0 && proof.markerMatches && proof.systemDirMatches &&
+      proof.nativeHostVerified && proof.executionPolicyUnchanged,
+      'real PowerShell 7 and embedded native command run with forged roots, empty PATH and unchanged execution policy');
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
 } else {
-  console.log('  not-run real Windows transport: Windows PowerShell requires Windows');
+  console.log('  not-run real Windows transport: native PowerShell 7 requires Windows');
 }
 
 console.log(`windows-tools-smoke: ${checks} checks passed`);

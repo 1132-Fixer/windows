@@ -684,7 +684,7 @@ function createUpdaterController(deps) {
       log.warn('install.not-ready', { origin, state });
       return { ok: false, reason: 'not-ready' };
     }
-    if (isBusy() && relaunch) {
+    if (isBusy()) {
       deferred = true;
       log.info('install.blocked-busy', { origin });
       try { emit(payload()); } catch (_) { /* ignore */ }
@@ -745,6 +745,15 @@ function createUpdaterController(deps) {
       return { ok: false, reason: 'install-location-mismatch' };
     }
 
+    // Notice/elevation/registry probes yield to the event loop. A repair
+    // can start during those awaits, so recheck custody before any handoff.
+    if (isBusy()) {
+      handoffStarted = false;
+      deferred = true;
+      setState(STATES.READY, { stage: null, reason: null });
+      return { ok: false, reason: 'busy' };
+    }
+
     const attempt = recordAttempt(target.version, STAGES.INSTALLER_LAUNCH, null);
     const record = buildHandoffRecord({
       currentVersion, targetVersion: target.version, execPath, installDir, channel,
@@ -793,46 +802,14 @@ function createUpdaterController(deps) {
     return { ok: true, pid: launched.pid };
   }
 
-  // Called from before-quit when the user (or an inactivity exit) closes the
-  // app with a verified update waiting. Synchronous: the quit handler cannot
-  // await. No relaunch: the user chose to leave.
-  function installOnExit(shutdownReason) {
-    if (handoffStarted || state !== STATES.READY || !target || !target.downloadedFile || !target.verifiedStat) return { ok: false, reason: 'nothing-to-install' };
-    if (shutdownReason === 'update_restart' || shutdownReason === 'elevated_relaunch' || shutdownReason === 'fatal' || shutdownReason === 'second_instance') {
+  // User/inactivity exits use the same asynchronous admission checks and
+  // confirmed spawn as an explicit update. The caller defers Electron quit
+  // until this settles. OS shutdown must never start another installer.
+  async function installOnExit(shutdownReason) {
+    if (shutdownReason !== 'user_exit' && shutdownReason !== 'inactive_exit') {
       return { ok: false, reason: 'shutdown-reason-excluded' };
     }
-    if (typeof deps.spawnInstallerSync !== 'function') return { ok: false, reason: 'no-sync-spawn' };
-    let stat;
-    try { stat = fsImpl.statSync(target.downloadedFile); } catch (_) { stat = null; }
-    if (!stat || stat.size !== target.verifiedStat.size || stat.mtimeMs !== target.verifiedStat.mtimeMs) {
-      log.warn('install-on-exit.skipped', { reason: 'file-changed-after-verify' });
-      return { ok: false, reason: 'file-changed-after-verify' };
-    }
-    if (deps.isElevatedSyncHint && deps.isElevatedSyncHint() === false) {
-      log.warn('install-on-exit.skipped', { reason: 'elevation-required' });
-      return { ok: false, reason: 'elevation-required' };
-    }
-    handoffStarted = true;
-    const attempt = recordAttempt(target.version, STAGES.INSTALLER_LAUNCH, null);
-    const record = buildHandoffRecord({
-      currentVersion, targetVersion: target.version, execPath, installDir, channel,
-      artifact: target.file, relaunchRequested: false, attempt,
-      timestamp: new Date(now()).toISOString(), state: 'installing'
-    });
-    try { writeHandoff(record); } catch (err) { handoffStarted = false; log.error('install-on-exit.handoff-write-failed', { error: err }); return { ok: false, reason: 'handoff-write-failed' }; }
-    const args = buildInstallerArgs({ installDir, relaunch: false });
-    log.info('installer.invoke', { installer: target.downloadedFile, args, onExit: true, shutdownReason });
-    const launched = deps.spawnInstallerSync(target.downloadedFile, args);
-    if (!launched || !launched.ok || !launched.pid) {
-      try { writeHandoff(Object.assign({}, record, { state: 'failed', failure: 'installer-launch-failed' })); } catch (_) { /* ignore */ }
-      recordOutcome(target.version, STAGES.INSTALLER_LAUNCH, 'installer-launch-failed');
-      log.error('install-on-exit.failed', { error: launched && launched.error });
-      return { ok: false, reason: 'installer-launch-failed' };
-    }
-    try { writeHandoff(Object.assign({}, record, { state: 'installer-started', installerPid: launched.pid })); } catch (_) { /* ignore */ }
-    log.info('installer.started', { pid: launched.pid, relaunch: false, onExit: true });
-    state = STATES.RESTARTING;
-    return { ok: true, pid: launched.pid };
+    return installNow('exit', { relaunch: false });
   }
 
   // ---- startup: what did the previous process leave behind? ---------

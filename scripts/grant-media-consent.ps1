@@ -1,260 +1,113 @@
 <#
 .SYNOPSIS
-  Grant camera + microphone consent for a freshly created local user so that
-  desktop (non-packaged) apps such as Zoom can access them under that user
-  without manual Settings -> Privacy trips.
-
+  Set helper-only consent; machine privacy and FrameServer are read-only.
 .DESCRIPTION
-  Writes the Windows CapabilityAccessManager ConsentStore values that govern
-  device access for the "Let desktop apps access ..." Settings toggle. Both
-  per-user (HKU\<SID>) and machine (HKLM) surfaces are set so that:
-
-    - HKLM acts as the device-wide floor (HKLM Deny cannot be overridden
-      upward by HKCU; setting Allow here ensures no machine-wide block).
-    - HKU\<SID> is the per-user "Let desktop apps access camera/microphone"
-      toggle that Zoom actually reads.
-
-  Group Policy LetAppsAccess{Camera,Microphone}=2 (Force Deny) takes
-  precedence over the registry — the script detects this and emits a
-  diagnostic line instead of silently writing dead values.
-
-  The script also unblocks the FrameServer service when it is Disabled
-  (default StartType is Manual; without it, no desktop app can enumerate
-  cameras even with consent granted).
-
-.PARAMETER Sid
-  SID of the local user to grant consent for. If omitted, only HKLM keys
-  are written and per-user keys are skipped (diagnostic emitted).
-
-.PARAMETER User
-  Display name of the user — used for diagnostic output and for resolving
-  the profile NTUSER.DAT path when HKU hive is not loaded.
-
-.PARAMETER ProfilePath
-  Optional explicit profile path (e.g. 'C:\Users\user1'). If supplied and
-  the HKU\<SID> hive is not currently loaded, the script will attempt
-  `reg load` against this profile's NTUSER.DAT, write consent, then
-  `reg unload`. If omitted, the script will fall back to ProfileList lookup
-  by SID.
-
-.OUTPUTS
-  Emits structured KEY=VALUE lines on stdout that the calling Electron
-  process parses:
-
-    CAM_USER_GRANTED=YES|NO
-    MIC_USER_GRANTED=YES|NO
-    CAM_HKLM_GRANTED=YES|NO
-    MIC_HKLM_GRANTED=YES|NO
-    GPO_DENY_CAMERA           (only if camera GPO == 2)
-    GPO_DENY_MICROPHONE       (only if mic    GPO == 2)
-    HKU_ALREADY_LOADED=YES    (hive was already loaded — no temp load)
-    HKU_LOADED_TEMP=YES       (we loaded the hive ourselves)
-    HKU_LOAD_FAILED=<reason>  (we needed to load it but could not)
-    HKU_UNLOAD_OK=YES         (cleanup of our temp load succeeded)
-    HKU_UNLOAD_FAILED=<reason>(cleanup failed — hive may remain loaded)
-    HKU_NOT_LOADED            (legacy marker — still emitted if hive was
-                               not loaded and we did not load it ourselves)
-    FRAMESERVER_DISABLED      (only if FrameServer is Disabled and could
-                               not be re-enabled)
-    FRAMESERVER_RESTORED      (FrameServer was Disabled, bumped to Manual)
-    FRAMESERVER_MISSING       (FrameServer service not present)
-    HKLM_WRITE_FAIL=<device>:<msg>
-    HKU_WRITE_FAIL=<device>:<msg>
-    ERROR=<message>           (any fatal exception)
+  Requires the exact local helper SID, canonical profile, and loaded hive.
+  No machine changes, hive mount/unload, or administrator HKCU fallback.
 #>
 [CmdletBinding()]
 param(
-  [string] $Sid         = '',
-  [string] $User        = 'user1',
-  [string] $ProfilePath = ''
+  [Parameter(Mandatory=$true)][string] $Sid,
+  [Parameter(Mandatory=$true)][string] $User,
+  [Parameter(Mandatory=$true)][string] $ProfilePath,
+  [Parameter(Mandatory=$true)][string] $Receipt
 )
+$ErrorActionPreference = 'Stop'
 
-# Use 'Continue' globally — we want to keep going on individual write
-# failures and emit structured markers per-device, not abort the whole
-# script. Cmdlets that need fail-fast use -ErrorAction Stop locally.
-$ErrorActionPreference = 'Continue'
-# In PS 7.4+, $PSNativeCommandUseErrorActionPreference defaults to $true,
-# which makes any nonzero exit from reg.exe / etc. throw under
-# $ErrorActionPreference='Stop'. We explicitly opt out so a reg query
-# miss is just a nonzero $LASTEXITCODE, not a thrown exception that we
-# can't distinguish from real failures.
-if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {
-    $Global:PSNativeCommandUseErrorActionPreference = $false
+function Get-FixerMediaOperatorSid {
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  try { return [string]$identity.User.Value }
+  finally { if ($null -ne $identity) { $identity.Dispose() } }
 }
 
-function Set-Consent {
-  # -EA Stop so the surrounding try/catch in the device-write loop can
-  # convert a write failure into a structured HKLM_WRITE_FAIL / HKU_WRITE_FAIL
-  # marker instead of letting it leak to stderr (which the calling
-  # Electron process would surface as a user-visible warning).
-  param([Parameter(Mandatory)][string] $Path)
-  if (-not (Test-Path $Path)) { New-Item -Path $Path -Force -ErrorAction Stop | Out-Null }
-  New-ItemProperty -Path $Path -Name 'Value' -PropertyType String -Value 'Allow' -Force -ErrorAction Stop | Out-Null
+function Assert-FixerMediaIdentity {
+  param([string]$Sid, [string]$User, [string]$ProfilePath)
+  if ($Sid -notmatch '^S-1-5-21-\d+-\d+-\d+-\d+$' -or $User -cne 'user1') { throw 'HELPER_IDENTITY_INVALID' }
+  $operatorSid = Get-FixerMediaOperatorSid
+  if (-not $operatorSid -or $operatorSid -ieq $Sid) { throw 'OPERATOR_IDENTITY_REFUSED' }
+  $accounts = @(Get-CimInstance -ClassName Win32_UserAccount -Filter ("LocalAccount=True AND SID='" + $Sid + "'") -ErrorAction Stop)
+  if ($accounts.Count -ne 1 -or $accounts[0].LocalAccount -isnot [bool] -or
+      -not $accounts[0].LocalAccount -or [string]$accounts[0].SID -ine $Sid -or
+      [string]$accounts[0].Name -ine $User -or
+      [string]$accounts[0].Domain -ine [Environment]::MachineName) { throw 'HELPER_ACCOUNT_UNVERIFIED' }
+  if (-not $ProfilePath -or $ProfilePath -ine ('C:\Users\' + $User)) { throw 'HELPER_PATH_INVALID' }
+  $profiles = @(Get-CimInstance -ClassName Win32_UserProfile -Filter ("SID='" + $Sid + "'") -ErrorAction Stop)
+  if ($profiles.Count -ne 1 -or [string]$profiles[0].SID -ine $Sid -or
+      $profiles[0].Loaded -isnot [bool] -or -not $profiles[0].Loaded -or
+      $profiles[0].Special -isnot [bool] -or $profiles[0].Special -or
+      [string]$profiles[0].LocalPath -ine $ProfilePath) { throw 'HELPER_PROFILE_UNVERIFIED' }
+  $registered = Get-ItemProperty -LiteralPath ('HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $Sid) -ErrorAction Stop
+  if ([string]$registered.ProfileImagePath -ine $ProfilePath) { throw 'HELPER_PROFILE_PATH_MISMATCH' }
+  $folder = Get-Item -LiteralPath $ProfilePath -Force -ErrorAction Stop
+  if (-not $folder.PSIsContainer -or [string]$folder.FullName -ine $ProfilePath -or
+      ($folder.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'HELPER_PROFILE_PATH_UNVERIFIED' }
+  if (-not (Test-Path -LiteralPath ('Registry::HKEY_USERS\' + $Sid) -ErrorAction Stop)) { throw 'HELPER_HIVE_NOT_LOADED' }
 }
 
-function Test-ConsentValue {
-  param([Parameter(Mandatory)][string] $Path)
+function Get-FixerMediaMachineState {
+  param([string]$Device, [string]$PolicyName)
   try {
-    $v = (Get-ItemProperty -Path $Path -Name 'Value' -ErrorAction Stop).Value
-    return ($v -eq 'Allow')
-  } catch {
-    return $false
-  }
+    $policyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy'
+    if (Test-Path -LiteralPath $policyPath -ErrorAction Stop) {
+      $policy = Get-ItemProperty -LiteralPath $policyPath -ErrorAction Stop
+      $property = $policy.PSObject.Properties[$PolicyName]
+      if ($null -ne $property -and $property.Value -eq 2) { return 'POLICY-BLOCKED' }
+      if ($null -ne $property -and $property.Value -notin @(0, 1)) { return 'UNVERIFIED' }
+    }
+    $base = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\' + $Device
+    $parent = [string](Get-ItemProperty -LiteralPath $base -ErrorAction Stop).Value
+    $child = [string](Get-ItemProperty -LiteralPath ($base + '\NonPackaged') -ErrorAction Stop).Value
+    if ($parent -eq 'Deny' -or $child -eq 'Deny') { return 'MACHINE-BLOCKED' }
+    if ($parent -eq 'Allow' -and $child -eq 'Allow') { return 'ALLOW' }
+  } catch { return 'UNVERIFIED' }
+  return 'UNVERIFIED'
 }
 
-try {
-  # This bundled script also runs directly with -File. Resolve reg.exe from
-  # Windows itself, without depending on PATH or an inherited app function.
-  $fixerRegExe = Join-Path ([Environment]::SystemDirectory) 'reg.exe'
-
-  # ----- GPO check -----
-  # HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy
-  #   LetAppsAccessCamera     (REG_DWORD) 1 = Force Allow, 2 = Force Deny, 0 = User in control
-  #   LetAppsAccessMicrophone (REG_DWORD) same
-  # Force Deny (2) makes registry writes a no-op.
-  $gpoBase = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy'
-  $camGpo = $null; $micGpo = $null
-  if (Test-Path $gpoBase) {
-    try { $camGpo = (Get-ItemProperty -Path $gpoBase -Name LetAppsAccessCamera     -ErrorAction SilentlyContinue).LetAppsAccessCamera } catch {}
-    try { $micGpo = (Get-ItemProperty -Path $gpoBase -Name LetAppsAccessMicrophone -ErrorAction SilentlyContinue).LetAppsAccessMicrophone } catch {}
-  }
-  $camGpoDeny = ($camGpo -eq 2)
-  $micGpoDeny = ($micGpo -eq 2)
-  if ($camGpoDeny) { Write-Output 'GPO_DENY_CAMERA' }
-  if ($micGpoDeny) { Write-Output 'GPO_DENY_MICROPHONE' }
-
-  # ----- HKU hive availability -----
-  # If hive is already loaded (target user has an active session — Zoom
-  # running as user1 = typical case), write directly.
-  # If not loaded, attempt explicit `reg load HKU\<sid> NTUSER.DAT` against
-  # the target profile's hive file, write under that key, then unload on
-  # exit. This eliminates the HKU race when the main fix runs before the
-  # user1 logon session is fully established.
-  $hkuLoaded     = $false
-  $hkuLoadedHere = $false   # true only if WE loaded it (we must unload)
-  if ($Sid) {
-    $null = & $fixerRegExe query "HKU\$Sid" 2>$null
-    if ($LASTEXITCODE -eq 0) { $hkuLoaded = $true }
-  }
-  if ($hkuLoaded) {
-    Write-Output 'HKU_ALREADY_LOADED=YES'
-  } else {
-    # Resolve profile path: explicit param > ProfileList lookup.
-    $resolvedProfilePath = $ProfilePath
-    if (-not $resolvedProfilePath -and $Sid) {
-      $plKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$Sid"
-      try {
-        $resolvedProfilePath = (Get-ItemProperty -Path $plKey -ErrorAction SilentlyContinue).ProfileImagePath
-      } catch {}
-    }
-    if (-not $resolvedProfilePath -and $User) {
-      $resolvedProfilePath = "C:\Users\$User"
-    }
-    $ntUser = if ($resolvedProfilePath) { Join-Path $resolvedProfilePath 'NTUSER.DAT' } else { '' }
-    if ($Sid -and $ntUser -and [System.IO.File]::Exists($ntUser)) {
-      # `reg load` writes NTUSER.DAT to the live registry under HKU\<key>.
-      # On success the NTUSER.DAT file is opened with an exclusive handle
-      # until `reg unload` runs — so we MUST unload in the finally clause.
-      $loadResult = & $fixerRegExe load "HKU\$Sid" "$ntUser" 2>&1
-      if ($LASTEXITCODE -eq 0) {
-        $hkuLoaded     = $true
-        $hkuLoadedHere = $true
-        Write-Output 'HKU_LOADED_TEMP=YES'
-      } else {
-        Write-Output ('HKU_LOAD_FAILED=' + (($loadResult -join ' ').Trim()))
-        Write-Output 'HKU_NOT_LOADED'
-      }
-    } else {
-      $why = if (-not $Sid) { 'no SID supplied' }
-             elseif (-not $ntUser) { 'no profile path resolved' }
-             else { "NTUSER.DAT not found at $ntUser" }
-      Write-Output ('HKU_LOAD_FAILED=' + $why)
-      Write-Output 'HKU_NOT_LOADED'
-    }
-  }
-
+function Invoke-FixerMediaConsent {
+  param([string]$Sid, [string]$User, [string]$ProfilePath, [string]$Receipt)
   try {
-    # ----- Per-device consent writes -----
-    $results = @{
-      cam_user = $false; mic_user = $false
-      cam_hklm = $false; mic_hklm = $false
-    }
-    $devices = @(
-      @{ Name = 'webcam';     Gpo = $camGpoDeny; UserKey = 'cam_user'; MachineKey = 'cam_hklm' },
-      @{ Name = 'microphone'; Gpo = $micGpoDeny; UserKey = 'mic_user'; MachineKey = 'mic_hklm' }
-    )
-
-    foreach ($d in $devices) {
-      if ($d.Gpo) { continue }
-      $name = $d.Name
-
-      # HKLM floor — always attempt, even if HKU hive missing.
-      try {
-        $hklmParent = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$name"
-        $hklmChild  = "$hklmParent\NonPackaged"
-        Set-Consent $hklmParent
-        Set-Consent $hklmChild
-        $results[$d.MachineKey] = (Test-ConsentValue $hklmParent) -and (Test-ConsentValue $hklmChild)
-      } catch {
-        Write-Output ("HKLM_WRITE_FAIL=" + $name + ":" + $_.Exception.Message)
+    if ($Receipt -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') { throw 'RECEIPT_INVALID' }
+    Assert-FixerMediaIdentity -Sid $Sid -User $User -ProfilePath $ProfilePath
+    $frameState = 'UNVERIFIED'
+    try {
+      $service = Get-Service -Name FrameServer -ErrorAction Stop
+      if ($service.StartType -eq 'Disabled') { $frameState = 'DISABLED' }
+      elseif ($service.StartType -in @('Manual', 'Automatic')) { $frameState = 'AVAILABLE' }
+    } catch { $frameState = 'UNVERIFIED' }
+    Write-Output ('FRAMESERVER_STATE=' + $frameState)
+    $results = @{}
+    foreach ($device in @(
+      @{ Name='webcam'; Prefix='CAM'; Policy='LetAppsAccessCamera' },
+      @{ Name='microphone'; Prefix='MIC'; Policy='LetAppsAccessMicrophone' }
+    )) {
+      $state = Get-FixerMediaMachineState -Device $device.Name -PolicyName $device.Policy
+      Write-Output ($device.Prefix + '_MACHINE_STATE=' + $state)
+      if ($device.Name -eq 'webcam' -and $state -eq 'ALLOW') {
+        if ($frameState -eq 'DISABLED') { $state = 'MACHINE-BLOCKED' }
+        elseif ($frameState -ne 'AVAILABLE') { $state = 'UNVERIFIED' }
       }
-
-      # HKU per-user consent — required for the actual "Let desktop apps"
-      # toggle the user sees in Settings.
-      if ($hkuLoaded) {
+      $granted = $false
+      if ($state -eq 'ALLOW') {
         try {
-          $hkuParent = "Registry::HKEY_USERS\$Sid\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$name"
-          $hkuChild  = "$hkuParent\NonPackaged"
-          Set-Consent $hkuParent
-          Set-Consent $hkuChild
-          $results[$d.UserKey] = (Test-ConsentValue $hkuParent) -and (Test-ConsentValue $hkuChild)
-        } catch {
-          Write-Output ("HKU_WRITE_FAIL=" + $name + ":" + $_.Exception.Message)
-        }
+          foreach ($leaf in @('', '\NonPackaged')) {
+            # Re-prove identity and loaded-hive state before each user write.
+            Assert-FixerMediaIdentity -Sid $Sid -User $User -ProfilePath $ProfilePath
+            $key = 'Registry::HKEY_USERS\' + $Sid + '\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\' + $device.Name + $leaf
+            if (-not (Test-Path -LiteralPath $key -ErrorAction Stop)) { New-Item -Path $key -Force -ErrorAction Stop | Out-Null }
+            New-ItemProperty -LiteralPath $key -Name Value -PropertyType String -Value Allow -Force -ErrorAction Stop | Out-Null
+          }
+          Assert-FixerMediaIdentity -Sid $Sid -User $User -ProfilePath $ProfilePath
+          $base = 'Registry::HKEY_USERS\' + $Sid + '\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\' + $device.Name
+          $granted = ((Get-ItemProperty -LiteralPath $base -ErrorAction Stop).Value -eq 'Allow') -and
+            ((Get-ItemProperty -LiteralPath ($base + '\NonPackaged') -ErrorAction Stop).Value -eq 'Allow')
+          $state = if ($granted) { 'OK' } else { 'UNVERIFIED' }
+        } catch { $state = 'UNVERIFIED' }
       }
+      Write-Output ($device.Prefix + '_USER_GRANTED=' + $(if ($granted) { 'YES' } else { 'NO' }))
+      $results[$device.Prefix] = $state
     }
-
-    Write-Output ("CAM_USER_GRANTED=" + ($(if ($results.cam_user) { 'YES' } else { 'NO' })))
-    Write-Output ("MIC_USER_GRANTED=" + ($(if ($results.mic_user) { 'YES' } else { 'NO' })))
-    Write-Output ("CAM_HKLM_GRANTED=" + ($(if ($results.cam_hklm) { 'YES' } else { 'NO' })))
-    Write-Output ("MIC_HKLM_GRANTED=" + ($(if ($results.mic_hklm) { 'YES' } else { 'NO' })))
-  }
-  finally {
-    # Always unload if we loaded — otherwise NTUSER.DAT stays open and the
-    # next sign-in / profile delete fails with file-in-use.
-    if ($hkuLoadedHere) {
-      # PowerShell may hold a RegistryKey handle under the loaded hive
-      # (Get-ItemProperty / New-ItemProperty cache). Force a GC so reg
-      # unload doesn't fail with "process cannot access the file".
-      [GC]::Collect(); [GC]::WaitForPendingFinalizers()
-      $unloadResult = & $fixerRegExe unload "HKU\$Sid" 2>&1
-      if ($LASTEXITCODE -eq 0) {
-        Write-Output 'HKU_UNLOAD_OK=YES'
-      } else {
-        Write-Output ('HKU_UNLOAD_FAILED=' + (($unloadResult -join ' ').Trim()))
-      }
-    }
-  }
-
-  # ----- FrameServer service -----
-  # Default StartType is Manual (trigger-start). If a previous "privacy
-  # hardening" script set it to Disabled, no desktop app can enumerate
-  # cameras even with consent granted. We only bump from Disabled; we do
-  # not change Manual -> Automatic.
-  $svc = Get-Service -Name FrameServer -ErrorAction SilentlyContinue
-  if ($svc) {
-    if ($svc.StartType -eq 'Disabled') {
-      try {
-        Set-Service -Name FrameServer -StartupType Manual -ErrorAction Stop
-        Write-Output 'FRAMESERVER_RESTORED'
-      } catch {
-        Write-Output 'FRAMESERVER_DISABLED'
-      }
-    }
-  } else {
-    Write-Output 'FRAMESERVER_MISSING'
-  }
-} catch {
-  Write-Output ("ERROR=" + $_.Exception.Message)
-  exit 1
+    Write-Output ('FIXER_MEDIA_V1=' + $Receipt + '|' + $Sid + '|' + $results.CAM + '|' + $results.MIC)
+  } catch { Write-Output ('MEDIA_UNVERIFIED=' + $_.Exception.Message) }
 }
+
+Invoke-FixerMediaConsent -Sid $Sid -User $User -ProfilePath $ProfilePath -Receipt $Receipt

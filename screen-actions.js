@@ -55,8 +55,8 @@ const SCREEN_CONTROLS = Object.freeze({
   // Fixing / cancelling: cooperative cancel and the details disclosure.
   fixing:     Object.freeze([...COMMON, 'cancelFixBtn', 'detailsBtn']),
   cancelling: Object.freeze([...COMMON, 'cancelFixBtn', 'detailsBtn']),
-  // Cancelled: try again, or read what happened.
-  cancelled:  Object.freeze([...COMMON, 'fixBtn', 'detailsBtn']),
+  // Cancelled: check current state before admitting another repair.
+  cancelled:  Object.freeze([...COMMON, 'rescanBtn', 'detailsBtn']),
   // Complete (verified success): Open Zoom is allowed here and nowhere
   // before it. The shortcut control appears only when the shortcut step
   // did not complete.
@@ -64,7 +64,7 @@ const SCREEN_CONTROLS = Object.freeze({
   // completed; Open Zoom stays the primary action.
   success:    Object.freeze([...COMMON, 'launchBtn', 'shortcutBtn', 'doneBtn', 'rescanBtn', 'detailsBtn', 'productsBtn']),
   // Unable: retry, support, copy details, close.
-  error:      Object.freeze([...COMMON, 'fixBtn', 'rescanBtn', 'closeBtn', 'supportBtn', 'copyErrBtn', 'detailsBtn']),
+  error:      Object.freeze([...COMMON, 'rescanBtn', 'closeBtn', 'supportBtn', 'copyErrBtn', 'detailsBtn']),
   // Notice (finished with items to attend to, shortcut states): the
   // renderer picks among these per outcome.
   notice:     Object.freeze([...COMMON, 'fixBtn', 'launchBtn', 'shortcutBtn', 'rescanBtn', 'closeBtn',

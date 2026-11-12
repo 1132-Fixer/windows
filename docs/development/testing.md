@@ -2,7 +2,7 @@
 
 From a clone of this repository on Windows:
 
-```bash
+```powershell
 npm ci
 npm test
 ```
@@ -18,6 +18,16 @@ digest or changed binary; needs `sha256sum` — coreutils or Git for Windows).
 The repository byte-format verifier rejects CRLF regardless of the installed
 tool version. GNU Coreutils 9.0 and later accept CRLF checksum input, so that
 tool's acceptance does not replace the repository's strict LF gate.
+
+Windows native fixtures require PowerShell 7. They do not use an execution-policy
+override or fall back to Windows PowerShell 5.1. The native portion of
+`packaged-runtime-smoke.js` also needs an already elevated test token: it creates
+GUID-named directories directly under `C:\Users` to test the production quarantine
+geometry. A limited token cannot qualify those cases. Do not relax directory
+permissions or modify real profiles to make the test pass. Use the existing
+authorized elevated test executor, and record its host, source hashes and result.
+These temporary filesystem fixtures are separate from a real helper-account reset,
+which still needs the disposable target and rollback described below.
 
 ## Windows tool and preflight regression checks
 
@@ -38,7 +48,14 @@ These Node-only checks run in `npm test`:
   decoding, and stdin failures.
 - `tools/packaged-runtime-smoke.js`: the actual acceptance gate with controlled
   main-process facts. Missing APIs, wrong archives, conflicting DLLs and failed
-  child commands cannot produce a passing runtime result.
+  child commands cannot produce a passing runtime result. On Windows it also tests
+  real path identity, private quarantine ACLs and retained directory leases using
+  uniquely owned fixtures. Account mutations use synthetic modules.
+- `tools/profile-cleanup-methods-smoke.js`: actual cleanup functions on disposable
+  trees with junction and literal-name sentinels. Busy profiles, unknown ACLs,
+  enumeration failures, identity drift, escaped children and lease mismatch must
+  refuse final deletion. Its profile/ACL adapters are synthetic; this check does
+  not replace privileged runtime or disposable repair acceptance.
 - `tools/ps-encoding-smoke.js`: fixed UTF-8 standard-input transport, no
   dynamic script or helper secret in arguments or a temporary script file,
   and the PowerShell preparation contract.

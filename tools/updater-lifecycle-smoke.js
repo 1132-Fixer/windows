@@ -653,14 +653,46 @@ async function driveToReady(env, inst, info) {
     const inst = makeInstaller(env.dir, `1132-Fixer-Setup-${TARGET}.exe`);
     await driveToReady(env, inst);
     env.ctl.defer();
-    const r = env.ctl.installOnExit('user_exit');
-    check(r.ok === true && env.spawnCalls.length === 1 && env.spawnCalls[0].sync === true, 'deferred update installs when the user exits');
+    const r = await env.ctl.installOnExit('user_exit');
+    check(r.ok === true && env.spawnCalls.length === 1 && env.spawnCalls[0].sync !== true, 'exit update uses the confirmed asynchronous spawn');
     check(!env.spawnCalls[0].args.includes('--fixer-relaunch'), 'install on exit does not relaunch the app');
     check(env.handoff().relaunchRequested === false && env.handoff().state === 'installer-started', 'record says no relaunch was requested');
     const env2 = makeEnv({ label: 'onexit2' });
     const inst2 = makeInstaller(env2.dir, `1132-Fixer-Setup-${TARGET}.exe`);
     await driveToReady(env2, inst2);
-    check(env2.ctl.installOnExit('update_restart').ok === false, 'an update restart never triggers a second install on exit');
+    check((await env2.ctl.installOnExit('update_restart')).ok === false, 'an update restart never triggers a second install on exit');
+    check((await env2.ctl.installOnExit('system_shutdown')).ok === false, 'OS shutdown never starts an installer');
+    for (const [label, options, expected] of [
+      ['exit-busy', { isBusy: () => true }, 'busy'],
+      ['exit-token', { isElevated: async () => false }, 'elevation-required'],
+      ['exit-location', { readRegisteredInstallDir: async () => 'C:\\OtherInstall' }, 'install-location-mismatch'],
+      ['exit-name', { execPath: path.win32.join(INSTALL_DIR, 'Other.exe') }, 'unexpected-executable']
+    ]) {
+      const denied = makeEnv({ label, ...options });
+      await driveToReady(denied, makeInstaller(denied.dir, `1132-Fixer-Setup-${TARGET}.exe`));
+      const outcome = await denied.ctl.installOnExit('user_exit');
+      check(outcome.ok === false && outcome.reason === expected && denied.spawnCalls.length === 0,
+        `${label} refuses before installer spawn`);
+    }
+    let becameBusy = false;
+    const late = makeEnv({ label: 'exit-late-busy', isBusy: () => becameBusy,
+      readRegisteredInstallDir: async () => { becameBusy = true; return INSTALL_DIR; } });
+    await driveToReady(late, makeInstaller(late.dir, `1132-Fixer-Setup-${TARGET}.exe`));
+    const lateOutcome = await late.ctl.installOnExit('user_exit');
+    check(lateOutcome.reason === 'busy' && late.spawnCalls.length === 0 && late.ctl.getState() === 'ready',
+      'repair starting during admission defers update before handoff');
+  }
+
+  console.log('updater-lifecycle-smoke: blocked quit retains a reusable controller');
+  {
+    let blocked = true;
+    let quits = 0;
+    const ctl = shutdownMod.createShutdownController({ canQuit: () => !blocked, quit: () => { quits++; } });
+    check(ctl.request('user_exit').accepted === false && !ctl.isShuttingDown() && quits === 0,
+      'busy repair does not record a completed shutdown request');
+    blocked = false;
+    check(ctl.request('user_exit').accepted === true && quits === 1,
+      'quit works after repair releases custody');
   }
 
   console.log('updater-lifecycle-smoke: busy (repair running) blocks install');

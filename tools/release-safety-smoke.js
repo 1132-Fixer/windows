@@ -9,6 +9,21 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 const clone = value => JSON.parse(JSON.stringify(value));
 
+let suiteCompleted = false;
+let suiteFailed = false;
+let suitePhase = 'module imports';
+const suiteDeadline = setTimeout(() => {
+  console.error(`release-safety-smoke: timed out during ${suitePhase}`);
+  process.exit(1);
+}, 30_000);
+suiteDeadline.unref();
+process.once('beforeExit', () => {
+  if (!suiteCompleted && !suiteFailed) {
+    console.error(`release-safety-smoke: incomplete during ${suitePhase}`);
+    process.exitCode = 1;
+  }
+});
+
 function crc32(bytes) {
   let crc = 0xffffffff;
   for (const byte of bytes) {
@@ -154,10 +169,20 @@ function cleanupExactFiles(filePaths, directory) {
     ...extra
   });
   {
+    suitePhase = 'bounded candidate download';
     const bytes = Buffer.from('bounded-candidate-archive');
     const digest = `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-bounded-'));
     const out = path.join(dir, 'candidate.zip');
+    const handles = [];
+    const partialFileSystem = {
+      ...fs.promises,
+      async open(...args) {
+        const handle = await fs.promises.open(...args);
+        handles.push(handle);
+        return handle;
+      }
+    };
     try {
       const api = candidateApi({
         metadata: candidateMetadata(bytes.length, digest),
@@ -166,13 +191,57 @@ function cleanupExactFiles(filePaths, directory) {
           headers: { 'content-length': String(bytes.length) }
         })
       });
-      await downloadReleaseCandidate(candidateInput(api, out, digest));
+      await downloadReleaseCandidate(candidateInput(api, out, digest, { partialFileSystem }));
       assert.deepEqual(fs.readFileSync(out), bytes, 'bounded candidate bytes are retained only after exact verification');
+      assert.ok(handles.length > 0 && handles.every(handle => handle.fd === -1),
+        'a completed download closes every original partial, identity-proof and final-verification handle');
+      assert.equal(fs.existsSync(`${out}.part-${process.pid}`), false,
+        'successful promotion leaves no owned partial');
       assert.equal(api.state.requests, 1);
       assert.equal(api.state.requestOptions.followRedirects, true,
         'the bounded candidate download keeps the authorized redirect route');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  suitePhase = 'candidate archive negative cases';
+  {
+    const bytes = Buffer.from('write-failure-fixture');
+    const digest = `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+    const streamState = { cancelled: false };
+    const handles = [];
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-candidate-write-failure-'));
+    const out = path.join(dir, 'candidate.zip');
+    const partialFileSystem = {
+      ...fs.promises,
+      async open(...args) {
+        const handle = await fs.promises.open(...args);
+        handles.push(handle);
+        if (args[1] === 'wx+') {
+          handle.writeFile = async () => {
+            const error = new Error('synthetic owned-file write failure');
+            error.code = 'EIO';
+            throw error;
+          };
+        }
+        return handle;
+      }
+    };
+    try {
+      const api = candidateApi({
+        metadata: candidateMetadata(bytes.length, digest),
+        archive: response({ body: openByteStream(bytes, streamState) })
+      });
+      await assert.rejects(downloadReleaseCandidate(candidateInput(api, out, digest, { partialFileSystem })),
+        error => error.code === 'EIO', 'a sink write failure reaches the caller');
+      assert.equal(streamState.cancelled, true, 'a sink failure cancels the unfinished response');
+      assert.ok(handles.length > 0 && handles.every(handle => handle.fd === -1),
+        'a sink failure closes every original file handle');
+      assert.equal(fs.existsSync(out), false, 'a sink failure cannot promote the candidate');
+      assert.equal(fs.existsSync(`${out}.part-${process.pid}`), false,
+        'a sink failure verifies removal of its exact owned partial');
+    } finally {
+      cleanupExactFiles([out, `${out}.part-${process.pid}`], dir);
     }
   }
   for (const [name, change] of [
@@ -451,6 +520,7 @@ function cleanupExactFiles(filePaths, directory) {
     }
   }
 
+  suitePhase = 'release evidence and authorization';
   const support = {
     schemaVersion: 1,
     sourceHead,
@@ -1183,6 +1253,7 @@ function cleanupExactFiles(filePaths, directory) {
     assert.equal(publication.state.tagReads, 3, 'annotated tag is read before draft, after draft and after publication');
   }
 
+  suitePhase = 'release workflow binding';
   const releaseYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
   const evidenceYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release-evidence.yml'), 'utf8');
   const preflightIndex = releaseYml.indexOf('  preflight:');
@@ -1210,7 +1281,11 @@ function cleanupExactFiles(filePaths, directory) {
   'receipt issuer validates bytes on protected main before immutable upload');
 
   console.log('release-safety-smoke: immutable receipts, new-tag identity, complete authorization and draft publication negatives passed');
+  suiteCompleted = true;
 })().catch(error => {
+  suiteFailed = true;
   console.error(error);
   process.exitCode = 1;
+}).finally(() => {
+  clearTimeout(suiteDeadline);
 });

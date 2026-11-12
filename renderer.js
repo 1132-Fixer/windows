@@ -967,8 +967,9 @@ function hideFixConfirm() {
 }
 
 function showFixConfirm() {
-  if (!fixConfirmOverlay) {
-    runFix();
+  if (!fixConfirmOverlay || !fixConfirmContinue || !fixConfirmCancel) {
+    showNoticePane('err', WIZARD.FAIL_TITLE, 'The repair confirmation could not open. Close and reopen 1132 Fixer.');
+    setActions({ details: true, support: true, close: true });
     return;
   }
   const title = document.getElementById('fixConfirmTitle');
@@ -1119,7 +1120,7 @@ async function runFix() {
       // Wizard outcome pane — a real terminal screen: Launch as User1 is
       // the next step; details and support are one quiet click away.
       const outcomeActions = {
-        launch: !shortcutFailed,
+        launch: true,
         shortcut: shortcutFailed || shortcutSkipped,
         shortcutQuiet: shortcutSkipped && !shortcutFailed,
         details: true,
@@ -1145,7 +1146,7 @@ async function runFix() {
       finalizeStages('fail');
       setStatus('error', 'Something went wrong');
       showNoticePane('err', WIZARD.FAIL_TITLE, friendlyError(res.error));
-      setActions({ fix: true, fixLabel: 'Try again', details: true, support: true, copyErr: true });
+      setActions({ rescan: true, details: true, support: true, copyErr: true });
     }
   } catch (err) {
     // The fix IPC (or a renderer helper it calls) threw. Surface it instead
@@ -1155,7 +1156,7 @@ async function runFix() {
     finalizeStages('fail');
     setStatus('error', 'Something went wrong');
     showNoticePane('err', WIZARD.FAIL_TITLE, unexpectedFixFailure(err));
-    setActions({ fix: true, fixLabel: 'Try again', details: true, support: true, copyErr: true });
+    setActions({ rescan: true, details: true, support: true, copyErr: true });
   } finally {
     // Always release the run lock — the outcome branches above own the
     // action-area state.
@@ -1170,7 +1171,7 @@ async function runFix() {
 // Copy error details — failure-only chip next to the log toggle.
 // Reuses the support-report IPC so the copied text is the SANITIZED bundle
 // (SIDs, username, home path, hostname redacted). If the report cannot be
-// built, falls back to the raw visible log lines — text already on screen.
+// built, copying stops; raw visible logs are not a sanitized support bundle.
 // ============================================================
 const COPY_ERR_LABEL = 'Copy error details';
 copyErrBtn.addEventListener('click', async () => {
@@ -1183,8 +1184,12 @@ copyErrBtn.addEventListener('click', async () => {
       stage:   lastStageLabel
     });
     text = (result && result.markdown) || '';
-  } catch (_) { /* fall through to the visible log lines */ }
-  if (!text) text = logBuffer.join('\n');
+  } catch (_) { /* no unsanitized fallback */ }
+  if (!text) {
+    copyErrBtn.textContent = 'Could not prepare safe details — use Support Report';
+    setTimeout(() => { copyErrBtn.textContent = COPY_ERR_LABEL; copyErrBtn.disabled = false; }, 2600);
+    return;
+  }
   try {
     await navigator.clipboard.writeText(text);
     copyErrBtn.textContent = 'Copied — paste into your support message';

@@ -111,9 +111,10 @@ console.log('profile-safety-smoke: command quoting');
   check(ps.winArgvQuote('say "hi"') === '"say \\"hi\\""', 'winArgvQuote escapes embedded quotes');
   check(ps.winArgvQuote('') === '""', 'winArgvQuote empty -> empty quotes');
   const create = ps.accountCreateScript('user1', 'Aa1!Aa1!Aa1!Aa1!Aa1!Aa1!');
-  check(create.includes("/add /y"), 'account create keeps net.exe /add /y');
-  check(create.includes("& (Resolve-FixerTool 'net.exe') user $u $p"),
-    'account create uses the trusted native net.exe resolver');
+  check(create.includes('& $newUser -Name $u -Password $securePassword') &&
+    create.includes('$securePassword.MakeReadOnly()'), 'account create passes a read-only SecureString to the trusted module command');
+  check(!/net\.exe|Start-Process|Process\]::Start/.test(create),
+    'account create has no native password-bearing descendant');
   const argv = windowsTools.PS_STDIN_ARGS;
   check(argv.includes('-Command') && !argv.includes('-File'), 'current create transport uses a fixed command and stdin');
   check(!ps.argvContainsSecret(argv, ['Aa1!Aa1!Aa1!Aa1!Aa1!Aa1!']) &&
@@ -122,6 +123,9 @@ console.log('profile-safety-smoke: command quoting');
 
 console.log('profile-safety-smoke: env construction');
 {
+  const mainSource = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+  check(mainSource.includes('Expected profile paths (not measured from Zoom)') &&
+    !mainSource.includes('Launched-profile environment:'), 'constructed paths are explicitly expected, never measured from Zoom');
   const env = ps.buildLaunchedEnv('C:\\Users\\user1');
   check(env.USERPROFILE === 'C:\\Users\\user1', 'USERPROFILE is the profile root');
   check(env.APPDATA === 'C:\\Users\\user1\\AppData\\Roaming', 'APPDATA under user1');
@@ -241,8 +245,8 @@ console.log('profile-safety-smoke: credential redaction and PowerShell stdin');
     'actual shared PowerShell argv has no credential or script-file argument');
   check(exe === 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     'account transport uses absolute Windows PowerShell without PATH');
-  check(ps.argvContainsSecret(['net.exe', 'user', 'user1', pw, '/add'], [pw]),
-    'presence helper detects the remaining native net.exe credential argument');
+  check(ps.argvContainsSecret(['unexpected-child', pw], [pw]),
+    'presence helper detects a hypothetical native credential argument');
 
   const leaked = `net user user1 ${pw} /add`;
   const redacted = ps.redactSecrets(leaked, [pw]);
@@ -253,8 +257,9 @@ console.log('profile-safety-smoke: credential redaction and PowerShell stdin');
   const script = ps.accountCreateScript('user1', pw);
   const stdin = windowsTools.prepareScript(script);
   check(stdin.includes(pw) && stdin.endsWith(script), 'complete account script and credential are carried in stdin');
-  check(stdin.includes('function Resolve-FixerTool') && script.includes("Resolve-FixerTool 'net.exe'"),
-    'account script receives the shared native-tool resolver before its first invocation');
+  check(script.includes('Import-Module -Name $trustedManifest -Force -PassThru') &&
+    script.includes("$exactModules[0].ExportedCommands[$name]") && !script.includes("Resolve-FixerTool 'net.exe'"),
+    'account creation binds commands to the exact trusted LocalAccounts manifest without a native fallback');
   const spawnLine = argv.join(' ');
   check(!spawnLine.includes(pw), 'joined create argv string has no password');
   // Never print the fixture password itself.

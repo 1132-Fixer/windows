@@ -43,7 +43,8 @@ for (const code of Object.keys(m.FRIENDLY_ERRORS)) {
 console.log('messages-smoke: fix/scan/shortcut failures');
 {
   const msg = m.unexpectedFixFailure(new Error('boom detail'));
-  check(msg.includes('safe to run the fix again'), 'unexpected failure says re-run is safe');
+  check(msg.includes('Completed changes may remain') && msg.includes('Check again') &&
+    !msg.includes('safe to run'), 'unexpected failure preserves partial-state uncertainty and requires a check');
   check(msg.includes('boom detail'), 'unexpected failure keeps detail for support');
   check(m.unexpectedFixFailure(null).length > 20, 'unexpected failure works without an error object');
 }
@@ -57,7 +58,9 @@ console.log('messages-smoke: fix/scan/shortcut failures');
   const msg = m.shortcutFailureMessage('Exit 1');
   check(msg.includes('Create desktop shortcut'), 'shortcut failure names the retry button');
   check(msg.includes('Exit 1'), 'shortcut failure keeps raw detail');
-  check(m.shortcutFailureMessage(null).includes('Nothing else was changed'), 'shortcut failure states blast radius without detail');
+  check(m.shortcutFailureMessage(null).includes('launcher files may have been written') &&
+    !m.shortcutFailureMessage(null).includes('Nothing else was changed'),
+  'shortcut failure retains uncertainty about launcher writes');
 }
 
 console.log('messages-smoke: receipt describers');

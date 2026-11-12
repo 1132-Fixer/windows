@@ -68,8 +68,7 @@ function check(condition, label) { assert.ok(condition, label); checks++; }
 
   if (process.platform === 'win32') {
     const { spawnSync } = require('child_process');
-    const { PS_STDIN_ARGS } = require('../src/main/windows-tools');
-    const { nativePowerShell7, prepareNativeScript } = require('./native-powershell');
+    const { NATIVE_PS_STDIN_ARGS, nativePowerShell7, prepareNativeScript } = require('./native-powershell');
     const fixture = `${PROFILE_UNLOADED_GUARD}
       function Get-CimInstance {
         [CmdletBinding()] param([string]$ClassName, [string]$Filter)
@@ -107,7 +106,7 @@ function check(condition, label) { assert.ok(condition, label); checks++; }
       }
       ConvertTo-Json -InputObject @($records) -Compress
     `;
-    const run = spawnSync(nativePowerShell7(), PS_STDIN_ARGS, {
+    const run = spawnSync(nativePowerShell7(), NATIVE_PS_STDIN_ARGS, {
       input: prepareNativeScript(fixture), encoding: 'utf8', windowsHide: true, timeout: 20000
     });
     check(run.status === 0 && !run.error, 'PowerShell 7 evaluates the actual guard without touching real profiles');

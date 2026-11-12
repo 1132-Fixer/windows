@@ -10,11 +10,12 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { PROFILE_UNLOADED_GUARD, checkHelperProfileIdle } = require('../src/main/helper-profile-idle');
 const { checkProfileServiceHealth } = require('../src/main/profile-service-health');
-const { nativePowerShell7, prepareNativeScript } = require('./native-powershell');
+const { NATIVE_PS_STDIN_ARGS, nativePowerShell7, prepareNativeScript } = require('./native-powershell');
 const { EventEmitter } = require('node:events');
 const windowsTools = require('../src/main/windows-tools');
 const source = fs.readFileSync(path.join(__dirname, 'packaged-acceptance.js'), 'utf8');
 const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+const mockedOnly = process.argv.includes('--mocked-only');
 function productionFunction(name) {
   const asyncStart = source.indexOf(`async function ${name}(`);
   const fnStart = asyncStart >= 0 ? asyncStart : source.indexOf(`function ${name}(`);
@@ -31,7 +32,7 @@ function mainProductionFunction(name) {
   assert.notEqual(fnEnd, -1, `production main function ${name} closes`);
   return mainSource.slice(fnStart, fnEnd + 2);
 }
-function mainTemplateConstant(name) {
+function mainTemplateConstant(name, dependencies = {}) {
   const marker = `const ${name} = `;
   const start = mainSource.indexOf(marker);
   assert.notEqual(start, -1, `production main template ${name} exists`);
@@ -40,14 +41,17 @@ function mainTemplateConstant(name) {
   assert.notEqual(contentStart, -1, `production main template ${name} starts`);
   const end = mainSource.indexOf(String.fromCharCode(96) + ';', contentStart + 1);
   assert.notEqual(end, -1, `production main template ${name} closes`);
-  return vm.runInNewContext(mainSource.slice(expressionStart, end + 1), { PROFILE_UNLOADED_GUARD });
+  return vm.runInNewContext(mainSource.slice(expressionStart, end + 1), { PROFILE_UNLOADED_GUARD, ...dependencies });
 }
 const profileIdentityHelper = mainTemplateConstant('PS_PROFILE_PATH_IDENTITY_HELPER');
 const profileRecoveryHelper = mainTemplateConstant('PS_PROFILE_RECOVERY_HELPER');
 const profileInventoryGuard = mainTemplateConstant('PS_PROFILE_INVENTORY_GUARD');
 const removeProfileHelper = mainTemplateConstant('PS_REMOVE_PROFILE_HELPER');
 const exactSidDisableHelper = mainTemplateConstant('PS_EXACT_SID_LOCAL_USER_DISABLE_HELPER');
-const exactSidProcessStopHelper = mainTemplateConstant('PS_EXACT_SID_PROCESS_STOP_HELPER');
+const nonUserProcessGuard = mainTemplateConstant('PS_NON_USER_PROCESS_GUARD');
+const exactSidProcessStopHelper = mainTemplateConstant('PS_EXACT_SID_PROCESS_STOP_HELPER', {
+  PS_NON_USER_PROCESS_GUARD: nonUserProcessGuard
+});
 const identityFixtureFailureReceipt = `
 $fixerFailure = $_.Exception
 $fixerFailureFrames = @()
@@ -64,7 +68,7 @@ for ($fixerDepth = 0; $fixerDepth -lt 8 -and $null -ne $fixerFailure; $fixerDept
     $fixerFrame['nativeCode'] = [int]$fixerFailure.NativeErrorCode
     if ($fixerNativeSite -ceq 'other' -and $null -ne $fixerFailure.TargetSite) {
       $fixerNativeMethod = [string]$fixerFailure.TargetSite.Name
-      if ($fixerNativeMethod -ceq 'DescribeDirectoryHandle') {
+      if ($fixerNativeMethod -ceq 'DescribeDirectoryHandle' -or $fixerNativeMethod -ceq 'DescribeEntryHandle') {
         $fixerNativeSite = 'describe-handle'
       } elseif ($fixerNativeMethod -ceq 'RenameByHandle') {
         $fixerNativeSite = 'rename-by-handle'
@@ -180,10 +184,11 @@ async function run(options = {}) {
       if (name === 'child_process') return { spawnSync: (exe, args, spawnOptions) => {
         commands++;
         assert.equal(exe, path.win32.join(path.win32.parse(root).root, 'Program Files', 'PowerShell', '7', 'pwsh.exe'));
-        assert.deepEqual(args, windowsTools.PS_STDIN_ARGS);
+        assert.deepEqual(Array.from(args), NATIVE_PS_STDIN_ARGS);
         assert.equal(spawnOptions.timeout, 15000);
-        assert.ok(spawnOptions.input.toString().includes("$fixerTestCmd = Resolve-FixerTool 'cmd.exe'"));
-        assert.ok(spawnOptions.input.toString().includes('& $fixerTestCmd'));
+        assert.ok(spawnOptions.input.toString().includes("$fixerTestWhoami = Resolve-FixerTool 'whoami.exe'"));
+        assert.ok(spawnOptions.input.toString().includes('& $fixerTestWhoami'));
+        assert.ok(!spawnOptions.input.toString().includes("Resolve-FixerTool 'cmd.exe'"));
         assert.ok(spawnOptions.input.toString().endsWith('$r | ConvertTo-Json -Compress'));
         if (options.fakeRoot) {
           assert.deepEqual(runtime.env, { ...originalEnvironment, ...expectedForgedEnvironment });
@@ -717,7 +722,8 @@ async function run(options = {}) {
     'this.exactSidLocalUserDisableProved = exactSidLocalUserDisableProved;',
     'this.exactSidFinalDrainScript = exactSidFinalDrainScript;'
   ].join('\n'), Object.assign(exactDeleteContext, {
-    PS_EXACT_SID_LOCAL_USER_DISABLE_HELPER: exactSidDisableHelper
+    PS_EXACT_SID_LOCAL_USER_DISABLE_HELPER: exactSidDisableHelper,
+    PS_NON_USER_PROCESS_GUARD: nonUserProcessGuard
   }));
   const exactDeleteScript = exactDeleteContext.exactSidLocalUserDeleteScript(oldSid, 'user1');
   const exactDeleteReceipt = JSON.stringify({
@@ -1043,7 +1049,9 @@ async function run(options = {}) {
     !exactSidProcessStopHelper.includes('Stop-Process -Id') &&
     !mainProductionFunction('exactSidFinalDrainScript').includes('Stop-Process') &&
     !mainSource.includes('Stop-Process -Id') &&
-    mainSource.includes('[System.Security.AccessControl.AccessControlSections]::Owner') &&
+    removeProfileHelper.includes('Get-Acl -LiteralPath $Path -ErrorAction Stop') &&
+    removeProfileHelper.includes('$receipt.GetOwner([System.Security.Principal.SecurityIdentifier])') &&
+    removeProfileHelper.includes('$receipt.AreAccessRulesProtected') &&
     mainSource.includes("$owner.Value -cne 'S-1-5-32-544'") &&
     mainSource.includes('FILE_FLAG_OPEN_REPARSE_POINT') &&
     mainSource.includes('profile identity is shared by an unrelated SID') &&
@@ -1060,10 +1068,17 @@ async function run(options = {}) {
   checks++;
 
   const launchZoomHelperSource = mainProductionFunction('launchZoomHelper');
-  async function launchZoomProbe(probeResult) {
+  async function launchZoomProbe(probeResult, operatorResult = { ok: true }) {
     let spawns = 0;
     let probeScript = '';
     const context = {
+      fixInProgress: false, helperSettingsCustodyUnverified: false,
+      shutdown: { isShuttingDown: () => false },
+      readLocalAccountIdentity: async () => ({ verified: true, exists: true, sid: newSid }),
+      checkOperatorIdentity: async (_capture, options) => {
+        assert.equal(options.helperSid, newSid, 'launch binds operator proof to independently read helper SID');
+        return operatorResult;
+      },
       fs: { existsSync: () => true },
       FIX_USER: 'user1',
       LAUNCHER_SCRIPT_PATH: () => 'C:\\ProgramData\\1132 Fixer\\launch.ps1',
@@ -1079,6 +1094,11 @@ async function run(options = {}) {
   const yesProbe = await launchZoomProbe({ code: 0, timedOut: false, stdout: 'FIXER_ZOOM_DEDUP_V1=YES\n' });
   assert.ok(yesProbe.result.success && yesProbe.result.alreadyRunning && yesProbe.spawns === 0,
     'the exact helper SID YES receipt suppresses a duplicate launcher');
+  for (const code of ['operator_identity_unverified', 'operator_identity_mismatch', 'operator_is_helper']) {
+    const refused = await launchZoomProbe({ code: 0, timedOut: false, stdout: 'FIXER_ZOOM_DEDUP_V1=NO' }, { ok: false, code });
+    assert.ok(!refused.result.success && refused.result.reason === code && refused.spawns === 0 && !refused.probeScript,
+      `${code} blocks launch before dedup probe or spawn`);
+  }
   const noProbe = await launchZoomProbe({ code: 0, timedOut: false, stdout: 'FIXER_ZOOM_DEDUP_V1=NO\n' });
   assert.ok(noProbe.result.success && noProbe.spawns === 1,
     'one exact successful NO receipt starts one launcher');
@@ -1169,11 +1189,21 @@ async function run(options = {}) {
     renameByHandleSource.includes('Marshal.WriteIntPtr(buffer, rootOffset, IntPtr.Zero)'),
   'FILE_RENAME_INFO uses a NULL RootDirectory and the exact normalized full-destination UTF-16 layout');
 
-  if (process.platform === 'win32') {
+  assert.ok(profileIdentityHelper.includes('CreateFileW(path, FILE_READ_ATTRIBUTES, FILE_SHARE_ALL') &&
+    profileIdentityHelper.includes('RootDirectory = parent.DangerousGetHandle()') &&
+    profileIdentityHelper.includes('DELETE_ACCESS | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | SYNCHRONIZE_ACCESS, FILE_SHARE_READ') &&
+    profileIdentityHelper.includes('MarkDeleteByHandle(handle); // A nonempty directory or readonly file fails closed.') &&
+    removeProfileHelper.includes('$frame.entry.OpenChild($name)') &&
+    removeProfileHelper.includes('$frame.entry.Delete()') &&
+    removeProfileHelper.includes('$owned[$index].Dispose()') &&
+    !/Remove-Item|\[IO\.(?:Directory|File)\]::Delete/.test(removeProfileHelper),
+  'cleanup retains no-follow parent-relative child handles and deletes their objects without path recursion');
+
+  if (process.platform === 'win32' && !mockedOnly) {
     const productPowerShell = nativePowerShell7();
     const executeProductPowerShell = (script, options = {}) => spawnSync(
       productPowerShell,
-      windowsTools.PS_STDIN_ARGS,
+      NATIVE_PS_STDIN_ARGS,
       {
         input: prepareNativeScript(script),
         encoding: 'utf8',
@@ -1572,11 +1602,16 @@ public static class FixerIdentityDiagnosticFixtureV1 {
       wrongOwnerBlocked: true, wrongOwnerSurvived: true
     }, 'retained Process custody kills only the refreshed exact SID and preserves a different-SID process');
 
+    // Core 7 has a different PSHOME from the product compatibility host.
+    // Bind this read-only absent-account probe to the original OS module;
+    // later account effects remain restricted to the synthetic fixture module.
+    const trustedLocalAccountsRoot = path.win32.join(windowsTools.resolveSystemRoot(),
+      'System32', 'WindowsPowerShell', 'v1.0', 'Modules', 'Microsoft.PowerShell.LocalAccounts');
     const trustedModuleProbe = executeProductPowerShell(
-      exactDeleteContext.exactSidLocalUserDeleteScript(oldSid, '__fixer_fixture_absent__'));
+      exactDeleteContext.exactSidLocalUserDeleteScript(oldSid, '__fixer_fixture_absent__', trustedLocalAccountsRoot));
     const trustedModuleReceipt = JSON.parse(String(trustedModuleProbe.stdout || '').trim());
     assert.equal(trustedModuleReceipt.pre, 'mismatch',
-      'the production transport loads the LocalAccounts commands from the trusted OS module tree');
+      'the native fixture loads production LocalAccounts commands from the explicit trusted OS module tree');
 
     const fakeLocalAccountsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-localaccounts-'));
     try {
@@ -2400,7 +2435,7 @@ public static class FixerIdentityDiagnosticFixtureV1 {
       destinationLeafValid: true
     }, 'the evaluated production cleanup deletes only the quarantined tree and preserves replacement and junction targets');
   } else {
-    console.log('packaged-runtime-smoke: not-run native PowerShell 7 fixtures (non-Windows host)');
+    console.log(`packaged-runtime-smoke: not-run native PowerShell 7 fixtures (${mockedOnly ? 'explicit --mocked-only mode; source and mocks only' : 'non-Windows host'})`);
   }
   checks++;
 
@@ -2416,7 +2451,9 @@ public static class FixerIdentityDiagnosticFixtureV1 {
     mainSource.includes("verifyAdminMembership(preDeleteSid)") &&
     mainSource.includes("Remove-LocalGroupMember -SID 'S-1-5-32-544' -Member $matches[0]") &&
     !mainSource.includes("Remove-LocalGroupMember -SID 'S-1-5-32-544' -Member '${FIX_USER}'") &&
-    sidAclGrants === 3 &&
+    sidAclGrants === 0 &&
+    mainSource.includes('const settingsScript = buildHelperSettingsScript({') &&
+    mainSource.includes('helperSettingsCustodyUnverified = true;') &&
     preflightScanSource.includes("$out['user1_identity_verified']") &&
     preflightScanSource.includes("$out['user1_admin_verified']") &&
     !preflightScanSource.includes("NTAccount('${FIX_USER}')") &&
@@ -2472,5 +2509,7 @@ public static class FixerIdentityDiagnosticFixtureV1 {
     if (name === 'tool resolves inside forged root') assert.equal(result.commands, 0, 'fake PowerShell is never executed');
     checks++;
   }
-  console.log(`packaged-runtime-smoke: ${checks} authoritative runtime gate checks passed`);
+  console.log(process.platform === 'win32' && !mockedOnly
+    ? `packaged-runtime-smoke: ${checks} authoritative runtime gate checks passed`
+    : `packaged-runtime-smoke: ${checks} source/mocked check groups passed; native fixtures not-run`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

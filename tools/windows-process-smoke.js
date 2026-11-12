@@ -447,7 +447,7 @@ function check(condition, name) {
   }
   {
     const handlerStart = source.indexOf("ipcMain.handle('run-fix'");
-    const overlapGuard = source.indexOf('if (fixInProgress || activeChildren.size > 0)', handlerStart);
+    const overlapGuard = source.indexOf('if (fixInProgress || helperSettingsCustodyUnverified || activeChildren.size > 0 ||', handlerStart);
     const repairStart = source.indexOf('fixInProgress = true', handlerStart);
     check(handlerStart >= 0 && overlapGuard > handlerStart && overlapGuard < repairStart,
       'repair overlap is rejected before a new destructive run takes ownership');

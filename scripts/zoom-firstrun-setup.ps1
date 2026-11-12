@@ -18,7 +18,42 @@
 #      update the Name string here.
 # ============================================================
 
-$ErrorActionPreference = 'Continue'
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory=$true)][string]$ExpectedSid,
+    [Parameter(Mandatory=$true)][string]$ExpectedProfilePath
+)
+$ErrorActionPreference = 'Stop'
+
+function Get-FixerFirstRunIdentity {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $process = [Diagnostics.Process]::GetCurrentProcess()
+    try { return @{ Sid=[string]$identity.User.Value; SessionId=$process.SessionId; ProfilePath=[Environment]::GetFolderPath('UserProfile') } }
+    finally { $identity.Dispose(); $process.Dispose() }
+}
+
+function Assert-FixerFirstRunIdentity {
+    param([string]$ExpectedSid, [string]$ExpectedProfilePath)
+    if ($ExpectedSid -notmatch '^S-1-5-21-\d+-\d+-\d+-\d+$' -or
+        $ExpectedProfilePath -ine 'C:\Users\user1') { throw 'HELPER_IDENTITY_INVALID' }
+    $identity = Get-FixerFirstRunIdentity
+    if ($identity.Sid -ine $ExpectedSid -or $identity.SessionId -isnot [int] -or
+        $identity.SessionId -le 0) { throw 'HELPER_SESSION_REQUIRED' }
+    $accounts = @(Get-CimInstance -ClassName Win32_UserAccount -Filter ("LocalAccount=True AND SID='" + $ExpectedSid + "'") -ErrorAction Stop)
+    if ($accounts.Count -ne 1 -or [string]$accounts[0].SID -ine $ExpectedSid -or
+        $accounts[0].LocalAccount -isnot [bool] -or -not $accounts[0].LocalAccount -or
+        [string]$accounts[0].Name -cne 'user1' -or
+        [string]$accounts[0].Domain -ine [Environment]::MachineName) { throw 'LOCAL_HELPER_REQUIRED' }
+    $profile = Get-ItemProperty -LiteralPath ('HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $ExpectedSid) -ErrorAction Stop
+    if ([string]$profile.ProfileImagePath -ine $ExpectedProfilePath -or
+        [string]$identity.ProfilePath -ine $ExpectedProfilePath) { throw 'HELPER_PROFILE_REQUIRED' }
+    return $identity.SessionId
+}
+
+# This guard precedes the log file, registry, assembly loads and UI operations.
+try { $script:FixerSessionId = Assert-FixerFirstRunIdentity -ExpectedSid $ExpectedSid -ExpectedProfilePath $ExpectedProfilePath }
+catch { Write-Output ('FIRST_RUN_REFUSED=' + $_.Exception.Message); exit 1 }
+
 $logFile = Join-Path $env:TEMP "zoom-firstrun-setup.log"
 "--- zoom-firstrun-setup started $(Get-Date) ---" | Out-File -FilePath $logFile
 
@@ -29,26 +64,11 @@ function Log {
 }
 
 # ----------------------------------------------------------------
-# Camera + microphone consent — belt-and-braces.
-# The main fix step (grant-media-consent.ps1) writes these at the
-# moment the fix runs. But the HKU hive for user1 may not have been
-# loaded then (race vs. the first Zoom launch). Re-asserting from
-# inside user1's own session — where HKCU IS HKU\<user1-sid> — is
-# guaranteed to take effect.
+# Media consent is owned by grant-media-consent.ps1. This manual helper
+# changes Zoom settings only, after proving the exact helper session.
 # ----------------------------------------------------------------
-Log "Asserting camera + microphone consent for desktop apps..."
-foreach ($dev in @('webcam','microphone')) {
-    foreach ($leaf in @('', '\NonPackaged')) {
-        $p = "HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$dev$leaf"
-        if (-not (Test-Path $p)) { New-Item -Path $p -Force -EA SilentlyContinue | Out-Null }
-        New-ItemProperty -Path $p -Name 'Value' -PropertyType String -Value 'Allow' -Force -EA SilentlyContinue | Out-Null
-    }
-}
-Log "  camera + microphone consent asserted in HKCU."
-
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
-Add-Type -AssemblyName System.Windows.Forms
 
 # ----------------------------------------------------------------
 # Desired settings keyed by visible UI name.
@@ -128,6 +148,24 @@ $DesiredRadios = @(
 $UIA = [System.Windows.Automation.AutomationElement]
 $Tree = [System.Windows.Automation.TreeScope]::Descendants
 
+function Assert-FixerZoomProcess {
+    param([int]$ProcessId)
+    if ($ProcessId -le 0) { throw 'ZOOM_PROCESS_REQUIRED' }
+    $candidates = @(Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId=" + $ProcessId) -ErrorAction Stop)
+    if ($candidates.Count -ne 1 -or [int]$candidates[0].ProcessId -ne $ProcessId -or
+        [string]$candidates[0].Name -ine 'Zoom.exe' -or
+        ($candidates[0].SessionId -isnot [uint32] -and $candidates[0].SessionId -isnot [int])) { throw 'ZOOM_PROCESS_UNVERIFIED' }
+    if ([int]$candidates[0].SessionId -ne $script:FixerSessionId) { throw 'ZOOM_SESSION_MISMATCH' }
+    $owner = Invoke-CimMethod -InputObject $candidates[0] -MethodName GetOwnerSid -ErrorAction Stop
+    if ($null -eq $owner -or $owner.ReturnValue -ne 0 -or [string]$owner.Sid -ine $ExpectedSid) { throw 'ZOOM_OWNER_MISMATCH' }
+}
+
+function Assert-FixerZoomElement {
+    param($Element)
+    if ($null -eq $Element) { throw 'ZOOM_ELEMENT_REQUIRED' }
+    Assert-FixerZoomProcess -ProcessId ([int]$Element.Current.ProcessId)
+}
+
 function Find-ByName {
     param($Root, [string]$Name)
     $cond = New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, $Name)
@@ -142,12 +180,14 @@ function Find-AllByName {
 
 function Invoke-Element {
     param($Element)
+    Assert-FixerZoomElement $Element
     try {
         $pat = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
         $pat.Invoke()
         return $true
     } catch {
         try {
+            Assert-FixerZoomElement $Element
             $pat = $Element.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
             $pat.Select()
             return $true
@@ -159,6 +199,7 @@ function Invoke-Element {
 
 function Set-Toggle {
     param($Element, [bool]$Desired)
+    Assert-FixerZoomElement $Element
     try {
         $pat = $Element.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
         $current = $pat.Current.ToggleState
@@ -173,17 +214,21 @@ function Set-Toggle {
 
 function Set-ComboValue {
     param($Element, [string]$Value)
+    Assert-FixerZoomElement $Element
     try {
         $expand = $Element.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
         $expand.Expand()
         Start-Sleep -Milliseconds 300
         $item = Find-ByName -Root $Element -Name $Value
         if ($item) {
+            Assert-FixerZoomElement $item
             $sel = $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
             $sel.Select()
+            Assert-FixerZoomElement $Element
             $expand.Collapse()
             return $true
         }
+        Assert-FixerZoomElement $Element
         $expand.Collapse()
     } catch {}
     return $false
@@ -197,15 +242,22 @@ function Wait-ZoomMainWindow {
     Log "Waiting for Zoom main window (up to ${TimeoutSec}s)..."
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        $root = $UIA::RootElement
-        $candidates = @('Zoom Workplace', 'Zoom')
-        foreach ($n in $candidates) {
-            $w = Find-ByName -Root $root -Name $n
-            if ($w) {
-                Log "Found Zoom window: '$n'"
-                return $w
-            }
+        $matches = @()
+        foreach ($candidate in @(Get-CimInstance -ClassName Win32_Process -Filter "Name='Zoom.exe'" -ErrorAction Stop)) {
+            if ([int]$candidate.SessionId -ne $script:FixerSessionId) { continue }
+            $owner = Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid -ErrorAction Stop
+            if ($owner.ReturnValue -ne 0 -or [string]$owner.Sid -ine $ExpectedSid) { continue }
+            $process = Get-Process -Id $candidate.ProcessId -ErrorAction Stop
+            try {
+                if ($process.MainWindowHandle -eq [IntPtr]::Zero) { continue }
+                Assert-FixerZoomProcess -ProcessId $candidate.ProcessId
+                $window = $UIA::FromHandle($process.MainWindowHandle)
+                Assert-FixerZoomElement $window
+                $matches += $window
+            } finally { $process.Dispose() }
         }
+        if ($matches.Count -gt 1) { throw 'ZOOM_WINDOW_AMBIGUOUS' }
+        if ($matches.Count -eq 1) { return $matches[0] }
         Start-Sleep -Seconds 1
     }
     return $null
@@ -213,17 +265,24 @@ function Wait-ZoomMainWindow {
 
 function Open-ZoomSettings {
     param($ZoomWindow)
+    Assert-FixerZoomElement $ZoomWindow
     Log "Opening Settings dialog..."
     $settingsBtn = Find-ByName -Root $ZoomWindow -Name 'Settings'
     if ($settingsBtn -and (Invoke-Element $settingsBtn)) {
         Start-Sleep -Seconds 2
     } else {
-        Log "Settings button not found via UIA - falling back to Ctrl+,"
-        [System.Windows.Forms.SendKeys]::SendWait("^,")
-        Start-Sleep -Seconds 2
+        Log "Settings button unavailable; no keyboard fallback was sent."
+        return $null
     }
-    $root = $UIA::RootElement
-    return Find-ByName -Root $root -Name 'Settings'
+    # Settings can be a separate top-level window. Match its exact Zoom PID,
+    # then re-prove the helper owner/session before returning any UI target.
+    $condition = [System.Windows.Automation.AndCondition]::new(
+        [System.Windows.Automation.PropertyCondition]::new($UIA::NameProperty, 'Settings'),
+        [System.Windows.Automation.PropertyCondition]::new($UIA::ProcessIdProperty, [int]$ZoomWindow.Current.ProcessId))
+    $windows = ($UIA::RootElement).FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
+    if ($windows.Count -ne 1) { return $null }
+    Assert-FixerZoomElement $windows[0]
+    return $windows[0]
 }
 
 # ----------------------------------------------------------------

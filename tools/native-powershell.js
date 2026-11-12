@@ -6,7 +6,13 @@
 // never PATH, SystemRoot, or a writable temporary executable.
 const fs = require('fs');
 const path = require('path');
-const { resolveSystemRoot, prepareScript } = require('../src/main/windows-tools');
+const { resolveSystemRoot, prepareScript, PS_STDIN_ARGS } = require('../src/main/windows-tools');
+
+// Reuse the fixed UTF-8 stdin expression without changing execution policy.
+// Product compatibility arguments are never native verification authority.
+const NATIVE_PS_STDIN_ARGS = Object.freeze([
+  '-NoProfile', '-NonInteractive', '-Command', PS_STDIN_ARGS.at(-1)
+]);
 
 function nativePowerShell7({ systemRoot = resolveSystemRoot(), existsSync = fs.existsSync } = {}) {
   if (typeof systemRoot !== 'string' || !/^[a-z]:\\[^\x00-\x1f]+$/i.test(systemRoot) ||
@@ -22,4 +28,4 @@ function prepareNativeScript(script) {
   return prepareScript("if ($PSVersionTable.PSVersion.Major -lt 7 -or $PSVersionTable.PSEdition -ne 'Core') { throw 'PowerShell 7 is required for native verification' }\n" + script);
 }
 
-module.exports = { nativePowerShell7, prepareNativeScript };
+module.exports = { NATIVE_PS_STDIN_ARGS, nativePowerShell7, prepareNativeScript };

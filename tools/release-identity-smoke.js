@@ -60,6 +60,25 @@ check(!fs.existsSync(path.join(ROOT, 'build', 'installer.nsi')),
   check(afterPack.includes('guardUninstaller') && !afterPack.includes('installUninstallerStamp'),
     'afterPack never edits the generated NSIS uninstaller (re-stamping breaks its integrity check, exit 2)');
   const nsh = fs.readFileSync(path.join(ROOT, 'build', 'installer.nsh'), 'utf8');
+  const gate = /!macro customCheckAppRunning\r?\n([\s\S]*?)!macroend/.exec(nsh)?.[1] || '';
+  const installerCommands = nsh.split(/\r?\n/).filter(line => !/^\s*;/.test(line)).join('\n');
+  check(gate.includes('${nsProcess::FindProcess}') && gate.includes('$R0 == 603') &&
+    gate.includes('$R0 != 0') && gate.includes('$R1 >= 20') && gate.includes('SetErrorLevel 2'),
+  'shared installer/uninstaller override bounds read-only process checks and refuses unknown or busy state');
+  check(!/taskkill|_KillProcess|_CloseProcess|KILL_PROCESS|Stop-Process/i.test(installerCommands),
+    'custom installer has no process termination command');
+  check(installerCommands.includes('${OrIf} $R0 == "6.4.0"') &&
+    installerCommands.includes('DeleteRegValue HKLM "${UNINSTALL_REGISTRY_KEY}" "UninstallString"'),
+    'recovery does not execute the known 6.4.0 force-kill uninstaller');
+  check(!/RMDir\s+\/r\s+"\$LOCALAPPDATA|DeleteRegKey\s+HKCU\s+"\$\{UNINSTALL_REGISTRY_KEY\}"/i.test(installerCommands),
+    'installation preserves unverified legacy per-user payload and registration');
+  check(installerCommands.includes('ReadRegStr $R1 HKCU "${UNINSTALL_REGISTRY_KEY}" "UninstallString"') &&
+    installerCommands.includes('A legacy per-user installation needs a separate verified migration'),
+    'legacy per-user uninstaller is refused before builder automatic migration');
+  const stockGate = fs.readFileSync(path.join(ROOT, 'node_modules', 'app-builder-lib', 'templates',
+    'nsis', 'include', 'allowOnlyOneInstallerInstance.nsh'), 'utf8');
+  check(/!ifmacrodef customCheckAppRunning\s+!insertmacro customCheckAppRunning\s+!else/.test(stockGate),
+    'actual installed builder selects the custom gate instead of its terminating fallback');
   check(/customInit[\s\S]*DisplayVersion[\s\S]*"6\.3\.1"[\s\S]*"6\.3\.3"[\s\S]*DeleteRegValue HKLM "\$\{UNINSTALL_REGISTRY_KEY\}" "UninstallString"/.test(nsh),
     'customInit skips the corrupt 6.3.1-6.3.3 uninstaller so the update can apply over it');
   check(nsh.includes('Delete "$INSTDIR\\resources\\elevate.exe"'),

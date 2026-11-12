@@ -18,6 +18,7 @@ function fixture(options = {}) {
   const result = fetchDesignSystem({ env, run: (exe, args, settings) => {
     calls.push({ exe, args, env: { ...settings.env }, timeout: settings.timeout });
     if (options.throwAt === calls.length) throw new Error(token);
+    if (calls.length === 3 && options.fetchError) return options.fetchError;
     if (options.failAt === calls.length) return { status: 128, stdout: token, stderr: token };
     const stdout = calls.length === 1 ? options.url || canonical : calls.length === 2 ? options.pin || pin : pin;
     if (calls.length === 4 && options.wrongHead) return { status: 0, stdout: 'a'.repeat(40) };
@@ -32,6 +33,10 @@ check(ok.calls.every(call => !JSON.stringify(call.args).includes(token) && !call
   'credential and derived header never enter command arguments');
 check(ok.calls.every(call => !('GIT_TRACE_CURL' in call.env) && !('GIT_CURL_VERBOSE' in call.env)),
   'inherited tracing cannot print the private header');
+check(ok.calls.every(call => !('DESIGN_SYSTEM_TOKEN' in call.env)),
+  'the private token variable never enters a git child environment');
+check(ok.calls.slice(0, 2).every(call => !('GIT_CONFIG_VALUE_0' in call.env)),
+  'local URL and pin checks receive no authorization header');
 check(ok.calls[2].env.GIT_CONFIG_KEY_0 === 'http.https://github.com/.extraheader' &&
   ok.calls[2].env.GIT_CONFIG_VALUE_0.endsWith(Buffer.from('x-access-token:' + token).toString('base64')),
   'private header exists only in scoped child environment for the fetch');
@@ -44,5 +49,18 @@ for (const options of [{ url: 'https://untrusted.example/repo' }, { pin: 'unveri
   const run = fixture(options);
   check(!run.result.ok && !JSON.stringify(run.result).includes(token), 'failure blocks and returns no secret/raw git output');
   if (options.url || options.pin) check(run.calls.length < 3, 'unverified URL or pin never reaches credentialed fetch');
+}
+for (const [fetchError, code] of [
+  [{ status: 128, stderr: 'remote: Repository not found. ' + token }, 'DESIGN_FETCH_ACCESS_UNAVAILABLE'],
+  [{ status: 128, stderr: 'fatal: Authentication failed ' + token }, 'DESIGN_FETCH_ACCESS_UNAVAILABLE'],
+  [{ status: 128, stderr: 'fatal: not our ref ' + pin }, 'DESIGN_FETCH_PIN_UNAVAILABLE'],
+  [{ status: 128, stderr: 'fatal: Could not resolve host: github.com ' + token }, 'DESIGN_FETCH_CONNECTION_FAILED'],
+  [{ status: null, error: { code: 'ETIMEDOUT', message: token } }, 'DESIGN_FETCH_TIMEOUT'],
+  [{ status: 128, stderr: 'unclassified ' + token }, 'DESIGN_FETCH_FAILED']
+]) {
+  const failed = fixture({ fetchError });
+  check(!failed.result.ok && failed.result.code === code, 'fetch failure has a useful fixed classification');
+  check(!JSON.stringify(failed.result).includes(token) && failed.calls.length === 3,
+    'classified failure discloses no diagnostic or secret and performs no retry');
 }
 console.log(`design-fetch-smoke: ${checks} checks passed`);

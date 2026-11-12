@@ -25,7 +25,7 @@ function functionSource(name) {
   return source.slice(start, end + 2);
 }
 
-function templateConstant(name) {
+function templateConstant(name, dependencies = {}) {
   const marker = `const ${name} = `;
   const start = source.indexOf(marker);
   assert.notEqual(start, -1, `production template ${name} exists`);
@@ -34,7 +34,7 @@ function templateConstant(name) {
   assert.notEqual(contentStart, -1, `production template ${name} starts`);
   const end = source.indexOf(String.fromCharCode(96) + ';', contentStart + 1);
   assert.notEqual(end, -1, `production template ${name} closes`);
-  return vm.runInNewContext(source.slice(expressionStart, end + 1), { PROFILE_UNLOADED_GUARD });
+  return vm.runInNewContext(source.slice(expressionStart, end + 1), { PROFILE_UNLOADED_GUARD, ...dependencies });
 }
 
 function toolList(name) {
@@ -48,6 +48,10 @@ const optional = toolList('OPTIONAL_TOOLS');
 const allTools = [...required, ...optional];
 const preflightSource = functionSource('preflightCheck');
 const fixSource = functionSource('runFixFlow');
+const scanStart = source.indexOf("ipcMain.handle('preflight-scan',");
+const scanEnd = source.indexOf('\n});', scanStart);
+assert.ok(scanStart >= 0 && scanEnd > scanStart, 'production environment scan handler exists');
+const scanSource = source.slice(scanStart, scanEnd + '\n});'.length);
 const profileSelectorSource = functionSource('selectSidBoundProfileEntries');
 const exactSidDeleteScriptSource = functionSource('exactSidLocalUserDeleteScript');
 const exactSidDeleteReceiptSource = functionSource('exactSidLocalUserDeleteProved');
@@ -59,7 +63,10 @@ const profileRecoveryHelper = templateConstant('PS_PROFILE_RECOVERY_HELPER');
 const profileInventoryGuard = templateConstant('PS_PROFILE_INVENTORY_GUARD');
 const removeProfileHelper = templateConstant('PS_REMOVE_PROFILE_HELPER');
 const exactSidDisableHelper = templateConstant('PS_EXACT_SID_LOCAL_USER_DISABLE_HELPER');
-const exactSidProcessStopHelper = templateConstant('PS_EXACT_SID_PROCESS_STOP_HELPER');
+const nonUserProcessGuard = templateConstant('PS_NON_USER_PROCESS_GUARD');
+const exactSidProcessStopHelper = templateConstant('PS_EXACT_SID_PROCESS_STOP_HELPER', {
+  PS_NON_USER_PROCESS_GUARD: nonUserProcessGuard
+});
 
 function inventory(overrides = {}) {
   return {
@@ -80,11 +87,12 @@ function probe(payload, overrides = {}) {
   };
 }
 
-function harness(initialProbe, healProbe, overrides = {}) {
+function harness(initialProbe, overrides = {}) {
   const calls = [];
   const destructive = [];
   const logs = [];
   const context = {
+    checkOperatorIdentity: async () => ({ ok: true }),
     checkProfileServiceHealth,
     checkHelperProfileIdle,
     REQUIRED_TOOLS: required,
@@ -93,9 +101,14 @@ function harness(initialProbe, healProbe, overrides = {}) {
     messages,
     runPSCapture: async script => {
       calls.push(script);
-      if (calls.length === 1) return initialProbe;
-      assert.ok(healProbe, 'no unexpected additional PowerShell probe');
-      return healProbe;
+      assert.doesNotMatch(script, /\b(?:Start|Stop|Restart|Set)-Service\b|Resolve-FixerTool 'sc\.exe'\)\s+(?:start|stop|config)\b/i,
+        'preflight never controls a Windows service');
+      if (script.includes("$out['cam_policy']")) {
+        return probe({ user1_exists: false, cam_policy: -1, mic_policy: -1, fs_status: 'Running', fs_starttype: 'Manual' });
+      }
+      assert.equal(calls.filter(call => !call.includes("$out['cam_policy']")).length, 1,
+        'preflight only captures the read-only tool/service inventory');
+      return initialProbe;
     },
     isElevatedSync: async () => true,
     os: { userInfo: () => ({ username: 'Owner' }) },
@@ -105,7 +118,12 @@ function harness(initialProbe, healProbe, overrides = {}) {
     resolveZoomInstall: async () => ({ path: 'C:\\Program Files\\Zoom\\bin\\Zoom.exe' }),
     zoomInstall: null,
     zoomDetect: { zoomStatusMessage: () => 'Zoom is installed.' },
-    profileSafety: { redactSecrets: line => line },
+    profileSafety: { redactSecrets: line => line, classifyHelperProfileCard: () => ({ status: 'ready' }) },
+    app: { getVersion: () => '6.4.0' },
+    ipcMain: { handle: (channel, handler) => {
+      assert.equal(channel, 'preflight-scan');
+      context.environmentScan = handler;
+    } },
     runProcess: async (...args) => {
       destructive.push(args);
       throw new Error('Destructive repair crossed a failed preflight guard');
@@ -113,13 +131,14 @@ function harness(initialProbe, healProbe, overrides = {}) {
     ...overrides
   };
   vm.createContext(context);
-  vm.runInContext(`${preflightSource}\n${fixSource}`, context, { filename: 'main.js:preflight-regression' });
+  vm.runInContext(`${preflightSource}\n${fixSource}\n${scanSource}`, context, { filename: 'main.js:preflight-regression' });
   return {
     context,
     calls,
     destructive,
     logs,
     preflight: () => context.preflightCheck(),
+    scan: () => context.environmentScan(),
     repair: () => context.runFixFlow({ sender: { send: (_channel, data) => logs.push(data) } })
   };
 }
@@ -165,6 +184,7 @@ function repairHarness(options = {}) {
       ? '' : (state.profileFolderPresent ? PROFILE_IDENTITY : '')
   });
   const context = {
+    checkOperatorIdentity: async () => options.operatorIdentity || { ok: true },
     checkProfileServiceHealth,
     checkHelperProfileIdle,
     REQUIRED_TOOLS: required,
@@ -176,6 +196,7 @@ function repairHarness(options = {}) {
     PS_REMOVE_PROFILE_HELPER: removeProfileHelper,
     PS_EXACT_SID_LOCAL_USER_DISABLE_HELPER: exactSidDisableHelper,
     PS_EXACT_SID_PROCESS_STOP_HELPER: exactSidProcessStopHelper,
+    PS_NON_USER_PROCESS_GUARD: nonUserProcessGuard,
     deletionOutcome: runVerdict.deletionOutcome,
     profsvcRefreshResult: runVerdict.profsvcRefreshResult,
     computeRunVerdict: runVerdict.computeRunVerdict,
@@ -388,7 +409,7 @@ async function main() {
     const pre = await run.preflight();
     check(pre.ok && pre.blockers.length === 0, 'complete healthy inventory permits repair');
     check(allTools.every(tool => pre.info.tools[tool] === true), 'healthy tool inventory preserved');
-    check(run.calls.length === 1, 'running service needs no start attempt');
+    check(run.calls.length === 1, 'running service uses only the read-only inventory');
     check(run.calls[0].includes('Resolve-FixerTool') && run.calls[0].includes('Test-Path'),
       'actual inventory resolves Windows executables and checks files');
     check(!run.calls[0].includes('Get-Command'), 'tool presence does not depend on inherited PATH');
@@ -422,36 +443,71 @@ async function main() {
     check(!pre.ok && pre.blockers.some(blocker => blocker.code === 'seclogon_not_running'),
       'service that is not running and cannot be started stays blocked');
   }
-  {
-    const run = harness(probe(inventory({ seclogon_status: 'Stopped' })), probe('SECLOGON_HEAL=RUNNING'));
-    const pre = await run.preflight();
-    check(pre.ok && pre.info.seclogon.status === 'Running' && pre.info.seclogon.selfHeal === 'started',
-      'verified successful service start permits repair');
-    check(run.calls.length === 2, 'stopped service gets one bounded start attempt');
+  for (const startType of ['Manual', 'Automatic']) {
+    for (const status of ['Stopped', 'StartPending', 'StopPending', 'ContinuePending', 'PausePending', 'Paused']) {
+      const state = { seclogon_status: status, seclogon_starttype: startType };
+      const run = harness(probe(inventory(state)));
+      const pre = await run.preflight();
+      const blocker = pre.blockers.find(item => item.code === 'seclogon_not_running');
+      check(!pre.ok && !!blocker, `${status}/${startType}: preflight blocks repair`);
+      check(pre.info.seclogon.status === status && run.calls.length === 1,
+        `${status}/${startType}: preflight preserves observed state without a start attempt`);
+      check(/Services/.test(blocker.message) && /re-check/i.test(blocker.message),
+        `${status}/${startType}: blocker gives a manual action and re-check`);
+      const repair = harness(probe(inventory(state)));
+      const result = await repair.repair();
+      check(!result.success && result.error === 'preflight_failed' && repair.destructive.length === 0,
+        `${status}/${startType}: actual repair stops before account/profile changes`);
+      const scan = harness(probe(inventory(state)));
+      const resultScan = await scan.scan();
+      check(resultScan.overall === 'blocked' && !resultScan.canRunFix && resultScan.cards.seclogon.status === 'blocked',
+        `${status}/${startType}: launch/focus scan disables Fix now`);
+      check(scan.calls.length === 2 && resultScan.info.seclogon.status === status &&
+        !/started it|could not be started/i.test(resultScan.cards.seclogon.message),
+      `${status}/${startType}: scan only reads inventories and never claims a service change`);
+    }
   }
-  for (const [name, response] of [
-    ['service start fails', probe('SECLOGON_HEAL=FAILED=Stopped', { code: 1 })],
-    ['nonzero service start with success text', probe('SECLOGON_HEAL=RUNNING', { code: 1 })],
-    ['timed out service start with success text', probe('SECLOGON_HEAL=RUNNING', { timedOut: true })]
+  {
+    const scan = harness(probe(inventory()));
+    const result = await scan.scan();
+    check(result.canRunFix && result.cards.seclogon.status === 'ready' && scan.calls.length === 2,
+      'healthy startup/focus scan permits repair without a service operation');
+  }
+  for (const state of [
+    { seclogon_status: 'MISSING', seclogon_starttype: 'MISSING' },
+    { seclogon_status: 'Stopped', seclogon_starttype: 'Disabled' },
+    { seclogon_status: 'Running', seclogon_starttype: 'Disabled' },
+    { seclogon_status: 'Stopped', [required[0]]: false }
   ]) {
-    const pre = await harness(probe(inventory({ seclogon_status: 'Stopped' })), response).preflight();
-    check(!pre.ok && pre.blockers.some(blocker => blocker.code === 'seclogon_start_failed'), `${name}: repair stays blocked`);
-    check(pre.info.seclogon.status !== 'Running', `${name}: no false running service state`);
+    const run = harness(probe(inventory(state)));
+    const result = await run.scan();
+    check(result.overall === 'blocked' && !result.canRunFix && result.cards.seclogon.status === 'blocked' && run.calls.length === 2,
+      `${JSON.stringify(state)}: scan preserves missing/disabled/tool blockers without a service operation`);
   }
 
   console.log('preflight-regression-smoke: existing elevation and helper-account safeguards');
+  for (const code of ['operator_identity_unverified', 'operator_identity_mismatch', 'operator_is_helper']) {
+    const refused = { ok: false, code };
+    const scan = harness(probe(inventory()), { checkOperatorIdentity: async () => refused });
+    const pre = await scan.preflight();
+    check(!pre.ok && pre.blockers.some(blocker => blocker.code === code), `${code} blocks preflight`);
+    const repair = repairHarness({ operatorIdentity: refused });
+    const result = await repair.repair();
+    check(result.error === code && repair.state.order.length === 0 && repair.state.createAttempts === 0,
+      `${code} blocks actual repair before process, profile and account mutation`);
+  }
   {
-    const run = harness(probe(inventory()), undefined, { isElevatedSync: async () => false });
+    const run = harness(probe(inventory()), { isElevatedSync: async () => false });
     const pre = await run.preflight();
     check(!pre.ok && pre.blockers.some(blocker => blocker.code === 'not_elevated'),
       'healthy tools never bypass the administrator guard');
   }
   {
-    const run = harness(probe(inventory()), undefined, { os: { userInfo: () => ({ username: 'USER1' }) } });
+    const run = harness(probe(inventory()), { os: { userInfo: () => ({ username: 'USER1' }) } });
     const pre = await run.preflight();
     check(!pre.ok && pre.blockers.some(blocker => blocker.code === 'running_as_target'),
       'healthy tools never allow rebuilding the signed-in helper account');
-    const repair = harness(probe(inventory()), undefined, { os: { userInfo: () => ({ username: 'USER1' }) } });
+    const repair = harness(probe(inventory()), { os: { userInfo: () => ({ username: 'USER1' }) } });
     const result = await repair.repair();
     check(!result.success && result.error === 'preflight_failed' && repair.destructive.length === 0,
       'actual repair preserves the signed-in helper account');
