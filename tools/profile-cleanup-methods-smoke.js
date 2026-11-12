@@ -43,7 +43,7 @@ if (process.platform !== 'win32') {
 const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-cleanup-methods-ü [literal]-'));
 const fixtureParent = fs.realpathSync(path.dirname(fixtureRoot));
 const quoted = value => value.replace(/'/g, "''");
-const cases = ['clear', 'loaded', 'enumeration', 'acl', 'identity', 'escape', 'lease', 'writer', 'readonly', 'swap'];
+const cases = ['clear', 'loaded', 'enumeration', 'acl', 'identity', 'escape', 'lease', 'writer', 'readonly', 'swap', 'writer-setup-failure'];
 const nested = 'nested ü [literal]';
 for (const name of cases) {
   const profile = path.join(fixtureRoot, name);
@@ -104,6 +104,28 @@ try {
       if ($script:identityFails -and $Path -ieq $script:identityFails) { throw 'fixture directory identity drift' }
       & $script:originalIdentityAssert @PSBoundParameters
     }
+    function Get-FixtureFailure {
+      param([Management.Automation.ErrorRecord]$Record,[string]$Stage)
+      $exception = $Record.Exception
+      $parameterName = ''
+      while ($null -ne $exception) {
+        if ($exception.PSObject.Properties['ParameterName'] -and
+            [string]$exception.ParameterName -match '^[A-Za-z][A-Za-z0-9_]{0,63}$') {
+          $parameterName = [string]$exception.ParameterName
+        }
+        if ($null -eq $exception.InnerException) { break }
+        $exception = $exception.InnerException
+      }
+      $errorId = [string]$Record.FullyQualifiedErrorId
+      if ($errorId.Length -gt 200 -or $errorId -notmatch '^[A-Za-z_][A-Za-z0-9_.+,-]*$') { $errorId = 'unclassified' }
+      [pscustomobject]@{
+        stage = $Stage; exceptionClass = $exception.GetType().FullName
+        nativeCode = if ($exception -is [ComponentModel.Win32Exception]) { $exception.NativeErrorCode } else { $null }
+        api = if ($exception.Message -match '^(GetFileInformationByHandleEx:FileAttributeTagInfo|GetFileInformationByHandleEx:FileIdInfo|GetFinalPathNameByHandleW)$') { $exception.Message } else { '' }
+        errorId = $errorId; parameterName = $parameterName
+        scriptLine = [int]$Record.InvocationInfo.ScriptLineNumber
+      }
+    }
     $phase = 'acl-write'
     try {
       Protect-FixerProfileQuarantineRoot -Path (Join-Path $fixtureRoot 'clear')
@@ -124,21 +146,25 @@ try {
         $lease = $null
         $quarantine = ''
         $completed = $false
-        $failureClass = ''
-        $failureNativeCode = $null
-        $failureApi = ''
+        $failure = $null
+        $stage = 'profile-identity'
         try {
+          if ($name -eq 'writer-setup-failure') { throw [ComponentModel.Win32Exception]::new(123, 'fixture-setup') }
           $profileIdentity = Get-FixerProfilePathIdentity -Path $profile
+          $stage = 'acquire-lease'
           $native = [FixerProfileIdentityV1]::AcquireQuarantineLease($profile, $profileIdentity.stableIdentity, $profileIdentity.resolvedPath)
+          $stage = 'quarantine'
           $quarantine = $native.Quarantine()
           $script:loaded = ($name -eq 'loaded')
           $script:aclFails = ($name -eq 'acl')
           $script:identityFails = if ($name -eq 'identity') { $quarantine } else { '' }
-          if ($name -eq 'writer') {
+          if ($name -in @('writer', 'writer-setup-failure')) {
+            $stage = 'open-writer'
             $writer = [IO.FileStream]::new((Join-Path $quarantine '[literal].txt'), [IO.FileMode]::Open,
               [IO.FileAccess]::Write, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
           }
-          if ($name -eq 'readonly') { [IO.File]::SetAttributes((Join-Path $quarantine '[literal].txt'), [IO.FileAttributes]::ReadOnly) }
+          if ($name -eq 'readonly') { $stage = 'set-readonly'; [IO.File]::SetAttributes((Join-Path $quarantine '[literal].txt'), [IO.FileAttributes]::ReadOnly) }
+          $stage = 'fixture-adapters'
           $lease = [pscustomobject]@{ QuarantinePath = $quarantine; Native = $native; Case = $name; DeleteProved = $false; rootWasEmpty = $false; RootChildren = [Collections.Generic.List[object]]::new() }
           $lease | Add-Member -MemberType ScriptMethod -Name ReadChildren -Value {
             param([int]$Maximum)
@@ -170,16 +196,11 @@ try {
             $this.DeleteProved = $this.Native.DeleteProved
           }
           if ($name -eq 'lease') { $lease.QuarantinePath = Join-Path $fixtureRoot 'outside' }
+          $stage = 'cleanup'
           Remove-ProfileFolder -Path $quarantine -Sid 'S-1-5-21-1-2-3-1001' -ExpectedIdentity $profileIdentity.stableIdentity -ExpectedResolvedPath $quarantine -Lease $lease
           $completed = $true
         } catch {
-          $failureClass = $_.Exception.GetType().FullName
-          $exception = $_.Exception
-          while ($null -ne $exception.InnerException) { $exception = $exception.InnerException }
-          if ($exception -is [ComponentModel.Win32Exception]) {
-            $failureNativeCode = $exception.NativeErrorCode
-            if ($exception.Message -match '^(GetFileInformationByHandleEx:FileAttributeTagInfo|GetFileInformationByHandleEx:FileIdInfo|GetFinalPathNameByHandleW)$') { $failureApi = $exception.Message }
-          }
+          $failure = Get-FixtureFailure -Record $_ -Stage $stage
         } finally { if ($null -ne $writer) { $writer.Dispose() }; if ($null -ne $native) { $native.Dispose() } }
         $allCapturedDisposed = $true
         if ($null -ne $lease) { foreach ($entry in $lease.RootChildren) { if (-not $entry.IsDisposed) { $allCapturedDisposed = $false } } }
@@ -189,8 +210,9 @@ try {
           rootPresent = [IO.Directory]::Exists($quarantine)
           originalPresent = [IO.Directory]::Exists($profile)
           capturedHandlesDisposed = $allCapturedDisposed
-          writerFilePreserved = if ($name -eq 'writer' -or $name -eq 'readonly') { [IO.File]::Exists((Join-Path $quarantine '[literal].txt')) } else { $null }
-          failureClass = $failureClass; failureNativeCode = $failureNativeCode; failureApi = $failureApi
+          writerFilePreserved = if (($name -in @('writer', 'readonly', 'writer-setup-failure')) -and $quarantine) { [IO.File]::Exists([IO.Path]::Combine($quarantine, '[literal].txt')) } else { $null }
+          quarantined = [bool]$quarantine
+          failure = $failure
         }
       }
       [pscustomobject]@{
@@ -200,9 +222,7 @@ try {
         records = @($records)
       } | ConvertTo-Json -Compress -Depth 5
     } catch {
-      $exception = $_.Exception
-      while ($null -ne $exception.InnerException) { $exception = $exception.InnerException }
-      [pscustomobject]@{ phase = $phase; exceptionClass = $exception.GetType().FullName; nativeCode = if ($exception -is [ComponentModel.Win32Exception]) { $exception.NativeErrorCode } else { $null }; api = if ($exception.Message -match '^(GetFileInformationByHandleEx:FileAttributeTagInfo|GetFileInformationByHandleEx:FileIdInfo|GetFinalPathNameByHandleW)$') { $exception.Message } else { '' } } | ConvertTo-Json -Compress
+      [pscustomobject]@{ phase = $phase; failure = (Get-FixtureFailure -Record $_ -Stage 'fixture-harness') } | ConvertTo-Json -Compress -Depth 4
       exit 1
     }
   `;
@@ -221,15 +241,24 @@ try {
   assert.equal(report.records.length, cases.length);
   for (const record of report.records) {
     const success = ['clear', 'swap'].includes(record.name);
+    const setupFailure = record.name === 'writer-setup-failure';
+    assert.equal(record.quarantined, !setupFailure, `${record.name}: fixture setup completed; ${JSON.stringify(record)}`);
     assert.equal(record.completed, success, `${record.name}: expected cleanup outcome; ${JSON.stringify(record)}`);
     assert.equal(record.leaseDeleted, success, `${record.name}: uncertain cleanup never reaches root deletion`);
-    assert.equal(record.rootPresent, !success, `${record.name}: root remains until handle deletion`);
-    assert.equal(record.originalPresent, false, `${record.name}: original name remains absent after quarantine`);
+    assert.equal(record.rootPresent, !success && !setupFailure, `${record.name}: root remains until handle deletion`);
+    assert.equal(record.originalPresent, setupFailure, `${record.name}: original name remains absent after quarantine`);
     assert.equal(record.capturedHandlesDisposed, true, `${record.name}: child handles close on every exit`);
     if (success) assert.equal(record.rootWasEmpty, true, 'root lease receives an empty retained directory');
     if (['writer', 'readonly'].includes(record.name)) assert.equal(record.writerFilePreserved, true, 'blocked target remains');
-    if (record.name === 'writer') assert.equal(record.failureNativeCode, 32, 'a pre-existing writer causes a sharing violation');
-    if (record.name === 'readonly') assert.equal(record.failureNativeCode, 5, 'readonly deletion fails with access denied');
+    if (record.name === 'writer') assert.equal(record.failure?.nativeCode, 32, 'a pre-existing writer causes a sharing violation');
+    if (record.name === 'readonly') assert.equal(record.failure?.nativeCode, 5, 'readonly deletion fails with access denied');
+    if (setupFailure) {
+      assert.equal(record.writerFilePreserved, null, 'an unavailable quarantine path is never passed to a diagnostic path command');
+      assert.equal(record.failure?.stage, 'profile-identity', 'early setup failure retains the original stage');
+      assert.equal(record.failure?.exceptionClass, 'System.ComponentModel.Win32Exception', 'early setup failure is not replaced by a parameter error');
+      assert.equal(record.failure?.nativeCode, 123, 'early setup failure retains the original native code');
+      assert.ok(record.failure?.scriptLine > 0, 'native diagnostics identify a script line without printing source');
+    }
   }
   console.log(`profile-cleanup-methods-smoke: 4 source checks and ${cases.length} native scenarios passed (owned Unicode scratch trees; synthetic profile/ACL adapters)`);
 } finally {
