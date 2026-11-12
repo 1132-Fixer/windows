@@ -232,13 +232,15 @@ try {
   assert.equal(result.status, 0, String(result.stdout || result.stderr || result.error?.code || 'native cleanup fixture failed'));
   assert.equal(String(result.stderr || '').trim(), '');
   const report = JSON.parse(String(result.stdout || '').trim());
+  assert.equal(report.records.length, cases.length);
+  assert.equal(report.records.every(record => record.quarantined === (record.name !== 'writer-setup-failure')), true,
+    `all fixture setups preserve their original result; ${JSON.stringify(report.records)}`);
   assert.equal(report.aclTransport, true, 'private ACL writes use the literal path and dispose the owned process');
   assert.equal(report.foreignAclBlocked, true, 'an additional Everyone grant is refused');
   assert.equal(report.outsidePreserved, true, 'junction targets and escaped names remain untouched');
   assert.equal(report.swapAttempted, true, 'the fixture attempts replacement after the directory is inspected and held');
   assert.equal(report.swapBlocked, true, 'a held directory cannot be renamed and replaced with an outside junction');
   assert.equal(report.swapNativeCode, 32, 'the retained parent blocks replacement with a sharing violation');
-  assert.equal(report.records.length, cases.length);
   for (const record of report.records) {
     const success = ['clear', 'swap'].includes(record.name);
     const setupFailure = record.name === 'writer-setup-failure';
