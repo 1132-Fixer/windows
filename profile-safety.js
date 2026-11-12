@@ -248,35 +248,149 @@ function argvContainsSecret(argv, secrets) {
   return false;
 }
 
-// Account-create body for a tmp PowerShell file (same residual as Zoom
-// launch: secret lives in the unlinked tmp script, never on CreateProcess
-// argv / Win32_Process CommandLine). net.exe /y answers the ">14 char"
-// DOS-compat prompt.
-function accountCreateScript(username, password) {
+// Account-create body for the shared in-memory PowerShell stdin transport.
+// The credential stays off PowerShell argv and temporary script files.
+// Exact trusted LocalAccounts exports receive an in-memory SecureString;
+// no native descendant receives the password in its command line.
+function accountCreateScript(username, password, trustedModuleRoot = '') {
   const u = psSingleQuote(username);
   const p = psSingleQuote(password);
-  return [
-    `$u = ${u}`,
-    `$p = ${p}`,
-    `$out = & net.exe user $u $p /add /y 2>&1`,
-    `Write-Host (($out | Out-String).Trim())`,
-    `if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }`,
-    `Write-Host 'ACCOUNT_CREATE=OK'`
-  ].join('\r\n');
+  // Only native synthetic-module tests pass this internal override. The app
+  // always uses its trusted inbox PowerShell's protected module directory.
+  const moduleRoot = trustedModuleRoot
+    ? psSingleQuote(trustedModuleRoot)
+    : "(Join-Path $PSHOME 'Modules\\Microsoft.PowerShell.LocalAccounts')";
+  return String.raw`
+$ErrorActionPreference = 'Stop'
+$createPhase = 'module'
+$securePassword = $null
+$passwordChars = $null
+try {
+  $u = ${u}
+  $trustedRoot = [IO.Path]::GetFullPath(${moduleRoot}).TrimEnd('\')
+  $trustedPrefix = $trustedRoot + '\'
+  if (([IO.File]::GetAttributes($trustedRoot) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'trusted LocalAccounts module root is a reparse point'
+  }
+  $manifests = @([IO.Directory]::GetFiles($trustedRoot,
+    'Microsoft.PowerShell.LocalAccounts.psd1', [IO.SearchOption]::AllDirectories))
+  if ($manifests.Count -ne 1) { throw 'trusted LocalAccounts module is unavailable or ambiguous' }
+  $trustedManifest = [IO.Path]::GetFullPath([string]$manifests[0])
+  if (-not $trustedManifest.StartsWith($trustedPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+      ([IO.File]::GetAttributes($trustedManifest) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'trusted LocalAccounts manifest identity is unavailable'
+  }
+  $trustedModuleBase = [IO.Path]::GetDirectoryName($trustedManifest).TrimEnd('\')
+  $moduleDirectory = $trustedModuleBase
+  while ($true) {
+    if (($moduleDirectory -ine $trustedRoot -and
+         -not $moduleDirectory.StartsWith($trustedPrefix, [StringComparison]::OrdinalIgnoreCase)) -or
+        ([IO.File]::GetAttributes($moduleDirectory) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw 'trusted LocalAccounts module directory identity is unavailable'
+    }
+    if ($moduleDirectory -ieq $trustedRoot) { break }
+    $moduleDirectory = [IO.Path]::GetDirectoryName($moduleDirectory)
+  }
+  $loaded = @(Import-Module -Name $trustedManifest -Force -PassThru -EA Stop)
+  $exactModules = @($loaded | Where-Object {
+    $_ -and [IO.Path]::GetFullPath([string]$_.ModuleBase).TrimEnd('\') -ieq $trustedModuleBase
+  })
+  if ($exactModules.Count -ne 1) { throw 'trusted LocalAccounts module identity is ambiguous' }
+  $commands = @{}
+  foreach ($name in @('Get-LocalUser', 'New-LocalUser', 'Add-LocalGroupMember', 'Get-LocalGroupMember')) {
+    $command = $exactModules[0].ExportedCommands[$name]
+    if ($null -eq $command -or $null -eq $command.Module -or
+        [IO.Path]::GetFullPath([string]$command.Module.ModuleBase).TrimEnd('\') -ine $trustedModuleBase) {
+      throw 'trusted LocalAccounts commands are unavailable'
+    }
+    $commands[$name] = $command
+  }
+  $getUser = $commands['Get-LocalUser']
+  $newUser = $commands['New-LocalUser']
+  $addMember = $commands['Add-LocalGroupMember']
+  $getMembers = $commands['Get-LocalGroupMember']
+  $createPhase = 'identity'
+  $before = @(& $getUser -EA Stop)
+  foreach ($user in $before) {
+    if ([string]::IsNullOrWhiteSpace([string]$user.Name) -or $null -eq $user.SID -or
+        [string]$user.SID.Value -notmatch '^S-1-5-21-(?:[0-9]+-){3}[0-9]+$') {
+      throw 'local account inventory is unreadable'
+    }
+  }
+  if (@($before | Where-Object { [string]$_.Name -ieq $u }).Count -ne 0) {
+    throw 'helper account already exists'
+  }
+  $securePassword = [Security.SecureString]::new()
+  $passwordChars = ${p}.ToCharArray()
+  try {
+    foreach ($passwordChar in $passwordChars) { $securePassword.AppendChar($passwordChar) }
+  } finally {
+    $passwordChar = $null
+    [Array]::Clear($passwordChars, 0, $passwordChars.Length)
+    $passwordChars = $null
+  }
+  $securePassword.MakeReadOnly()
+  $createPhase = 'create'
+  $created = @(& $newUser -Name $u -Password $securePassword -EA Stop)
+  if ($created.Count -ne 1 -or [string]$created[0].Name -ine $u -or
+      $null -eq $created[0].SID -or
+      [string]$created[0].SID.Value -notmatch '^S-1-5-21-(?:[0-9]+-){3}[0-9]+$') {
+    throw 'created helper identity is unavailable'
+  }
+  $createdSid = [string]$created[0].SID.Value
+  if (@($before | Where-Object { $_.SID -and [string]$_.SID.Value -ieq $createdSid }).Count -ne 0) {
+    throw 'created helper SID is not fresh'
+  }
+  $createdSidObject = [Security.Principal.SecurityIdentifier]::new($createdSid)
+  foreach ($verification in @('before-membership', 'after-membership')) {
+    $createPhase = 'verify'
+    $after = @(& $getUser -EA Stop)
+    $sidMatches = @($after | Where-Object { $_.SID -and [string]$_.SID.Value -ieq $createdSid })
+    $nameMatches = @($after | Where-Object { [string]$_.Name -ieq $u })
+    if ($sidMatches.Count -ne 1 -or $nameMatches.Count -ne 1 -or
+        [string]$sidMatches[0].Name -ine $u -or [string]$nameMatches[0].SID.Value -ine $createdSid -or
+        $null -eq $sidMatches[0].PSObject.Properties['Enabled'] -or
+        $sidMatches[0].Enabled -isnot [bool] -or -not $sidMatches[0].Enabled) {
+      throw 'fresh helper identity was not proved'
+    }
+    if ($verification -eq 'before-membership') {
+      $createPhase = 'groups'
+      $usersSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
+      $membersBefore = @(& $getMembers -SID $usersSid -EA Stop)
+      foreach ($member in $membersBefore) {
+        if ($null -eq $member.SID -or [string]::IsNullOrWhiteSpace([string]$member.SID.Value)) {
+          throw 'local Users membership is unreadable'
+        }
+      }
+      $alreadyMember = @($membersBefore | Where-Object { $_.SID -and [string]$_.SID.Value -ieq $createdSid })
+      if ($alreadyMember.Count -gt 1) { throw 'local Users membership is ambiguous' }
+      if ($alreadyMember.Count -eq 0) {
+        & $addMember -SID $usersSid -Member $createdSidObject -EA Stop | Out-Null
+      }
+      $users = @(& $getMembers -SID $usersSid -EA Stop)
+      $admins = @(& $getMembers -SID ([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')) -EA Stop)
+      foreach ($member in @($users) + @($admins)) {
+        if ($null -eq $member.SID -or [string]::IsNullOrWhiteSpace([string]$member.SID.Value)) {
+          throw 'local group membership is unreadable'
+        }
+      }
+      if (@($users | Where-Object { [string]$_.SID.Value -ieq $createdSid }).Count -ne 1 -or
+          @($admins | Where-Object { [string]$_.SID.Value -ieq $createdSid }).Count -ne 0) {
+        throw 'standard helper group membership was not proved'
+      }
+    }
+  }
+  Write-Output 'ACCOUNT_CREATE=OK'
+  exit 0
+} catch {
+  # Never echo an exception or native command arguments containing a secret.
+  Write-Output ('ACCOUNT_CREATE=FAILED phase=' + $createPhase + '; partial changes may remain.')
+  exit 1
+} finally {
+  if ($null -ne $passwordChars) { [Array]::Clear($passwordChars, 0, $passwordChars.Length) }
+  if ($null -ne $securePassword) { $securePassword.Dispose() }
 }
-
-// Spawn argv for that create script: powershell -File <tmp>. The password
-// must never appear here.
-function accountCreateArgv(scriptPath) {
-  return [
-    'powershell.exe',
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-File',
-    scriptPath
-  ];
+`;
 }
 
 const DEFAULT_ZOOM_CANDIDATES = [
@@ -463,7 +577,6 @@ module.exports = {
   redactSecrets,
   argvContainsSecret,
   accountCreateScript,
-  accountCreateArgv,
   discoverZoomExe,
   shortcutSpec,
   classifyPrivilegeState,

@@ -320,7 +320,17 @@ console.log('inactivity-smoke: static wiring');
   const renderer = read('renderer.js');
   check(main.includes("require('./src/main/inactivity')") && main.includes("require('./src/main/critical-ops')"), 'main requires the inactivity and critical-ops modules');
   check(/criticalOps\.addSource\('updater', \(\) => !!updaterCtl && \(updaterCtl\.isCritical\(\) \|\| updaterCtl\.isReady\(\)\)\)/.test(main), 'the update lifecycle (including ready) is a critical source');
-  check(/criticalOps\.addSource\('repair', \(\) => fixInProgress\)/.test(main), 'a running fix is a critical source');
+  const repairSource = main.split(/\r?\n/).find(line => line.startsWith("criticalOps.addSource('repair',"));
+  let repairBusy;
+  const frame = { fixInProgress: false, helperSettingsCustodyUnverified: false,
+    criticalOps: { addSource: (_name, fn) => { repairBusy = fn; } } };
+  require('vm').runInNewContext(repairSource, frame);
+  check(repairBusy() === false, 'finished repair with verified custody permits inactivity');
+  frame.fixInProgress = true;
+  check(repairBusy() === true, 'a running fix is a critical source');
+  frame.fixInProgress = false;
+  frame.helperSettingsCustodyUnverified = true;
+  check(repairBusy() === true, 'unverified helper exit keeps inactivity suspended');
   for (const ch of ['run-fix', 'create-shortcut', 'launch-zoom-helper', 'preflight', 'preflight-scan', 'relaunch-elevated', 'install-update-now', 'update-retry']) {
     check(new RegExp(`'${ch}': '`).test(main), `${ch} is wrapped as a critical operation`);
   }

@@ -75,7 +75,10 @@ for (const s of STATES) check(!has(s, 'fixBtn') || s !== 'checking', `${s}: Fix 
 check(!has('checking', 'fixBtn') && !has('checking', 'detailsBtn'), 'Checking allows Exit only');
 check(!has('blocked', 'fixBtn'), 'Blocked never offers Fix now');
 check(has('blocked', 'elevateBtn') && has('blocked', 'zrDownloadBtn'), 'Blocked allows the elevation and Zoom recovery path');
-check(has('error', 'fixBtn') && has('error', 'supportBtn'), 'Unable allows Try again and Support Report');
+check(!has('error', 'fixBtn') && has('error', 'rescanBtn') && has('error', 'supportBtn'),
+  'Unable requires a new check and offers Support Report');
+check(!has('cancelled', 'fixBtn') && has('cancelled', 'rescanBtn'),
+  'Cancelled requires a new check before another repair');
 
 console.log('screen-actions-smoke: applyScreenControls hides, never reveals');
 {

@@ -160,6 +160,8 @@ const OPENED = [];   // destination ids the mocked IPC was asked to open
     const EXPECT_ORDER = ['fixer', 'botify', 'primeHosting', 'gifDirectory', 'kickbot', 'modbot', 'emojiGenerator', 'makeItGif'];
 
     if (JSON.stringify(m.order) !== JSON.stringify(EXPECT_ORDER)) fail(`order ${JSON.stringify(m.order)}`);
+    const guard = await page.locator('[data-explore="modbot"]').innerText();
+    if (!guard.includes('Botify Guard') || guard.includes('BotifyModBot')) fail(`Guard marketing name "${guard}"`);
     if (m.heroName !== '1132 Fixer') fail(`hero name "${m.heroName}"`);
     if (m.heroDesc !== 'Project website') fail(`hero desc "${m.heroDesc}"`);
     if (m.heroNote !== messages.DISCLOSURE.INDEPENDENCE) fail(`hero note "${m.heroNote}"`);
@@ -273,7 +275,7 @@ const OPENED = [];   // destination ids the mocked IPC was asked to open
       focus: document.activeElement && document.activeElement.id,
     }));
     if (closed.shown) fail('Escape did not close the panel');
-    if (closed.focus !== 'btnExplore') fail(`focus returned to "${closed.focus}", expected btnExplore`);
+    if (closed.focus !== 'aboutBtn') fail(`focus returned to "${closed.focus}", expected aboutBtn`);
 
     console.log(`${vp.name.padEnd(22)} card ${m.cardH}px / viewport ${m.viewportH}px  bodyScrolls=${m.bodyScrolls}  orgRows=${colsOf(m.orgBoxes)}`);
     OPENED.push({ vp: vp.name, opened });

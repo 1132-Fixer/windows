@@ -13,7 +13,7 @@
 ;
 ;     --updated /S --fixer-relaunch /D=<its own install directory>
 ;
-; and then quits. electron-builder's stock install section waits for the
+; and then quits. Our read-only process gate waits for the
 ; app to exit (CHECK_APP_RUNNING), runs the previous version's uninstaller
 ; with --keep-shortcuts / KEEP_APP_DATA, extracts the new files into $INSTDIR,
 ; refreshes the registry records and shortcuts, and then customInstall below
@@ -31,37 +31,75 @@
 ; update this installer is a descendant of the still-exiting app process, so
 ; `/T` (kill the process TREE) could terminate the installer itself while
 ; the app was shutting down — the update then silently never happened.
-; electron-builder's install section already waits for the app to exit and
-; ends it without touching this process (allowOnlyOneInstallerInstance.nsh).
+; customCheckAppRunning below waits for an app-owned exit and refuses if it
+; cannot prove the app is closed. Installers never terminate repair processes.
 ; ============================================================================
 
 !macro customInit
+  ; The builder otherwise invokes a legacy HKCU uninstaller automatically.
+  ; Its account/path/process ownership has not been proved. Preserve it and
+  ; refuse this automatic migration rather than execute an unknown teardown.
+  ReadRegStr $R1 HKCU "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
+  ${If} $R1 != ""
+    DetailPrint "A legacy per-user installation needs a separate verified migration. Setup stopped and preserved it."
+    IfSilent +2
+    MessageBox MB_OK|MB_ICONEXCLAMATION "A legacy per-user 1132 Fixer installation needs review before migration. Setup has preserved it. Use Support Report before trying again."
+    SetErrorLevel 2
+    Quit
+  ${EndIf}
   ; Releases 6.3.1-6.3.3 shipped an uninstaller whose NSIS integrity check
   ; fails (afterPack re-stamped its manifest after makensis had computed the
   ; CRC). Running it aborts with exit code 2, so the "uninstall old version"
   ; step of this installer would stop at "Failed to uninstall old application
   ; files ... : 2" and the update would never apply. For those versions skip
-  ; that uninstaller: the new files overwrite the old ones in the same
+  ; that uninstaller. Version 6.4.0 also shipped an uninstaller that force-kills
+  ; same-name app processes, so do not execute that hook during recovery.
+  ; The new files overwrite the old ones in the same
   ; directory and this installer registers a fresh, valid uninstaller.
   ReadRegStr $R0 HKLM "${UNINSTALL_REGISTRY_KEY}" "DisplayVersion"
   ${If} $R0 == "6.3.1"
   ${OrIf} $R0 == "6.3.2"
   ${OrIf} $R0 == "6.3.3"
+  ${OrIf} $R0 == "6.4.0"
     DeleteRegValue HKLM "${UNINSTALL_REGISTRY_KEY}" "UninstallString"
     DeleteRegValue HKLM "${UNINSTALL_REGISTRY_KEY}" "QuietUninstallString"
   ${EndIf}
 !macroend
 
 ; ============================================================================
-; customUnInit — runs before UNINSTALL.
-; Uninstalling while the app is open used to hit locked files and silently
-; leave the install behind. No /T: the uninstaller is itself launched by the
-; next version's installer during an update, and must never kill its parent.
+; Override electron-builder's shared install/uninstall process gate. Its
+; default can escalate to forced termination. A repair may already have made
+; irreversible changes, so only the application owns its shutdown boundary.
+; nsProcess is already supplied by electron-builder; 603 alone means absent.
+; Same-name processes in another account conservatively block installation.
 ; ============================================================================
 
-!macro customUnInit
-  nsExec::ExecToLog 'taskkill /F /IM "1132 Fixer.exe"'
-  Sleep 500
+!macro customCheckAppRunning
+  Push $R0
+  Push $R1
+  StrCpy $R1 0
+  ${Do}
+    ${nsProcess::FindProcess} "${APP_EXECUTABLE_FILENAME}" $R0
+    ${If} $R0 == 603
+      ${ExitDo}
+    ${EndIf}
+    ${If} $R0 != 0
+      DetailPrint "Could not verify that 1132 Fixer is closed. Setup stopped without closing programs."
+      SetErrorLevel 2
+      Quit
+    ${EndIf}
+    IntOp $R1 $R1 + 1
+    ${If} $R1 >= 20
+      DetailPrint "1132 Fixer is still running. Finish the repair and close the app before running Setup again."
+      IfSilent +2
+      MessageBox MB_OK|MB_ICONEXCLAMATION "Finish any repair, then close 1132 Fixer and run Setup again. Setup will not close a repair for you."
+      SetErrorLevel 2
+      Quit
+    ${EndIf}
+    Sleep 500
+  ${Loop}
+  Pop $R1
+  Pop $R0
 !macroend
 
 ; ============================================================================
@@ -72,13 +110,10 @@
   ; Install location for app reference — SHCTX resolves to HKLM per-machine.
   WriteRegStr SHCTX "Software\1132Fixer" "InstallPath" "$INSTDIR"
 
-  ; Migration from pre-5.4 per-user installs: remove the old copy and its
-  ; per-user Add/Remove entry so the machine doesn't end up with two apps.
-  ; ${UNINSTALL_REGISTRY_KEY} is the same GUID-derived key name electron-builder
-  ; used for the per-user install (deterministic from appId).
-  RMDir /r "$LOCALAPPDATA\Programs\1132 Fixer"
-  DeleteRegKey HKCU "${UNINSTALL_REGISTRY_KEY}"
-  DeleteRegKey HKCU "Software\1132Fixer"
+  ; Preserve legacy per-user files and registration. An elevated installer
+  ; may run as a different account; a folder/name alone cannot prove ownership
+  ; or that an older copy has no pending repair. Removal needs a separate
+  ; verified migration rather than recursive deletion during installation.
 
   ; Belt-and-suspenders: afterPack strips elevate.exe from win-unpacked
   ; before the 7z is built. Delete it here if a future packer copies it again.

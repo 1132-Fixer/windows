@@ -27,6 +27,7 @@ const KNOWN = new Set(Object.values(REASONS));
 function createShutdownController(deps = {}) {
   const quit = typeof deps.quit === 'function' ? deps.quit : () => {};
   const log = deps.log || null;
+  const canQuit = typeof deps.canQuit === 'function' ? deps.canQuit : () => true;
   let reason = null;
   let requestedAt = null;
   const duplicates = [];
@@ -34,6 +35,12 @@ function createShutdownController(deps = {}) {
 
   function request(why, extra) {
     const r = KNOWN.has(why) ? why : REASONS.USER_EXIT;
+    let permitted = false;
+    try { permitted = canQuit(r) === true; } catch (_) { /* retain custody on doubt */ }
+    if (!permitted) {
+      if (log) log.warn('shutdown.blocked', { reason: r });
+      return { accepted: false, reason: 'operation-in-progress' };
+    }
     if (reason) {
       duplicates.push({ reason: r, at: Date.now() });
       if (log) log.warn('shutdown.duplicate-request', { reason: r, firstReason: reason });

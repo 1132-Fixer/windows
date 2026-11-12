@@ -1,5 +1,17 @@
 # Release-home migration — August 2026
 
+> **Current status (2026-10-19):** The legacy repository
+> `PrimeUpYourLife/1132-Fixer-Windows-Releases` was intentionally deleted by
+> owner decision. The plan and live-status statements below document the
+> August 2026 decision and measurements; they are historical, not current
+> operating instructions. Builds v5.5.1 and earlier have that deleted
+> endpoint baked in and cannot automatically discover the current channel.
+> Manual recovery is to install the current Setup over the existing copy, or
+> replace an old Portable build with the current one. The canonical v6.0.0
+> release remains published here, but its former legacy-feed bridge no longer
+> works. Current tests verify current channel and broker behavior, plus those
+> canonical recovery assets; they do not query the deleted repository.
+
 ## Canonical home
 
 Public source, CI, issues, and GitHub Releases for the Windows app:

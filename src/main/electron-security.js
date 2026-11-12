@@ -89,7 +89,6 @@ const UPDATER_CDN_HOSTS = new Set([
   'github-releases.githubusercontent.com',
 ]);
 const WEBSITE_HOSTS = new Set([
-  '1132-fixer.xyz', 'www.1132-fixer.xyz',
   'botify-network.com', 'www.botify-network.com',
   'gif.directory', 'www.gif.directory',
   // Prime Hosting (Explore redesign, issue #185). Exact host only — no
@@ -104,11 +103,11 @@ const ZOOM_HOSTS = new Set(['zoom.us', 'www.zoom.us']);
 // not even a different path on an approved host. Every URL must also pass
 // isAllowedExternalUrl — the map is not a bypass.
 const EXPLORE_DESTINATIONS = Object.freeze({
-  fixer: 'https://1132-fixer.xyz/',
+  fixer: 'https://botify-network.com/apps/1132-fixer',
   botify: 'https://botify-network.com/',
   gifDirectory: 'https://gif.directory/',
   kickbot: 'https://botify-network.com/apps/botifykickbot',
-  modbot: 'https://botify-network.com/apps/botifymodbot',
+  modbot: 'https://botify-network.com/apps/botify-guard',
   emojiGenerator: 'https://botify-network.com/apps/emoji-generator-bot',
   makeItGif: 'https://botify-network.com/apps/makeitgif',
   // Prime Hosting (Explore addendum 2026-08-25). Exact origin, no
@@ -126,7 +125,7 @@ function exploreDestinationUrl(key) {
 
 const IPC_SCHEMAS = Object.freeze({
   'user-activity': { args: ['activity-kind'] },
-  'submit-feedback': { args: ['feedback-type', 'feedback-text', 'screenshot?'] },
+  'submit-feedback': { args: ['feedback-type', 'feedback-text', 'screenshot?', 'feedback-rating?'] },
   'support-report': { args: ['support-context?'] },
   'open-explore-destination': { args: ['explore-destination'] },
 });
@@ -340,7 +339,11 @@ function coerceArg(kind, value) {
       return { ok: true, value };
     case 'feedback-text':
       if (typeof value !== 'string') return { ok: false, reason: 'text not a string' };
-      if (value.length > FEEDBACK_TEXT_MAX) return { ok: false, reason: 'text too long' };
+      if (Buffer.byteLength(value, 'utf8') > FEEDBACK_TEXT_MAX) return { ok: false, reason: 'text too long' };
+      return { ok: true, value };
+    case 'feedback-rating?':
+      if (value === undefined || value === null) return { ok: true, value: undefined };
+      if (!Number.isInteger(value) || value < 1 || value > 5) return { ok: false, reason: 'rating not allowed' };
       return { ok: true, value };
     case 'screenshot?': {
       if (value === undefined || value === null) return { ok: true, value: undefined };
@@ -415,6 +418,10 @@ function validateInvoke(channel, args) {
     const coerced = coerceArg(kind, value);
     if (!coerced.ok) return { ok: false, reason: `arg ${i}: ${coerced.reason}` };
     out.push(coerced.value);
+  }
+  if (channel === 'submit-feedback') {
+    if (out[0] === 'User Rating' && out[3] === undefined) return { ok: false, reason: 'rating required' };
+    if (out[0] !== 'User Rating' && out[3] !== undefined) return { ok: false, reason: 'rating type not allowed' };
   }
   return { ok: true, args: out };
 }

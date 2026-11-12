@@ -58,17 +58,19 @@ function deletionOutcome(deleted, total) {
 // value is the toggle Zoom actually reads (grant-media-consent.ps1); HKLM is
 // only the device-wide floor and must NEVER rescue a missing per-user value
 // to OK.
-//   writeTime         write-time status: 'OK' | 'UNVERIFIED' | 'POLICY-BLOCKED'
+//   writeTime         complete identity-bound script status; unknown proof is
+//                     never rescued by an unrelated later registry read
 //   userWriteVerified the consent script's own post-write readback confirmed
 //                     the PER-USER value — the only per-user evidence when
 //                     the hive is no longer loaded at verify time
 //   userReadback      'YES' | 'NO' from the verification pass, '' when the
 //                     hive was not readable (not loaded, or probe failed)
 function consentOutcome(writeTime, userWriteVerified, userReadback) {
-  if (writeTime === 'POLICY-BLOCKED') return 'POLICY-BLOCKED';
+  if (writeTime === 'POLICY-BLOCKED' || writeTime === 'MACHINE-BLOCKED') return writeTime;
+  if (writeTime !== 'OK') return 'UNVERIFIED';
   if (userReadback === 'YES') return 'OK';
   if (userReadback === 'NO') return 'UNVERIFIED';
-  return userWriteVerified ? 'OK' : 'UNVERIFIED';
+  return userWriteVerified === true ? 'OK' : 'UNVERIFIED';
 }
 
 // Parse the PROFSVC_REFRESH structured marker from captured flush-script

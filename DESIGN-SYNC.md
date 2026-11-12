@@ -1,9 +1,123 @@
 # Design Sync — 1132 Fixer for Windows
 
+## Repair refusal and recovery (#252)
+
+Repair confirmation names both effect scopes: replacing the `user1` account
+and its profile (including files saved there), and writing helper launch/sign-in
+files under the Windows account running the app. It does not promise that all
+personal files remain unchanged. Missing confirmation controls refuse repair.
+
+Cancellation is accepted at explicit engine checkpoints. Completed changes
+remain; cancellation is not rollback. Failure and cancellation offer **Check
+again**, which runs a read-only preflight. They do not immediately repeat the
+destructive repair. Closing the window during repair explains why the window
+must stay open. Update installation waits for repair and child-process custody
+to finish, including when the app exits normally.
+
+The app does not start Secondary Logon during a check, change machine privacy
+settings, restart shared profile services, mount a profile hive, or send
+untargeted keystrokes. Unavailable services and unverified helper settings
+remain blockers or unresolved outcomes. Expected profile paths are labelled
+as expected; they are not presented as measurements from the launched Zoom
+process. Copying error details requires the sanitized support report and never
+falls back to raw logs.
+
+Recovery text does not infer a locked file, password policy, antivirus action,
+or successful rollback from a failed process. It asks for a new read-only check
+and a support report before another reset. Optional shortcut failure does not
+claim that no launcher files were written. Setup waits for application-owned
+exit and refuses busy or unknown process state; it does not force-close repair.
+Legacy per-user installation data is preserved until a separate verified
+migration can establish its ownership.
+
+The app must prove that its token belongs to the user signed into its Windows
+session before repair or launcher writes. A different administrator supplied
+at the Windows prompt is a blocker, since its Desktop and encrypted launcher
+storage would belong to a different person. The helper SID is checked again
+before teardown and before shortcut or launch actions.
+
+Profile descendants are writable by the helper. Elevated code does not write
+through those paths or grant recursive permissions. First-run deployment and
+Zoom dark mode run only under the verified standard helper token. The app no
+longer copies preference files or encrypted Zoom databases from the operator's
+profile. Windows desktop theme changes are removed. Unknown helper-program
+exit blocks another reset, updates and normal app shutdown. Fatal interface
+recovery must preserve that same boundary. Native credential launch remains
+an acceptance requirement; inert adapters do not qualify this change.
+
+Repair, shortcut creation and helper launch share one admission lock across
+their asynchronous identity checks. Only one can mutate state at a time. A
+failed Windows Desktop lookup does not create a guessed folder; the known
+folder is read again so redirection changes are respected.
+
+The existing failure screen names an in-use or unverified prior Zoom setup in
+plain English and directs the user to close Zoom or use Support Report. An
+unverified Windows profile-service state offers recovery guidance. These
+messages do not claim that no earlier repair step changed state. Unknown
+profile or service evidence cannot produce Complete or Open Zoom.
+
+This uses the existing notice, details and recovery controls. The shared design
+pin and product assets are retained. Source/mocked checks are recorded on
+PR #254. The canonical design pin was read locally. CI credential access,
+rendered integration and packaged Windows acceptance remain required before
+release. Current operator instructions prohibit UI automation in this session;
+rendered checks remain not run, rather than waived or reported as passed.
+
 Visual source of truth for this repository is the separate
 [1132-Fixer/design-system](https://github.com/1132-Fixer/design-system) repo
 (docs and tokens; nothing in it is built, imported, or shipped here). This file
 records the decisions this repository owns, and the evidence behind them.
+
+---
+
+## Windows tool check outcomes (2026-10-05)
+
+The repair check distinguishes an unavailable result from a tool proved
+missing. A failed or timed-out check produces one blocker. It must not create
+one missing-tool error for every tool. Only a successful system-folder check
+can report a missing required tool; several absent tools share one blocker.
+
+The existing Unable screen keeps its existing controls and tokens. Primary
+copy states what the app could check and gives **Try again** and **Support
+Report** as next steps. It does not blame PATH, cleanup software, antivirus,
+AppLocker, or a Windows policy without evidence. It never asks the user to
+disable security software. Paths, process status and check diagnostics belong
+in the support report rather than the primary explanation. Do not claim that
+nothing changed unless the recorded repair stage proves that claim.
+
+The source defect in 6.4.0 is reproducible: empty output was treated as an
+empty tool inventory, and process failure and timeout were not validated
+before accepting JSON. The reported Windows incident has no accompanying
+runtime log. Its exact environmental or policy trigger remains unproven.
+
+---
+
+## Support submission (2026-10-05)
+
+The existing feedback chooser, dialogs, buttons and tokens remain the Windows
+support surface. Bug Report, Rate Your Experience and Share Other Feedback
+send only after the user selects Submit. All three use one public support
+endpoint. The normal submission includes the app version and user-entered
+text. It does not collect device inventories, usernames, administrator state
+or Zoom details. The sanitized support report remains an optional attachment
+that the user chooses and can preview first.
+
+Rate Your Experience requires the existing Overall score from 1 to 5. That
+selected score is the numeric rating sent with the survey. No average of other
+answers replaces the user's Overall choice.
+
+Submission has one bounded HTTP exchange. Show **Sending…** during that
+exchange and **Sent** only after a valid acknowledgement. Keep the draft on
+failure. Do not show delivery, case, inbox or follow-up status. Do not retry
+automatically. An explicit retry of unchanged content keeps the same temporary
+request ID. That ID remains in memory only and is not an install identity.
+
+Screenshot attachment is available when a valid public endpoint is configured.
+The capability check is local and sends no startup or dialog-opening network
+request. Screenshots remain optional, with the existing PNG, JPEG, WebP and
+GIF controls and 5 MB limit. Reports over the service text limit are rejected
+with clear copy rather than cut short. No server credential, bot identity,
+private destination or support database code belongs in the Windows client.
 
 ---
 
@@ -32,7 +146,7 @@ Explore the network
 ORGANIZATIONS & SERVICES
   Botify Network      Prime Hosting       GIF Directory
 BOTS
-  BotifyKickBot       BotifyModBot
+  BotifyKickBot       Botify Guard
 CREATIVE TOOLS
   Emoji Generator     Make It GIF
 ```
@@ -58,16 +172,19 @@ URL — not even a different path on an approved host.
 
 | # | id | Name | Description | Category | URL |
 |--:|----|------|-------------|----------|-----|
-| 1 | `fixer` | 1132 Fixer | Project website | featured | `https://1132-fixer.xyz/` |
+| 1 | `fixer` | 1132 Fixer | Project website | featured | `https://botify-network.com/apps/1132-fixer` |
 | 2 | `botify` | Botify Network | Network home | organizations | `https://botify-network.com/` |
 | 3 | `primeHosting` | Prime Hosting | Hosting and developer services | organizations | `https://primehosting.dev/` |
 | 4 | `gifDirectory` | GIF Directory | Organize and discover GIFs | organizations | `https://gif.directory/` |
 | 5 | `kickbot` | BotifyKickBot | Moderation bot | bots | `https://botify-network.com/apps/botifykickbot` |
-| 6 | `modbot` | BotifyModBot | Community management bot | bots | `https://botify-network.com/apps/botifymodbot` |
+| 6 | `modbot` | Botify Guard | Community management bot | bots | `https://botify-network.com/apps/botify-guard` |
 | 7 | `emojiGenerator` | Emoji Generator | Create custom emoji | creative-tools | `https://botify-network.com/apps/emoji-generator-bot` |
 | 8 | `makeItGif` | Make It GIF | Create and convert GIFs | creative-tools | `https://botify-network.com/apps/makeitgif` |
 
-Prime Hosting is the only URL added. Every other destination is unchanged, and
+The product website destinations were updated in October 2026: 1132 Fixer
+uses its canonical app page, and Botify ModBot is now publicly named Botify
+Guard at `/apps/botify-guard`. The internal `modbot` destination key and icon
+path remain stable; they are not API endpoints or public product names.
 `tools/electron-security-smoke.js` pins the whole table so a silent edit fails.
 
 `primehosting.dev` is allowlisted as an **exact host** — `*.primehosting.dev` is
@@ -140,7 +257,8 @@ unreachable.
 
 - Dialog accessible name `Explore`; `role="dialog"`, `aria-modal="true"`.
 - Escape closes; close control is a 40×40 target though the glyph is 13px.
-- Focus is trapped while open and returns to the Explore trigger on close.
+- Focus is trapped while open. Closing Explore also closes About and returns
+  focus to the footer About control (landing decision, 2026-09-05).
 - Every destination exposes `Open <product> in your default browser`.
 - Focus is an **outline**, hover is a **fill** — never the same signal, and the
   focus ring is never clipped by a card container.
@@ -288,6 +406,9 @@ block in `index.html`, recorded in the design system as the Windows overlay
   Support · Feedback · About as `.footer-link` (12/600, 32px, hover fill,
   pressed, ring). The line stays on one row at 520px and may wrap to two rows
   only below 480px; it never clips.
+  Footer links use 4px horizontal padding and a 4px inter-link gap, with 8px
+  between groups, so the full disclosure fits alongside version and links
+  at 520px without reducing typography or touch-target height.
 - Spacing uses only 4/8/12/16/24/32 (`--s-1…--s-4`, `--s-6`, `--s-7`); `20`
   and `40` remain defined for the Explore and feedback surfaces.
 - Motion: `wiz-in` 200ms on pane and Details entry, 150ms hover/press

@@ -22,7 +22,7 @@
 <p align="center">
   <a href="https://github.com/1132-Fixer/windows/releases/latest"><strong>Download the latest release</strong></a>
   &nbsp;┬╖&nbsp;
-  <a href="https://1132-fixer.xyz/"><strong>Website</strong></a>
+  <a href="https://botify-network.com/apps/1132-fixer"><strong>Website</strong></a>
   &nbsp;┬╖&nbsp;
   <a href="CONTRIBUTING.md"><strong>Contribute</strong></a>
   &nbsp;┬╖&nbsp;
@@ -60,7 +60,7 @@ Error 1132 can stay after Zoom is reinstalled. It is often tied to a Windows use
 When you press **Fix now**, the app:
 
 1. Checks Windows, admin access, and the Zoom install.
-2. Stops active `user1` sessions and removes the old helper profile.
+2. Verifies the old helper profile is unloaded, stops only processes owned by its exact local identity, and removes the verified old profile.
 3. Recreates `user1` and applies safe session settings.
 4. Opens and checks Zoom Workplace as `user1`.
 5. Creates or repairs the desktop shortcut.
@@ -85,6 +85,15 @@ Longer user and contributor guides: [docs/README.md](docs/README.md).
 
 > [!IMPORTANT]
 > 1132 Fixer deletes and recreates the local `user1` helper account. Anything stored in that helper profile is removed. It does not delete files or Zoom data from your normal Windows profile. Do not run it while signed in to Windows as `user1`.
+
+The source change associated with [incident #252](https://github.com/1132-Fixer/windows/issues/252)
+removes the global User Profile Service restart from helper repairs. It checks
+`ProfSvc` and `UserManager` before cleanup and before creating the new account.
+An unavailable, stopped, pending or unverified service blocks the repair; the app
+does not try to recover it by stopping Windows services. This source change has
+not yet passed packaged Windows acceptance or been released. The branch also adds loaded-profile refusal and fresh idle-state checks before
+cleanup/account deletion. Native acceptance for the full incident remains open. Do not deliberately
+reproduce the incident on an everyday workstation.
 
 The app manages this local account:
 
@@ -121,7 +130,7 @@ Password: random — a fresh one is generated on every fix run
 6. Sign in to Zoom in the new session.
 7. Create the desktop shortcut if you want faster access next time.
 
-**v5.6.0** builds check for updates through `https://botify-network.com/downloads/1132-fixer/updates`, which serves the same installer that is published on [this repository's Releases](https://github.com/1132-Fixer/windows/releases/latest). If you installed **v5.5.1 or earlier**, your copy still checks the old download location (`PrimeUpYourLife/1132-Fixer-Windows-Releases`); that location still answers, but it will not offer newer versions. Install the latest release from this repository once to move off it. The update location is fixed when a build is made, so an existing install cannot be pointed somewhere else remotely.
+**v5.6.0** builds check for updates through `https://botify-network.com/downloads/1132-fixer/updates`, which serves the same installer that is published on [this repository's Releases](https://github.com/1132-Fixer/windows/releases/latest). **v5.5.1 and earlier** builds have the deleted legacy Releases repository baked into their updater, so they cannot automatically discover updates. For manual recovery, install the latest Setup from this repository over the existing copy; replace old Portable builds with the latest Portable build. The update location is fixed when a build is made, so an existing install cannot be pointed somewhere else remotely.
 
 ## Privacy
 
@@ -139,6 +148,7 @@ Common fixes are in [docs/user/troubleshooting.md](docs/user/troubleshooting.md)
 | The app says permission is missing | Close it, then approve the Windows prompt. |
 | Zoom is not found | Install Zoom Workplace with the machine-wide installer. |
 | **Fix now** stays unavailable | Open **View details** and fix the marked item. |
+| The Windows tool check fails, or 6.4.0 lists several missing tools after **Fix now** | Try again, then use **Support Report** if it repeats. Version 6.4.0 can turn a failed check into misleading missing-tool messages. See [troubleshooting](docs/user/troubleshooting.md). |
 | Camera or microphone is missing | Set camera and microphone access for desktop apps while signed in as `user1`. |
 | SmartScreen warns, or Smart App Control blocks the app | Releases are unsigned. SmartScreen lets you continue; Smart App Control does not, and has no per-app exception. Do not turn it off for this. See [troubleshooting](docs/user/troubleshooting.md) and [code signing](docs/security/code-signing.md). |
 
@@ -185,9 +195,14 @@ node scripts/bump-version.js patch
 npm install --package-lock-only
 ```
 
-`npm test` runs every `tools/*-smoke.js` check with Node alone. CI additionally builds the installer on a Windows runner and runs `tools/packaged-acceptance.js` against the packaged executable: it launches the real app, proves it leaves **Checking** within the deadline, checks the footer, focus rings, target sizes and scrollbars at 100 %, 125 % and 150 % scaling, confirms only that state's controls are visible, walks **View details** → category → **Back**, exercises the second-instance guard and the **Fix now** journey, and uploads screenshots and a report as the `packaged-acceptance` artifact. That driver needs an elevated Windows session without Smart App Control enforcement.
+`npm test` runs every `tools/*-smoke.js` check with Node alone. CI additionally builds the installer on a Windows runner and runs `tools/packaged-acceptance.js` against an asInvoker-stamped test copy: it launches the real packaged app code, proves it leaves **Checking** within the deadline, checks the footer, focus rings, target sizes and scrollbars at 100 %, 125 % and 150 % scaling, confirms only that state's controls are visible, walks **View details** → category → **Back**, exercises the second-instance guard and the **Fix now** journey, and uploads screenshots and a report as the `packaged-acceptance` artifact. This CI run is diagnostic and never native/final-artifact release acceptance. Release evidence needs the exact unmodified artifact on disposable Windows with UAC enabled, matching head/hash/support configuration, and the required operator attestation.
 
-A `v*` tag reachable from `main` runs `.github/workflows/release.yml`, which builds Setup and Portable artifacts, checksums, and `latest.yml` onto this repository's GitHub Releases.
+A `v*` tag on exact current `main` runs `.github/workflows/release.yml`. Its
+read-only preflight requires current checks and independent review plus bound
+native Windows and support receipts. The publication job reuses the exact CI
+Setup and Portable bytes, verifies every digest, uploads them to a draft, and
+publishes only after complete asset readback; it does not rebuild accepted
+packages.
 
 Secrets belong in GitHub Actions or the feedback service — never in app source or a packaged config. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/development/building.md](docs/development/building.md).
 

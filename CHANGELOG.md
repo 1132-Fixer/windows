@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.1] - 2026-11-12
+
+### Fixed
+
+- Rebuilding the helper account no longer restarts shared Windows profile
+  services. In 6.4.0 that restart could disrupt the signed-in user's session
+  ([#252](https://github.com/1132-Fixer/windows/issues/252)). Repair now stops
+  with a clear message when the account, service or profile state cannot be
+  verified. The cause of the separately reported Explorer crash is not yet
+  established.
+- Helper settings are applied with the helper's own standard privileges. The
+  app no longer changes elevated registry hive permissions, machine privacy or
+  camera service settings, or the Windows desktop theme.
+- Setup no longer force-closes running processes, and the 6.4.0 uninstaller is
+  not run during recovery. A cancelled or partly completed repair reports what
+  changed and asks for a fresh check.
+- Startup no longer shows **Ready to fix Zoom** before the first check of the
+  computer has finished. The app stays on **Checking…** until that check
+  reports, so a blocked computer never shows **Fix now** first. A **Fix now**
+  click made while a check runs is dropped when that check ends blocked.
+- A failed Windows tool check no longer becomes several false missing-tool
+  errors after **Fix now**. Preflight validates process status and the complete
+  inventory before accepting it; actual missing required tools share one
+  blocker. Copy gives retry and Support Report steps without blaming PATH or
+  asking users to disable security software.
+- Privileged repair tools resolve from allowlisted Windows system-folder
+  paths. PowerShell reads UTF-8 script source through standard input; dynamic
+  scripts and helper passwords stay out of PowerShell arguments and temporary
+  script files. Setup and Portable use the same repair path.
+- Secondary Logon must be running or successfully started and verified before
+  repair continues. Failed or timed-out checks cannot pass on output alone.
+- Administrator checks and elevated relaunches reject failed process results,
+  even when their output contains a success marker. Process output preserves
+  Unicode across arbitrary pipe chunks and ignores events after completion.
+
+### Changed
+
+- Feedback, Rate us and Report a bug use one anonymous HTTPS submission to
+  1132 Fixer Support. The app shows **Sent** after a valid response and keeps
+  drafts on failure. Support credentials, Discord destinations and support
+  server code belong to the separate service repository.
+
 ## [6.4.0] - 2026-09-05
 
 Verified on this branch's packaged builds by `tools/packaged-update-acceptance.js` on an elevated Windows 11 session: a real per-machine install of a local pre-release build followed by an in-place update to 6.4.0 through a local copy of the update feed. Four full runs on the release candidate passed every check except the handoff-notice check, which found the defect fixed below; a targeted re-check of that fix is recorded in the release notes. The rebuilt uninstaller exits 0 on every run; the 6.3.1–6.3.3 uninstaller exited 2 on every start. `npm test` and the CI packaged acceptance are green on `main`. Releases remain unsigned.
@@ -1185,6 +1227,7 @@ The following manual cases must pass before tagging the release:
 - Direct publish of releases to the `1132-Fixer-Windows-Releases` repo
   for the auto-updater.
 
+[6.4.1]: https://github.com/1132-Fixer/windows/releases/tag/v6.4.1
 [6.4.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.4.0
 [6.3.3]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.3
 [6.3.2]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.2

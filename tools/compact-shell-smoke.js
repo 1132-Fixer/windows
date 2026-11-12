@@ -21,7 +21,7 @@ for (const text of [
   'Making sure everything',
   'Ready to fix Zoom',
   'Start Zoom with a fresh setup.',
-  'Your personal files won’t be changed.',
+  'Review the helper account and profile changes before continuing.',
   'Fixing Zoom',
   'Getting things ready…',
   'Step ${view.step} of ${FIX_STAGE_COUNT}',
@@ -69,7 +69,8 @@ check(html.includes('id="cancelFixBtn"') && shell.includes("document.getElementB
 check(!shell.includes("cancelBtn.addEventListener('click', () => exitBtn.click())"), 'Cancel is not wired to the old Exit button');
 check(shell.includes('Cancel fix and exit') && shell.includes('Keep running'), 'Exit-during-fix confirmation is present');
 check(shell.includes('Finishing the current step safely…'), 'cancelling state explains safe-boundary behavior');
-check(shell.includes('Fix cancelled') && shell.includes('Nothing else will be changed.'), 'cancelled terminal state is conclusive');
+check(shell.includes('Fix cancelled') && shell.includes('Completed changes remain.') &&
+  shell.includes('Check again before another repair.'), 'cancelled state preserves prior changes and requires a check');
 check(/requestCancel: \(\) => \(api\(\) && api\(\)\.quitApp \? api\(\)\.quitApp\(\)/.test(shell) && preload.includes("quitApp: () => ipcRenderer.invoke('quit-app')"),
   'shell routes cancellation through the brokered quit-app IPC exposed by preload');
 check(preload.includes("dataset.fixOutcome = 'running'"), 'preload exposes run outcome to the presentation shell');

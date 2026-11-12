@@ -413,7 +413,7 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
       if (state === 'ready') {
         if (resultTitle) resultTitle.textContent = 'Ready to fix Zoom';
         if (resultSub) {
-          resultSub.textContent = 'Start Zoom with a fresh setup.\nYour personal files won’t be changed.';
+          resultSub.textContent = 'Start Zoom with a fresh setup.\nReview the helper account and profile changes before continuing.';
           resultSub.hidden = false;
         }
         setElementHidden(fixBtn, false);
@@ -439,15 +439,16 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
       } else if (state === 'cancelled') {
         if (noticeTitle) noticeTitle.textContent = 'Fix cancelled';
         if (noticeSub) {
-          noticeSub.textContent = 'Nothing else will be changed.';
+          noticeSub.textContent = 'Completed changes remain. No further steps will run. Check again before another repair.';
           noticeSub.hidden = false;
         }
         setElementHidden(launchBtn, true);
         setElementHidden(shortcutBtn, true);
-        setElementHidden(rescanBtn, true);
+        setElementHidden(rescanBtn, false);
+        rescanBtn.textContent = 'Check again';
         setElementHidden(detailsBtn, false);
         setElementHidden(supportBtn, true);
-        if (!fixBtn.hidden) fixBtn.textContent = 'Try again';
+        setElementHidden(fixBtn, true);
         resetCancelButton();
         if (exitAfterCancel && !quitAfterCancelScheduled && typeof requestQuit === 'function') {
           quitAfterCancelScheduled = true;

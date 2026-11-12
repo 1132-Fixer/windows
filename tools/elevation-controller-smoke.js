@@ -10,7 +10,7 @@
  * Smart App Control style refusal, exit-before-output, output-without-exit,
  * special-character paths and arguments, and the no-temp-file guarantee.
  *
- * The last section runs the real System32 PowerShell (no -Verb RunAs) to
+ * The last section runs native PowerShell 7 (no -Verb RunAs) to
  * prove the -Command transport carries apostrophes, spaces, quotes, `$`,
  * backticks, semicolons and non-ASCII text byte-for-byte. It is skipped on
  * non-Windows hosts and reported as such.
@@ -19,8 +19,11 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const vm = require('vm');
+const { EventEmitter } = require('events');
 const { spawnSync } = require('child_process');
 const elev = require('../src/main/elevation');
+const { nativePowerShell7 } = require('./native-powershell');
 
 let failures = 0;
 let skipped = 0;
@@ -57,7 +60,13 @@ function controller(opts) {
     spawnSync: opts.sync,
     runTimed: opts.runner,
     probeMs: opts.probeMs || 50,
-    relaunchMs: opts.relaunchMs || 50
+    relaunchMs: opts.relaunchMs || 50,
+    // Process mocks still use the real resolver. Model loaded Windows DLL
+    // evidence explicitly so these behaviour cases run on every CI host.
+    env: opts.env || { SystemRoot: 'C:\\Windows', PATH: '' },
+    getReport: Object.prototype.hasOwnProperty.call(opts, 'getReport') ? opts.getReport :
+      () => ({ sharedObjects: ['ntdll.dll', 'kernel32.dll', 'kernelbase.dll'].map(name => `C:\\Windows\\System32\\${name}`) }),
+    arch: opts.arch || 'x64'
   });
 }
 const RELAUNCH_OPTS = {
@@ -91,6 +100,12 @@ const RELAUNCH_OPTS = {
     check(runner.calls.length === 1 && /powershell\.exe$/i.test(runner.calls[0].cmd), 'fallback runs System32 PowerShell');
     check(runner.calls[0].args.includes('-Command') && !runner.calls[0].args.includes('-File'), 'fallback is -Command, never -File');
     check(runner.calls[0].timeoutMs === 50, 'token probe carries the probe deadline');
+    const snap = c.snapshot();
+    const retry = await c.isElevated();
+    check(snap.elevated === true && snap.method === 'token-elevation',
+      'startup snapshot preserves a successful TOKEN_ELEVATION fallback');
+    check(retry.elevated === true && retry.method === 'token-elevation' && runner.calls.length === 1,
+      'retry reuses the successful fallback instead of dead-ending as already elevated');
   }
   {
     const c = controller({ sync: fakeSync(''), runner: recordingRunner({ stdout: '' }) });
@@ -111,6 +126,29 @@ const RELAUNCH_OPTS = {
     const c = controller({ sync: fakeSync(''), runner: recordingRunner({ outcome: 'ok', code: 1, stdout: '' }) });
     const r = await c.isElevated();
     check(r.elevated === false && r.method === 'failed', 'nonzero exit without a sentinel fails closed');
+  }
+  for (const [name, reply] of [
+    ['nonzero exit', { code: 1 }],
+    ['missing exit code', { code: null }],
+    ['timeout', { outcome: 'timeout', timedOut: true, code: -1 }],
+    ['spawn error', { outcome: 'launch-error', code: -1, error: 'spawn denied' }],
+    ['error with zero exit', { code: 0, error: 'probe failed' }],
+    ['unknown outcome', { outcome: 'unknown', code: 0 }]
+  ]) {
+    const c = controller({ sync: fakeSync(''), runner: recordingRunner({ stdout: 'TOKEN_ELEVATED=1\r\n', ...reply }) });
+    const r = await c.isElevated();
+    check(r.elevated === false && r.method === 'failed', `${name} with a valid token sentinel never grants elevation`);
+  }
+  for (const [name, reply] of [
+    ['nonzero whoami exit', { status: 1 }],
+    ['whoami process error', { status: 0, error: new Error('probe denied') }],
+    ['whoami timeout signal', { status: null, signal: 'SIGTERM' }]
+  ]) {
+    const runner = recordingRunner({ stdout: 'TOKEN_ELEVATED=0\r\n' });
+    const c = controller({ sync: () => ({ stdout: HIGH, ...reply }), runner });
+    const r = await c.isElevated();
+    check(r.elevated === false && r.method === 'token-elevation' && runner.calls.length === 1,
+      `${name} with a valid integrity SID requires a successful independent token probe`);
   }
   {
     const c = controller({ sync: fakeSync(''), runner: recordingRunner({ outcome: 'launch-error', code: -1, error: 'spawn ENOENT' }) });
@@ -174,6 +212,18 @@ const RELAUNCH_OPTS = {
     const r = await c.relaunchElevated(RELAUNCH_OPTS);
     check(r.started === false && r.outcome === 'failed', 'child exits before emitting a result: failed, not started');
   }
+  for (const [name, reply, expected] of [
+    ['nonzero exit', { code: 1 }, 'failed'],
+    ['missing exit code', { code: null }, 'failed'],
+    ['timeout', { outcome: 'timeout', timedOut: true, code: -1 }, 'timeout'],
+    ['spawn error', { outcome: 'launch-error', code: -1, error: 'spawn denied' }, 'launch-error'],
+    ['error with zero exit', { code: 0, error: 'relaunch failed' }, 'failed'],
+    ['unknown outcome', { outcome: 'unknown', code: 0 }, 'failed']
+  ]) {
+    const c = controller({ sync: fakeSync(MEDIUM), runner: recordingRunner({ stdout: `${elev.RELAUNCH_STARTED}\r\n`, ...reply }) });
+    const r = await c.relaunchElevated(RELAUNCH_OPTS);
+    check(!r.started && r.outcome === expected, `${name} cannot promote a valid relaunch sentinel to success`);
+  }
   {
     const c = controller({ sync: fakeSync(MEDIUM), runner: recordingRunner({ outcome: 'ok', code: 1, stdout: 'At line:1 char:1 STARTED is not recognized' }) });
     const r = await c.relaunchElevated(RELAUNCH_OPTS);
@@ -211,16 +261,25 @@ const RELAUNCH_OPTS = {
     check(elev.parseRelaunchOutput('') === null && elev.parseRelaunchOutput(null) === null, 'empty output parses to null');
   }
 
-  console.log('elevation-controller-smoke: SystemRoot resolution');
+  console.log('elevation-controller-smoke: OS-loaded root authority');
   {
-    const exists = (p) => p === 'D:\\Win' || p === 'C:\\Windows';
-    check(elev.resolveSystemRoot({ SystemRoot: 'D:\\Win' }, exists) === 'D:\\Win', 'absolute existing SystemRoot is used');
-    check(elev.resolveSystemRoot({ SystemRoot: 'Win' }, exists) === 'C:\\Windows', 'relative SystemRoot is ignored');
-    check(elev.resolveSystemRoot({}, exists) === 'C:\\Windows', 'missing SystemRoot falls back to C:\\Windows');
-    check(elev.resolveSystemRoot({ SystemRoot: 'D:\\Nope' }, exists) === 'C:\\Windows', 'nonexistent SystemRoot falls back');
-    check(elev.resolveSystemRoot({}, () => false) === null, 'no Windows directory at all resolves to null');
-    check(elev.systemPowerShell({ SystemRoot: 'D:\\Win' }, exists) === 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'PowerShell path is absolute under SystemRoot');
-    check(elev.systemPowerShell({}, () => false) === null, 'PowerShell path is null without a Windows directory');
+    const opts = { arch: 'x64', getReport: () => ({ sharedObjects: ['ntdll.dll', 'kernel32.dll', 'kernelbase.dll'].map(name => `D:\\Win\\System32\\${name}`) }),
+      env: { SystemRoot: 'C:\\Fake', WINDIR: 'C:\\Fake', PATH: 'C:\\Fake' }, existsSync: () => true };
+    check(elev.resolveSystemRoot(opts) === 'D:\\Win', 'elevation root comes from loaded OS libraries');
+    check(elev.systemPowerShell(opts) === 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      'forged environment and matching disk shape cannot replace elevation PowerShell');
+    check(elev.systemWhoami(opts) === 'D:\\Win\\System32\\whoami.exe', 'whoami uses the same loaded-library root');
+    const absent = { ...opts, getReport: null };
+    check(elev.systemPowerShell(absent) === null && elev.systemWhoami(absent) === null,
+      'no report means no privileged executable, even with existing forged folders');
+    const wow64 = { arch: 'ia32', getReport: () => ({ sharedObjects: ['ntdll.dll', 'kernel32.dll', 'kernelbase.dll'].map(name => `D:\\Win\\SysWOW64\\${name}`) }) };
+    check(elev.systemPowerShell(wow64) === 'D:\\Win\\Sysnative\\WindowsPowerShell\\v1.0\\powershell.exe',
+      'loaded WOW64 libraries select native PowerShell without an environment flag');
+    const runner = recordingRunner({ stdout: `${elev.RELAUNCH_STARTED}\r\n` });
+    const missing = controller({ sync: fakeSync(HIGH), runner, env: { SystemRoot: 'C:\\Fake', PATH: 'C:\\Fake' }, getReport: null });
+    const missingResult = await missing.relaunchElevated(RELAUNCH_OPTS);
+    check(missingResult.outcome === 'launch-error' && runner.calls.length === 0,
+      'missing OS authority reports launch error without a fixed-drive or PATH fallback');
   }
 
   console.log('elevation-controller-smoke: no temporary script file');
@@ -253,16 +312,56 @@ const RELAUNCH_OPTS = {
     check(grand.outcome === 'ok' && /EARLY/.test(grand.stdout) && grand.ms < 3000, 'inherited handles do not hold runTimed open past the grace period');
   }
 
-  console.log('elevation-controller-smoke: -Command transport through real PowerShell');
+  console.log('elevation-controller-smoke: exit fences the main deadline during close grace');
+  {
+    const moduleSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'elevation.js'), 'utf8');
+    const start = moduleSource.indexOf('function runTimed(');
+    const end = moduleSource.indexOf('\n}\n', start);
+    const child = new EventEmitter();
+    child.pid = 1132;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => true;
+    const timers = new Map();
+    let nextTimer = 1;
+    let now = 0;
+    const context = {
+      spawn: () => child,
+      killTree: () => {},
+      EXIT_CLOSE_GRACE_MS: elev.EXIT_CLOSE_GRACE_MS,
+      Date: { now: () => now },
+      setTimeout: (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, ms }); return id; },
+      clearTimeout: id => timers.delete(id)
+    };
+    vm.createContext(context);
+    vm.runInContext(moduleSource.slice(start, end + 2) + '\nthis.runTimed = runTimed;', context);
+    const pending = context.runTimed('fixture.exe', [], 1000);
+    child.stdout.emit('data', Buffer.from('NEAR\n'));
+    now = 999;
+    child.emit('exit', 7);
+    check(!Array.from(timers.values()).some(timer => timer.ms === 1000) &&
+      Array.from(timers.values()).some(timer => timer.ms === elev.EXIT_CLOSE_GRACE_MS),
+    'exit observed just before the deadline clears the deadline and starts only close grace');
+    const grace = Array.from(timers.entries()).find(([, timer]) => timer.ms === elev.EXIT_CLOSE_GRACE_MS);
+    timers.delete(grace[0]);
+    now += elev.EXIT_CLOSE_GRACE_MS;
+    grace[1].fn();
+    const result = await pending;
+    check(result.outcome === 'ok' && result.code === 7 && result.timedOut === false && result.stdout === 'NEAR\n',
+      'inherited handles cannot overwrite the completed child outcome after exit');
+  }
+
+  console.log('elevation-controller-smoke: -Command transport through native PowerShell 7');
   if (process.platform !== 'win32') {
     skip('PowerShell transport', 'not Windows');
   } else {
-    const ps = elev.systemPowerShell();
+    const ps = nativePowerShell7();
     if (!ps || !fs.existsSync(ps)) {
-      skip('PowerShell transport', 'System32 PowerShell not present');
+      throw new Error('Required native PowerShell 7 transport is unavailable');
     } else {
       const probe = "C:\\Users\\O'Brien\\Área ünïcode\\1132 \"Fixer\".exe $env:TEMP `x; y";
       const script = [
+        "if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 is required' }",
         'try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}',
         `Write-Output ('ECHO=' + '${probe.replace(/'/g, "''")}')`
       ].join('; ');

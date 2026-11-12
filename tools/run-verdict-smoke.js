@@ -13,8 +13,11 @@
 //  - empty/missing steps -> legacy verdict unchanged (success; warning-count
 //    headline when warnings exist)
 //  - 'warn' steps and plain warnings never flip a run to partial
+//  - bundled consent script resolves native registry tools without PATH
 
 const rv = require('../run-verdict.js');
+const fs = require('fs');
+const path = require('path');
 
 let failures = 0;
 function check(cond, name) {
@@ -98,18 +101,36 @@ console.log('run-verdict-smoke: warn steps never partial');
 console.log('run-verdict-smoke: consent outcome (P1-A — HKU is the toggle Zoom reads)');
 {
   check(rv.consentOutcome('OK', false, 'YES') === 'OK', 'per-user readback Allow -> OK');
-  check(rv.consentOutcome('UNVERIFIED', false, 'YES') === 'OK', 'readback upgrades marker-lost UNVERIFIED to OK');
+  check(rv.consentOutcome('UNVERIFIED', false, 'YES') === 'UNVERIFIED', 'later readback cannot replace missing identity-bound proof');
   check(rv.consentOutcome('OK', false, 'NO') === 'UNVERIFIED', 'HKLM-only OK with per-user value absent -> UNVERIFIED (never OK)');
   check(rv.consentOutcome('OK', false, '') === 'UNVERIFIED', 'HKLM-only OK, hive unreadable, no per-user write proof -> UNVERIFIED');
   check(rv.consentOutcome('OK', true, '') === 'OK', 'verified per-user write stands when hive is unreadable at verify');
-  check(rv.consentOutcome('UNVERIFIED', true, '') === 'OK', 'verified per-user write also rescues a marker-degraded status');
+  check(rv.consentOutcome('UNVERIFIED', true, '') === 'UNVERIFIED', 'a partial write marker cannot replace a complete identity-bound receipt');
   check(rv.consentOutcome('UNVERIFIED', false, '') === 'UNVERIFIED', 'nothing verified anywhere -> UNVERIFIED');
   check(rv.consentOutcome('POLICY-BLOCKED', true, 'YES') === 'POLICY-BLOCKED', 'policy block always stands');
+  check(rv.consentOutcome('MACHINE-BLOCKED', true, 'YES') === 'MACHINE-BLOCKED', 'machine block cannot be upgraded by per-user values');
+  for (const unknown of [undefined, null, '', 'ALLOW', 'unverified']) {
+    check(rv.consentOutcome(unknown, true, 'YES') === 'UNVERIFIED', 'unknown script status remains unverified');
+  }
   const v = rv.computeRunVerdict(
     [{ id: 'consent', label: 'Grant camera and microphone access', outcome: 'fail',
        detail: 'camera=UNVERIFIED, microphone=OK — sign in as user1, open Settings > Privacy & security > Camera (and Microphone), and toggle access on manually.' }],
     [], []);
   check(v.partial === true, 'unconfirmed consent -> partial run');
+}
+
+console.log('run-verdict-smoke: bundled consent isolation boundary');
+{
+  const consent = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'grant-media-consent.ps1'), 'utf8');
+  function hasNoHiveOrServiceMutation(script) {
+    return !/\b(?:reg(?:\.exe)?\s+(?:load|unload)|Set-Service|Start-Service|Stop-Service|Restart-Service|Start-Process)\b/i.test(script);
+  }
+  check(hasNoHiveOrServiceMutation(consent), 'consent never mounts/unmounts a hive or changes a service');
+  check(!consent.includes('Resolve-FixerTool') && !consent.includes('$env:SystemRoot'),
+    'bundled -File script works without an inherited helper or environment-root lookup');
+  for (const mutation of ['reg.exe load', 'reg.exe unload', 'Set-Service', 'Start-Process']) {
+    check(!hasNoHiveOrServiceMutation(consent + '\n' + mutation), 'negative control rejects ' + mutation);
+  }
 }
 
 console.log('run-verdict-smoke: ProfSvc refresh marker (P1-B)');
