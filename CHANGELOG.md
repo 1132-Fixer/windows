@@ -7,8 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.1] - 2026-11-12
+
 ### Fixed
 
+- Rebuilding the helper account no longer restarts shared Windows profile
+  services. In 6.4.0 that restart could disrupt the signed-in user's session
+  ([#252](https://github.com/1132-Fixer/windows/issues/252)). Repair now stops
+  with a clear message when the account, service or profile state cannot be
+  verified. The cause of the separately reported Explorer crash is not yet
+  established.
+- Helper settings are applied with the helper's own standard privileges. The
+  app no longer changes elevated registry hive permissions, machine privacy or
+  camera service settings, or the Windows desktop theme.
+- Setup no longer force-closes running processes, and the 6.4.0 uninstaller is
+  not run during recovery. A cancelled or partly completed repair reports what
+  changed and asks for a fresh check.
 - A failed Windows tool check no longer becomes several false missing-tool
   errors after **Fix now**. Preflight validates process status and the complete
   inventory before accepting it; actual missing required tools share one
@@ -1209,6 +1223,7 @@ The following manual cases must pass before tagging the release:
 - Direct publish of releases to the `1132-Fixer-Windows-Releases` repo
   for the auto-updater.
 
+[6.4.1]: https://github.com/1132-Fixer/windows/releases/tag/v6.4.1
 [6.4.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.4.0
 [6.3.3]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.3
 [6.3.2]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.2
