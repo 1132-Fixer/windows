@@ -88,6 +88,43 @@ in a bounded chain and requires the final issue to be closed before it reads
 candidate metadata. Preflight and the publisher also require immutable releases
 to be enabled before either can create a draft.
 
+#### Releasing while the support service is not live
+
+A repair fix must not wait for the support service. The support clearance
+receipt therefore has a second form, `schemaVersion: 2`, that declares the
+service unavailable for one release:
+
+```json
+{
+  "schemaVersion": 2,
+  "sourceHead": "<40-hex release commit>",
+  "availability": "unavailable",
+  "endpointConfigRevision": "<64-hex, same value as in both packages>",
+  "journeys": [
+    { "kind": "setup", "journey": "bug-report", "packageSha256": "<64-hex>",
+      "receiptSha256": "<64-hex>", "outcome": "failure-shown-draft-kept" }
+  ]
+}
+```
+
+What it changes, and what it does not:
+
+- All six journeys (Setup and Portable; bug report, rating, contact) are still
+  run on the exact packages. Each must end with the app showing the failure
+  and keeping the draft. Any other outcome is refused.
+- The receipt is still issued by an independent code owner through the
+  `Release evidence issuer` workflow, and the native acceptance manifest still
+  binds its hash. A version 1 receipt cannot carry a failed journey, and a
+  version 2 receipt cannot carry a deployment identity.
+- Preflight does not require the support cutover issue to be closed for a
+  version 2 receipt. Review, required checks, native acceptance, UAC evidence,
+  candidate identity and immutable releases are unchanged.
+- At publication, `scripts/verify-support-endpoint.mjs` refuses the declaration
+  when the configured endpoint answers as a ready 1132 Fixer support service.
+  A live service is released with version 1 evidence.
+- The published release notes gain a "Known issue" section that tells users
+  in-app feedback cannot send in that release.
+
 ### 3. Build
 
 The CI Build & Test job runs `npm ci`, writes the validated public support

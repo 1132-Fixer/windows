@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { createGitHubRestClient } from './github-rest.mjs';
 import {
   fetchAuthoritativeReceipt,
+  supportIsDeclaredUnavailable,
   validateReleaseEvidence
 } from './release-evidence.mjs';
 
@@ -285,7 +286,12 @@ export async function verifyReleasePreflight({
   if (!approved) fail('independent-codeowner-approval-missing');
   await assertReviewThreadsResolved(api, owner, repo, prNumber);
 
-  await assertSupportIssueCleared(api);
+  // The support cutover issue must be closed for a release that claims live
+  // support. Evidence that declares support unavailable makes no such claim,
+  // so the open cutover issue does not block it. Nothing else is relaxed: the
+  // declaration is an issuer-signed receipt bound to this head and to both
+  // package hashes, and publication refuses it if the service is in fact live.
+  if (!supportIsDeclaredUnavailable(evidence.support)) await assertSupportIssueCleared(api);
 
   // Candidate metadata is intentionally last. Review, thread, issuer, policy,
   // and support clearance failures cannot read accepted package metadata.
