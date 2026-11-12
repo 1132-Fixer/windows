@@ -631,6 +631,8 @@ async function runEnvironmentScan(opts = {}) {
     lastScan = { statusByKey: {} };
     refreshDetailsIfOpen();
     canRunFix = false;
+    pendingFixAfterScan = false; // a queued Fix now click is void when the scan fails
+    fixBtn.textContent = 'Fix now';
     setStatus('error', 'Something went wrong');
     updateFixDisabledNote(['Environment scan'], false);
     updateZoomRecovery(null, null); // scan state unknown — hide the card
@@ -651,6 +653,11 @@ async function presentScanResult({ statuses, repairableLabels, blockedLabels, qu
   if (!quiet) await new Promise(r => setTimeout(r, 650));
 
   if (statuses.indexOf('blocked') !== -1 || !canRunFix) {
+    // A Fix now click queued during this scan is void: the result is blocked.
+    // Without this reset the queued click would open the confirmation after a
+    // later clean scan, and the button would keep its "Starting…" label.
+    pendingFixAfterScan = false;
+    fixBtn.textContent = 'Fix now';
     showResultPane('warn', WIZARD.BLOCKED_TITLE, wizardBlockedSub(blockedLabels));
     // The Zoom recovery card (when Zoom is the blocker) renders inside this
     // pane with its own guided actions; one clear next step, plus details.
@@ -1819,9 +1826,12 @@ async function runStartupSequence() {
     signalUpdateAppReady();
     return;
   }
-  canRunFix = true;
-  showResultPane('ok', WIZARD.READY_TITLE, WIZARD.READY_SUB);
-  setActions({ fix: true, shortcutOption: true, details: true });
+  // Elevation alone does not make the repair ready. Stay on the Checking pane
+  // (set at the top of this function) until the first environment scan
+  // reports: showing "Ready to fix Zoom" here painted a result the scan could
+  // contradict a moment later (issue 252 diagnostics, 150% scale run). The
+  // scan is quiet so it does not restart the Checking pane it is already on.
+  canRunFix = false;
   signalUpdateAppReady();
   runEnvironmentScan({ quiet: true });
 }

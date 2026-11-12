@@ -569,6 +569,10 @@ async function runLanding(scale, tag) {
     passed(`${tag}.window-visible`, `first window in ${l.ms} ms`);
     const first = await stateOf(page);
     const firstShot = await shot(page, `${tag}-01-first-paint-${first || 'unknown'}`);
+    // The first paint precedes the first environment scan result. A result
+    // state here is a claim the scan has not made yet.
+    (first !== 'ready' && first !== 'blocked' ? passed : failed)(`${tag}.no-result-before-first-scan`,
+      `first paint state=${first || 'unknown'}`, { screenshot: firstShot });
     const left = await waitForState(page, (s) => s && s !== 'checking', CHECKING_DEADLINE_MS, 'leave checking');
     if (left.ok) passed(`${tag}.leaves-checking`, `state=${left.state} after ${left.ms} ms`, { screenshot: firstShot });
     else failed(`${tag}.leaves-checking`, `still "${left.state || 'checking'}" after ${left.ms} ms — startup freeze`, { screenshot: firstShot });

@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Setup no longer force-closes running processes, and the 6.4.0 uninstaller is
   not run during recovery. A cancelled or partly completed repair reports what
   changed and asks for a fresh check.
+- Startup no longer shows **Ready to fix Zoom** before the first check of the
+  computer has finished. The app stays on **Checking…** until that check
+  reports, so a blocked computer never shows **Fix now** first. A **Fix now**
+  click made while a check runs is dropped when that check ends blocked.
 - A failed Windows tool check no longer becomes several false missing-tool
   errors after **Fix now**. Preflight validates process status and the complete
   inventory before accepting it; actual missing required tools share one
