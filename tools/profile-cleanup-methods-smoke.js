@@ -40,7 +40,8 @@ if (process.platform !== 'win32') {
   process.exit(0);
 }
 
-const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-cleanup-methods-ü [literal]-'));
+const canonicalTemp = fs.realpathSync.native(os.tmpdir());
+const fixtureRoot = fs.mkdtempSync(path.join(canonicalTemp, 'fixer-cleanup-methods-ü [literal]-'));
 const fixtureParent = fs.realpathSync(path.dirname(fixtureRoot));
 const quoted = value => value.replace(/'/g, "''");
 const cases = ['clear', 'loaded', 'enumeration', 'acl', 'identity', 'escape', 'lease', 'writer', 'readonly', 'swap', 'writer-setup-failure'];
@@ -265,7 +266,7 @@ try {
   console.log(`profile-cleanup-methods-smoke: 4 source checks and ${cases.length} native scenarios passed (owned Unicode scratch trees; synthetic profile/ACL adapters)`);
 } finally {
   assert.equal(fs.realpathSync(path.dirname(fixtureRoot)), fixtureParent);
-  assert.equal(fixtureParent, fs.realpathSync(os.tmpdir()));
+  assert.equal(fixtureParent, canonicalTemp);
   assert.ok(path.basename(fixtureRoot).startsWith('fixer-cleanup-methods-'));
   if (fs.existsSync(junction) && fs.lstatSync(junction).isSymbolicLink()) fs.unlinkSync(junction);
   fs.rmSync(fixtureRoot, { recursive: true, force: true });
