@@ -41,7 +41,7 @@ this file.
   repository owns and any recorded divergence. Read both before touching a
   user-facing surface; update `DESIGN-SYNC.md` first when a decision changes.
 - The submodule **is** a git submodule (`.gitmodules`, gitlink mode `160000`,
-  pinned to `516b5ac7d53c488b9ac4266402318fcabf24189f`). The `brand-assets`
+  pinned to `6063385117596e087215d6222082448223e20fb3`). The `brand-assets`
   required check depends on it: `.github/workflows/brand.yml` checks out with
   `submodules: true` and runs `design-system/scripts/brand-assets.sh`. Do not
   remove it, do not vendor a second copy of the guard or of the canonical
