@@ -3,7 +3,7 @@
 // Exercise the INSTALLED packaging consumers without building/launching an app.
 // Run unchanged before and after the scoped minimatch override:
 //   node tools/packaging-globs-smoke.js --json
-// Candidate run can add --expect-minimatch 11.0.1 to require both scoped users.
+// Candidate run can add --expect-minimatch 11.0.8 to require both scoped users.
 // Optional read-only archive comparison:
 //   node tools/packaging-globs-smoke.js --asar <baseline> --compare-asar <candidate>
 // No package/lock changes, fixture files, archive extraction, native helpers,
@@ -97,10 +97,10 @@ function loadConsumers() {
   const builderFile = require.resolve('app-builder-lib/out/fileMatcher.js');
   const builderRequire = Module.createRequire(builderFile);
   const builder = packageInfo(builderFile, 'app-builder-lib');
-  assert.equal(builder.version, '26.15.3', 'Review fixtures when app-builder-lib consumer changes');
+  assert.equal(builder.version, '26.18.0', 'Review fixtures when app-builder-lib consumer changes');
   const builderMatchPath = builderRequire.resolve('minimatch');
   const builderMatch = packageInfo(builderMatchPath, 'minimatch');
-  assert.ok(['10.2.6', '11.0.1'].includes(builderMatch.version), 'Expected current baseline or proposed scoped builder minimatch');
+  assert.ok(['10.2.6', '11.0.8'].includes(builderMatch.version), 'Expected current baseline or proposed scoped builder minimatch');
   const api = builderRequire(builderFile);
   assert.equal(typeof api.FileMatcher, 'function');
   assert.equal(typeof api.getMainFileMatchers, 'function');
@@ -113,7 +113,7 @@ function loadConsumers() {
   assert.equal(universal.version, '2.0.3', 'Review private consumer extraction when universal changes');
   const universalMatchPath = universalRequire.resolve('minimatch');
   const universalMatch = packageInfo(universalMatchPath, 'minimatch');
-  assert.ok(['9.0.9', '11.0.1'].includes(universalMatch.version), 'Expected current baseline or proposed scoped universal minimatch');
+  assert.ok(['9.0.9', '11.0.8'].includes(universalMatch.version), 'Expected current baseline or proposed scoped universal minimatch');
   const dependency = universalRequire('minimatch');
   const asarEntry = builderRequire.resolve('@electron/asar');
   const asarRequire = Module.createRequire(asarEntry);
@@ -316,7 +316,7 @@ function main() {
     if (args[index] === '--json') { assert.equal(options.json, undefined); options.json = true; }
     else if (['--asar', '--compare-asar', '--expect-minimatch'].includes(args[index])) {
       const key = args[index].slice(2); assert.equal(options[key], undefined); assert.ok(args[index + 1]); options[key] = args[++index];
-    } else throw new Error('Use --json, --expect-minimatch 11.0.1, or --asar <baseline> --compare-asar <candidate>');
+    } else throw new Error('Use --json, --expect-minimatch 11.0.8, or --asar <baseline> --compare-asar <candidate>');
   }
   assert.ok(!options['compare-asar'] || options.asar, '--compare-asar requires --asar');
   // Standalone CLI: retain guards through process exit, including callbacks
@@ -331,7 +331,7 @@ function main() {
   {
     const consumer = loadConsumers(), patterns = runFixtures(consumer);
     if (options['expect-minimatch']) {
-      assert.equal(options['expect-minimatch'], '11.0.1', 'Only the reviewed scoped candidate is supported');
+      assert.equal(options['expect-minimatch'], '11.0.8', 'Only the reviewed scoped candidate is supported');
       assert.equal(consumer.versions.builderMinimatch, options['expect-minimatch'], 'Builder must resolve scoped candidate');
       assert.equal(consumer.versions.universalMinimatch, options['expect-minimatch'], 'Universal must resolve scoped candidate');
     }
