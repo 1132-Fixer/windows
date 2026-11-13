@@ -29,7 +29,7 @@
   "author": "1132 Fixer",
   "license": "MIT",
   "devDependencies": {
-    "electron": "44.10.2",
+    "electron": "45.3.0",
     "electron-builder": "^26.15.3",
     "playwright-core": "1.62.1"
   },
