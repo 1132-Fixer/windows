@@ -71,8 +71,10 @@ unsigned Elevate (`nsis-3.0.4.1`, SHA-256
 Smart App Control blocks it as “part of this app”. First-party code does not
 call it.
 
-`scripts/after-pack-verify-manifest.js` deletes it after the copy, before the
-NSIS 7z is built. Uninstall UAC is Windows, not that helper: electron-builder
+`scripts/after-pack-verify-manifest.js` disables builder 26.18 helper source
+resolution before archive injection and the deferred unpacked copy, and removes
+leftover helpers from the unpacked directory. Unknown helper APIs fail the build.
+Uninstall UAC is Windows, not that helper: electron-builder
 builds the uninstaller `RequestExecutionLevel user` on purpose and it
 re-launches itself elevated when it runs per-machine. Do **not** edit the
 generated `__uninstaller.exe` after makensis writes it (no manifest stamp, no

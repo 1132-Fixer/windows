@@ -31,26 +31,25 @@ function removeElevateHelper(appOutDir) {
   }
 }
 
-// electron-builder copies elevate.exe AFTER afterPack when perMachine is true
-// (packElevateHelper false is ignored). Patch the copier so the 7z payload
-// never includes it. First-party code does not call that helper.
+// electron-builder 26.18 injects elevate.exe into the completed archive and
+// schedules a final unpacked copy. Disable source resolution before either
+// operation; deleting from appOutDir alone cannot protect the archive.
+// packElevateHelper false is still ignored for perMachine builds.
 function installElevateStrip() {
-  let CopyElevateHelper;
-  try {
-    ({ CopyElevateHelper } = require('app-builder-lib/out/targets/nsis/nsisUtil'));
-  } catch (_) {
-    return false;
+  const { CopyElevateHelper } = require('app-builder-lib/out/targets/nsis/nsisUtil');
+  if (typeof CopyElevateHelper?.prototype.resolve !== 'function' ||
+      typeof CopyElevateHelper.prototype.addToArchive !== 'function') {
+    throw new Error('Unsupported electron-builder elevate helper API; refusing to package.');
   }
-  if (!CopyElevateHelper || CopyElevateHelper.prototype.copy.__1132_stripped) return true;
-  const orig = CopyElevateHelper.prototype.copy;
-  CopyElevateHelper.prototype.copy = function copyAndStrip(appOutDir, target) {
-    return Promise.resolve(orig.call(this, appOutDir, target)).then(() => {
-      removeElevateHelper(appOutDir);
-    });
+  if (CopyElevateHelper.prototype.resolve.__1132_stripped) return true;
+  CopyElevateHelper.prototype.resolve = function omitElevateHelper() {
+    return Promise.resolve(null);
   };
-  CopyElevateHelper.prototype.copy.__1132_stripped = true;
+  CopyElevateHelper.prototype.resolve.__1132_stripped = true;
   return true;
 }
+
+exports.installElevateStrip = installElevateStrip;
 
 // The generated NSIS uninstaller (__uninstaller.exe) must NOT be edited after
 // makensis writes it. NSIS computes the executable's CRC at build time and
