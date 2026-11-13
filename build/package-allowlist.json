@@ -23,7 +23,7 @@
 
     "d3dcompiler_47.dll",
     "dxcompiler.dll",
-    "dxil.dll",
+    "electron_wer.dll",
     "ffmpeg.dll",
     "vk_swiftshader.dll",
     "vulkan-1.dll",

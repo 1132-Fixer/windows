@@ -16,9 +16,10 @@ statements in both directions:
 
 ## 1. Currently packaged binaries
 
-Verified 2026-09-01 against Electron 44.0.0 (`dist/win-unpacked`). Electron 44
-no longer ships `libEGL.dll` or `libGLESv2.dll`; those names were removed from
-`build/package-allowlist.json` in the same change.
+Verified 2026-11-14 against Electron 45.3.2 (`dist/win-unpacked`). Electron 45
+adds `electron_wer.dll` and no longer ships `dxil.dll`; the exact inventory
+allowlist records this runtime change. Electron 44 already removed `libEGL.dll`
+and `libGLESv2.dll`.
 
 ### 1.1 Electron runtime
 
@@ -26,7 +27,8 @@ no longer ships `libEGL.dll` or `libGLESv2.dll`; those names were removed from
 | --- | --- | --- | --- |
 | `1132 Fixer.exe` | Electron official Windows x64 distribution, renamed by electron-builder | MIT (Electron), with Chromium components under their own terms | The application host |
 | `ffmpeg.dll` | Electron distribution | LGPL-2.1-or-later / Chromium terms | Chromium media |
-| `vk_swiftshader.dll`, `vulkan-1.dll`, `dxcompiler.dll`, `dxil.dll`, `d3dcompiler_47.dll` | Electron distribution | Chromium / SwiftShader / DirectX terms | Chromium graphics |
+| `vk_swiftshader.dll`, `vulkan-1.dll`, `dxcompiler.dll`, `d3dcompiler_47.dll` | Electron distribution | Chromium / SwiftShader / DirectX terms | Chromium graphics |
+| `electron_wer.dll` | Official Electron 45.3.2 Windows x64 distribution | MIT (Electron) | Upstream Windows Error Reporting helper; app does not enable crashReporter or register this helper |
 | `*.pak`, `icudtl.dat`, `*.bin`, `locales/*.pak` | Electron distribution | Chromium terms | Chromium resources and locales |
 | `LICENSES.chromium.html` | Electron distribution | n/a | Required attribution |
 
