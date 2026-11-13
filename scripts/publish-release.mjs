@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createGitHubRestClient } from './github-rest.mjs';
-import { validateReleaseEvidence } from './release-evidence.mjs';
+import { supportIsDeclaredUnavailable, validateReleaseEvidence } from './release-evidence.mjs';
 import { verifyCandidateManifest } from './release-candidate.mjs';
 
 function fail(code) {
@@ -46,7 +46,25 @@ export function exactAssets(dist, candidate) {
   return names.map(name => ({ name, file: path.join(dist, name), ...hashFile(path.join(dist, name)) }));
 }
 
-export async function publishRelease({ api, repository, tag, head, version, assets }) {
+// The published notes must say so when the release evidence declares the
+// support service unavailable: users are told before they try the form.
+export function releaseBody(version, { supportUnavailable = false } = {}) {
+  const lines = [
+    '## Download', '',
+    '| File | Use this one if |', '|---|---|',
+    `| **1132-Fixer-Setup-${version}.exe** | **Most people.** Standard installer — adds Start Menu / desktop shortcuts and enables auto-update. |`,
+    `| **1132-Fixer-Portable-${version}.exe** | You want no install — just run it. |`, '',
+    'Right-click → **Run as administrator**. Requires Windows 10/11 with Zoom Workplace installed machine-wide.'
+  ];
+  if (supportUnavailable) {
+    lines.push('', '## Known issue', '',
+      'In-app **Feedback**, **Rate us** and **Report a bug** cannot send in this release: the support service is not live. ' +
+      'The app shows the failure and keeps your draft. Report problems through GitHub Issues in this repository.');
+  }
+  return lines.join('\n');
+}
+
+export async function publishRelease({ api, repository, tag, head, version, assets, supportUnavailable = false }) {
   if (!api || typeof api.getReleaseByTag !== 'function' ||
       typeof api.resolveTag !== 'function' ||
       typeof api.getImmutableReleaseState !== 'function' ||
@@ -64,13 +82,7 @@ export async function publishRelease({ api, repository, tag, head, version, asse
   const draft = await api.createDraft({
     tag, head, version, prerelease,
     name: `1132 Fixer ${tag}`,
-    body: [
-      '## Download', '',
-      '| File | Use this one if |', '|---|---|',
-      `| **1132-Fixer-Setup-${version}.exe** | **Most people.** Standard installer — adds Start Menu / desktop shortcuts and enables auto-update. |`,
-      `| **1132-Fixer-Portable-${version}.exe** | You want no install — just run it. |`, '',
-      'Right-click → **Run as administrator**. Requires Windows 10/11 with Zoom Workplace installed machine-wide.'
-    ].join('\n')
+    body: releaseBody(version, { supportUnavailable: supportUnavailable === true })
   });
   if (!draft || !Number.isSafeInteger(draft.id) || draft.id < 1 || draft.draft !== true ||
       draft.tag_name !== tag || draft.prerelease !== prerelease) {
@@ -233,7 +245,8 @@ async function main() {
   });
   const assets = exactAssets(dist, candidate);
   const published = await publishRelease({
-    api: githubReleaseApi({ repository, token }), repository, tag, head, version, assets
+    api: githubReleaseApi({ repository, token }), repository, tag, head, version, assets,
+    supportUnavailable: supportIsDeclaredUnavailable(evidence.support)
   });
   console.log(`[release-publish] PASS release=${published.id} assets=${assets.length}`);
 }

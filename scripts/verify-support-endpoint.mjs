@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { validateReleaseEvidence } from './release-evidence.mjs';
+import { supportIsDeclaredUnavailable, validateReleaseEvidence } from './release-evidence.mjs';
 
 const require = createRequire(import.meta.url);
 const { endpointUrl, supportConfigRevision } = require('../src/main/support-client');
@@ -63,6 +63,51 @@ export async function verifySupportEndpoint(value, expected, fetchImpl = fetch) 
   } finally { clearTimeout(timer); }
 }
 
+// Counterpart for a release whose evidence declares support unavailable
+// (support clearance schema version 2). The declaration is refused when the
+// configured endpoint answers as a ready 1132 Fixer support service: a live
+// service must be released with live journey evidence, not with a waiver.
+export async function verifySupportUnavailable(value, expected, fetchImpl = fetch) {
+  const endpoint = endpointUrl(value);
+  if (!endpoint) throw new Error('A valid public HTTPS support endpoint is required.');
+  const revision = expected && typeof expected === 'object' ? expected.endpointConfigRevision : '';
+  if (!/^[a-f0-9]{64}$/.test(revision || '') || supportConfigRevision(endpoint.href) !== revision) {
+    throw new Error('The public support configuration revision does not match the release evidence.');
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  let live = false;
+  try {
+    const response = await fetchImpl(new URL('/health', endpoint), {
+      signal: controller.signal, redirect: 'error', headers: { Accept: 'application/json' }
+    });
+    if (response.ok && response.body) {
+      const reader = response.body.getReader();
+      const chunks = [];
+      let size = 0;
+      let bounded = true;
+      while (true) {
+        const { done, value: chunk } = await reader.read();
+        if (done) break;
+        size += chunk.byteLength;
+        if (size > 16384) { await reader.cancel(); bounded = false; break; }
+        chunks.push(Buffer.from(chunk));
+      }
+      if (bounded) {
+        const state = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        live = !!state && state.ok === true && state.service === '1132-fixer-support' &&
+          state.capabilities?.feedback === true;
+      }
+    }
+  } catch (_) {
+    // Unreachable, redirected, timed out or not JSON: not a ready service.
+    live = false;
+  } finally { clearTimeout(timer); }
+  if (live) {
+    throw new Error('The support service is live. Release with live support evidence, not an unavailable declaration.');
+  }
+}
+
 function argOf(flag, fallback = '') {
   const index = process.argv.indexOf(flag);
   return index >= 0 && process.argv[index + 1] ? process.argv[index + 1] : fallback;
@@ -76,7 +121,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       expectedHead: process.env.GITHUB_SHA || '',
       expectedVersion: process.env.RELEASE_VERSION || ''
     });
-    verifySupportEndpoint(process.env.FEEDBACK_PROXY_URL, {
+    if (supportIsDeclaredUnavailable(evidence.support)) {
+      verifySupportUnavailable(process.env.FEEDBACK_PROXY_URL, {
+        endpointConfigRevision: evidence.support.endpointConfigRevision
+      }).then(() => {
+        console.log('[release] Support is declared unavailable for this release. Verified that no ready support service answers at the configured endpoint, and that all six journeys recorded a shown failure with the draft kept.');
+      }).catch(() => {
+        console.error('[release] Support unavailable declaration was refused.');
+        process.exitCode = 1;
+      });
+    } else verifySupportEndpoint(process.env.FEEDBACK_PROXY_URL, {
       endpointConfigRevision: evidence.support.endpointConfigRevision,
       backendDeploymentRevision: evidence.support.backendDeploymentRevision,
       destinationFingerprint: evidence.support.destinationFingerprint,

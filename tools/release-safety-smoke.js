@@ -600,6 +600,67 @@ function cleanupExactFiles(filePaths, directory) {
     }), error => error.code === code, name);
   }
   {
+    // A live receipt can never carry a failed journey; failure evidence has its own form.
+    const changed = clone(support);
+    changed.journeys[0].success = false;
+    assert.throws(() => validateReleaseEvidence(nativeBytes, Buffer.from(JSON.stringify(changed)), {
+      expectedHead: sourceHead, expectedVersion: version
+    }), error => error.code === 'support-journey-failed', 'a live receipt with a failed journey fails closed');
+  }
+  {
+    // Support declared unavailable (schema version 2): journeys still run on
+    // the exact packages and must record a shown failure with the draft kept.
+    const unavailable = {
+      schemaVersion: 2, sourceHead, availability: 'unavailable',
+      endpointConfigRevision: support.endpointConfigRevision, journeys: []
+    };
+    for (const kind of ['setup', 'portable']) {
+      for (const journey of ['bug-report', 'user-rating', 'contact']) {
+        unavailable.journeys.push({
+          kind, journey, packageSha256: packageHashes[kind], outcome: 'failure-shown-draft-kept',
+          receiptSha256: crypto.createHash('sha256').update(`unavailable:${kind}:${journey}`).digest('hex')
+        });
+      }
+    }
+    const unavailableBytes = Buffer.from(JSON.stringify(unavailable));
+    const nativeFor = bytes => Buffer.from(JSON.stringify({ ...clone(native), supportClearanceSha256: receiptSha256(bytes) }));
+    const accepted = validateReleaseEvidence(nativeFor(unavailableBytes), unavailableBytes, {
+      expectedHead: sourceHead, expectedVersion: version
+    });
+    assert.equal(accepted.support.availability, 'unavailable');
+    assert.equal(accepted.support.journeys.length, 6);
+    assert.throws(() => validateReleaseEvidence(nativeBytes, unavailableBytes, {
+      expectedHead: sourceHead, expectedVersion: version
+    }), error => error.code === 'support-clearance-hash-mismatch',
+    'an unavailable declaration must be the receipt the native acceptance bound');
+    for (const [name, mutate, code] of [
+      ['journey reported as sent', value => { value.journeys[0].outcome = 'sent'; }, 'support-journey-outcome'],
+      ['journey with a success flag', value => { value.journeys[0].success = true; }, 'support-journey-shape'],
+      ['availability not declared', value => { value.availability = 'live'; }, 'support-availability'],
+      ['live identity smuggled in', value => { value.backendDeploymentRevision = '7'.repeat(40); }, 'support-clearance-shape'],
+      ['missing journey', value => { value.journeys.pop(); }, 'support-journey-count'],
+      ['duplicate journey', value => { value.journeys[5] = clone(value.journeys[0]); }, 'support-journey-duplicate'],
+      ['other package bytes', value => { value.journeys[0].packageSha256 = 'f'.repeat(64); }, 'support-journey-package'],
+      ['other source head', value => { value.sourceHead = 'f'.repeat(40); }, 'support-clearance-head']
+    ]) {
+      const changed = clone(unavailable);
+      mutate(changed);
+      const changedBytes = Buffer.from(JSON.stringify(changed));
+      assert.throws(() => validateReleaseEvidence(nativeFor(changedBytes), changedBytes, {
+        expectedHead: sourceHead, expectedVersion: version
+      }), error => error.code === code, name);
+    }
+    {
+      const changed = clone(unavailable);
+      changed.endpointConfigRevision = 'f'.repeat(64);
+      const changedBytes = Buffer.from(JSON.stringify(changed));
+      assert.throws(() => validateReleaseEvidence(nativeFor(changedBytes), changedBytes, {
+        expectedHead: sourceHead, expectedVersion: version
+      }), error => error.code === 'support-config-package-mismatch',
+      'the declaration is bound to the support configuration built into the packages');
+    }
+  }
+  {
     const changed = clone(native);
     changed.packages.setup.packageToRuntime.launchObserved = false;
     assert.throws(() => validateReleaseEvidence(Buffer.from(JSON.stringify(changed)), supportBytes, {
@@ -935,6 +996,48 @@ function cleanupExactFiles(filePaths, directory) {
     await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: issueApi }),
       error => error.code === 'support-issue-not-cleared', 'open support issue blocks candidate access');
     assert.equal(issueApi.calls.includes('json /repos/1132-Fixer/windows/actions/runs/1132'), false);
+  }
+  {
+    // Declared-unavailable support evidence: the open cutover issue does not
+    // block, and it is not even read. Every other gate still runs.
+    const unavailable = {
+      schemaVersion: 2, sourceHead, availability: 'unavailable',
+      endpointConfigRevision: support.endpointConfigRevision, journeys: []
+    };
+    for (const kind of ['setup', 'portable']) {
+      for (const journey of ['bug-report', 'user-rating', 'contact']) {
+        unavailable.journeys.push({
+          kind, journey, packageSha256: packageHashes[kind], outcome: 'failure-shown-draft-kept',
+          receiptSha256: crypto.createHash('sha256').update(`preflight-unavailable:${kind}:${journey}`).digest('hex')
+        });
+      }
+    }
+    const unavailableBytes = Buffer.from(JSON.stringify(unavailable));
+    const boundNativeBytes = Buffer.from(JSON.stringify({
+      ...clone(native), supportClearanceSha256: receiptSha256(unavailableBytes)
+    }));
+    const boundNativeArchive = zipReceipt('native-acceptance.json', boundNativeBytes);
+    const unavailableArchive = zipReceipt('support-clearance.json', unavailableBytes);
+    const changedJson = new Map(jsonResponses);
+    changedJson.set('/repos/1132-Fixer/windows/actions/artifacts/7001', artifact(
+      7001, 8001, `native-acceptance-receipt-${sourceHead}`, boundNativeArchive));
+    changedJson.set('/repos/1132-Fixer/windows/actions/artifacts/7002', artifact(
+      7002, 8002, `support-clearance-receipt-${sourceHead}`, unavailableArchive));
+    changedJson.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/2',
+      supportIssue(2, { state: 'open', closed_at: null }));
+    const changedBytes = new Map(byteResponses);
+    changedBytes.set('/repos/1132-Fixer/windows/actions/artifacts/7001/zip', boundNativeArchive);
+    changedBytes.set('/repos/1132-Fixer/windows/actions/artifacts/7002/zip', unavailableArchive);
+    const unavailableApi = makeApi({ jsonMap: changedJson, byteMap: changedBytes });
+    const result = await verifyReleasePreflight({ ...preflightInput, api: unavailableApi });
+    assert.equal(result.evidence.support.availability, 'unavailable');
+    assert.equal(unavailableApi.calls.includes('json /repos/1132-Fixer/support-requests-bug-reporting/issues/2'), false,
+      'a declared-unavailable release does not depend on the support cutover issue');
+    assert.ok(unavailableApi.calls.includes('json /repos/1132-Fixer/windows/actions/runs/1132'),
+      'candidate verification still runs for a declared-unavailable release');
+    await assert.rejects(verifyReleasePreflight({
+      ...preflightInput, api: makeApi({ jsonMap: changedJson, byteMap: changedBytes, reviewDecision: 'REVIEW_REQUIRED' })
+    }), 'the review gate is unchanged for a declared-unavailable release');
   }
   {
     const changed = new Map(jsonResponses);

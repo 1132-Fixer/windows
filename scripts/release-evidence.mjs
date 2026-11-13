@@ -148,7 +148,50 @@ export function validateNativeAcceptanceManifest(value, { expectedHead, expected
   return value;
 }
 
+// Schema version 2 declares that the support service is NOT live for this
+// release. It does not waive the journeys: all six are still run on the exact
+// packages, and each must end with the app showing the failure and keeping the
+// draft. A receipt cannot mix the two forms: a live receipt (version 1) still
+// requires every journey to succeed against one bound deployment.
+export const SUPPORT_UNAVAILABLE_OUTCOME = 'failure-shown-draft-kept';
+
+export function supportIsDeclaredUnavailable(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value) && value.schemaVersion === 2;
+}
+
+function validateSupportUnavailable(value, { expectedHead, packages } = {}) {
+  exactKeys(value, [
+    'availability', 'endpointConfigRevision', 'journeys', 'schemaVersion', 'sourceHead'
+  ], 'support-clearance-shape');
+  if (value.availability !== 'unavailable') fail('support-availability');
+  exactSha(value.sourceHead, SHA40, 'support-clearance-head');
+  if (expectedHead && value.sourceHead !== expectedHead) fail('support-clearance-head');
+  exactSha(value.endpointConfigRevision, SHA64, 'support-config-revision');
+  if (!Array.isArray(value.journeys) || value.journeys.length !== PACKAGE_KINDS.length * JOURNEYS.length) {
+    fail('support-journey-count');
+  }
+  const seen = new Set();
+  for (const receipt of value.journeys) {
+    exactKeys(receipt, ['journey', 'kind', 'outcome', 'packageSha256', 'receiptSha256'], 'support-journey-shape');
+    if (!PACKAGE_KINDS.includes(receipt.kind) || !JOURNEYS.includes(receipt.journey)) fail('support-journey-identity');
+    const identity = `${receipt.kind}:${receipt.journey}`;
+    if (seen.has(identity)) fail('support-journey-duplicate');
+    seen.add(identity);
+    if (receipt.outcome !== SUPPORT_UNAVAILABLE_OUTCOME) fail('support-journey-outcome');
+    exactSha(receipt.packageSha256, SHA64, 'support-journey-package');
+    exactSha(receipt.receiptSha256, SHA64, 'support-journey-receipt');
+    if (packages && (!packages[receipt.kind] || receipt.packageSha256 !== packages[receipt.kind].packageSha256)) {
+      fail('support-journey-package');
+    }
+  }
+  for (const kind of PACKAGE_KINDS) {
+    for (const journey of JOURNEYS) if (!seen.has(`${kind}:${journey}`)) fail('support-journey-missing');
+  }
+  return value;
+}
+
 export function validateSupportClearance(value, { expectedHead, packages } = {}) {
+  if (supportIsDeclaredUnavailable(value)) return validateSupportUnavailable(value, { expectedHead, packages });
   exactKeys(value, [
     'acknowledgementFingerprint', 'backendDeploymentRevision', 'destinationFingerprint',
     'endpointConfigRevision', 'journeys', 'schemaVersion', 'sourceHead'
