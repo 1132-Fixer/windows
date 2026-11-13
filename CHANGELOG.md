@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   computer has finished. The app stays on **Checking…** until that check
   reports, so a blocked computer never shows **Fix now** first. A **Fix now**
   click made while a check runs is dropped when that check ends blocked.
+- The **Action required** text no longer joins a full blocker message to
+  "needs your attention", which produced a broken sentence and repeated the
+  blocker's name.
 - A failed Windows tool check no longer becomes several false missing-tool
   errors after **Fix now**. Preflight validates process status and the complete
   inventory before accepting it; actual missing required tools share one

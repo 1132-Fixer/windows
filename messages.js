@@ -353,7 +353,22 @@ function wizardBlockedSub(labels) {
     return 'Something on this PC blocks the fix, but this version could not name it. ' +
       'Select Check again; if it stays blocked, send a support report.';
   }
-  return `${list.join(', ')} ${list.length > 1 ? 'need' : 'needs'} your attention before the fix can run.`;
+  // Callers pass two kinds of entry: short names ("Zoom Workplace") and whole
+  // blocker messages that already end as sentences and say what to do. A
+  // sentence joined into "… needs your attention" produced broken copy such
+  // as "…did not change this service. need your attention…". Sentences stand
+  // on their own; a name is listed only when no sentence already mentions it.
+  const isSentence = (text) => /[.!?]\s*$/.test(String(text).trim());
+  const sentences = list.filter(isSentence).map((text) => String(text).trim());
+  const mentioned = sentences.join(' ').toLowerCase();
+  const names = list.filter((text) => !isSentence(text))
+    .map((text) => String(text).trim())
+    .filter((name, index, all) => all.indexOf(name) === index && mentioned.indexOf(name.toLowerCase()) === -1);
+  const parts = [];
+  if (names.length) {
+    parts.push(`${names.join(', ')} ${names.length > 1 ? 'need' : 'needs'} your attention before the fix can run.`);
+  }
+  return parts.concat(sentences).join(' ');
 }
 
 // ============================================================

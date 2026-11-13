@@ -200,6 +200,21 @@ console.log('messages-smoke: wizard states (directive 2026-08-23)');
   check(/Zoom Workplace needs your attention/.test(m.wizardBlockedSub(['Zoom Workplace'])),
     'blocked sub names the blocker');
   check(m.wizardBlockedSub([]).length > 40, 'blocked sub without labels still explains next steps');
+  {
+    // Seen in the packaged diagnostics: a card name plus a full blocker message.
+    const sentence = 'Secondary Logon service (seclogon) is Stopped/Manual. Open Windows Services, make sure Secondary Logon is running, then re-check. 1132 Fixer did not change this service.';
+    const mixed = m.wizardBlockedSub(['Secondary Logon', sentence]);
+    check(mixed === sentence, 'a blocker message that names the card stands alone, with no duplicate name');
+    check(!/\.\s+needs? your attention/.test(mixed) && !/service\. need/.test(mixed),
+      'a full sentence is never joined into "needs your attention"');
+    const both = m.wizardBlockedSub(['Zoom Workplace', 'Camera', sentence]);
+    check(both.startsWith('Zoom Workplace, Camera need your attention before the fix can run. ') && both.endsWith(sentence),
+      'names lead with correct plural agreement and sentences follow');
+    check(m.wizardBlockedSub(['Signed in as user1']) === 'Signed in as user1 needs your attention before the fix can run.',
+      'a single short name keeps the existing copy');
+    check(m.wizardBlockedSub(['Zoom Workplace', 'Zoom Workplace']) === 'Zoom Workplace needs your attention before the fix can run.',
+      'a repeated name is listed once');
+  }
 
   // State copy exists, is real copy, and never leans on raw codes.
   const wiz = m.WIZARD;
