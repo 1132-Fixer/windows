@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { StringDecoder } = require('string_decoder');
 const { spawn, spawnSync } = require('child_process');
 const windowsTools = require('./src/main/windows-tools');
+const bundledScript = require('./src/main/bundled-script');
 // System tools never use the app directory, current directory or PATH.
 const spawnWindowsTool = (name, args, opts) => spawn(windowsTools.resolveTool(name), args, opts);
 const spawnWindowsToolSync = (name, args, opts) => spawnSync(windowsTools.resolveTool(name), args, opts);
@@ -4308,11 +4309,23 @@ async function runFixFlow(event) {
     } else {
       send('  Checking media access and applying helper-only consent...', 'out');
       const consentNonce = crypto.randomUUID();
-      const consent = await runProcess('powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', consentScript,
-          '-Sid', helperSID, '-User', FIX_USER, '-ProfilePath', newUserProfile, '-Receipt', consentNonce],
-        (line, kind) => send('    ' + line, kind),
-        { heartbeatMs: 5000, heartbeatLabel: 'media-consent', timeoutMs: 30000 });
+      // The script text travels through stdin, like every other script. A
+      // "-File <path>" launch can be held by endpoint protection for most of
+      // this step's time limit (#266). A script that cannot be read or
+      // prepared yields no receipt, which the checks below report as not
+      // verified.
+      let consent = { stdout: '' };
+      try {
+        const consentSource = await fs.promises.readFile(consentScript, 'utf8');
+        consent = await runPSScript(
+          bundledScript.buildBundledScriptInvocation(consentSource, {
+            Sid: helperSID, User: FIX_USER, ProfilePath: newUserProfile, Receipt: consentNonce
+          }),
+          (line, kind) => send('    ' + line, kind),
+          { heartbeatMs: 5000, heartbeatLabel: 'media-consent', timeoutMs: 30000 });
+      } catch (err) {
+        send(`    media-consent helper could not be started (${(err && err.code) || 'error'}).`, 'err');
+      }
       // One complete receipt from this invocation is required. Partial output,
       // exceptions, stale SIDs/nonces and duplicate receipts cannot grant success.
       const mediaLines = String(consent.stdout || '').split(/\r?\n/).map(line => line.trim());
