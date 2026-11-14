@@ -23,6 +23,10 @@ on:
         required: false
         type: boolean
         default: false
+      candidate_run_id:
+        description: 'Successful main CI run whose retained packages will be tested (optional)'
+        required: false
+        type: string
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -64,6 +68,7 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
+      actions: read
 
     steps:
       # The explicit private fetch and tools/design-sync-pin-smoke.js prove the pinned
@@ -122,6 +127,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release download v6.4.0 --repo 1132-Fixer/windows --pattern "1132-Fixer-Setup-6.4.0.exe" --pattern checksums-sha256.txt --dir baseline-640
+
+      - name: Use retained main release candidate
+        if: github.event_name == 'workflow_dispatch' && inputs.run_release_gaps == true && inputs.candidate_run_id != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: |
+          if ($env:CANDIDATE_RUN_ID -notmatch '^[1-9][0-9]*$') { throw 'Invalid candidate run ID' }
+          $run = gh api "repos/1132-Fixer/windows/actions/runs/$env:CANDIDATE_RUN_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.conclusion -ne 'success' -or $run.event -ne 'push' -or $run.head_branch -ne 'main' -or $run.path -ne '.github/workflows/ci.yml') { throw 'Candidate must come from successful main CI' }
+          gh run download $env:CANDIDATE_RUN_ID --repo 1132-Fixer/windows --name "release-candidate-$($run.head_sha)" --dir retained-candidate
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate download failed' }
+          Copy-Item -LiteralPath 'retained-candidate/release-candidate.json' -Destination 'dist/release-candidate.json'
+          Get-ChildItem -LiteralPath retained-candidate -File -Filter '*.exe' | Copy-Item -Destination dist -Force
 
       - name: Disposable install, upgrade and failure diagnostics
         if: github.event_name == 'workflow_dispatch' && inputs.run_release_gaps == true

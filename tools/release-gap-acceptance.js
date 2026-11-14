@@ -16,6 +16,7 @@ const report = { sourceHead: process.env.GITHUB_SHA, version, evidenceClass: 'ho
     'real helper repair and six support journeys remain required'] };
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 let currentApp = null;
+const diagnosticCopies = new Map();
 function record(id, detail) { report.cases.push({ id, status: 'passed', detail }); console.log(`PASS ${id}`); }
 async function run(exe, args, timeout = 180000) {
   await new Promise((resolve, reject) => {
@@ -32,7 +33,23 @@ async function closeApp() {
   if (currentApp) { await currentApp.close(); currentApp = null; }
 }
 async function open(exe, expected, extraEnv = {}) {
-  currentApp = await electron.launch({ executablePath: exe, timeout: 45000,
+  const asar = require('@electron/asar');
+  const archive = path.join(path.dirname(exe), 'resources', 'app.asar');
+  assert.equal(JSON.parse(asar.extractFile(archive, 'package.json').toString()).version, expected);
+  const sourceHash = hash(exe);
+  const archiveHash = hash(archive);
+  const key = sourceHash + archiveHash;
+  let diagnosticExe = diagnosticCopies.get(key);
+  if (!diagnosticExe) {
+    const copy = path.join(process.env.RUNNER_TEMP, `fixer-ui-${key.slice(0, 16)}`);
+    fs.cpSync(path.dirname(exe), copy, { recursive: true });
+    diagnosticExe = path.join(copy, path.basename(exe));
+    await require('../scripts/stamp-exe-manifest').stampExecutionLevel(diagnosticExe, 'asInvoker');
+    assert.equal(hash(exe), sourceHash, 'installed/extracted executable remains unchanged');
+    assert.equal(hash(path.join(copy, 'resources', 'app.asar')), archiveHash);
+    diagnosticCopies.set(key, diagnosticExe);
+  }
+  currentApp = await electron.launch({ executablePath: diagnosticExe, timeout: 45000,
     env: { ...process.env, ...extraEnv } });
   const page = await currentApp.firstWindow({ timeout: 45000 });
   await page.waitForLoadState('domcontentloaded');
@@ -83,13 +100,15 @@ async function faultScreens(exe, mode, env) {
   }
   const page = await open(exe, version, env);
   // Fault injection is confined to this test process. App bytes and security settings stay intact.
-  await currentApp.evaluate(() => {
-    const { autoUpdater } = require('electron-updater');
+  await currentApp.evaluate(({ app }) => {
+    const load = process.getBuiltinModule('module').createRequire(
+      process.getBuiltinModule('path').join(app.getAppPath(), 'package.json'));
+    const { autoUpdater } = load('electron-updater');
     autoUpdater.checkForUpdates = async () => {
       const error = new Error('getaddrinfo ENOTFOUND'); error.code = 'ENOTFOUND'; throw error;
     };
-    const https = require('node:https');
-    const { EventEmitter } = require('node:events');
+    const https = process.getBuiltinModule('https');
+    const { EventEmitter } = process.getBuiltinModule('events');
     https.get = () => {
       const req = new EventEmitter(); req.destroy = () => {}; req.setTimeout = () => req;
       process.nextTick(() => req.emit('error', Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' })));
@@ -110,6 +129,31 @@ async function faultScreens(exe, mode, env) {
   record(`${mode}.offline-check`, text);
   await closeApp();
 }
+async function supportJourneys(exe, mode, env) {
+  const page = await open(exe, version, env);
+  for (const [journey, field, submit, status, back] of [
+    ['contact', 'fbContactText', 'fbContactSubmit', 'fbContactStatus', 'fbContactBack'],
+    ['bug', 'fbBugText', 'fbBugSubmit', 'fbBugStatus', 'fbBugBack'],
+    ['rating', 'fbRatingText', 'fbRatingSubmit', 'fbRatingStatus', 'fbRatingBack']
+  ]) {
+    if (journey === 'contact') await page.click('#btnSupport');
+    await page.click(`[data-mode="${journey}"]`);
+    const draft = `Release ${version} disposable acceptance diagnostic: verify unavailable support keeps this test draft.`;
+    await page.fill(`#${field}`, draft);
+    if (journey === 'rating') await page.click('[data-cat="overall"] [data-val="5"]');
+    await page.click(`#${submit}`);
+    await page.waitForFunction(id => {
+      const e = document.getElementById(id);
+      return e && e.classList.contains('err') && e.textContent.trim().length > 0;
+    }, status, { timeout: 45000 });
+    assert.equal(await page.locator(`#${field}`).inputValue(), draft);
+    const detail = await page.locator(`#${status}`).innerText();
+    await page.screenshot({ path: path.join(out, `${mode}-support-${journey}.png`) });
+    record(`${mode}.support-${journey}`, `Live configured endpoint: failure shown, draft kept. ${detail}`);
+    await page.click(`#${back}`);
+  }
+  await closeApp();
+}
 (async () => {
   assert.equal(process.platform, 'win32');
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
@@ -124,6 +168,17 @@ async function faultScreens(exe, mode, env) {
   const portable = path.join(dist, `1132-Fixer-Portable-${version}.exe`);
   report.packages = { setup: { name: path.basename(setup), sha256: hash(setup) },
     portable: { name: path.basename(portable), sha256: hash(portable) } };
+  const retained = path.join(root, 'retained-candidate');
+  if (fs.existsSync(retained)) {
+    const manifest = JSON.parse(fs.readFileSync(path.join(retained, 'release-candidate.json')));
+    const { verifyCandidateManifest } = await import('../scripts/release-candidate.mjs');
+    verifyCandidateManifest({ dist: retained, manifest, head: manifest.sourceHead, version,
+      setupSha256: report.packages.setup.sha256, portableSha256: report.packages.portable.sha256 });
+    report.driverHead = report.sourceHead;
+    report.sourceHead = manifest.sourceHead;
+    report.candidate = manifest;
+    record('candidate.exact-retained-bytes', 'All retained asset sizes and SHA-256 values verified before installation');
+  }
   const baselineDir = path.join(root, 'baseline-640');
   const baseline = path.join(baselineDir, '1132-Fixer-Setup-6.4.0.exe');
   const baselineManifest = fs.readFileSync(path.join(baselineDir, 'checksums-sha256.txt'), 'utf8');
@@ -132,17 +187,18 @@ async function faultScreens(exe, mode, env) {
   const exe = path.join(installDir, '1132 Fixer.exe');
   await run(setup, ['/S', '/allusers', `/D=${installDir}`]);
   await open(exe, version);
-  record('setup.clean-install', 'Exact Setup package installed and launched version ' + version);
+  record('setup.clean-install', 'Exact Setup installed; payload version ' + version + ' verified and byte-identical app.asar launched through diagnostic host');
   await closeApp();
   const runtimeHash = hash(path.join(installDir, 'resources', 'app.asar'));
   assert.equal(runtimeHash, hash(path.join(dist, 'win-unpacked', 'resources', 'app.asar')));
   record('setup.payload-binding', 'Installed app.asar matches the packaged build');
   await faultScreens(exe, 'setup');
+  await supportJourneys(exe, 'setup');
   await uninstall(installDir, 'setup.clean-uninstall');
   // Keep userData to test preservation. Never execute 6.4.0's uninstaller.
   await run(baseline, ['/S', '/allusers', `/D=${installDir}`]);
   await open(exe, '6.4.0'); await closeApp();
-  record('upgrade.baseline-launch', 'Published 6.4.0 installed and launched before upgrade');
+  record('upgrade.baseline-launch', 'Published 6.4.0 installed; its unchanged app.asar launched through diagnostic host');
   fs.mkdirSync(userData, { recursive: true });
   const marker = path.join(userData, 'release-upgrade-marker.txt');
   fs.writeFileSync(marker, 'preserve-during-650-upgrade');
@@ -168,8 +224,9 @@ async function faultScreens(exe, mode, env) {
   assert.equal(hash(path.join(runtime, 'resources', 'app.asar')), runtimeHash);
   const env = { PORTABLE_EXECUTABLE_DIR: extract, PORTABLE_EXECUTABLE_FILE: portable };
   await open(portableExe, version, env); await closeApp();
-  record('portable.extract-launch', 'Exact Portable payload extracted and launched, app.asar matches Setup');
+  record('portable.extract-launch', 'Exact Portable payload extracted; unchanged app.asar matches Setup and launches through diagnostic host');
   await faultScreens(portableExe, 'portable', env);
+  await supportJourneys(portableExe, 'portable', env);
 })().catch(error => {
   report.cases.push({ id: 'driver', status: 'failed', detail: String(error.stack || error) });
   console.error(error); process.exitCode = 1;
