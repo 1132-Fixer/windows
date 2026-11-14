@@ -14,12 +14,15 @@
  *   ARTIFACT_SIGNING_ENDPOINT   https://<region>.codesigning.azure.net
  *   ARTIFACT_SIGNING_ACCOUNT    Artifact Signing account name
  *   ARTIFACT_SIGNING_PROFILE    certificate profile name (Public Trust)
- *   ARTIFACT_SIGNING_PUBLISHER  exact subject CN of the issued certificate
+ *   ARTIFACT_SIGNING_PUBLISHER  exact subject CN of the issued certificate;
+ *                               must equal the publisher declared in
+ *                               package.json, or the build fails
  *
  * Output (GITHUB_OUTPUT): configured=true|false, args=<electron-builder CLI
  * overrides>, publisher=<CN>. The overrides carry names only.
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const SECRET_NAMES = Object.freeze(['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET']);
@@ -38,7 +41,18 @@ function fail(code, detail) {
   throw error;
 }
 
-export function resolveSigning(env = process.env) {
+// The publisher identity of this product is fixed (AGENTS.md, and
+// tools/release-identity-smoke.js reads it from package.json). Signing must
+// not change it. A certificate whose subject is any other name is refused
+// here; using one needs an explicit identity migration that updates the
+// policy, the identity checks and the provenance together.
+export function declaredPublisher(root = process.cwd()) {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const win = (pkg.build && pkg.build.win) || {};
+  return (win.signtoolOptions && win.signtoolOptions.publisherName) || win.publisherName || null;
+}
+
+export function resolveSigning(env = process.env, { expectedPublisher } = {}) {
   const value = (name) => (typeof env[name] === 'string' ? env[name].trim() : '');
   const all = [...SECRET_NAMES, ...VARIABLE_NAMES];
   const present = all.filter((name) => value(name));
@@ -56,16 +70,19 @@ export function resolveSigning(env = process.env) {
   if (!NAME_RE.test(account)) fail('signing-account-invalid');
   if (!NAME_RE.test(profile)) fail('signing-profile-invalid');
   if (!PUBLISHER_RE.test(publisher)) fail('signing-publisher-invalid');
+  if (typeof expectedPublisher !== 'string' || !expectedPublisher) fail('signing-declared-publisher-missing');
+  if (publisher !== expectedPublisher) {
+    fail('signing-publisher-mismatch', `the certificate subject must be exactly "${expectedPublisher}"`);
+  }
 
-  // electron-updater compares the signer CN with publisherName, so the same
-  // value goes to both places. signtoolOptions.publisherName is what
-  // app-update.yml carries.
+  // The packaged publisher (signtoolOptions.publisherName in package.json,
+  // which app-update.yml and the provenance carry) is not overridden. The
+  // signer name given to the signing step is that same declared value.
   const args = [
     `-c.win.azureSignOptions.endpoint=${endpoint}`,
     `-c.win.azureSignOptions.codeSigningAccountName=${account}`,
     `-c.win.azureSignOptions.certificateProfileName=${profile}`,
-    `-c.win.azureSignOptions.publisherName=${publisher}`,
-    `-c.win.signtoolOptions.publisherName=${publisher}`
+    `-c.win.azureSignOptions.publisherName=${publisher}`
   ];
   return { configured: true, args, publisher, missing: [] };
 }
@@ -85,7 +102,7 @@ export function toOutput(result) {
 function main() {
   let result;
   try {
-    result = resolveSigning(process.env);
+    result = resolveSigning(process.env, { expectedPublisher: declaredPublisher() });
   } catch (error) {
     console.error(`[signing-config] FAIL ${error.code || 'error'}${error.message && error.message !== error.code ? ` (${error.message})` : ''}`);
     process.exit(1);

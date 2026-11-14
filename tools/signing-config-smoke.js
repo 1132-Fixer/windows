@@ -26,11 +26,15 @@ const FULL = {
   ARTIFACT_SIGNING_ENDPOINT: 'https://eus.codesigning.azure.net/',
   ARTIFACT_SIGNING_ACCOUNT: 'fixer-signing',
   ARTIFACT_SIGNING_PROFILE: 'fixer-public-trust',
-  ARTIFACT_SIGNING_PUBLISHER: 'Example Publisher LLC'
+  ARTIFACT_SIGNING_PUBLISHER: 'High Texas'
 };
 
 (async () => {
-  const { resolveSigning, toOutput, SECRET_NAMES, VARIABLE_NAMES } = await import('../scripts/signing-config.mjs');
+  const mod = await import('../scripts/signing-config.mjs');
+  const { toOutput, SECRET_NAMES, VARIABLE_NAMES, declaredPublisher } = mod;
+  const DECLARED = declaredPublisher(path.join(__dirname, '..'));
+  // Every case resolves against the publisher declared in package.json.
+  const resolveSigning = (env, opts) => mod.resolveSigning(env, opts || { expectedPublisher: DECLARED });
 
   console.log('signing-config-smoke: not configured');
   {
@@ -43,12 +47,23 @@ const FULL = {
   console.log('signing-config-smoke: fully configured');
   {
     const r = resolveSigning(FULL);
-    check(r.configured === true && r.publisher === 'Example Publisher LLC', 'all values: configured, publisher carried');
+    check(DECLARED === 'High Texas', 'the declared publisher in package.json is "High Texas"');
+    check(r.configured === true && r.publisher === DECLARED, 'all values: configured, publisher is the declared one');
     check(r.args.includes('-c.win.azureSignOptions.endpoint=https://eus.codesigning.azure.net'), 'endpoint argument, trailing slash removed');
     check(r.args.includes('-c.win.azureSignOptions.codeSigningAccountName=fixer-signing'), 'account argument');
     check(r.args.includes('-c.win.azureSignOptions.certificateProfileName=fixer-public-trust'), 'profile argument');
-    check(r.args.includes('-c.win.azureSignOptions.publisherName=Example Publisher LLC') &&
-      r.args.includes('-c.win.signtoolOptions.publisherName=Example Publisher LLC'), 'the same publisher goes to the signer check and to the updater metadata');
+    check(r.args.includes(`-c.win.azureSignOptions.publisherName=${DECLARED}`), 'the signer name given to the signing step is the declared publisher');
+    check(!r.args.some((a) => /signtoolOptions/.test(a)), 'the packaged publisher identity is never overridden');
+    for (const other of ['Example Publisher LLC', 'high texas', 'High Texas LLC', 'High  Texas']) {
+      let code = null;
+      try { resolveSigning(Object.assign({}, FULL, { ARTIFACT_SIGNING_PUBLISHER: other })); } catch (e) { code = e.code; }
+      check(code === 'signing-publisher-mismatch', `certificate subject "${other}" is refused: it is not the declared publisher`);
+    }
+    {
+      let code = null;
+      try { mod.resolveSigning(FULL, {}); } catch (e) { code = e.code; }
+      check(code === 'signing-declared-publisher-missing', 'signing is refused when the declared publisher cannot be read');
+    }
     const out = toOutput(r) + JSON.stringify(r);
     for (const name of SECRET_NAMES) check(!out.includes(FULL[name]), `${name} value never appears in the output`);
     check(!r.args.some((a) => /verifyUpdateCodeSignature/.test(a)), 'signing does not turn on update signature verification');
@@ -91,7 +106,7 @@ const FULL = {
     for (const name of VARIABLE_NAMES) check(new RegExp(`${name}: \\$\\{\\{ .*vars\\.${name}`).test(ci), `ci.yml reads ${name} from variables`);
     check((ci.match(/SIGNING_ARGS/g) || []).length >= 4, 'both package builds receive the signing arguments');
     check(/ARTIFACT_SIGNING_CONFIGURED/.test(ci) && /ARTIFACT_SIGNING_CONFIGURED/.test(state), 'the signature check knows when signing was configured');
-    check(/ARTIFACT_SIGNING_PUBLISHER/.test(state), 'the signature check compares the signer with the configured publisher');
+    check(!/ARTIFACT_SIGNING_PUBLISHER/.test(state) && /win\.signtoolOptions\?\.publisherName/.test(state), 'the signature check compares the signer with the publisher declared in package.json');
     check(pkg.build.win.verifyUpdateCodeSignature === false, 'update signature verification stays off until one signed update is proven');
     check(pkg.build.win.azureSignOptions === undefined, 'package.json carries no signing account: a build without secrets stays unsigned');
     check(pkg.scripts['test:core'].includes('node tools/signing-config-smoke.js'), 'this test is part of npm run test:core');

@@ -247,7 +247,6 @@ jobs:
       - name: Check signature state
         env:
           ARTIFACT_SIGNING_CONFIGURED: ${{ steps.signing.outputs.configured }}
-          ARTIFACT_SIGNING_PUBLISHER: ${{ steps.signing.outputs.publisher }}
         run: node scripts/check-signature-state.mjs --dist dist
 
       - name: Generate SBOM

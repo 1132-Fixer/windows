@@ -156,10 +156,15 @@ Limits that decide whether it can be used:
 - An individual developer must be in the USA or Canada. An organization must be
   in the USA, Canada, the EU or the UK and have three years of tax history.
 - Microsoft validates the identity first. Allow several business days.
-- The certificate subject is the **validated legal name**. It will not be
-  `High Texas` unless that is the validated name. The updater compares the
-  signer with the publisher name, so the build takes the publisher from
-  `ARTIFACT_SIGNING_PUBLISHER` and writes it to both places.
+- The certificate subject is the **validated legal name**. The publisher
+  identity of this product is fixed as `High Texas` (`AGENTS.md`,
+  `tools/release-identity-smoke.js`, provenance). The build therefore signs
+  **only** when `ARTIFACT_SIGNING_PUBLISHER` is exactly `High Texas`. Any other
+  subject fails the build with `signing-publisher-mismatch`.
+- If Microsoft validates a different name, signing needs an identity migration
+  first: one pull request that changes the declared publisher, the identity
+  checks, the provenance and this document together, with the owner's decision
+  recorded. Confirm the validated name before paying for a second month.
 
 | Name | Kind | Purpose | Configured today |
 | --- | --- | --- | --- |
@@ -169,7 +174,7 @@ Limits that decide whether it can be used:
 | `ARTIFACT_SIGNING_ENDPOINT` | variable | `https://<region>.codesigning.azure.net` | no |
 | `ARTIFACT_SIGNING_ACCOUNT` | variable | Artifact Signing account name | no |
 | `ARTIFACT_SIGNING_PROFILE` | variable | Public Trust certificate profile name | no |
-| `ARTIFACT_SIGNING_PUBLISHER` | variable | exact subject common name of the issued certificate | no |
+| `ARTIFACT_SIGNING_PUBLISHER` | variable | exact subject common name of the issued certificate; must be `High Texas` | no |
 
 Rules the wiring enforces (`tools/signing-config-smoke.js`):
 
