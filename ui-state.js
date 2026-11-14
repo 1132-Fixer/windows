@@ -234,6 +234,11 @@ function updateBannerView(data) {
       return { show: true, tone: 'info', icon: 'shield', title: t('VERIFYING', 'Verifying update'), msg: t('VERIFYING_MSG', 'Checking that version {v} downloaded correctly.'), progress: 100 };
     case 'ready':
       if (d.deferred) {
+        if (d.automatic === false) {
+          // Automatic updates are off: nothing installs on exit. The wording
+          // must not promise an install the app will not perform.
+          return { show: true, tone: 'info', icon: 'restart', title: t('READY_MANUAL', 'Update downloaded'), msg: t('READY_MANUAL_MSG', 'Version {v} is downloaded. It installs only when you choose Restart now.'), restartBtn: true };
+        }
         return { show: true, tone: 'info', icon: 'restart', title: t('READY', 'Ready to restart'), msg: t('READY_DEFERRED_MSG', 'Version {v} installs when you exit, or restart now.'), restartBtn: true };
       }
       return {
@@ -259,7 +264,8 @@ function updateBannerView(data) {
         // The check did not produce a result. Nothing is known about a newer
         // version, so no download is offered — only a retry, a dismissal and
         // the official download page.
-        return { show: true, tone: 'warning', icon: 'offline', title: t('CHECK_FAILED', 'Couldn’t check for updates'), msg: t('CHECK_FAILED_MSG', 'You can continue using 1132 Fixer. We’ll try again the next time the app starts.'), retryBtn: true, dismissBtn: true, pageLink: true };
+        // With automatic updates off there is no "next time": do not promise one.
+        return { show: true, tone: 'warning', icon: 'offline', title: t('CHECK_FAILED', 'Couldn’t check for updates'), msg: d.automatic === false ? t('CHECK_FAILED_MANUAL_MSG', 'You can continue using 1132 Fixer. Choose Retry to check again.') : t('CHECK_FAILED_MSG', 'You can continue using 1132 Fixer. We’ll try again the next time the app starts.'), retryBtn: true, dismissBtn: true, pageLink: true };
       }
       if (stage === 'download' || stage === 'verify') {
         return { show: true, tone: 'warning', icon: 'offline', title: t('DOWNLOAD_FAILED', 'The update didn’t finish downloading'), msg: t('DOWNLOAD_FAILED_MSG', 'You can continue using 1132 Fixer and try the download again.'), retryBtn: true, dismissBtn: true, diagBtn: true };

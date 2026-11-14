@@ -119,7 +119,13 @@ console.log('elevation-startup-smoke: startup timeout reaches actionable failure
 check(messages.WIZARD.UNABLE_TITLE === 'Unable to complete', 'Unable to complete copy');
 check(messages.WIZARD.TRY_AGAIN === 'Try again', 'Try again copy');
 check(renderer.includes('showUnableToComplete'), 'timeout handler exists');
-check(renderer.includes("err.stage = 'startup-status'"), 'timeout records the stage');
+// 6.5.0: the deadline helper stamps the operation it was given, and the
+// administrator check passes 'startup-status' with the unchanged 8 s limit.
+check(renderer.includes('err.stage = operation;') &&
+  renderer.includes("withDeadline(window.electronAPI.startupStatus(), STARTUP_DEADLINE_MS, 'startup-status')") &&
+  renderer.includes('const STARTUP_DEADLINE_MS = 8000;'), 'timeout records the stage');
+check(/showUnableToComplete\(\(err && err\.stage\) \|\| 'startup-status', err && err\.kind === 'timeout' \? 'timeout' : 'error'\)/.test(renderer),
+  'a timeout and an error are reported differently');
 
 console.log('elevation-startup-smoke: successful preflight reaches Ready to fix Zoom');
 check(renderer.includes("status.state === 'need-elevation'") && renderer.includes('WIZARD.READY_TITLE'),
@@ -128,7 +134,9 @@ check(renderer.includes('runEnvironmentScan({ quiet: true })'),
   'full scan is quiet and cannot put Checking back on screen');
 {
   // Startup must not paint a result before the first environment scan reports.
-  const start = renderer.indexOf('async function runStartupSequence()');
+  // runStartupSequence() is the re-entrancy guard; the sequence itself is
+  // runStartupSequenceOnce().
+  const start = renderer.indexOf('async function runStartupSequenceOnce()');
   const end = renderer.indexOf('\n}\n', start);
   const startup = start >= 0 && end > start ? renderer.slice(start, end) : '';
   check(startup.length > 0, 'startup sequence source is found');

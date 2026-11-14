@@ -307,7 +307,10 @@ const WIZARD = {
                   'to try again.',
   ADMIN_RESTARTING: 'Restarting with administrator access…',
   UNABLE_TITLE:   'Unable to complete',
-  UNABLE_SUB:     'The startup check did not finish in time. Nothing has been changed on this computer.',
+  // Fallback only. The window normally shows startupFailureSub(), which says
+  // which operation stopped and whether it timed out or failed. This line
+  // used to claim a timeout for every kind of failure.
+  UNABLE_SUB:     'The startup check could not be completed. The check only reads settings, so nothing was changed on this computer.',
   TRY_AGAIN:      'Try again',
   FIXING_TITLE:   'Fixing Zoom',
   FIXING_START:   'Getting things ready…',
@@ -487,6 +490,9 @@ const UPDATE = {
   READY:       'Ready to restart',
   READY_MSG:   '1132 Fixer restarts in {s} seconds to install version {v}.',
   READY_DEFERRED_MSG: 'Version {v} installs when you exit, or restart now.',
+  READY_MANUAL: 'Update downloaded',
+  READY_MANUAL_MSG: 'Version {v} is downloaded. It installs only when you choose Restart now.',
+  CHECK_FAILED_MANUAL_MSG: 'You can continue using 1132 Fixer. Choose Retry to check again.',
   INSTALLING:  'Installing update',
   INSTALLING_MSG: 'Version {v} is being installed. 1132 Fixer will reopen automatically.',
   RESTARTING:  'Restarting 1132 Fixer',
@@ -572,6 +578,82 @@ const UPDATE = {
 };
 
 // ------------------------------------------------------------
+// App updates section of the About dialog. Reachable from the footer on
+// every screen, including "Unable to complete" and "Action required".
+// {v} is a version, {c} the running version.
+// ------------------------------------------------------------
+const UPDATE_SETTINGS = {
+  HEADING: 'App updates',
+  TOGGLE_LABEL: 'Automatic app updates',
+  ON_HELP: 'On: 1132 Fixer checks for a new version when it starts and every four hours. You choose when to download. A downloaded update installs after a short countdown or when you exit.',
+  OFF_HELP: 'Off: 1132 Fixer does not check for, download or install updates on its own. Use Check for updates when you want one.',
+  DEFAULT_NOTE: 'Automatic app updates are on by default. You have not changed this setting.',
+  UNREADABLE_NOTE: 'Your saved setting could not be read, so automatic app updates are off until you choose.',
+  CHECK_BUTTON: 'Check for updates',
+  CHECKING: 'Checking for updates…',
+  UP_TO_DATE: 'You have the latest version ({c}).',
+  AVAILABLE: 'Version {v} is available. Choose Download update in the update bar to get it. Nothing installs until you choose Restart now.',
+  AVAILABLE_PORTABLE: 'Version {v} is available. This portable copy cannot update itself. Use the update bar to open the download page.',
+  SAVED_ON: 'Saved. Automatic app updates are on.',
+  SAVED_OFF: 'Saved. Automatic app updates are off.',
+  SAVE_FAILED: 'The setting could not be saved, so it was not changed. Try again.',
+  STOPPED_COUNTDOWN: 'The restart countdown was stopped. The downloaded update installs only when you choose Restart now.',
+  STOPPED_CHECK: 'The update check that was running was stopped.',
+  UNINTERRUPTIBLE: 'An update is already installing and cannot be stopped safely. The setting is saved and applies after this install.',
+  BUSY: 'An update step is already running. Try again when it finishes.',
+  NOT_INSTALLED: 'This copy was not installed with the installer, so there is nothing to check.',
+  FAILED: 'Could not check for updates. {reason}',
+  FAILED_GENERIC: 'Could not check for updates. Try again later.'
+};
+
+// ------------------------------------------------------------
+// Startup check failures. One sentence says what kind of failure it was and
+// which operation it was; the check is read-only, which is why "nothing was
+// changed" is a statement about the check and not a guess.
+// ------------------------------------------------------------
+const STARTUP_FAILURE = {
+  OPERATIONS: {
+    'startup-status': 'the administrator check',
+    'windows-checks': 'the Windows tools, Zoom and Secondary Logon check',
+    'account-and-policy': 'the helper account, privacy policy and camera service check',
+    results: 'reading the check results',
+    scan: 'the startup check',
+    bridge: 'the connection between the window and the app'
+  },
+  TIMEOUT_SUB: 'The startup check stopped because {op} did not finish in time. The check only reads settings, so nothing was changed on this computer.',
+  ERROR_SUB: 'The startup check stopped because {op} could not run. The check only reads settings, so nothing was changed on this computer.',
+  PARTIAL_SUB: '{n} of {total} checks could not be verified because {op} {why}. The other results are shown in View details. Nothing was changed on this computer.',
+  WHY_TIMEOUT: 'did not finish in time',
+  WHY_ERROR: 'could not run',
+  LOG_LINE: 'Startup check: {op} {why} (code {code}).'
+};
+
+// kind: 'timeout' | anything else. Returns the result-pane sentence.
+function startupFailureSub(issue, counts) {
+  const i = issue && typeof issue === 'object' ? issue : {};
+  const op = STARTUP_FAILURE.OPERATIONS[i.operation] || STARTUP_FAILURE.OPERATIONS.scan;
+  const timeout = i.kind === 'timeout';
+  if (counts && counts.unverified > 0 && counts.unverified < counts.total) {
+    return STARTUP_FAILURE.PARTIAL_SUB
+      .replace('{n}', String(counts.unverified))
+      .replace('{total}', String(counts.total))
+      .replace('{op}', op)
+      .replace('{why}', timeout ? STARTUP_FAILURE.WHY_TIMEOUT : STARTUP_FAILURE.WHY_ERROR);
+  }
+  return (timeout ? STARTUP_FAILURE.TIMEOUT_SUB : STARTUP_FAILURE.ERROR_SUB).replace('{op}', op);
+}
+
+function startupFailureLogLine(issue) {
+  const i = issue && typeof issue === 'object' ? issue : {};
+  const op = STARTUP_FAILURE.OPERATIONS[i.operation] || STARTUP_FAILURE.OPERATIONS.scan;
+  const code = typeof i.code === 'string' && /^[A-Za-z0-9_.:-]{1,48}$/.test(i.code) ? i.code : 'unknown';
+  return STARTUP_FAILURE.LOG_LINE
+    .replace('{op}', op)
+    .replace('{why}', i.kind === 'timeout' ? STARTUP_FAILURE.WHY_TIMEOUT : STARTUP_FAILURE.WHY_ERROR)
+    .replace('{code}', code);
+}
+
+// ------------------------------------------------------------
 // Inactivity warning. Shown after 30 s without use; the app closes 30 s
 // later unless the user does something. {s} is the live seconds value.
 // ------------------------------------------------------------
@@ -603,6 +685,8 @@ const DISCOVERY = {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     UPDATE,
+    UPDATE_SETTINGS,
+    STARTUP_FAILURE, startupFailureSub, startupFailureLogLine,
     INACTIVITY,
     DISCOVERY,
     CHECK_ORDER,

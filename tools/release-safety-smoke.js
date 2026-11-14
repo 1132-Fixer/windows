@@ -733,10 +733,10 @@ function cleanupExactFiles(filePaths, directory) {
     {
       type: 'pull_request',
       parameters: {
-        required_approving_review_count: 1,
-        require_code_owner_review: true,
-        dismiss_stale_reviews_on_push: true,
-        require_last_push_approval: true,
+        required_approving_review_count: 0,
+        require_code_owner_review: false,
+        dismiss_stale_reviews_on_push: false,
+        require_last_push_approval: false,
         required_review_thread_resolution: true
       }
     }
@@ -849,12 +849,12 @@ function cleanupExactFiles(filePaths, directory) {
     };
   };
   const tagEvent = {
-    created: true, forced: false, before: '0'.repeat(40), after: tagObjectSha, pusher: 'releasepusher'
+    created: true, forced: false, before: '0'.repeat(40), after: tagObjectSha, pusher: 'patricktobias86'
   };
   const preflightInput = {
     repository: '1132-Fixer/windows', tag: `v${version}`, sha: sourceHead, version,
     nativeArtifactId: 7001, supportArtifactId: 7002,
-    codeownersText: '* @JG2547 @patricktobias86\n', tagEvent
+    tagEvent
   };
   const api = makeApi();
   const preflight = await verifyReleasePreflight({ ...preflightInput, api });
@@ -938,10 +938,31 @@ function cleanupExactFiles(filePaths, directory) {
     await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi({ pageMap: changed }) }),
       error => error.code === 'blocking-review-unresolved', 'current blocking review prevents release');
   }
-  await assert.rejects(verifyReleasePreflight({
+  await verifyReleasePreflight({
     ...preflightInput, api: makeApi({ reviewDecision: 'REVIEW_REQUIRED' })
-  }), error => error.code === 'provider-review-decision-not-approved',
-  'an exact-head REST approval cannot bypass the provider last-push review decision');
+  });
+  {
+    const changed = new Map(jsonResponses);
+    changed.set('/repos/1132-Fixer/windows/pulls/233', {
+      ...clone(jsonResponses.get('/repos/1132-Fixer/windows/pulls/233')),
+      user: { login: 'JG2547' }
+    });
+    for (const id of [8001, 8002]) {
+      const run = clone(changed.get(`/repos/1132-Fixer/windows/actions/runs/${id}`));
+      run.actor.login = run.triggering_actor.login = 'JG2547';
+      changed.set(`/repos/1132-Fixer/windows/actions/runs/${id}`, run);
+    }
+    const pages = new Map(pageResponses);
+    pages.set('/repos/1132-Fixer/windows/pulls/233/reviews?per_page=100', {
+      items: [], pages: 1, complete: true
+    });
+    const ownRelease = await verifyReleasePreflight({
+      ...preflightInput, tagEvent: { ...tagEvent, pusher: 'JG2547' },
+      api: makeApi({ jsonMap: changed, pageMap: pages, reviewDecision: null })
+    });
+    assert.equal(ownRelease.nativeReceipt.issuer.login, 'jg2547',
+      'the PR author can issue receipts and approve release without any code-owner approval');
+  }
   await assert.rejects(verifyReleasePreflight({
     ...preflightInput,
     api: makeApi({ threads: () => ({ nodes: [{ id: 'T1', isResolved: false }], pageInfo: { hasNextPage: false, endCursor: null } }) })
@@ -957,7 +978,7 @@ function cleanupExactFiles(filePaths, directory) {
     run.triggering_actor.login = 'outsider';
     changed.set('/repos/1132-Fixer/windows/actions/runs/8001', run);
     await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi({ jsonMap: changed }) }),
-      error => error.code === 'receipt-issuer-not-independent', 'wrong receipt issuer fails closed');
+      error => error.code === 'receipt-issuer-not-release-actor', 'a different receipt issuer fails closed');
   }
   {
     const changed = new Map(jsonResponses);
@@ -1035,9 +1056,9 @@ function cleanupExactFiles(filePaths, directory) {
       'a declared-unavailable release does not depend on the support cutover issue');
     assert.ok(unavailableApi.calls.includes('json /repos/1132-Fixer/windows/actions/runs/1132'),
       'candidate verification still runs for a declared-unavailable release');
-    await assert.rejects(verifyReleasePreflight({
+    await verifyReleasePreflight({
       ...preflightInput, api: makeApi({ jsonMap: changedJson, byteMap: changedBytes, reviewDecision: 'REVIEW_REQUIRED' })
-    }), 'the review gate is unchanged for a declared-unavailable release');
+    });
   }
   {
     const changed = new Map(jsonResponses);
@@ -1132,11 +1153,11 @@ function cleanupExactFiles(filePaths, directory) {
     supportRun.triggering_actor.login = 'JG2547';
     changedJson.set('/repos/1132-Fixer/windows/actions/runs/8002', supportRun);
     const approved = await verifyReleasePreflight({
-      ...preflightInput, tagEvent: { ...tagEvent, pusher: 'patricktobias86' },
+      ...preflightInput, tagEvent: { ...tagEvent, pusher: 'JG2547' },
       api: makeApi({ jsonMap: changedJson })
     });
     assert.equal(approved.artifact.id, 6401,
-      'the tag pusher is not substituted for the provider-authoritative last PR pusher');
+      'the release actor can issue both receipts without code-owner approval');
   }
 
   const headersSeen = [];

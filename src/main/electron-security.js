@@ -41,6 +41,9 @@ const IPC_INVOKE_CHANNELS = Object.freeze([
   'update-diagnostics',
   'update-status-get',
   'update-app-ready',
+  'update-preference-get',
+  'update-preference-set',
+  'update-check-now',
   'user-activity',
   'inactivity-keep-open',
   'inactivity-close-now',
@@ -128,6 +131,7 @@ const IPC_SCHEMAS = Object.freeze({
   'submit-feedback': { args: ['feedback-type', 'feedback-text', 'screenshot?', 'feedback-rating?'] },
   'support-report': { args: ['support-context?'] },
   'open-explore-destination': { args: ['explore-destination'] },
+  'update-preference-set': { args: ['boolean'] },
 });
 
 function rendererWebPreferences(preloadPath) {
@@ -324,6 +328,10 @@ function coerceArg(kind, value) {
       if (typeof value !== 'string' || !ACTIVITY_KINDS.includes(value)) {
         return { ok: false, reason: 'activity kind not allowed' };
       }
+      return { ok: true, value };
+    case 'boolean':
+      // Strictly true or false: no truthy strings, numbers or objects.
+      if (value !== true && value !== false) return { ok: false, reason: 'not a boolean' };
       return { ok: true, value };
     case 'explore-destination':
       // Keys only — a URL-shaped value is rejected here before the handler

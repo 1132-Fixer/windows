@@ -69,10 +69,10 @@ jobs:
 
       # This job has no write permission. Every v* path stops here unless the
       # tag is exact current main, current repository rules and all required
-      # check integrations are green on that SHA, an independent code-owner
-      # approved the reviewed head/current base, and the exact candidate bytes
-      # have bound native and support evidence.
-      - name: Verify source, checks, review and release evidence
+      # check integrations are green on that SHA, review findings are resolved,
+      # and the tag pusher issued bound native and support evidence for the
+      # exact candidate bytes. No code-owner approval is required.
+      - name: Verify source, checks and release evidence
         id: gate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

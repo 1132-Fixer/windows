@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const path = require('node:path');
 
 (async () => {
   const { verifySupportEndpoint } = await import('../scripts/verify-support-endpoint.mjs');
@@ -91,5 +92,20 @@ const assert = require('node:assert/strict');
   assert.ok(unavailableNotes.startsWith(liveNotes) && /## Known issue/.test(unavailableNotes) &&
     /cannot send in this release/.test(unavailableNotes) && /keeps your draft/.test(unavailableNotes),
     'unavailable-support notes add the known issue after the unchanged download section');
+  // Per-version change notes (docs/releases/<version>.md) go between the
+  // download section and the known issue. No file means no section.
+  const { readReleaseChanges, RELEASE_NOTES_DIR } = await import('../scripts/publish-release.mjs');
+  const withChanges = releaseBody('6.4.1', { supportUnavailable: true, changes: '### Fixed\n\n- A thing.' });
+  assert.ok(withChanges.startsWith(liveNotes) && withChanges.indexOf('## What changed') > 0 &&
+    withChanges.indexOf('## What changed') < withChanges.indexOf('## Known issue') && withChanges.includes('- A thing.'),
+    'change notes sit after the download section and before the known issue');
+  assert.equal(releaseBody('6.4.1', { changes: '   ' }), liveNotes, 'blank change notes add no section');
+  assert.equal(readReleaseChanges('0.0.0-none'), '', 'a version with no notes file has no change notes');
+  assert.equal(readReleaseChanges('../../package'), '', 'a version that is not a version reads nothing');
+  const repoRoot = path.join(__dirname, '..');
+  const current = require('../package.json').version;
+  const currentNotes = readReleaseChanges(current, { root: repoRoot });
+  assert.ok(currentNotes.length > 0, `${RELEASE_NOTES_DIR}/${current}.md exists for the version being built`);
+  assert.ok(!/TBD|Lorem ipsum|<placeholder>|\bxxx\b/i.test(currentNotes), 'release notes carry no placeholder text');
   console.log('support-release-smoke: bound deployment/destination/ack identity, protocol, bounds and secret-safe errors passed; unavailable declaration refused when the service is live');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

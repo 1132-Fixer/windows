@@ -30,6 +30,8 @@ const { checkProfileServiceHealth } = require('./src/main/profile-service-health
 const { PROFILE_UNLOADED_GUARD, checkHelperProfileIdle } = require('./src/main/helper-profile-idle');
 
 const updaterMod = require('./src/main/updater');
+const startupScan = require('./src/main/startup-scan');
+const updatePreferenceMod = require('./src/main/update-preference');
 const { createUpdaterLog } = require('./src/main/updater-log');
 const shutdownMod = require('./src/main/shutdown');
 
@@ -261,6 +263,23 @@ function spawnInstallerDetached(installerPath, args, opts = {}) {
     });
   });
 }
+// The one "Automatic app updates" preference. Read by the updater
+// controller, the portable update notice and the exit path; written only by
+// the update-preference-set handler.
+let updatePreference = null;
+function getUpdatePreference() {
+  if (!updatePreference) {
+    updatePreference = updatePreferenceMod.createUpdatePreference({
+      userDataDir: app.getPath('userData'),
+      log: updaterLog
+    });
+  }
+  return updatePreference;
+}
+function automaticUpdatesEnabled() {
+  try { return getUpdatePreference().isEnabled(); } catch (_) { return false; }
+}
+
 let updaterCtl = null;
 function getUpdater() {
   if (updaterCtl) return updaterCtl;
@@ -284,11 +303,58 @@ function getUpdater() {
     spawnInstaller: spawnInstallerDetached,
     confirmNotice: confirmInstallNoticeShown,
     readRegisteredInstallDir,
-    requestShutdown: (reason) => shutdown.request(reason)
+    requestShutdown: (reason) => shutdown.request(reason),
+    automaticEnabled: automaticUpdatesEnabled
   });
   return updaterCtl;
 }
 
+function updatePreferencePayload(extra) {
+  const pref = getUpdatePreference().get();
+  const isPortable = !!process.env.PORTABLE_EXECUTABLE_DIR;
+  return Object.assign({
+    automatic: pref.enabled === true,
+    explicit: pref.explicit === true,
+    source: pref.source,
+    // Which kind of build this is decides what "update" can mean here.
+    mode: !app.isPackaged ? 'development' : (isPortable ? 'portable' : 'installed')
+  }, extra || {});
+}
+
+ipcMain.handle('update-preference-get', () => updatePreferencePayload());
+
+// Saves the choice first, then applies it to anything already in progress.
+// A choice that could not be saved is reported as not saved and is not
+// applied, so the switch never shows a state the next start would not keep.
+ipcMain.handle('update-preference-set', (_event, enabled) => {
+  const saved = getUpdatePreference().set(enabled === true);
+  if (!saved.ok) return updatePreferencePayload({ ok: false, reason: saved.reason });
+  const applied = getUpdater().onAutomaticChanged(enabled === true);
+  if (enabled !== true) {
+    // The portable notice comes from an automatic check too.
+    if (portableNotice) { portableNotice = null; sendUpdateStatus({ state: 'idle' }); }
+  } else if (app.isPackaged) {
+    // Turning it back on restores the normal behaviour now, not at the
+    // next start.
+    if (process.env.PORTABLE_EXECUTABLE_DIR) checkPortableUpdate('interval');
+    else getUpdater().check('interval').catch(() => {});
+  }
+  return updatePreferencePayload({
+    ok: true,
+    stopped: applied.stopped,
+    uninterruptible: applied.uninterruptible === true
+  });
+});
+
+// "Check for updates": always available, including with automatic updates
+// off. It only looks. Downloading and installing each need their own click.
+ipcMain.handle('update-check-now', async () => {
+  if (!app.isPackaged) return { ok: false, reason: 'not-installed-build' };
+  if (process.env.PORTABLE_EXECUTABLE_DIR) return checkPortableUpdate('user');
+  const result = await getUpdater().check('user');
+  const status = getUpdater().getStatus();
+  return Object.assign({}, result, { state: status.state, version: status.version, current: status.current, failure: status.reason });
+});
 ipcMain.handle('install-update-now', async () => getUpdater().installNow('user'));
 ipcMain.handle('defer-update', () => getUpdater().defer());
 ipcMain.handle('update-download', async () => getUpdater().download('user'));
@@ -366,25 +432,44 @@ function isNewerVersion(candidate, current) {
   return false;
 }
 
-async function checkPortableUpdate() {
+// origin 'startup' / 'interval' are automatic and do nothing, with no network
+// request, while automatic updates are off. origin 'user' is "Check for
+// updates" and always runs. The portable build never downloads or installs:
+// it only tells the user a newer version exists.
+async function checkPortableUpdate(origin = 'interval') {
+  if (origin !== 'user' && !automaticUpdatesEnabled()) {
+    console.log(`${UPDATER} portable check skipped (${origin}): automatic updates are off`);
+    return { ok: false, reason: 'automatic-updates-off' };
+  }
+  const current = app.getVersion();
   try {
     const body = await httpsGetText(LATEST_YML_URL);
     const m = /^version:\s*(\S+)/m.exec(body || '');
     if (!m) {
       console.warn(`${UPDATER} portable check: latest.yml had no version line`);
-      return;
+      return { ok: false, reason: 'check-failed', failure: 'invalid-response', current };
     }
     const latest = m[1].trim();
-    if (isNewerVersion(latest, app.getVersion())) {
-      console.log(`${UPDATER} portable check: v${latest} available (running v${app.getVersion()})`);
+    if (origin !== 'user' && !automaticUpdatesEnabled()) {
+      // Turned off while the request was in flight: discard the answer.
+      return { ok: false, reason: 'automatic-updates-off' };
+    }
+    if (isNewerVersion(latest, current)) {
+      console.log(`${UPDATER} portable check: v${latest} available (running v${current})`);
       portableNotice = { version: latest };
       sendUpdateStatus({ state: 'manual', version: latest });
-    } else {
-      console.log(`${UPDATER} portable check: up to date (v${app.getVersion()})`);
+      return { ok: true, state: 'manual', version: latest, current };
     }
+    console.log(`${UPDATER} portable check: up to date (v${current})`);
+    return { ok: true, state: 'idle', version: null, current };
   } catch (err) {
     // Non-fatal: offline or GitHub unreachable; retried on the next tick.
     console.warn(`${UPDATER} portable check failed: ${(err && err.message) || err}`);
+    const text = String((err && err.message) || err);
+    const failure = /ENOTFOUND|ENETUNREACH|ECONNREFUSED|EAI_AGAIN/.test(`${(err && err.code) || ''} ${text}`)
+      ? 'offline'
+      : (/timeout/i.test(text) ? 'timeout' : 'service-unavailable');
+    return { ok: false, reason: 'check-failed', failure, current };
   }
 }
 
@@ -972,9 +1057,9 @@ app.whenReady().then(async () => {
     // Long-open sessions: re-check periodically.
     setInterval(() => { updater.check('interval').catch(() => {}); }, UPDATE_RECHECK_MS);
   } else if (app.isPackaged && isPortable) {
-    setTimeout(checkPortableUpdate, 3000);
+    setTimeout(() => { checkPortableUpdate('startup'); }, 3000);
     setInterval(() => {
-      if (!fixInProgress) checkPortableUpdate();
+      if (!fixInProgress) checkPortableUpdate('interval');
     }, UPDATE_RECHECK_MS);
   } else {
     console.log(`${UPDATER} skipped (packaged=${app.isPackaged}, portable=${isPortable})`);
@@ -1013,7 +1098,9 @@ app.on('before-quit', (event) => {
   // A verified update the user deferred installs silently as the app exits
   // (no relaunch — the user chose to leave). Excluded for an update restart
   // (the installer is already running) and for fatal / relaunch exits.
-  if (!exitUpdateAttempted && updaterCtl && updaterCtl.isReady() &&
+  // Never with automatic updates off: a downloaded update then installs only
+  // when the user chooses "Restart now".
+  if (!exitUpdateAttempted && updaterCtl && updaterCtl.isReady() && automaticUpdatesEnabled() &&
       (reason === shutdown.REASONS.USER_EXIT || reason === shutdown.REASONS.INACTIVE_EXIT)) {
     exitUpdateAttempted = true;
     event.preventDefault();
@@ -5031,7 +5118,54 @@ ipcMain.handle('submit-feedback', async (event, type, text, screenshot, rating) 
 //   'warning'    = yellow, advisory, fix can still run
 //   'blocked'    = red, manual action required first
 // ============================================================
-ipcMain.handle('preflight-scan', async () => {
+// Checklist card labels, by key. Used when a card has to be reported as
+// "not checked" because the operation that feeds it failed.
+const SCAN_CARD_LABELS = Object.freeze({
+  admin: 'Administrator',
+  zoom: 'Zoom Workplace',
+  helperUser: 'Helper account',
+  helperProfile: 'Helper profile',
+  seclogon: 'Secondary Logon',
+  camPolicy: 'Camera policy',
+  micPolicy: 'Microphone policy',
+  frameServer: 'Camera Frame Server',
+  hku: 'User registry hive',
+  version: 'App version'
+});
+// Which cards each scan input feeds.
+const SCAN_CARDS_FROM_WINDOWS_CHECKS = Object.freeze(['admin', 'zoom', 'seclogon']);
+const SCAN_CARDS_FROM_ACCOUNT_PROBE = Object.freeze(['helperUser', 'helperProfile', 'camPolicy', 'micPolicy', 'frameServer', 'hku']);
+
+function logScanIssues(issues, elapsedMs) {
+  for (const issue of issues) {
+    try {
+      updaterLog.warn('startup-scan.issue', { operation: issue.operation, kind: issue.kind, code: issue.code, elapsedMs });
+    } catch (_) { /* logging never fails the scan */ }
+    console.warn(`[startup] scan issue operation=${issue.operation} kind=${issue.kind} code=${issue.code} ${elapsedMs}ms`);
+  }
+}
+
+// One scan at a time. "Try again", a focus re-check and the first startup
+// scan all share the scan that is already running, so a retry can never
+// start a second set of PowerShell workers. The scan never rejects: a
+// failure is returned as named issues with every unaffected result kept.
+const runPreflightScan = startupScan.createSingleFlight(async () => {
+  const t0 = Date.now();
+  try {
+    const result = await buildPreflightScan();
+    result.scanElapsedMs = Date.now() - t0;
+    if (result.scanIssues.length) logScanIssues(result.scanIssues, result.scanElapsedMs);
+    return result;
+  } catch (err) {
+    const issue = startupScan.issueFor(startupScan.OPERATIONS.RESULTS, err);
+    const failed = startupScan.failedScanResult(issue, SCAN_CARD_LABELS, Date.now() - t0);
+    logScanIssues(failed.scanIssues, failed.scanElapsedMs);
+    return failed;
+  }
+});
+ipcMain.handle('preflight-scan', () => runPreflightScan());
+
+async function buildPreflightScan() {
   // All three probes (base preflight, user1 existence, policy/FrameServer/HKU)
   // are independent and read-only — run them concurrently. This scan gates
   // the FIX NOW button on every launch and window-focus, so serial spawns
@@ -5113,10 +5247,36 @@ ipcMain.handle('preflight-scan', async () => {
     $out | ConvertTo-Json -Compress
   `, { timeoutMs: 20000 });
 
-  const [pre, probe] = await Promise.all([
-    preflightCheck(),
-    probePromise
-  ]);
+  // A rejected input no longer rejects the scan. It becomes a named issue,
+  // its own cards are reported as not checked, and the other input's
+  // results are kept.
+  const settled = await startupScan.settleInputs({
+    pre: {
+      promise: preflightCheck(),
+      operation: startupScan.OPERATIONS.WINDOWS_CHECKS,
+      fallback: {
+        ok: false,
+        blockers: [{
+          code: 'preflight_unavailable',
+          message: 'The Windows tools, Zoom and Secondary Logon check could not run. Choose Try again.'
+        }],
+        warnings: [],
+        info: {
+          elevated: null,
+          zoomInstall: { path: null, dir: null, source: null, perUserPath: null },
+          seclogon: { status: 'not checked', startType: 'not checked' }
+        }
+      }
+    },
+    probe: {
+      promise: probePromise,
+      operation: startupScan.OPERATIONS.ACCOUNT_PROBE,
+      fallback: { code: -1, stdout: '', stderr: '', timedOut: false, errorCode: 'probe_unavailable' }
+    }
+  });
+  const pre = settled.values.pre.value;
+  const probe = settled.values.probe.value;
+  const scanIssues = settled.issues.slice();
   const cards = {};
 
   // --- Admin --------------------------------------------------
@@ -5135,14 +5295,30 @@ ipcMain.handle('preflight-scan', async () => {
 
   let probeData = {};
   let probeFailed = false;
-  if (probe.timedOut) {
+  const probeText = (probe.stdout || '').trim();
+  if (probe.timedOut || !settled.values.probe.ok) {
+    probeFailed = true;
+  } else if (!probeText) {
+    // No output is not an answer. It used to parse as `{}`, which reported
+    // the helper account, both policies and the registry hive as ready.
     probeFailed = true;
   } else {
     try {
-      probeData = JSON.parse((probe.stdout || '').trim() || '{}');
+      probeData = JSON.parse(probeText);
+      if (!probeData || typeof probeData !== 'object' || Array.isArray(probeData)) {
+        probeData = {};
+        probeFailed = true;
+      }
     } catch (_) {
       probeFailed = true;
     }
+  }
+  if (probeFailed && settled.values.probe.ok) {
+    scanIssues.push({
+      operation: startupScan.OPERATIONS.ACCOUNT_PROBE,
+      kind: probe.timedOut ? startupScan.KINDS.TIMEOUT : startupScan.KINDS.ERROR,
+      code: probe.timedOut ? 'probe_timeout' : (probeText ? 'probe_unreadable' : 'probe_no_output')
+    });
   }
   if (!probeFailed && probeData.user1_exists &&
       (probeData.user1_identity_verified !== true || probeData.user1_admin_verified !== true)) {
@@ -5277,21 +5453,36 @@ ipcMain.handle('preflight-scan', async () => {
   // count even when no card carries them (running_as_target, missing_tool,
   // tool-probe failure) — otherwise the Fix button sits enabled while
   // run-fix would refuse at [0/8] anyway.
+  // An input that did not run cannot report its cards as ready or blocked.
+  // They are "not checked", and that alone keeps Fix now unavailable.
+  for (const issue of scanIssues) {
+    const keys = issue.operation === startupScan.OPERATIONS.WINDOWS_CHECKS
+      ? SCAN_CARDS_FROM_WINDOWS_CHECKS
+      : (issue.operation === startupScan.OPERATIONS.ACCOUNT_PROBE && !settled.values.probe.ok
+        ? SCAN_CARDS_FROM_ACCOUNT_PROBE
+        : []);
+    for (const key of keys) {
+      cards[key] = startupScan.unknownCard(SCAN_CARD_LABELS[key], issue.operation, issue.kind);
+    }
+  }
+
   const statuses = Object.values(cards).map(c => c.status);
   let overall = 'ready';
   if (statuses.includes('blocked') || pre.blockers.length) overall = 'blocked';
+  else if (statuses.includes('unknown'))      overall = 'unknown';
   else if (statuses.includes('repairable'))   overall = 'repairable';
   else if (statuses.includes('warning'))      overall = 'warning';
 
   return {
     cards,
     overall,
-    canRunFix: !statuses.includes('blocked') && pre.blockers.length === 0,
+    canRunFix: !statuses.includes('blocked') && !statuses.includes('unknown') && pre.blockers.length === 0,
     blockers: pre.blockers,
     warnings: pre.warnings,
-    info: pre.info
+    info: pre.info,
+    scanIssues
   };
-});
+}
 
 // ============================================================
 // IPC: support-report — sanitized markdown bundle for support.

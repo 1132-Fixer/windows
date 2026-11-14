@@ -48,7 +48,25 @@ export function exactAssets(dist, candidate) {
 
 // The published notes must say so when the release evidence declares the
 // support service unavailable: users are told before they try the form.
-export function releaseBody(version, { supportUnavailable = false } = {}) {
+// Release notes live in the source tree, one file per version, so they are
+// reviewed with the change and are part of the tagged commit. A release is
+// immutable once published, so the notes must be in the draft from the start.
+export const RELEASE_NOTES_DIR = 'docs/releases';
+const RELEASE_NOTES_MAX_BYTES = 32 * 1024;
+
+export function readReleaseChanges(version, { root = process.cwd(), fsImpl = fs } = {}) {
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version || '')) return '';
+  const file = path.join(root, RELEASE_NOTES_DIR, `${version}.md`);
+  let text;
+  try { text = fsImpl.readFileSync(file, 'utf8'); } catch (error) {
+    if (error && error.code === 'ENOENT') return '';
+    fail('publication-release-notes-unreadable');
+  }
+  if (Buffer.byteLength(text, 'utf8') > RELEASE_NOTES_MAX_BYTES) fail('publication-release-notes-too-large');
+  return text.replace(/\r\n/g, '\n').trim();
+}
+
+export function releaseBody(version, { supportUnavailable = false, changes = '' } = {}) {
   const lines = [
     '## Download', '',
     '| File | Use this one if |', '|---|---|',
@@ -56,6 +74,9 @@ export function releaseBody(version, { supportUnavailable = false } = {}) {
     `| **1132-Fixer-Portable-${version}.exe** | You want no install — just run it. |`, '',
     'Right-click → **Run as administrator**. Requires Windows 10/11 with Zoom Workplace installed machine-wide.'
   ];
+  if (typeof changes === 'string' && changes.trim()) {
+    lines.push('', '## What changed', '', changes.trim());
+  }
   if (supportUnavailable) {
     lines.push('', '## Known issue', '',
       'In-app **Feedback**, **Rate us** and **Report a bug** cannot send in this release: the support service is not live. ' +
@@ -64,7 +85,7 @@ export function releaseBody(version, { supportUnavailable = false } = {}) {
   return lines.join('\n');
 }
 
-export async function publishRelease({ api, repository, tag, head, version, assets, supportUnavailable = false }) {
+export async function publishRelease({ api, repository, tag, head, version, assets, supportUnavailable = false, changes = '' }) {
   if (!api || typeof api.getReleaseByTag !== 'function' ||
       typeof api.resolveTag !== 'function' ||
       typeof api.getImmutableReleaseState !== 'function' ||
@@ -82,7 +103,7 @@ export async function publishRelease({ api, repository, tag, head, version, asse
   const draft = await api.createDraft({
     tag, head, version, prerelease,
     name: `1132 Fixer ${tag}`,
-    body: releaseBody(version, { supportUnavailable: supportUnavailable === true })
+    body: releaseBody(version, { supportUnavailable: supportUnavailable === true, changes })
   });
   if (!draft || !Number.isSafeInteger(draft.id) || draft.id < 1 || draft.draft !== true ||
       draft.tag_name !== tag || draft.prerelease !== prerelease) {
@@ -246,7 +267,8 @@ async function main() {
   const assets = exactAssets(dist, candidate);
   const published = await publishRelease({
     api: githubReleaseApi({ repository, token }), repository, tag, head, version, assets,
-    supportUnavailable: supportIsDeclaredUnavailable(evidence.support)
+    supportUnavailable: supportIsDeclaredUnavailable(evidence.support),
+    changes: readReleaseChanges(version)
   });
   console.log(`[release-publish] PASS release=${published.id} assets=${assets.length}`);
 }

@@ -7,7 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.5.0] - 2026-11-14
+
+6.5.0 is the first release after 6.4.0. Version 6.4.1 was prepared but never
+published, so 6.5.0 also contains every change listed under 6.4.1 below.
+
+### Added
+
+- **Automatic app updates** switch, with a **Check for updates** button, in
+  **About**. About opens from the footer on every screen, so the setting stays
+  reachable when the startup check fails.
+  - **Off:** 1132 Fixer does not check for, download or install an update on
+    its own. This covers the check at startup, the check every four hours, the
+    restart countdown after a download, and the install when the app exits or
+    closes for inactivity. The portable copy also stops its automatic check.
+  - **On:** the 6.4 behaviour is unchanged. The app checks at startup and
+    every four hours, you choose when to download, and a downloaded update
+    installs after a 10 second countdown or when you exit.
+  - **Check for updates** works with the switch off. It only looks. A download
+    needs **Download update** and an install needs **Restart now**.
+  - The choice is saved at once in `settings.json` in the app's user-data
+    folder. It survives app restarts, Windows restarts and upgrades.
+  - Default with no saved choice: **on**, the same as earlier releases. The
+    app shows that this is a default and never records it as your choice. A
+    settings file that cannot be read counts as **off** until you choose again.
+  - Turning the switch off cancels a running restart countdown and discards
+    the answer of an automatic check that is still running. A downloaded
+    update is kept and installs only on **Restart now**. An install that has
+    already started cannot be stopped safely, and the app says so.
+
+### Fixed
+
+- Startup no longer reports every failure as "The startup check did not
+  finish in time", and one failed operation no longer marks all nine checks as
+  unverified. In 6.4.0, if any part of the startup check failed, the whole
+  request was rejected: the results that had completed were dropped and the
+  real error was not shown or logged. Now:
+  - a failed or timed-out operation is named, with a short code in **View
+    details** and in the app log;
+  - results from the operations that completed are kept;
+  - a check that could not run reads "could not be verified". It is not shown
+    as failed and not shown as passed, and **Fix now** stays unavailable;
+  - the message says "did not finish in time" only for a real timeout.
+- A startup-check worker that returned no output is now an error. In 6.4.0 an
+  empty answer was read as "no problems", so the helper account, both privacy
+  policies and the registry hive showed as ready.
+- **Try again** cannot start a second set of worker processes. A retry joins
+  the check that is already running, and a late answer from an older check is
+  ignored.
+- The first check has a 60 second limit, so the app cannot stay on
+  **Checking…** without end. The 8 second limit on the administrator check is
+  unchanged.
+- With automatic app updates off, the update bar no longer says a downloaded
+  version "installs when you exit", and a failed check no longer promises to
+  try again at the next start.
+
+### Not established
+
+- The exact trigger on the affected computers is not known. No support report
+  or app log from an affected computer was available, and the failure did not
+  reproduce on the development computer. The failure path above was reproduced
+  by fault injection against the released 6.4.0 code.
+
 ## [6.4.1] - 2026-11-12
+
+Not published. Released as part of 6.5.0.
 
 ### Fixed
 

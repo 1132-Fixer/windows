@@ -22,7 +22,7 @@ source/review  ->  required checks  ->  exact CI candidate
 
 | # | Link | Status | Where |
 | --- | --- | --- | --- |
-| 1 | Source and review | present | tag is the current protected `main`; exact reviewed PR head/base and independent code-owner approval are read back |
+| 1 | Source and release authorization | present | tag is the current protected `main`; merged PR head/base and receipts issued by the tag pusher are read back |
 | 2 | Required checks | present | all seven repository-rule contexts, with their required GitHub Actions integration, are green on the exact SHA |
 | 3 | Build | present | `ci.yml` builds and retains one exact-SHA candidate; `release.yml` does not rebuild accepted packages |
 | 4 | Security checks | present | blocking `npm audit --audit-level=high`; packaging inventory + allowlist enforced while producing the CI candidate |
@@ -51,14 +51,16 @@ requires its commit to equal current `main`. It does not use a Release object's
 `target_commitish` as tag identity.
 
 The preflight also requires `package.json` to equal the tag version, the active
-branch rules to retain all seven named checks and every review control,
-including required thread resolution, and each check to be green on that SHA
+branch rules to retain all seven named checks and required thread resolution,
+and each check to be green on that SHA
 under its required integration. It paginates reviews and review threads to
 exhaustion. Every thread must be resolved. No current blocking review can
-remain. Exact-head approval must come from a code owner who is not the PR
-author. GitHub must also return the PR's current `reviewDecision` as `APPROVED`;
-that provider decision enforces the last-PR-push rule. The tag pusher is not
-treated as the last PR pusher. All release runs share one concurrency group.
+remain. No code-owner or other PR approval is required for release. The release
+actor approves publication by issuing both evidence receipts and pushing the
+annotated release tag with the same GitHub account. That account may also be
+the PR author. All release runs share one concurrency group. CODEOWNERS remains
+available for optional review routing. Repository settings can independently
+require reviews; this change does not modify those settings.
 
 ### 2. CI tests
 
@@ -74,7 +76,7 @@ acceptance receipt, verifies the artifact archive digest and every candidate
 file, and refuses any different package hash.
 
 Native and support evidence is not accepted from JSON-valued release
-variables. An independent code owner uses the `Release evidence issuer`
+variables. The release actor uses the `Release evidence issuer`
 workflow on protected `main`. That workflow validates the exact non-secret
 receipt bytes and stores one immutable Actions artifact. The release variables
 contain only those artifact IDs. Preflight fetches each artifact and its
@@ -112,7 +114,7 @@ What it changes, and what it does not:
 - All six journeys (Setup and Portable; bug report, rating, contact) are still
   run on the exact packages. Each must end with the app showing the failure
   and keeping the draft. Any other outcome is refused.
-- The receipt is still issued by an independent code owner through the
+- The receipt is still issued by the release actor through the
   `Release evidence issuer` workflow, and the native acceptance manifest still
   binds its hash. A version 1 receipt cannot carry a failed journey, and a
   version 2 receipt cannot carry a deployment identity.
@@ -283,6 +285,16 @@ draft and cannot change the public update feed. The workflow also retains the
 complete transaction inputs as an Actions artifact before any draft is
 created. That retention step is mandatory; storage failure stops publication.
 
+#### Release notes
+
+The release body is built by `releaseBody()` in `scripts/publish-release.mjs`:
+the download table, then **What changed**, then the support known issue when
+it applies. **What changed** is the content of `docs/releases/<version>.md`
+from the tagged commit, so the notes are reviewed with the change. A published
+release is immutable, so the notes must be in the tagged commit; they cannot
+be added afterwards. `tools/support-release-smoke.js` fails when the file for
+the `package.json` version is missing or contains placeholder text.
+
 ### 10. Updater metadata
 
 `latest.yml` carries the version, the installer filename, its SHA-512, and its
@@ -358,15 +370,14 @@ workflow bytes and rejects a tag or abbreviated SHA.
 ## Publishing a release
 
 1. Land the version change on protected `main`; all seven required checks must
-   be green and the exact merged head must retain independent code-owner
-   approval.
+   be green. Code-owner approval is not a release prerequisite.
 2. `npm version <patch|minor|major>` or `node scripts/bump-version.js`, then
    commit.
 3. Let CI retain the exact candidate. Complete disposable native Windows Setup
    and Portable acceptance for those package hashes. Complete the six live
    support journeys against the immutable backend revision. Close support
    issue #2 or record its explicit supersession.
-4. Have an independent code owner run `Release evidence issuer` on protected
+4. As the release actor, run `Release evidence issuer` on protected
    `main` once for `native` and once for `support`. Put only the resulting
    immutable artifact IDs in `NATIVE_ACCEPTANCE_ARTIFACT_ID` and
    `SUPPORT_CLEARANCE_ARTIFACT_ID`. Do not put receipt JSON in a variable.
