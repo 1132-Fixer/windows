@@ -16,6 +16,45 @@ const windowsTools = require('../src/main/windows-tools');
 const source = fs.readFileSync(path.join(__dirname, 'packaged-acceptance.js'), 'utf8');
 const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 const mockedOnly = process.argv.includes('--mocked-only');
+// Can this process run the fixtures that work under C:\Users? Two facts must
+// both hold; any failure counts as "no".
+//   1. The token is elevated, read with the production probe (whoami
+//      integrity level) from the trusted System32 path.
+//   2. The process can really create a folder under C:\Users. A restricted
+//      token can keep a high integrity level while its Administrators group
+//      is deny-only, so the integrity level alone is not proof. The probe
+//      creates one empty, randomly named folder and removes it at once.
+const elevation = require('../src/main/elevation');
+const NOT_ELEVATED_REASON = 'elevation required: run this suite from an elevated PowerShell 7 to include them';
+function canCreateUnderUsersRoot() {
+  const probe = path.join('C:\\Users', `.fixer-elevation-probe-${require('node:crypto').randomBytes(6).toString('hex')}`);
+  try {
+    fs.mkdirSync(probe);
+  } catch (_) {
+    return false;
+  }
+  try { fs.rmdirSync(probe); } catch (_) { /* an empty folder we just made; nothing else to do */ }
+  return !fs.existsSync(probe);
+}
+function hostIsElevated() {
+  if (process.platform !== 'win32') return false;
+  try {
+    const whoami = elevation.systemWhoami();
+    if (!whoami) return false;
+    const probe = spawnSync(whoami, ['/groups'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+    if (probe.status !== 0 || elevation.parseWhoamiIntegrity(probe.stdout || '').elevated !== true) return false;
+    return canCreateUnderUsersRoot();
+  } catch (_) {
+    return false;
+  }
+}
+const nativeElevated = hostIsElevated();
+let elevatedFixturesNotRun = '';
+// CI is the authority for the elevated fixtures. If a CI host is ever not
+// elevated, that must fail loudly, not turn into a quiet NOT RUN.
+if (process.env.GITHUB_ACTIONS === 'true' && process.platform === 'win32' && !mockedOnly) {
+  assert.equal(nativeElevated, true, 'CI Windows host must be elevated: the profile identity and cleanup fixtures are mandatory in CI');
+}
 function productionFunction(name) {
   const asyncStart = source.indexOf(`async function ${name}(`);
   const fnStart = asyncStart >= 0 ? asyncStart : source.indexOf(`function ${name}(`);
@@ -1760,6 +1799,18 @@ public static class FixerIdentityDiagnosticFixtureV1 {
       blocked: true, identityCalls: 0, reason: 'profile quarantine receipt is malformed'
     }, 'a present blank quarantine receipt fails closed before identity or mutation');
 
+    // The two fixtures below create and rename real folders under C:\Users.
+    // Windows allows that only to an elevated process. On a host that is
+    // not elevated they are reported NOT RUN with the reason; they are not
+    // run to an assertion that reads like a product defect (issue 264).
+    // CI must run them: a non-elevated CI host fails above.
+    // (The block keeps its original indentation: it is mostly PowerShell text.)
+    elevatedFixtures: {
+    if (!nativeElevated) {
+      elevatedFixturesNotRun = NOT_ELEVATED_REASON;
+      console.log(`packaged-runtime-smoke: NOT RUN profile identity and cleanup fixtures (${NOT_ELEVATED_REASON})`);
+      break elevatedFixtures;
+    }
     const identityFixture = executeProductPowerShell(`
         $ErrorActionPreference = 'Stop'
         function Test-FixerExpectedIdentityIOException {
@@ -2434,6 +2485,7 @@ public static class FixerIdentityDiagnosticFixtureV1 {
       destinationParentIsUsersRoot: true,
       destinationLeafValid: true
     }, 'the evaluated production cleanup deletes only the quarantined tree and preserves replacement and junction targets');
+    } // elevatedFixtures
   } else {
     console.log(`packaged-runtime-smoke: not-run native PowerShell 7 fixtures (${mockedOnly ? 'explicit --mocked-only mode; source and mocks only' : 'non-Windows host'})`);
   }
@@ -2509,7 +2561,12 @@ public static class FixerIdentityDiagnosticFixtureV1 {
     if (name === 'tool resolves inside forged root') assert.equal(result.commands, 0, 'fake PowerShell is never executed');
     checks++;
   }
-  console.log(process.platform === 'win32' && !mockedOnly
-    ? `packaged-runtime-smoke: ${checks} authoritative runtime gate checks passed`
-    : `packaged-runtime-smoke: ${checks} source/mocked check groups passed; native fixtures not-run`);
+  if (process.platform === 'win32' && !mockedOnly && elevatedFixturesNotRun) {
+    // Never "authoritative": two fixtures did not run, and the line says why.
+    console.log(`packaged-runtime-smoke: ${checks} check groups passed; NOT RUN: profile identity and cleanup fixtures (${elevatedFixturesNotRun})`);
+  } else {
+    console.log(process.platform === 'win32' && !mockedOnly
+      ? `packaged-runtime-smoke: ${checks} authoritative runtime gate checks passed`
+      : `packaged-runtime-smoke: ${checks} source/mocked check groups passed; native fixtures not-run`);
+  }
 })().catch(error => { console.error(error); process.exitCode = 1; });
