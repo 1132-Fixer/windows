@@ -61,13 +61,32 @@ published, so 6.5.0 also contains every change listed under 6.4.1 below.
 - With automatic app updates off, the update bar no longer says a downloaded
   version "installs when you exit", and a failed check no longer promises to
   try again at the next start.
+- The repair's camera and microphone consent step no longer starts PowerShell
+  with a script file. It sends the script text through standard input, as every
+  other step already does. On the affected computer a script-file start was
+  held for 27 seconds, against a 30 second limit for this step (#266).
 
-### Not established
+### Cause on one affected computer (#266)
 
-- The exact trigger on the affected computers is not known. No support report
-  or app log from an affected computer was available, and the failure did not
-  reproduce on the development computer. The failure path above was reproduced
-  by fault injection against the released 6.4.0 code.
+- Measured on one affected Windows 11 Home computer on 2026-11-14. A new
+  PowerShell process that is started with a script file on its command line
+  waits 27 seconds before the first line runs. The same script text through
+  standard input or `-EncodedCommand` starts in 0.3 seconds. 6.4.0 ran each
+  startup probe as a new temporary script file with a 10 or 20 second limit.
+  A probe that needs 27 seconds to start cannot report inside those limits.
+- The app log of that computer shows the startup check at 0 to 4 seconds until
+  2026-11-04 and at about 56 seconds on several days from 2026-11-05.
+- Smart App Control is on for that computer but is not the cause: PowerShell
+  runs in full language mode, the script policy check takes 13 milliseconds,
+  and Windows logged no script block.
+- Not established: which program holds the process. The computer runs a
+  third-party antivirus product and Microsoft Defender is in passive mode. The
+  hold was not traced to a product, because that needs a change on the
+  computer.
+- Not established: whether other affected computers have the same cause.
+- Not changed: the helper's desktop shortcut and first-run setup still start a
+  script file. On such a computer Zoom can open about 27 seconds late from the
+  shortcut. These starts have no time limit and do not fail.
 
 ## [6.4.1] - 2026-11-12
 
