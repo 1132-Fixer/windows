@@ -41,10 +41,20 @@ const OUT = path.resolve(argOf('--out', path.join(DIST, 'signature-state.json'))
 const pkg = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
 const win = pkg.build?.win ?? {};
 const verifyFlag = win.verifyUpdateCodeSignature === true;
-const expectedPublisher = win.signtoolOptions?.publisherName ?? win.publisherName ?? null;
+// Cloud signing (Microsoft Artifact Signing) is resolved by
+// scripts/signing-config.mjs. When it is configured, the publisher the build
+// was given is the one every artifact must be signed by: the certificate's
+// subject is a verified legal name, which package.json cannot know in advance.
+const cloudSigningConfigured = process.env.ARTIFACT_SIGNING_CONFIGURED === 'true';
+const cloudPublisher = (process.env.ARTIFACT_SIGNING_PUBLISHER || '').trim();
+const expectedPublisher = (cloudSigningConfigured && cloudPublisher)
+  ? cloudPublisher
+  : (win.signtoolOptions?.publisherName ?? win.publisherName ?? null);
 
-// A certificate was offered to this build if either variable carries a value.
-const certConfigured = Boolean(process.env.CSC_LINK) || Boolean(process.env.WIN_CSC_LINK);
+// A certificate was offered to this build if a certificate variable carries a
+// value or cloud signing was configured. A configured build that comes out
+// unsigned is a failure, never an "intentional unsigned build".
+const certConfigured = Boolean(process.env.CSC_LINK) || Boolean(process.env.WIN_CSC_LINK) || cloudSigningConfigured;
 
 const errors = [];
 const fail = (msg) => { errors.push(msg); console.error(`FAIL: ${msg}`); };

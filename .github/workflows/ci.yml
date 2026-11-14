@@ -106,15 +106,48 @@ jobs:
       - name: Verify pinned design source
         run: npm run test:design
 
+      # Code signing (Microsoft Artifact Signing) is all-or-nothing and is off
+      # until every secret and variable below exists. With none set, this
+      # step reports "not configured" and both builds are unsigned, as before.
+      # With only some set, it fails. Pull request builds never receive the
+      # secrets, so they are always unsigned. See docs/security/code-signing.md.
+      - name: Resolve signing configuration
+        id: signing
+        env:
+          AZURE_TENANT_ID: ${{ github.event_name != 'pull_request' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ github.event_name != 'pull_request' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ github.event_name != 'pull_request' && secrets.AZURE_CLIENT_SECRET || '' }}
+          ARTIFACT_SIGNING_ENDPOINT: ${{ github.event_name != 'pull_request' && vars.ARTIFACT_SIGNING_ENDPOINT || '' }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ github.event_name != 'pull_request' && vars.ARTIFACT_SIGNING_ACCOUNT || '' }}
+          ARTIFACT_SIGNING_PROFILE: ${{ github.event_name != 'pull_request' && vars.ARTIFACT_SIGNING_PROFILE || '' }}
+          ARTIFACT_SIGNING_PUBLISHER: ${{ github.event_name != 'pull_request' && vars.ARTIFACT_SIGNING_PUBLISHER || '' }}
+        run: node scripts/signing-config.mjs
+
       - name: Build portable executable
+        shell: pwsh
         env:
           FEEDBACK_PROXY_URL: ${{ vars.FEEDBACK_PROXY_URL }}
-        run: npm run build
+          SIGNING_ARGS: ${{ steps.signing.outputs.args }}
+          AZURE_TENANT_ID: ${{ github.event_name != 'pull_request' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ github.event_name != 'pull_request' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ github.event_name != 'pull_request' && secrets.AZURE_CLIENT_SECRET || '' }}
+        run: |
+          $signing = @($env:SIGNING_ARGS -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          npm run build -- @signing
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build NSIS installer
+        shell: pwsh
         env:
           FEEDBACK_PROXY_URL: ${{ vars.FEEDBACK_PROXY_URL }}
-        run: npm run build:installer
+          SIGNING_ARGS: ${{ steps.signing.outputs.args }}
+          AZURE_TENANT_ID: ${{ github.event_name != 'pull_request' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ github.event_name != 'pull_request' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ github.event_name != 'pull_request' && secrets.AZURE_CLIENT_SECRET || '' }}
+        run: |
+          $signing = @($env:SIGNING_ARGS -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          npm run build:installer -- @signing
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Updater metadata as release.yml will publish it: no
       # isAdminRightsRequired flag, and version / installer name / size /
@@ -212,6 +245,9 @@ jobs:
       # separate steps deliberately: pwsh only propagates the last command's
       # exit code, so chaining them would mask a failure in the first two.
       - name: Check signature state
+        env:
+          ARTIFACT_SIGNING_CONFIGURED: ${{ steps.signing.outputs.configured }}
+          ARTIFACT_SIGNING_PUBLISHER: ${{ steps.signing.outputs.publisher }}
         run: node scripts/check-signature-state.mjs --dist dist
 
       - name: Generate SBOM

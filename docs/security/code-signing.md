@@ -137,6 +137,63 @@ Secrets read by the release workflow:
 Record secret **names**, presence, and fingerprints only — never values — in
 issues, PRs, receipts, or logs.
 
+### 5.1 Microsoft Artifact Signing (prepared 2026-11-14, not active)
+
+The build can sign with Microsoft Artifact Signing (formerly Trusted Signing).
+The wiring is in `ci.yml` and `scripts/signing-config.mjs`. It is **off**:
+none of the values below exists, so every build is still unsigned. **The
+signed path has never run.** It was written from the electron-builder and
+Microsoft documentation and must be proven on the first build after setup.
+
+Why this service: it needs no hardware token, it works on a hosted runner,
+Smart App Control accepts its Public Trust certificates, and the Basic tier
+costs 9.99 USD per month for 5,000 signatures (Microsoft Learn, read
+2026-11-14). It does **not** give instant SmartScreen reputation; warnings
+continue until the publisher identity builds reputation.
+
+Limits that decide whether it can be used:
+
+- An individual developer must be in the USA or Canada. An organization must be
+  in the USA, Canada, the EU or the UK and have three years of tax history.
+- Microsoft validates the identity first. Allow several business days.
+- The certificate subject is the **validated legal name**. It will not be
+  `High Texas` unless that is the validated name. The updater compares the
+  signer with the publisher name, so the build takes the publisher from
+  `ARTIFACT_SIGNING_PUBLISHER` and writes it to both places.
+
+| Name | Kind | Purpose | Configured today |
+| --- | --- | --- | --- |
+| `AZURE_TENANT_ID` | secret | Microsoft Entra tenant of the signing application | no |
+| `AZURE_CLIENT_ID` | secret | application (client) identifier with the role *Artifact Signing Certificate Profile Signer* | no |
+| `AZURE_CLIENT_SECRET` | secret | client secret of that application | no |
+| `ARTIFACT_SIGNING_ENDPOINT` | variable | `https://<region>.codesigning.azure.net` | no |
+| `ARTIFACT_SIGNING_ACCOUNT` | variable | Artifact Signing account name | no |
+| `ARTIFACT_SIGNING_PROFILE` | variable | Public Trust certificate profile name | no |
+| `ARTIFACT_SIGNING_PUBLISHER` | variable | exact subject common name of the issued certificate | no |
+
+Rules the wiring enforces (`tools/signing-config-smoke.js`):
+
+- All seven values, or none. A partial set fails the build and names what is
+  missing. It never falls back to an unsigned build.
+- Pull request builds never receive the values, so they are always unsigned.
+- A build that was configured to sign and comes out unsigned fails at
+  `check-signature-state.mjs`.
+- `verifyUpdateCodeSignature` stays `false`. Turn it on only in a later
+  release, after one signed update has been installed over a signed version
+  on a test computer (section 4).
+
+Setup order, once the service is approved:
+
+1. Create the Artifact Signing account (Basic) and complete identity validation.
+2. Create one Public Trust certificate profile.
+3. Register an application, give it the signer role on the profile, and create
+   a client secret.
+4. Set the three secrets and four variables in this repository.
+5. Push to `main`. Confirm `signature-state.json` in the release candidate
+   reports every artifact `Valid`, timestamped, with the expected publisher.
+6. Run native acceptance on that signed candidate. A rebuild changes the
+   package hashes, so earlier acceptance does not carry over.
+
 The workflow sets `CSC_IDENTITY_AUTO_DISCOVERY: false` so electron-builder can
 never pick up an unrelated certificate that happens to be present on a runner.
 
