@@ -29,6 +29,20 @@ authorized elevated test executor, and record its host, source hashes and result
 These temporary filesystem fixtures are separate from a real helper-account reset,
 which still needs the disposable target and rollback described below.
 
+On a host that is not elevated, `packaged-runtime-smoke.js` no longer stops at
+an assertion inside those two fixtures. It reports them as **NOT RUN** with the
+reason "elevation required" and runs every other check. The two fixtures are
+required, so the default run still exits 1, with a **BLOCKED** line that says
+it is a host condition and not a product defect. `npm test` on such a host
+therefore still fails, as the rule against skipping a required check demands.
+For a reduced run of only the checks the host can do, pass
+`--allow-not-elevated`: it exits 0, says it is not the required suite, and
+never says "authoritative". The suite decides this
+with two facts: the token's integrity level (the production probe) and a real
+attempt to create one empty, randomly named folder under `C:\Users`, removed
+at once. In CI (`GITHUB_ACTIONS=true`) a host that is not elevated is a
+failure, so the fixtures cannot be skipped there without notice.
+
 ## Windows tool and preflight regression checks
 
 These Node-only checks run in `npm test`:
