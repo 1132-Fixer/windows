@@ -87,7 +87,9 @@ async function uninstall(dir, id) {
   await closeApp();
   const name = fs.readdirSync(dir).find(n => /^Uninstall.*\.exe$/i.test(n));
   assert.ok(name, 'the current 6.5.0 uninstaller exists');
-  await run(path.join(dir, name), ['/S', `/D=${dir}`]);
+  // Match electron-builder's ExecWait contract. _?= must be last; without
+  // it NSIS starts a temporary copy and the original process exits early.
+  await run(path.join(dir, name), ['/S', '/KEEP_APP_DATA', `_?=${dir}`]);
   assert.equal(fs.existsSync(path.join(dir, '1132 Fixer.exe')), false);
   record(id, '6.5.0 uninstaller exited successfully and removed the app executable');
 }
