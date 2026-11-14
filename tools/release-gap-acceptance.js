@@ -60,6 +60,9 @@ async function diagnose(id, action) {
 async function open(exe, expected, extraEnv = {}) {
   const asar = require('@electron/asar');
   const archive = path.join(path.dirname(exe), 'resources', 'app.asar');
+  // Upgrade tests replace archives at the same path; cached offsets belong
+  // to the previous version, not the newly installed package.
+  asar.uncache(archive);
   assert.equal(JSON.parse(asar.extractFile(archive, 'package.json').toString()).version, expected);
   const sourceHash = hash(exe);
   const archiveHash = hash(archive);
