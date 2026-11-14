@@ -1,5 +1,5 @@
 // Unicode username boundary regression for the support-report sanitizer
-// (governance#656). Runs the production handler through the smoke harness
+// (issue #263). Runs the production handler through the smoke harness
 // with synthetic identities only. Run: node --test tools/sanitizer-unicode-boundary.test.js
 const test = require('node:test');
 const assert = require('node:assert/strict');
