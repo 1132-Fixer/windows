@@ -676,6 +676,13 @@ async function runUpdateSettings(page, tag, state) {
     (fits ? passed : failed)(`${tag}.update-setting-fits`,
       fits ? `dialog ${f.dialogRect.w}x${f.dialogRect.h} inside ${f.viewport.w}x${f.viewport.h}${f.dialogScrolls ? ' (dialog scrolls internally)' : ''}` : `dialog or its controls leave the window: dialog=${JSON.stringify(f.dialogRect)} viewport=${JSON.stringify(f.viewport)}`,
       { screenshot: openShot });
+    const closeVisible = await page.evaluate(() => {
+      const b = document.getElementById('aboutClose');
+      if (!b) return false;
+      const r = b.getBoundingClientRect();
+      return r.top >= 0 && r.bottom <= innerHeight + 1 && r.height > 0;
+    });
+    (closeVisible ? passed : failed)(`${tag}.about-close-visible`, closeVisible ? 'Close is fully inside the window without scrolling' : 'Close is clipped by the window');
     const smallTarget = (f.trackRect && f.trackRect.h < 22) || (f.checkRect && f.checkRect.h < 24);
     (!smallTarget ? passed : failed)(`${tag}.update-setting-target-size`, `switch ${f.trackRect && f.trackRect.w}x${f.trackRect && f.trackRect.h}, button ${f.checkRect && f.checkRect.w}x${f.checkRect && f.checkRect.h}`);
 
