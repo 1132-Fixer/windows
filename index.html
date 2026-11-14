@@ -846,7 +846,9 @@
     .fix-confirm-dialog p { margin: 10px 0 20px; color: var(--muted); font-size: 14px; line-height: 21px; }
     .fix-confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
     /* App updates section of the About dialog. */
-    #aboutOverlay .fix-confirm-dialog { max-height: 100%; overflow-y: auto; scrollbar-color: var(--border-strong) transparent; scrollbar-width: thin; }
+    /* scroll-padding-bottom is the height of the pinned action row, so
+       scrollIntoView stops with the target fully above it. */
+    #aboutOverlay .fix-confirm-dialog { max-height: 100%; overflow-y: auto; scrollbar-color: var(--border-strong) transparent; scrollbar-width: thin; scroll-padding-bottom: 96px; }
     /* The action row stays visible while the dialog scrolls, so Close is
        never clipped in a small window. */
     #aboutOverlay .fix-confirm-actions { position: sticky; bottom: -24px; margin: 0 -24px -24px; padding: 12px 24px 24px; background: var(--panel); border-top: 1px solid var(--border); }

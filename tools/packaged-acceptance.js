@@ -708,6 +708,18 @@ async function runUpdateSettings(page, tag, state) {
     const checkShot = await shot(page, `${tag}-about-03-check-now`);
     (f.status && !/Checking for updates/.test(f.status) && f.checked === false ? passed : failed)(`${tag}.manual-check-while-off`,
       `result shown: "${f.status}"; switch still off=${f.checked === false}`, { screenshot: checkShot });
+    // The result must be readable: no line of it under the pinned action row.
+    const statusClear = await page.evaluate(() => {
+      const s = document.getElementById('updateSettingsStatus');
+      const a = document.querySelector('#aboutOverlay .fix-confirm-actions');
+      const d = document.querySelector('#aboutOverlay .fix-confirm-dialog');
+      if (!s || !a || !d) return null;
+      const sr = s.getBoundingClientRect(); const ar = a.getBoundingClientRect(); const dr = d.getBoundingClientRect();
+      return { statusBottom: Math.round(sr.bottom), statusTop: Math.round(sr.top), actionsTop: Math.round(ar.top), dialogTop: Math.round(dr.top) };
+    });
+    const clear = !!statusClear && statusClear.statusBottom <= statusClear.actionsTop + 1 && statusClear.statusTop >= statusClear.dialogTop;
+    (clear ? passed : failed)(`${tag}.manual-check-result-not-covered`,
+      clear ? 'the whole result is above the pinned action row' : `result is partly covered: ${JSON.stringify(statusClear)}`, { screenshot: checkShot });
 
     // Back on, by pointer, so the next launch starts from the default behaviour.
     await page.click('label.update-switch');
