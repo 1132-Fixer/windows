@@ -32,6 +32,16 @@ async function run(exe, args, timeout = 180000) {
 async function closeApp() {
   if (currentApp) { await currentApp.close(); currentApp = null; }
 }
+async function diagnose(id, action) {
+  try { await action(); }
+  catch (error) {
+    report.cases.push({ id, status: 'failed', detail: String(error.stack || error) });
+    console.error(error); process.exitCode = 1;
+    if (currentApp) {
+      try { await currentApp.windows()[0].screenshot({ path: path.join(out, `${id}-failed.png`) }); } catch (_) { /* preserve the original failure */ }
+    }
+  } finally { await closeApp(); }
+}
 async function open(exe, expected, extraEnv = {}) {
   const asar = require('@electron/asar');
   const archive = path.join(path.dirname(exe), 'resources', 'app.asar');
@@ -99,6 +109,8 @@ async function faultScreens(exe, mode, env) {
     await closeApp();
   }
   const page = await open(exe, version, env);
+  // A user check is correctly refused while startup owns child processes.
+  await page.waitForFunction(() => !document.getElementById('wizChecking').classList.contains('active'), null, { timeout: 90000 });
   // Fault injection is confined to this test process. App bytes and security settings stay intact.
   await currentApp.evaluate(({ app }) => {
     const load = process.getBuiltinModule('module').createRequire(
@@ -122,9 +134,10 @@ async function faultScreens(exe, mode, env) {
   await page.click('#updateCheckNowBtn');
   await page.waitForFunction(() => {
     const s = document.getElementById('updateSettingsStatus').textContent;
-    return /could|unable|internet|offline|failed/i.test(s) && !/Checking for updates/.test(s);
+    return s.trim().length > 0 && !/Checking for updates/.test(s);
   }, null, { timeout: 45000 });
   const text = await page.locator('#updateSettingsStatus').innerText();
+  assert.match(text, /could|unable|internet|offline|failed/i, `offline result: ${text}`);
   assert.doesNotMatch(text, /latest version|up to date/i);
   assert.equal(await page.locator('#autoUpdateToggle').isChecked(), false);
   await page.screenshot({ path: path.join(out, `${mode}-offline.png`) });
@@ -194,8 +207,8 @@ async function supportJourneys(exe, mode, env) {
   const runtimeHash = hash(path.join(installDir, 'resources', 'app.asar'));
   assert.equal(runtimeHash, hash(path.join(dist, 'win-unpacked', 'resources', 'app.asar')));
   record('setup.payload-binding', 'Installed app.asar matches the packaged build');
-  await faultScreens(exe, 'setup');
-  await supportJourneys(exe, 'setup');
+  await diagnose('setup.fault-diagnostics', () => faultScreens(exe, 'setup'));
+  await diagnose('setup.support-diagnostics', () => supportJourneys(exe, 'setup'));
   await uninstall(installDir, 'setup.clean-uninstall');
   // Keep userData to test preservation. Never execute 6.4.0's uninstaller.
   await run(baseline, ['/S', '/allusers', `/D=${installDir}`]);
@@ -227,8 +240,8 @@ async function supportJourneys(exe, mode, env) {
   const env = { PORTABLE_EXECUTABLE_DIR: extract, PORTABLE_EXECUTABLE_FILE: portable };
   await open(portableExe, version, env); await closeApp();
   record('portable.extract-launch', 'Exact Portable payload extracted; unchanged app.asar matches Setup and launches through diagnostic host');
-  await faultScreens(portableExe, 'portable', env);
-  await supportJourneys(portableExe, 'portable', env);
+  await diagnose('portable.fault-diagnostics', () => faultScreens(portableExe, 'portable', env));
+  await diagnose('portable.support-diagnostics', () => supportJourneys(portableExe, 'portable', env));
 })().catch(error => {
   report.cases.push({ id: 'driver', status: 'failed', detail: String(error.stack || error) });
   console.error(error); process.exitCode = 1;
