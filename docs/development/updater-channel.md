@@ -147,7 +147,67 @@ retry).
    diagnostic details**.
 
 A deferred update installs silently when the user exits (no relaunch);
-`autoInstallOnAppQuit` is not used.
+`autoInstallOnAppQuit` is not used. This happens only while **Automatic app
+updates** is on (see below).
+
+### Automatic app updates (6.5.0)
+
+One preference decides every unattended update action. It is
+`automaticUpdates.enabled` in `%APPDATA%\1132-fixer\settings.json`, owned by
+`src/main/update-preference.js`. `main.js` creates one store and passes it to
+the updater controller (`automaticEnabled`), the portable notice and the exit
+path. Nothing else reads or caches the value.
+
+The switch and **Check for updates** are in **About**, which opens from the
+footer on every screen, including *Unable to complete* and *Action required*.
+
+| Path | On | Off |
+| --- | --- | --- |
+| Check 3 s after startup (`check('startup')`) | runs | not started, no network request |
+| Check every 4 h (`check('interval')`) | runs | not started, no network request |
+| Portable notice check (startup and 4 h) | runs | not started, no network request |
+| Download | user chooses **Download update** | user chooses **Download update** |
+| 10 s restart countdown after a download | starts when idle | never starts |
+| Install when the app exits or closes for inactivity | yes, for a downloaded update | never |
+| **Check for updates** (`check('user')`) | runs | runs |
+| **Restart now** (`installNow('user')`) | installs | installs |
+
+**Default.** An installation with no saved preference behaves as **on**. That
+is the behaviour every earlier release had hardcoded. It is reported as
+`explicit: false`, shown in the dialog as a default, and never written to disk
+as if the user had chosen it. Upgrading therefore changes nothing for a user
+who never touched the switch, and never changes a saved choice.
+
+**Unreadable file.** A `settings.json` that exists but cannot be read or parsed
+counts as **off** until the user chooses again. A damaged file must not turn
+updates back on for someone who turned them off.
+
+**Saving.** The handler writes the file first (temporary file, then rename)
+and applies the change only when the write succeeded. A failed write is shown
+as *not saved* and the switch keeps its old position.
+
+**Turning off while something is in progress**
+(`onAutomaticChanged(false)` in `src/main/updater.js`):
+
+| In progress | Result |
+| --- | --- |
+| Automatic check | The interface returns to idle. The request cannot be cancelled, so its answer is discarded when it arrives. |
+| Restart countdown | Cancelled. The update stays downloaded and installs only on **Restart now**. The timer also re-reads the preference when it fires. |
+| Downloaded update, deferred | Kept. Not installed on exit. |
+| Download the user started | Continues. It was an explicit request. It ends in *Update downloaded*, with no countdown. |
+| Installer already started | Cannot be stopped safely. The dialog says so. The setting applies after that install. |
+
+`installNow()` has a last gate: the origins `countdown` and `exit` are refused
+while the preference is off, whatever state led there.
+
+**Turning on** starts one check at once, so the normal behaviour returns
+without a restart.
+
+**Persistence.** `%APPDATA%\1132-fixer` is kept across updates and uninstalls
+(`deleteAppDataOnUninstall: false`), and it is per Windows user. The choice
+survives app restarts, Windows restarts and upgrades.
+
+Tests: `tools/update-preference-smoke.js`.
 
 ### Retry policy
 
@@ -167,6 +227,7 @@ Handoff records older than seven days are discarded.
 | --- | --- |
 | `%APPDATA%\1132-fixer\update-handoff.json` | current version, target version, executable path, install directory, channel, artifact name/size/SHA-512, timestamp, state, attempt. No credentials. |
 | `%APPDATA%\1132-fixer\update-state.json` | attempts and last outcome per target version (retry policy) |
+| `%APPDATA%\1132-fixer\settings.json` | the **Automatic app updates** choice and the time it was made. Absent until the user changes the switch. |
 | `%APPDATA%\1132-fixer\logs\updater.log` | JSON lines, sanitized (no URL query strings, tokens, home directory or user name); rotated at 512 KB |
 | `%LOCALAPPDATA%\1132-fixer-updater\pending\` | electron-updater's download cache |
 

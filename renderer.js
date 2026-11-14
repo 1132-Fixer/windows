@@ -575,8 +575,12 @@ async function runEnvironmentScan(opts = {}) {
     refreshDetailsIfOpen();
   }
 
+  // A newer scan (or a retry) makes this one stale. A stale scan never
+  // repaints: its late answer is dropped.
+  const generation = ++scanGeneration;
   try {
-    const result = await window.electronAPI.preflightScan();
+    const result = await withDeadline(window.electronAPI.preflightScan(), SCAN_DEADLINE_MS, 'scan');
+    if (generation !== scanGeneration) return;
     const cards = (result && result.cards && typeof result.cards === 'object') ? result.cards : {};
     // Every CHECK_ORDER row is recorded, every time. A card the scan did not
     // return is recorded UNKNOWN — it used to be `continue`, which silently
@@ -617,6 +621,26 @@ async function runEnvironmentScan(opts = {}) {
       statusByGroup[g.group] = worstStatus(g.keys.map(k => statusByKey[k]));
     }
     renderWizChecks(statusByGroup);
+
+    // The scan answered, but one of its operations failed or timed out.
+    // Every issue is recorded by name. Results from the operations that
+    // completed stay in View details; only the affected checks read
+    // "could not be verified". Fix now stays unavailable (main refuses it
+    // while any check is unverified).
+    const scanIssues = (result && Array.isArray(result.scanIssues)) ? result.scanIssues : [];
+    for (const issue of scanIssues) addFileItem(startupFailureLogLine(issue), 'failed');
+    const unverified = renderedStatuses.filter(s => s === 'unknown').length;
+    if (scanIssues.length && unverified > 0) {
+      pendingFixAfterScan = false;
+      fixBtn.textContent = 'Fix now';
+      setStatus('error', WIZARD.UNABLE_TITLE);
+      updateFixDisabledNote(['Startup check'], false);
+      showNoticePane('err', WIZARD.UNABLE_TITLE,
+        startupFailureSub(scanIssues[0], { unverified, total: renderedStatuses.length }));
+      setActions({ rescan: true, rescanLabel: WIZARD.TRY_AGAIN, close: true, details: true });
+      return;
+    }
+
     const repairableLabels = CHECK_ORDER
       .filter(c => statusByKey[c.key] === 'repairable')
       .map(c => (cards[c.key] && cards[c.key].label) || c.label);
@@ -627,21 +651,53 @@ async function runEnvironmentScan(opts = {}) {
       quiet
     });
   } catch (err) {
-    // The scan itself failed: every check is unverified, not failed.
+    if (generation !== scanGeneration) return;
+    // No answer at all (the deadline passed, or the request itself failed):
+    // every check is unverified, not failed. The sentence says which of the
+    // two happened; it no longer says "did not finish in time" for an error.
+    const issue = {
+      operation: (err && err.operation) || 'scan',
+      kind: err && err.kind === 'timeout' ? 'timeout' : 'error',
+      code: err && err.kind === 'timeout' ? 'renderer_deadline' : ((err && typeof err.name === 'string' && err.name) || 'Error')
+    };
     lastScan = { statusByKey: {} };
     refreshDetailsIfOpen();
     canRunFix = false;
     pendingFixAfterScan = false; // a queued Fix now click is void when the scan fails
     fixBtn.textContent = 'Fix now';
-    setStatus('error', 'Something went wrong');
-    updateFixDisabledNote(['Environment scan'], false);
+    setStatus('error', WIZARD.UNABLE_TITLE);
+    updateFixDisabledNote(['Startup check'], false);
     updateZoomRecovery(null, null); // scan state unknown — hide the card
-    showNoticePane('err', WIZARD.UNABLE_TITLE, WIZARD.UNABLE_SUB);
+    showNoticePane('err', WIZARD.UNABLE_TITLE, startupFailureSub(issue));
+    addFileItem(startupFailureLogLine(issue), 'failed');
     addFileItem(scanFailureMessage(err), 'failed');
-    setActions({ rescan: true, rescanLabel: WIZARD.TRY_AGAIN, details: true });
+    setActions({ rescan: true, rescanLabel: WIZARD.TRY_AGAIN, close: true, details: true });
   } finally {
-    scanInProgress = false;
+    if (generation === scanGeneration) scanInProgress = false;
   }
+}
+
+// How long the window waits for the whole scan before it says so. Main
+// bounds every worker it starts (20 s tool check, 10 s Zoom registry
+// lookup, 20 s account and policy check), so a healthy scan cannot be this
+// slow; reaching this deadline means the app itself stopped answering.
+const SCAN_DEADLINE_MS = 60000;
+let scanGeneration = 0;
+
+// Rejects with a named operation when the promise does not settle in time.
+// The late answer, if one ever arrives, is ignored by the caller.
+function withDeadline(promise, ms, operation) {
+  let timer = null;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`timeout:${operation}`);
+      err.kind = 'timeout';
+      err.operation = operation;
+      err.stage = operation;
+      reject(err);
+    }, ms);
+  });
+  return Promise.race([Promise.resolve(promise), deadline]).finally(() => clearTimeout(timer));
 }
 
 // Scan result -> wizard result pane + the one CTA that state allows.
@@ -1787,31 +1843,45 @@ function showAdminRequired() {
   setActions({ elevate: true, close: true, details: true });
 }
 
-function showUnableToComplete(stage) {
+function showUnableToComplete(stage, kind) {
   canRunFix = false;
+  // Which operation stopped, and whether it timed out or failed: 'preload'
+  // is the missing window bridge, 'startup-status' the administrator check.
+  const issue = {
+    operation: stage === 'preload' ? 'bridge' : (stage === 'startup-status' ? 'startup-status' : 'scan'),
+    kind: kind === 'timeout' ? 'timeout' : 'error',
+    code: kind === 'timeout' ? 'renderer_deadline' : (stage || 'startup')
+  };
   addFileItem(`Startup stopped at ${stage || 'startup'}.`, 'failed');
+  addFileItem(startupFailureLogLine(issue), 'failed');
   setStatus('error', 'Unable to complete');
-  showNoticePane('err', WIZARD.UNABLE_TITLE, WIZARD.UNABLE_SUB);
+  showNoticePane('err', WIZARD.UNABLE_TITLE, startupFailureSub(issue));
   setActions({ rescan: true, rescanLabel: WIZARD.TRY_AGAIN, close: true, details: true });
 }
 
+// One startup sequence at a time: a second "Try again" while one is still
+// waiting does nothing instead of starting a parallel sequence.
+let startupSequenceInFlight = false;
 async function runStartupSequence() {
+  if (startupSequenceInFlight) return;
+  startupSequenceInFlight = true;
+  try {
+    await runStartupSequenceOnce();
+  } finally {
+    startupSequenceInFlight = false;
+  }
+}
+
+async function runStartupSequenceOnce() {
   setWizardPane('checking');
   renderWizChecks(null);
   setActions({});
   const startedAt = Date.now();
   let status;
   try {
-    status = await Promise.race([
-      window.electronAPI.startupStatus(),
-      new Promise((_, reject) => setTimeout(() => {
-        const err = new Error('timeout:startup-status');
-        err.stage = 'startup-status';
-        reject(err);
-      }, STARTUP_DEADLINE_MS))
-    ]);
+    status = await withDeadline(window.electronAPI.startupStatus(), STARTUP_DEADLINE_MS, 'startup-status');
   } catch (err) {
-    showUnableToComplete((err && err.stage) || 'startup-status');
+    showUnableToComplete((err && err.stage) || 'startup-status', err && err.kind === 'timeout' ? 'timeout' : 'error');
     return;
   }
   addFileItem(`Startup ${status.state} in ${status.elapsedMs || (Date.now() - startedAt)}ms via ${status.elevationMethod || 'unknown'}.`, 'header');
@@ -2020,6 +2090,122 @@ function showAbout() {
   if (!aboutOverlay) return;
   aboutOverlay.hidden = false;
   if (aboutClose) aboutClose.focus();
+  refreshUpdateSettings();
+}
+
+// ============================================================
+// App updates (About dialog). The switch shows the SAVED preference, never
+// an optimistic one: it changes only after main confirms the value was
+// written. Main owns the preference and applies it to the updater; this is
+// display plus two requests (save, check now).
+// ============================================================
+const updateSettingsEl     = document.getElementById('updateSettings');
+const autoUpdateToggle     = document.getElementById('autoUpdateToggle');
+const autoUpdateHelp       = document.getElementById('autoUpdateHelp');
+const autoUpdateState      = document.getElementById('autoUpdateState');
+const updateCheckNowBtn    = document.getElementById('updateCheckNowBtn');
+const updateSettingsStatus = document.getElementById('updateSettingsStatus');
+const UPDATE_SETTINGS_COPY = typeof UPDATE_SETTINGS !== 'undefined' ? UPDATE_SETTINGS : {};
+let updateSettingsBusy = false;
+let updateSettingsMode = 'installed';
+
+function setUpdateSettingsStatus(text) {
+  if (updateSettingsStatus) updateSettingsStatus.textContent = text || '';
+}
+
+function paintUpdatePreference(pref) {
+  if (!autoUpdateToggle || !pref) return;
+  const on = pref.automatic === true;
+  autoUpdateToggle.checked = on;
+  autoUpdateToggle.setAttribute('aria-checked', on ? 'true' : 'false');
+  if (autoUpdateState) autoUpdateState.textContent = on ? 'On' : 'Off';
+  let help = on ? UPDATE_SETTINGS_COPY.ON_HELP : UPDATE_SETTINGS_COPY.OFF_HELP;
+  if (pref.source === 'default') help = `${help} ${UPDATE_SETTINGS_COPY.DEFAULT_NOTE}`;
+  if (pref.source === 'unreadable') help = `${help} ${UPDATE_SETTINGS_COPY.UNREADABLE_NOTE}`;
+  if (autoUpdateHelp) autoUpdateHelp.textContent = help || '';
+  if (typeof pref.mode === 'string') updateSettingsMode = pref.mode;
+}
+
+async function refreshUpdateSettings() {
+  if (!updateSettingsEl) return;
+  const api = window.electronAPI;
+  if (!api || typeof api.updatePreference !== 'function') return; // bridge missing: section stays hidden
+  document.getElementById('updateSettingsHeading').textContent = UPDATE_SETTINGS_COPY.HEADING || 'App updates';
+  document.getElementById('autoUpdateLabel').textContent = UPDATE_SETTINGS_COPY.TOGGLE_LABEL || 'Automatic app updates';
+  updateCheckNowBtn.textContent = UPDATE_SETTINGS_COPY.CHECK_BUTTON || 'Check for updates';
+  try {
+    paintUpdatePreference(await api.updatePreference());
+    updateSettingsEl.hidden = false;
+  } catch (_) {
+    // The saved value is unknown, so no switch position is shown at all.
+    updateSettingsEl.hidden = true;
+  }
+}
+
+if (autoUpdateToggle) {
+  autoUpdateToggle.addEventListener('change', async () => {
+    const wanted = autoUpdateToggle.checked === true;
+    if (updateSettingsBusy) { autoUpdateToggle.checked = !wanted; return; }
+    updateSettingsBusy = true;
+    autoUpdateToggle.disabled = true;
+    // Hold the previous position until main confirms the save.
+    autoUpdateToggle.checked = !wanted;
+    let result = null;
+    try { result = await window.electronAPI.setUpdatePreference(wanted); } catch (_) { result = null; }
+    autoUpdateToggle.disabled = false;
+    updateSettingsBusy = false;
+    if (!result || result.ok !== true) {
+      if (result) paintUpdatePreference(result);
+      setUpdateSettingsStatus(UPDATE_SETTINGS_COPY.SAVE_FAILED);
+      autoUpdateToggle.focus();
+      return;
+    }
+    paintUpdatePreference(result);
+    const notes = [result.automatic ? UPDATE_SETTINGS_COPY.SAVED_ON : UPDATE_SETTINGS_COPY.SAVED_OFF];
+    const stopped = Array.isArray(result.stopped) ? result.stopped : [];
+    if (stopped.indexOf('restart-countdown') !== -1) notes.push(UPDATE_SETTINGS_COPY.STOPPED_COUNTDOWN);
+    if (stopped.indexOf('automatic-check') !== -1) notes.push(UPDATE_SETTINGS_COPY.STOPPED_CHECK);
+    if (result.uninterruptible) notes.push(UPDATE_SETTINGS_COPY.UNINTERRUPTIBLE);
+    setUpdateSettingsStatus(notes.filter(Boolean).join(' '));
+    addFileItem(`Automatic app updates turned ${result.automatic ? 'on' : 'off'}.`, 'header');
+    autoUpdateToggle.focus();
+  });
+}
+
+if (updateCheckNowBtn) {
+  updateCheckNowBtn.addEventListener('click', async () => {
+    if (updateSettingsBusy) return;
+    updateSettingsBusy = true;
+    updateCheckNowBtn.disabled = true;
+    setUpdateSettingsStatus(UPDATE_SETTINGS_COPY.CHECKING);
+    let r = null;
+    try { r = await window.electronAPI.updateCheckNow(); } catch (_) { r = null; }
+    updateCheckNowBtn.disabled = false;
+    updateSettingsBusy = false;
+    const fill = (text, extra) => String(text || '')
+      .replace('{v}', (r && r.version) || '')
+      .replace('{c}', (r && r.current) || '')
+      .replace('{reason}', extra || '');
+    let text;
+    if (!r) {
+      text = UPDATE_SETTINGS_COPY.FAILED_GENERIC;
+    } else if (r.reason === 'busy') {
+      text = UPDATE_SETTINGS_COPY.BUSY;
+    } else if (r.reason === 'not-installed-build' || r.reason === 'no-update-config') {
+      text = UPDATE_SETTINGS_COPY.NOT_INSTALLED;
+    } else if (r.state === 'manual') {
+      text = fill(UPDATE_SETTINGS_COPY.AVAILABLE_PORTABLE);
+    } else if (r.state === 'available') {
+      text = fill(UPDATE_SETTINGS_COPY.AVAILABLE);
+    } else if (r.ok === true && r.state === 'idle') {
+      text = fill(UPDATE_SETTINGS_COPY.UP_TO_DATE);
+    } else {
+      const why = (UPDATE_COPY.REASONS && UPDATE_COPY.REASONS[r.failure]) || '';
+      text = why ? fill(UPDATE_SETTINGS_COPY.FAILED, why) : UPDATE_SETTINGS_COPY.FAILED_GENERIC;
+    }
+    setUpdateSettingsStatus(text);
+    updateCheckNowBtn.focus();
+  });
 }
 function hideAbout() {
   if (aboutOverlay) aboutOverlay.hidden = true;

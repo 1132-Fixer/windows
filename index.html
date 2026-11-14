@@ -845,6 +845,26 @@
     .fix-confirm-dialog h2 { margin: 0; font-size: 18px; line-height: 24px; }
     .fix-confirm-dialog p { margin: 10px 0 20px; color: var(--muted); font-size: 14px; line-height: 21px; }
     .fix-confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
+    /* App updates section of the About dialog. */
+    #aboutOverlay .fix-confirm-dialog { max-height: 100%; overflow-y: auto; }
+    .update-settings { margin: 0 0 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+    .update-settings[hidden] { display: none; }
+    .update-settings h3 { margin: 0 0 10px; font-size: 14px; line-height: 20px; font-weight: 600; color: var(--text); }
+    .update-switch { display: flex; align-items: center; gap: 10px; min-height: 32px; cursor: pointer; color: var(--text); font-size: 14px; line-height: 20px; }
+    .update-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+    .update-switch-track { flex: none; position: relative; width: 40px; height: 22px; border-radius: 11px; background: var(--surface-pressed); border: 1px solid var(--border-strong); transition: background-color 120ms ease; }
+    .update-switch-thumb { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--muted); transition: transform 120ms ease, background-color 120ms ease; }
+    .update-switch input:checked + .update-switch-track { background: var(--accent); border-color: var(--accent); }
+    .update-switch input:checked + .update-switch-track .update-switch-thumb { transform: translateX(18px); background: #FFFFFF; }
+    .update-switch input:focus-visible + .update-switch-track { box-shadow: var(--focus-ring); }
+    .update-switch input:disabled + .update-switch-track { opacity: 0.55; }
+    .update-switch-label { flex: 1; }
+    .update-switch-state { flex: none; min-width: 24px; text-align: right; color: var(--muted); font-size: 14px; }
+    .fix-confirm-dialog p.update-settings-help { margin: 8px 0 12px; }
+    .fix-confirm-dialog p.update-settings-status { margin: 10px 0 0; min-height: 21px; color: var(--text); }
+    @media (prefers-reduced-motion: reduce) {
+      .update-switch-track, .update-switch-thumb { transition: none; }
+    }
     .wizard .zoom-recovery { text-align: left; width: 100%; margin-top: var(--s-5); border-radius: var(--r-md); }
     /* Action area, repair option, secondary row, footer and the Details
        view are defined in the APP SHELL section at the end of this
@@ -1877,6 +1897,21 @@
       <h2 id="aboutTitle">About 1132 Fixer</h2>
       <p id="aboutBody"></p>
       <p id="aboutLegal"></p>
+      <!-- App updates. This dialog opens from the footer on every screen,
+           so the setting stays reachable when the startup check fails.
+           Copy comes from the UPDATE_SETTINGS catalog (messages.js). -->
+      <section class="update-settings" id="updateSettings" aria-labelledby="updateSettingsHeading" hidden>
+        <h3 id="updateSettingsHeading"></h3>
+        <label class="update-switch" for="autoUpdateToggle">
+          <input type="checkbox" role="switch" id="autoUpdateToggle" aria-describedby="autoUpdateHelp">
+          <span class="update-switch-track" aria-hidden="true"><span class="update-switch-thumb"></span></span>
+          <span class="update-switch-label" id="autoUpdateLabel"></span>
+          <span class="update-switch-state" id="autoUpdateState" aria-hidden="true"></span>
+        </label>
+        <p class="update-settings-help" id="autoUpdateHelp"></p>
+        <button type="button" class="btn" id="updateCheckNowBtn"></button>
+        <p class="update-settings-status" id="updateSettingsStatus" role="status" aria-live="polite"></p>
+      </section>
       <div class="fix-confirm-actions">
         <!-- Explore lives here, and only here: a destination chooser for
              the project's other sites (issue #185). It is not landing

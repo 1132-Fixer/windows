@@ -48,10 +48,16 @@ const optional = toolList('OPTIONAL_TOOLS');
 const allTools = [...required, ...optional];
 const preflightSource = functionSource('preflightCheck');
 const fixSource = functionSource('runFixFlow');
-const scanStart = source.indexOf("ipcMain.handle('preflight-scan',");
-const scanEnd = source.indexOf('\n});', scanStart);
-assert.ok(scanStart >= 0 && scanEnd > scanStart, 'production environment scan handler exists');
-const scanSource = source.slice(scanStart, scanEnd + '\n});'.length);
+// The scan is the card-label constants, the single-flight wrapper, the
+// 'preflight-scan' handler and buildPreflightScan() (6.5.0: the handler no
+// longer holds the body, so a failed operation cannot reject the request).
+const scanStart = source.indexOf('const SCAN_CARD_LABELS = Object.freeze({');
+const scanBodyStart = source.indexOf('async function buildPreflightScan() {', scanStart);
+const scanEnd = source.indexOf('\n}\n', scanBodyStart);
+assert.ok(scanStart >= 0 && scanBodyStart > scanStart && scanEnd > scanBodyStart, 'production environment scan handler exists');
+const scanSource = source.slice(scanStart, scanEnd + '\n}\n'.length);
+assert.ok(scanSource.includes("ipcMain.handle('preflight-scan', () => runPreflightScan());"), 'the scan is served through the single-flight wrapper');
+const startupScan = require('../src/main/startup-scan');
 const profileSelectorSource = functionSource('selectSidBoundProfileEntries');
 const exactSidDeleteScriptSource = functionSource('exactSidLocalUserDeleteScript');
 const exactSidDeleteReceiptSource = functionSource('exactSidLocalUserDeleteProved');
@@ -120,6 +126,9 @@ function harness(initialProbe, overrides = {}) {
     zoomDetect: { zoomStatusMessage: () => 'Zoom is installed.' },
     profileSafety: { redactSecrets: line => line, classifyHelperProfileCard: () => ({ status: 'ready' }) },
     app: { getVersion: () => '6.4.0' },
+    startupScan,
+    updaterLog: { warn: () => {} },
+    console: { warn: () => {}, log: () => {} },
     ipcMain: { handle: (channel, handler) => {
       assert.equal(channel, 'preflight-scan');
       context.environmentScan = handler;

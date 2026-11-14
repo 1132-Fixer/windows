@@ -45,5 +45,24 @@ Center if it is not already installed.
 The update location is fixed when a build is made. An existing install cannot
 be pointed somewhere else remotely.
 
+### Turn automatic updates off or on (6.5.0 and later)
+
+1. Open **About** at the bottom right of the window. It is there on every
+   screen.
+2. Use the **Automatic app updates** switch.
+
+- **Off:** 1132 Fixer does not check for, download or install updates on its
+  own. Press **Check for updates** in the same dialog when you want one. A
+  found update still needs **Download update**, and a downloaded update
+  installs only when you press **Restart now**.
+- **On:** 1132 Fixer checks when it starts and every four hours. You choose
+  when to download. A downloaded update installs after a short countdown or
+  when you exit.
+
+The switch is **on** until you change it. Your choice is saved at once and is
+kept when you restart the app, restart Windows or install a newer version.
+If an update is already installing when you turn the switch off, that install
+finishes; it cannot be stopped safely.
+
 Current builds are **unsigned**. Windows SmartScreen may warn. That warning is
 accurate until signing exists. See [code signing](../security/code-signing.md).

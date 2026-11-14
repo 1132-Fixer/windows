@@ -70,6 +70,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateDiagnostics: () => ipcRenderer.invoke('update-diagnostics'),
   updateStatus: () => ipcRenderer.invoke('update-status-get'),
   updateAppReady: () => ipcRenderer.invoke('update-app-ready'),
+  // "Automatic app updates" (src/main/update-preference.js): read the saved
+  // choice, save a new one, and check for updates on request.
+  updatePreference: () => ipcRenderer.invoke('update-preference-get'),
+  setUpdatePreference: (enabled) => ipcRenderer.invoke('update-preference-set', enabled === true),
+  updateCheckNow: () => ipcRenderer.invoke('update-check-now'),
   // Inactivity exit (src/main/inactivity.js): the renderer reports real
   // user input by kind (validated in main), shows the main-process
   // countdown, and offers Keep open / Close now.

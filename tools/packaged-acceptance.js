@@ -604,11 +604,115 @@ async function runLanding(scale, tag) {
     }, { allowed: screenActions.allowedControls(state), managed: screenActions.MANAGED_CONTROLS });
     (leak.length === 0 ? passed : failed)(`${tag}.controls-belong-to-state`, leak.length ? `controls from another screen visible on ${state}: ${leak.join(', ')}` : `only ${state} controls are visible`);
     await runDetailsRoundTrip(page, tag, state);
+    await runUpdateSettings(page, tag, state);
     return { app, page, state };
   } catch (err) {
     failed(`${tag}.launch`, `could not drive the packaged app: ${err && err.message}`);
     if (app) await app.close().catch(() => {});
     return null;
+  }
+}
+
+// "Automatic app updates" on the packaged build, from whatever screen the
+// app landed on (Ready, Action required or Unable to complete): the setting
+// must be reachable from the footer, labelled, operable by keyboard, saved
+// by the main process, and still saved after the dialog is reopened.
+async function runUpdateSettings(page, tag, state) {
+  const facts = async () => page.evaluate(() => {
+    const el = (id) => document.getElementById(id);
+    const dialog = document.querySelector('#aboutOverlay .fix-confirm-dialog');
+    const toggle = el('autoUpdateToggle');
+    const section = el('updateSettings');
+    const track = document.querySelector('.update-switch-track');
+    const check = el('updateCheckNowBtn');
+    const rect = (n) => { if (!n) return null; const r = n.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), bottom: Math.round(r.bottom), right: Math.round(r.right) }; };
+    const d = rect(dialog);
+    const inside = (r) => !!(r && d && r.y >= d.y && r.bottom <= d.bottom + 1 && r.x >= d.x && r.right <= d.right + 1);
+    return {
+      overlayOpen: !!el('aboutOverlay') && !el('aboutOverlay').hidden,
+      sectionVisible: !!section && !section.hidden && section.getBoundingClientRect().height > 0,
+      label: (el('autoUpdateLabel') || {}).textContent || '',
+      role: toggle ? toggle.getAttribute('role') : null,
+      checked: toggle ? toggle.checked : null,
+      ariaChecked: toggle ? toggle.getAttribute('aria-checked') : null,
+      stateText: (el('autoUpdateState') || {}).textContent || '',
+      help: (el('autoUpdateHelp') || {}).textContent || '',
+      status: (el('updateSettingsStatus') || {}).textContent || '',
+      checkLabel: check ? check.textContent : '',
+      checkRect: rect(check),
+      trackRect: rect(track),
+      dialogRect: d,
+      viewport: { w: innerWidth, h: innerHeight },
+      dialogFits: !!d && d.y >= 0 && d.bottom <= innerHeight + 1 && d.x >= 0 && d.right <= innerWidth + 1,
+      dialogScrolls: !!dialog && dialog.scrollHeight > dialog.clientHeight + 1,
+      controlsInside: inside(rect(track)) && inside(rect(check)),
+      focusId: document.activeElement ? document.activeElement.id : ''
+    };
+  });
+  const waitFor = async (pred, ms) => {
+    const t0 = Date.now();
+    let f = await facts();
+    while (!pred(f) && Date.now() - t0 < ms) { await sleep(100); f = await facts(); }
+    return f;
+  };
+  try {
+    await page.click('#aboutBtn');
+    let f = await waitFor((x) => x.overlayOpen && x.sectionVisible, 4000);
+    const openShot = await shot(page, `${tag}-about-01-updates-${state}`);
+    (f.overlayOpen && f.sectionVisible ? passed : failed)(`${tag}.update-setting-reachable`,
+      f.sectionVisible ? `About opened from the footer on the "${state}" screen and shows the update setting` : `update setting not visible on the "${state}" screen`, { screenshot: openShot, facts: f });
+    (f.label === 'Automatic app updates' && f.role === 'switch' && f.checkLabel === 'Check for updates' ? passed : failed)(`${tag}.update-setting-labelled`,
+      `label="${f.label}" role=${f.role} button="${f.checkLabel}"`);
+    // Only the first launch has no saved preference; later launches reuse
+    // the profile, where the earlier run saved an explicit ON.
+    if (tag === 'scale100') {
+      (f.checked === true && f.ariaChecked === 'true' && f.stateText === 'On' && /on by default/i.test(f.help) ? passed : failed)(`${tag}.update-setting-default-on`,
+        `no saved preference: checked=${f.checked} state="${f.stateText}" help="${f.help}"`);
+    } else {
+      (f.checked === true && f.stateText === 'On' ? passed : failed)(`${tag}.update-setting-kept-across-restart`,
+        `new process reads the saved choice: checked=${f.checked} state="${f.stateText}"`);
+    }
+    const fits = f.dialogFits && f.controlsInside;
+    (fits ? passed : failed)(`${tag}.update-setting-fits`,
+      fits ? `dialog ${f.dialogRect.w}x${f.dialogRect.h} inside ${f.viewport.w}x${f.viewport.h}${f.dialogScrolls ? ' (dialog scrolls internally)' : ''}` : `dialog or its controls leave the window: dialog=${JSON.stringify(f.dialogRect)} viewport=${JSON.stringify(f.viewport)}`,
+      { screenshot: openShot });
+    const smallTarget = (f.trackRect && f.trackRect.h < 22) || (f.checkRect && f.checkRect.h < 24);
+    (!smallTarget ? passed : failed)(`${tag}.update-setting-target-size`, `switch ${f.trackRect && f.trackRect.w}x${f.trackRect && f.trackRect.h}, button ${f.checkRect && f.checkRect.w}x${f.checkRect && f.checkRect.h}`);
+
+    // Keyboard: focus the switch and press Space.
+    await page.focus('#autoUpdateToggle');
+    await page.keyboard.press('Space');
+    f = await waitFor((x) => x.checked === false && /Saved/.test(x.status), 4000);
+    const offShot = await shot(page, `${tag}-about-02-updates-off`);
+    (f.checked === false && f.ariaChecked === 'false' && f.stateText === 'Off' && /Saved\. Automatic app updates are off\./.test(f.status) ? passed : failed)(`${tag}.update-setting-off-by-keyboard`,
+      `checked=${f.checked} state="${f.stateText}" status="${f.status}"`, { screenshot: offShot });
+    (/does not check for, download or install/.test(f.help) ? passed : failed)(`${tag}.update-setting-off-explained`, `help="${f.help}"`);
+
+    // Close and reopen: the dialog re-reads the saved value from main.
+    await page.click('#aboutClose');
+    await page.click('#aboutBtn');
+    f = await waitFor((x) => x.overlayOpen && x.sectionVisible, 4000);
+    (f.checked === false && f.stateText === 'Off' && !/on by default/i.test(f.help) ? passed : failed)(`${tag}.update-setting-persisted`,
+      `after reopening: checked=${f.checked} state="${f.stateText}" (an explicit choice, no "default" note)`);
+
+    // Manual check stays available while the switch is off.
+    await page.click('#updateCheckNowBtn');
+    f = await waitFor((x) => x.status && !/Checking for updates/.test(x.status), 40000);
+    const checkShot = await shot(page, `${tag}-about-03-check-now`);
+    (f.status && !/Checking for updates/.test(f.status) && f.checked === false ? passed : failed)(`${tag}.manual-check-while-off`,
+      `result shown: "${f.status}"; switch still off=${f.checked === false}`, { screenshot: checkShot });
+
+    // Back on, by pointer, so the next launch starts from the default behaviour.
+    await page.click('label.update-switch');
+    f = await waitFor((x) => x.checked === true && /Saved/.test(x.status), 4000);
+    (f.checked === true && f.stateText === 'On' && /Saved\. Automatic app updates are on\./.test(f.status) ? passed : failed)(`${tag}.update-setting-on-by-pointer`,
+      `checked=${f.checked} state="${f.stateText}" status="${f.status}"`);
+    await page.keyboard.press('Escape');
+    f = await facts();
+    (!f.overlayOpen ? passed : failed)(`${tag}.about-closes-with-escape`, f.overlayOpen ? 'About still open after Escape' : 'Escape closes About');
+  } catch (err) {
+    failed(`${tag}.update-setting`, `could not drive the update setting: ${err && err.message}`);
+    try { await page.keyboard.press('Escape'); } catch (_) { /* window gone */ }
   }
 }
 

@@ -336,8 +336,18 @@ function createUpdaterController(deps) {
     setTimer = setTimeout,
     clearTimer = clearTimeout,
     requestShutdown,
-    restartCountdownSeconds = RESTART_COUNTDOWN_SECONDS
+    restartCountdownSeconds = RESTART_COUNTDOWN_SECONDS,
+    // The one "Automatic app updates" preference (src/main/update-preference.js).
+    // Every unattended path below asks this, each time, before it acts.
+    automaticEnabled = () => true
   } = deps;
+
+  // Origins that nobody asked for. Everything else ('user', 'retry') is an
+  // explicit request and is allowed with automatic updates off.
+  const AUTOMATIC_ORIGINS = new Set(['startup', 'interval', 'countdown', 'exit']);
+  function automaticOn() {
+    try { return automaticEnabled() === true; } catch (_) { return false; }
+  }
 
   const installDir = path.win32.dirname(execPath);
   const channel = deps.channel || channelOf(currentVersion);
@@ -363,6 +373,10 @@ function createUpdaterController(deps) {
   let lastCheckOrigin = null;
   let sessionDismissedCheck = false;
   let quiet = false;
+  // Set when automatic updates are turned off while an automatic check is in
+  // flight. The library request cannot be cancelled, so its answer is
+  // discarded when it arrives.
+  let discardCheckResult = false;
   const checkTimeoutMs = deps.checkTimeoutMs || CHECK_TIMEOUT_MS;
   const eventCounts = {};
 
@@ -427,7 +441,9 @@ function createUpdaterController(deps) {
       canRetry: policy ? policy.installAllowed : true,
       quiet,
       executionMode,
-      channel
+      channel,
+      automatic: automaticOn(),
+      checkOrigin: lastCheckOrigin
     };
   }
   function setState(next, extra = {}) {
@@ -499,6 +515,12 @@ function createUpdaterController(deps) {
 
   function onAvailable(info) {
     count('update-available');
+    if (discardCheckResult) {
+      // Automatic updates were turned off while this check was running.
+      discardCheckResult = false;
+      log.info('check.result-discarded', { event: 'update-available', reason: 'automatic-updates-off' });
+      return;
+    }
     if (state !== STATES.CHECKING && state !== STATES.IDLE) {
       log.warn('event.ignored', { event: 'update-available', state });
       return;
@@ -542,6 +564,11 @@ function createUpdaterController(deps) {
 
   function onNotAvailable(info) {
     count('update-not-available');
+    if (discardCheckResult) {
+      discardCheckResult = false;
+      log.info('check.result-discarded', { event: 'update-not-available', reason: 'automatic-updates-off' });
+      return;
+    }
     if (state === STATES.CHECKING) {
       log.info('check.up-to-date', { latest: info && info.version });
       target = null;
@@ -594,6 +621,15 @@ function createUpdaterController(deps) {
     if (!policy.autoInstallAllowed) {
       deferred = true;
       log.info('ready.no-auto-countdown', { attempts: policy.attempts, lastReason: policy.lastReason });
+      try { emit(payload()); } catch (_) { /* ignore */ }
+      return;
+    }
+    if (!automaticOn()) {
+      // Downloaded and verified because the user asked for it. It installs
+      // only when the user chooses "Restart now": no countdown, no install
+      // on exit.
+      deferred = true;
+      log.info('ready.no-auto-countdown', { reason: 'automatic-updates-off' });
       try { emit(payload()); } catch (_) { /* ignore */ }
       return;
     }
@@ -661,11 +697,20 @@ function createUpdaterController(deps) {
   // ---- countdown ----------------------------------------------------
   function startCountdown() {
     cancelCountdown();
+    if (!automaticOn()) {
+      deferred = true;
+      log.info('ready.no-auto-countdown', { reason: 'automatic-updates-off' });
+      try { emit(payload()); } catch (_) { /* ignore */ }
+      return;
+    }
     countdownEndsAt = now() + restartCountdownSeconds * 1000;
     countdownTimer = setTimer(() => {
       countdownTimer = null;
       countdownEndsAt = 0;
       if (state !== STATES.READY || deferred) return;
+      // Re-read at the moment of acting: the preference may have changed
+      // while the countdown ran.
+      if (!automaticOn()) { deferred = true; try { emit(payload()); } catch (_) { /* ignore */ } return; }
       if (isBusy()) { deferred = true; try { emit(payload()); } catch (_) { /* ignore */ } return; }
       installNow('countdown').catch((err) => fail(STAGES.PREPARE, 'install-threw', { error: err }));
     }, restartCountdownSeconds * 1000);
@@ -676,6 +721,12 @@ function createUpdaterController(deps) {
   // ---- install handoff (exactly once per process) --------------------
   async function installNow(origin, opts = {}) {
     const relaunch = opts.relaunch !== false;
+    if (AUTOMATIC_ORIGINS.has(origin) && !automaticOn()) {
+      // Last gate before any installer starts: an unattended origin never
+      // installs while automatic updates are off.
+      log.info('install.refused', { origin, reason: 'automatic-updates-off' });
+      return { ok: false, reason: 'automatic-updates-off' };
+    }
     if (handoffStarted) {
       log.warn('install.duplicate-request', { origin, state });
       return { ok: false, reason: 'already-installing' };
@@ -809,6 +860,10 @@ function createUpdaterController(deps) {
     if (shutdownReason !== 'user_exit' && shutdownReason !== 'inactive_exit') {
       return { ok: false, reason: 'shutdown-reason-excluded' };
     }
+    if (!automaticOn()) {
+      log.info('install-on-exit.skipped', { reason: 'automatic-updates-off' });
+      return { ok: false, reason: 'automatic-updates-off' };
+    }
     return installNow('exit', { relaunch: false });
   }
 
@@ -879,6 +934,12 @@ function createUpdaterController(deps) {
       log.info('check.skipped', { origin, reason: 'busy' });
       return { ok: false, reason: 'busy' };
     }
+    if (AUTOMATIC_ORIGINS.has(origin) && !automaticOn()) {
+      // No network request at all: the check is not started.
+      log.info('check.skipped', { origin, reason: 'automatic-updates-off' });
+      return { ok: false, reason: 'automatic-updates-off' };
+    }
+    discardCheckResult = false;
     if (origin === 'interval' || origin === 'startup') {
       const doc = readStateDoc();
       const last = doc.lastOutcome;
@@ -904,6 +965,11 @@ function createUpdaterController(deps) {
       await Promise.race([autoUpdater.checkForUpdates(), timeout]);
       return { ok: true };
     } catch (err) {
+      if (discardCheckResult) {
+        discardCheckResult = false;
+        log.info('check.result-discarded', { event: 'error', reason: 'automatic-updates-off' });
+        return { ok: false, reason: 'automatic-updates-off' };
+      }
       if (state === STATES.CHECKING) fail(STAGES.CHECK, classifyError(err), { error: err });
       return { ok: false, reason: 'check-failed' };
     } finally {
@@ -994,6 +1060,50 @@ function createUpdaterController(deps) {
     };
   }
 
+  // The preference changed. Called by main.js after the new value is saved.
+  //
+  // Turning OFF stops everything unattended that can still be stopped:
+  //   - a running automatic check: its answer will be discarded;
+  //   - a restart countdown: cancelled, the update stays ready for
+  //     "Restart now";
+  //   - a downloaded update: kept, never installed on exit.
+  // A download the user started is their explicit choice and continues.
+  // An installer that has already started cannot be stopped safely; that is
+  // reported as `uninterruptible` so the interface can say so.
+  function onAutomaticChanged(enabled) {
+    const on = enabled === true;
+    const result = { ok: true, automatic: on, state, stopped: [], uninterruptible: false };
+    log.info('preference.applied', { automatic: on, state });
+    if (on) {
+      try { emit(payload()); } catch (_) { /* ignore */ }
+      return result;
+    }
+    if (state === STATES.INSTALLING || state === STATES.RESTARTING) {
+      result.uninterruptible = true;
+      try { emit(payload()); } catch (_) { /* ignore */ }
+      return result;
+    }
+    if (state === STATES.CHECKING && AUTOMATIC_ORIGINS.has(lastCheckOrigin)) {
+      discardCheckResult = true;
+      target = null;
+      result.stopped.push('automatic-check');
+      setState(STATES.IDLE, { stage: null, reason: null, detail: null });
+    }
+    if (state === STATES.READY) {
+      if (countdownTimer) result.stopped.push('restart-countdown');
+      cancelCountdown();
+      deferred = true;
+    }
+    if (state === STATES.AVAILABLE && AUTOMATIC_ORIGINS.has(lastCheckOrigin)) {
+      // Found by an automatic check the user has now turned off: keep the
+      // knowledge, drop the banner.
+      quiet = true;
+    }
+    result.state = state;
+    try { emit(payload()); } catch (_) { /* ignore */ }
+    return result;
+  }
+
   function dispose() {
     cancelCountdown();
   }
@@ -1001,6 +1111,8 @@ function createUpdaterController(deps) {
   return {
     STATES, STAGES,
     start, check, download, dismiss, installNow, installOnExit, defer, retry, continueCurrent, diagnostics, markAppReady, dispose,
+    onAutomaticChanged,
+    isAutomatic: automaticOn,
     classifyError,
     getStatus: payload,
     getState: () => state,

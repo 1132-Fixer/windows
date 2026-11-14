@@ -68,7 +68,8 @@ function functionSource(source, name) {
     updaterMod: { createUpdaterController: options => { busy = options.isBusy; return {}; } },
     autoUpdater: {}, updaterLog: {}, sendUpdateStatus() {}, isElevatedSync() {},
     spawnInstallerDetached() {}, confirmInstallNoticeShown() {}, readRegisteredInstallDir() {},
-    fs: { existsSync: () => true }, path, shutdown: { request() {} }
+    fs: { existsSync: () => true }, path, shutdown: { request() {} },
+    automaticUpdatesEnabled: () => true
   };
   vm.runInNewContext(functionSource(main, 'getUpdater') + '\ngetUpdater();', context);
   for (const name of ['updater', 'update-install', 'update-retry', 'update-download']) {
