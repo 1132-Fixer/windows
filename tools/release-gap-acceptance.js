@@ -116,7 +116,9 @@ async function faultScreens(exe, mode, env) {
     };
   });
   await page.click('#aboutBtn');
-  await page.locator('#autoUpdateToggle').uncheck();
+  await page.focus('#autoUpdateToggle');
+  if (await page.locator('#autoUpdateToggle').isChecked()) await page.keyboard.press('Space');
+  await page.waitForFunction(() => document.getElementById('autoUpdateState').textContent === 'Off');
   await page.click('#updateCheckNowBtn');
   await page.waitForFunction(() => {
     const s = document.getElementById('updateSettingsStatus').textContent;
