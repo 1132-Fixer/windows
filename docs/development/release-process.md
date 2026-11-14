@@ -283,6 +283,16 @@ draft and cannot change the public update feed. The workflow also retains the
 complete transaction inputs as an Actions artifact before any draft is
 created. That retention step is mandatory; storage failure stops publication.
 
+#### Release notes
+
+The release body is built by `releaseBody()` in `scripts/publish-release.mjs`:
+the download table, then **What changed**, then the support known issue when
+it applies. **What changed** is the content of `docs/releases/<version>.md`
+from the tagged commit, so the notes are reviewed with the change. A published
+release is immutable, so the notes must be in the tagged commit; they cannot
+be added afterwards. `tools/support-release-smoke.js` fails when the file for
+the `package.json` version is missing or contains placeholder text.
+
 ### 10. Updater metadata
 
 `latest.yml` carries the version, the installer filename, its SHA-512, and its
