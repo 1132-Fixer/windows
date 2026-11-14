@@ -2110,7 +2110,14 @@ let updateSettingsBusy = false;
 let updateSettingsMode = 'installed';
 
 function setUpdateSettingsStatus(text) {
-  if (updateSettingsStatus) updateSettingsStatus.textContent = text || '';
+  if (!updateSettingsStatus) return;
+  updateSettingsStatus.textContent = text || '';
+  // The dialog scrolls in a small window and its action row is pinned over
+  // the bottom edge. Bring the whole result into view above that row
+  // (scroll-padding-bottom on the dialog), so no line of it is hidden.
+  if (text && typeof updateSettingsStatus.scrollIntoView === 'function') {
+    updateSettingsStatus.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 function paintUpdatePreference(pref) {
