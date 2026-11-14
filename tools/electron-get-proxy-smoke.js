@@ -56,7 +56,11 @@ if (process.argv[2] === '--child') {
         mirrorOptions: { mirror: job.mirror, customDir: job.dir },
         checksums: { [FILE]: job.sha256 },
         cacheRoot: job.cacheRoot,
-        downloadOptions: Object.assign({ retry: 0, timeout: 10000 }, job.ca ? { https: { certificateAuthority: job.ca } } : {})
+        // quiet: the downloader starts a 30 s progress timer unless both
+        // `quiet` and ELECTRON_GET_NO_PROGRESS are set, and clears it only on
+        // success. Without it every expected failure keeps the child alive
+        // for 30 s. No assertion or time limit changes.
+        downloadOptions: Object.assign({ quiet: true, retry: 0, timeout: 10000 }, job.ca ? { https: { certificateAuthority: job.ca } } : {})
       });
       out.ok = true;
       out.sha256 = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
