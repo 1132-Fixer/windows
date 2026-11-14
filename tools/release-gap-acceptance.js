@@ -16,8 +16,13 @@ const report = { sourceHead: process.env.GITHUB_SHA, version, evidenceClass: 'ho
     'real helper repair and six support journeys remain required'] };
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 let currentApp = null;
+let closeUnverified = false;
 const diagnosticCopies = new Map();
-function record(id, detail) { report.cases.push({ id, status: 'passed', detail }); console.log(`PASS ${id}`); }
+function saveReport() {
+  fs.mkdirSync(out, { recursive: true });
+  fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 2));
+}
+function record(id, detail) { report.cases.push({ id, status: 'passed', detail }); saveReport(); console.log(`PASS ${id}`); }
 async function run(exe, args, timeout = 180000) {
   await new Promise((resolve, reject) => {
     const child = spawn(exe, args, { windowsHide: true, stdio: 'ignore' });
@@ -30,12 +35,22 @@ async function run(exe, args, timeout = 180000) {
   });
 }
 async function closeApp() {
-  if (currentApp) { await currentApp.close(); currentApp = null; }
+  if (closeUnverified) throw new Error('App close unverified; runner retains custody until job teardown');
+  if (currentApp) {
+    let timer;
+    try {
+      await Promise.race([currentApp.close(), new Promise((_, reject) => {
+        timer = setTimeout(() => { closeUnverified = true; reject(new Error('App close exceeded 20 seconds; no further installer may run')); }, 20000);
+      })]);
+      currentApp = null;
+    } finally { clearTimeout(timer); }
+  }
 }
 async function diagnose(id, action) {
   try { await action(); }
   catch (error) {
     report.cases.push({ id, status: 'failed', detail: String(error.stack || error) });
+    saveReport();
     console.error(error); process.exitCode = 1;
     if (currentApp) {
       try { await currentApp.windows()[0].screenshot({ path: path.join(out, `${id}-failed.png`) }); } catch (_) { /* preserve the original failure */ }
@@ -64,6 +79,8 @@ async function open(exe, expected, extraEnv = {}) {
   const page = await currentApp.firstWindow({ timeout: 45000 });
   await page.waitForLoadState('domcontentloaded');
   assert.equal(await currentApp.evaluate(({ app }) => app.getVersion()), expected);
+  // Do not request shutdown while startup still owns Windows probe children.
+  await page.waitForFunction(() => !document.getElementById('wizChecking').classList.contains('active'), null, { timeout: 90000 });
   return page;
 }
 async function uninstall(dir, id) {
@@ -247,6 +264,8 @@ async function supportJourneys(exe, mode, env) {
   console.error(error); process.exitCode = 1;
 }).finally(async () => {
   try { await closeApp(); } catch (error) { report.cases.push({ id: 'closeout', status: 'failed', detail: error.message }); process.exitCode = 1; }
-  fs.mkdirSync(out, { recursive: true });
-  fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 2));
+  saveReport();
+  // A failed close cannot permit overlapping installs. The disposable hosted
+  // job owns remaining runtime processes and tears them down at job completion.
+  if (closeUnverified) process.exit(1);
 });

@@ -144,6 +144,7 @@ jobs:
           Get-ChildItem -LiteralPath retained-candidate -File -Filter '*.exe' | Copy-Item -Destination dist -Force
 
       - name: Disposable install, upgrade and failure diagnostics
+        timeout-minutes: 10
         if: github.event_name == 'workflow_dispatch' && inputs.run_release_gaps == true
         run: node tools/release-gap-acceptance.js
 
