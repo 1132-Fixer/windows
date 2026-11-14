@@ -1,6 +1,6 @@
 # Trust-center security workflow for 1132 Fixer Windows.
-# Advisory and inventory checks. Not added to the required-status ruleset
-# by this change — ruleset edits are a separate governance action.
+# Audit and inventory checks. Required contexts must reflect the actual
+# command result; ruleset administration remains a separate owner action.
 name: Security
 
 on:
@@ -27,7 +27,6 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: npm audit (high)
         run: npm audit --audit-level=high
-        continue-on-error: true
 
   license-and-binaries:
     name: Licence and binary inventory

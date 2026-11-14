@@ -214,6 +214,27 @@ function stageForStep(n) {
   return null;
 }
 
+function stageForRepairStep(step) {
+  const stages = {
+    preparing:'prep', 'checking-recovery':'prep', 'resetting-helper':'verify',
+    'launch-zoom':'verify', 'verify-profile':'verify', 'configure-helper':'consent',
+    'seal-credential':'consent', 'persist-credential':'consent', 'verify-zoom':'launch',
+    'checking-completion':'receipt', 'closing-worker':'receipt'
+  };
+  return typeof step === 'string' && Object.prototype.hasOwnProperty.call(stages,step) ? stages[step] : null;
+}
+
+function handleRepairLog(payload) {
+  if (!payload || typeof payload.line !== 'string' || payload.line.length > 2048) return;
+  // Native steps have explicit, allowlisted stage identities. They do not use
+  // human log headers as cancellation checkpoints inside the reset transaction.
+  const stage = stageForRepairStep(payload.step);
+  if (isRunning && stage) advanceStageTo(stage);
+  const cls = payload.kind === 'err' ? 'failed' : payload.kind === 'header' ? 'header'
+    : payload.kind === 'success' ? 'success' : '';
+  addFileItem(payload.line,cls);
+}
+
 function setStageTracker(active) {
   stageTracker.classList.toggle('active', active);
 }
@@ -514,8 +535,15 @@ function iconForStatus(status, klass) {
 // ============================================================
 
 let scanInProgress = false;
+let scanGeneration = 0;
 let lastScanAt = 0;
 let canRunFix = false;
+
+// A read-only probe may finish after a repair has taken over the screen.
+// Only the current scan may publish data, actions, or a terminal error.
+function ownsEnvironmentScan(generation) {
+  return generation === scanGeneration && !isRunning;
+}
 
 // Fix-button gating transparency (#66): a disabled "Fix now" never says WHY
 // on its own, so name the blocking checklist row(s) in one line under the
@@ -561,6 +589,7 @@ function updateFixDisabledNote(blockedLabels, canRunFix) {
 async function runEnvironmentScan(opts = {}) {
   const quiet = !!opts.quiet;
   if (scanInProgress || isRunning) return;
+  const generation = ++scanGeneration;
   scanInProgress = true;
   lastScanAt = Date.now();
   if (!quiet) {
@@ -577,6 +606,7 @@ async function runEnvironmentScan(opts = {}) {
 
   try {
     const result = await window.electronAPI.preflightScan();
+    if (!ownsEnvironmentScan(generation)) return;
     const cards = (result && result.cards && typeof result.cards === 'object') ? result.cards : {};
     // Every CHECK_ORDER row is recorded, every time. A card the scan did not
     // return is recorded UNKNOWN — it used to be `continue`, which silently
@@ -624,9 +654,13 @@ async function runEnvironmentScan(opts = {}) {
       statuses: renderedStatuses,
       repairableLabels,
       blockedLabels: blockedLabels.concat(nonCardBlockers),
-      quiet
+      quiet,
+      generation
     });
   } catch (err) {
+    if (!ownsEnvironmentScan(generation)) return;
+    clearPendingFixAfterScan();
+    hideFixConfirm();
     // The scan itself failed: every check is unverified, not failed.
     lastScan = { statusByKey: {} };
     refreshDetailsIfOpen();
@@ -638,19 +672,22 @@ async function runEnvironmentScan(opts = {}) {
     addFileItem(scanFailureMessage(err), 'failed');
     setActions({ rescan: true, rescanLabel: WIZARD.TRY_AGAIN, details: true });
   } finally {
-    scanInProgress = false;
+    if (generation === scanGeneration) scanInProgress = false;
   }
 }
 
 // Scan result -> wizard result pane + the one CTA that state allows.
 // Ranking mirrors the summary badge: blocked > unknown > repairable >
 // warning > ready — the pane can never look better than the badge.
-async function presentScanResult({ statuses, repairableLabels, blockedLabels, quiet }) {
+async function presentScanResult({ statuses, repairableLabels, blockedLabels, quiet, generation }) {
   // A short beat so the finished check marks are visible before the pane
   // transitions (skipped for quiet refreshes).
   if (!quiet) await new Promise(r => setTimeout(r, 650));
+  if (!ownsEnvironmentScan(generation)) return;
 
   if (statuses.indexOf('blocked') !== -1 || !canRunFix) {
+    clearPendingFixAfterScan();
+    hideFixConfirm();
     showResultPane('warn', WIZARD.BLOCKED_TITLE, wizardBlockedSub(blockedLabels));
     // The Zoom recovery card (when Zoom is the blocker) renders inside this
     // pane with its own guided actions; one clear next step, plus details.
@@ -662,7 +699,7 @@ async function presentScanResult({ statuses, repairableLabels, blockedLabels, qu
     showResultPane('ok', WIZARD.READY_TITLE, WIZARD.READY_SUB);
     setActions({ fix: true, shortcutOption: true, details: true });
     if (pendingFixAfterScan) {
-      pendingFixAfterScan = false;
+      clearPendingFixAfterScan();
       showFixConfirm();
     }
   }
@@ -852,8 +889,8 @@ zrCancelBtn.addEventListener('click', () => window.electronAPI.quitApp());
 // ============================================================
 // Builds the "Repair results" rows for the Details view. Nothing is
 // rendered here; the view reads lastReceiptItems when it opens.
-function renderFixReceipt(receipt, warnings) {
-  void warnings;
+function renderFixReceipt(receipt, warnings, steps, verdictAttention) {
+  const attention = buildRepairAttentionModel(steps, warnings, verdictAttention);
   if (!receipt) {
     // A run that reports success but returns no receipt has proven none of
     // the four things the receipt exists to prove. Every item reads as
@@ -861,7 +898,8 @@ function renderFixReceipt(receipt, warnings) {
     // "nothing to report".
     lastReceipt = null;
     lastReceiptItems = ['camera', 'microphone', 'hku', 'frameServer']
-      .map(key => receiptItemView(key, 'warn', 'The fix did not report a result for this item. Run the fix again, or send a support report.'));
+      .map(key => receiptItemView(key, 'warn', 'The fix did not report a result for this item. Send a support report if this continues.'))
+      .concat(attention.items);
     refreshDetailsIfOpen();
     return;
   }
@@ -880,7 +918,7 @@ function renderFixReceipt(receipt, warnings) {
     receiptItemView('frameServer', fs.icon,    fs.icon === 'ok' ? ''
       : fs.icon === 'fail' ? 'The camera service is not available on this PC, so cameras may not work in Zoom.'
       : 'The camera service could not be confirmed. Cameras may not work in Zoom.')
-  ];
+  ].concat(attention.items);
   refreshDetailsIfOpen();
 }
 
@@ -918,6 +956,7 @@ function getFocusable(root) {
 function installFocusTrap(overlay) {
   if (!overlay) return () => {};
   const opener = (document.activeElement instanceof HTMLElement) ? document.activeElement : null;
+  let released = false;
 
   const handler = (e) => {
     if (e.key !== 'Tab') return;
@@ -936,12 +975,16 @@ function installFocusTrap(overlay) {
   overlay.addEventListener('keydown', handler);
 
   // Focus the first focusable on open, deferred so layout settles.
-  setTimeout(() => {
+  const focusTimer = setTimeout(() => {
+    if (released || overlay.hidden || !document.contains(overlay)) return;
     const items = getFocusable(overlay);
     if (items.length) items[0].focus();
   }, 0);
 
   return function release() {
+    if (released) return;
+    released = true;
+    clearTimeout(focusTimer);
     overlay.removeEventListener('keydown', handler);
     // Restore focus to the opener so keyboard users land back where they
     // were. Guard against the opener having been removed from the DOM.
@@ -960,10 +1003,20 @@ let pendingFixAfterScan = false;
 const fixConfirmOverlay = document.getElementById('fixConfirmOverlay');
 const fixConfirmContinue = document.getElementById('fixConfirmContinue');
 const fixConfirmCancel = document.getElementById('fixConfirmCancel');
+let releaseFixConfirmFocus = null;
+
+function clearPendingFixAfterScan() {
+  pendingFixAfterScan = false;
+  // Clear the presented intent as well as the flag. Display copy is not a
+  // reliable state marker (for example, an ellipsis is not a period).
+  fixBtn.textContent = 'Fix now';
+}
 
 function hideFixConfirm() {
   if (!fixConfirmOverlay) return;
   fixConfirmOverlay.hidden = true;
+  if (releaseFixConfirmFocus) releaseFixConfirmFocus();
+  releaseFixConfirmFocus = null;
 }
 
 function showFixConfirm() {
@@ -978,6 +1031,7 @@ function showFixConfirm() {
   if (fixConfirmContinue) fixConfirmContinue.textContent = WIZARD.CONFIRM_CONTINUE;
   if (fixConfirmCancel) fixConfirmCancel.textContent = WIZARD.CONFIRM_CANCEL;
   fixConfirmOverlay.hidden = false;
+  if (!releaseFixConfirmFocus) releaseFixConfirmFocus = installFocusTrap(fixConfirmOverlay);
   if (fixConfirmContinue) fixConfirmContinue.focus();
 }
 
@@ -1014,13 +1068,26 @@ function onFixButtonClick() {
 // ============================================================
 // Run Fix flow
 // ============================================================
+function hasVerifiedZoomReceipt(result) {
+  const receipt = result && result.receipt;
+  return !!(result && result.success === true && receipt &&
+    receipt.profileKind === 'canonical' && receipt.zoomRelaunch === 'confirmed' &&
+    Array.isArray(result.steps) && result.steps.some(step =>
+      step && step.id === 'relaunch' && step.outcome === 'ok'));
+}
+
 async function runFix() {
-  if (isRunning) return;
+  if (isRunning || !canRunFix) return;
 
   // The desktop-shortcut option rides the repair transaction — read it
   // before the actions area is repainted for the running state.
   const wantShortcut = document.getElementById('shortcutOptInput').checked;
 
+  // Confirmation can remain open while a quiet scan runs. Main performs its
+  // own preflight; the earlier read-only scan no longer owns this operation.
+  ++scanGeneration;
+  scanInProgress = false;
+  clearPendingFixAfterScan();
   isRunning = true;
   // No CTA during automatic work, and ONE status voice: the wizard body
   // itself. The header badge hides until an outcome lands (setStatus
@@ -1047,10 +1114,10 @@ async function runFix() {
       const warnings = Array.isArray(result.warnings) ? result.warnings : [];
       const steps = Array.isArray(result.steps) ? result.steps : [];
       // Verdict + header live in run-verdict.js (loaded before this script,
-      // shared with main.js). Legacy results without steps keep the old
-      // warning-count headline unchanged.
+      // shared with main.js). Missing evidence is incomplete; a successful
+      // call alone cannot prove the intended profile and Zoom launch.
       const verdict = computeRunVerdict(steps, warnings, []);
-      const partial = !!result.partial || verdict.partial;
+      const partial = !!result.partial || verdict.partial || !hasVerifiedZoomReceipt(result);
       if (partial) {
         addFileItem(VERDICT_HEADERS.attention, 'header');
         finalizeStages('warn');
@@ -1064,7 +1131,7 @@ async function runFix() {
         finalizeStages('ok');
         setStatus('done', 'Fixed');
       }
-      renderFixReceipt(result.receipt, warnings);
+      renderFixReceipt(result.receipt, warnings, result.steps, verdict.attention);
 
       const failedSteps = steps.filter(s => s && s.outcome === 'fail');
       if (warnings.length || failedSteps.length) {
@@ -1087,7 +1154,9 @@ async function runFix() {
       let shortcutNote = '';
       let shortcutFailed = false;
       let shortcutSkipped = false;
-      try {
+      if (partial) {
+        shortcutNote = WIZARD.SHORTCUT_DEFERRED;
+      } else try {
         const status = await window.electronAPI.shortcutExists();
         if (status && status.exists && status.valid) {
           addFileItem(`Desktop shortcut already present: ${status.path}`, 'success');
@@ -1119,8 +1188,8 @@ async function runFix() {
       // Wizard outcome pane — a real terminal screen: Launch as User1 is
       // the next step; details and support are one quiet click away.
       const outcomeActions = {
-        launch: !shortcutFailed,
-        shortcut: shortcutFailed || shortcutSkipped,
+        launch: !partial && !shortcutFailed,
+        shortcut: !partial && (shortcutFailed || shortcutSkipped),
         shortcutQuiet: shortcutSkipped && !shortcutFailed,
         details: true,
         note: shortcutNote
@@ -1135,6 +1204,8 @@ async function runFix() {
       setActions(outcomeActions);
     } else {
       const res = result || {};
+      const failureVerdict = computeRunVerdict(res.steps, res.warnings, res.blockers);
+      renderFixReceipt(res.receipt, res.warnings, res.steps, failureVerdict.attention);
       addFileItem(`FIX FAILED: ${friendlyError(res.error)}`, 'failed');
       if (Array.isArray(res.blockers) && res.blockers.length) {
         res.blockers.forEach(b => addFileItem(`  • [${b.code}] ${b.message}`, 'failed'));
@@ -1693,13 +1764,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  api.onFixLog(({ line, kind }) => {
-    const cls = kind === 'err' ? 'failed'
-      : kind === 'header'  ? 'header'
-      : kind === 'success' ? 'success'
-      : '';
-    addFileItem(line, cls);
-  });
+  api.onFixLog(handleRepairLog);
 
   api.onUpdateStatus(handleUpdateStatus);
   // The relaunched process evaluates its handoff record before this page
@@ -1897,8 +1962,24 @@ supportBtn.addEventListener('click', () => openSupportReport());
 const ratings = { ease: 0, resolved: 0, recommend: 0, overall: 0 };
 let feedbackMode = '';
 let releaseFeedbackTrap = null;
+let feedbackGeneration = 0;
+const feedbackInFlight = new Set();
+const FEEDBACK_TEXT_MAX_BYTES = 100 * 1024;
+let attachReportBusy = false;
+
+function invalidateReportAttachment() {
+  if (!attachReportBusy) return;
+  ++attachGen;
+  attachReportBusy = false;
+  const button = document.getElementById('fbAttachReport');
+  button.disabled = false;
+  button.textContent = 'Attach Support Report';
+  refreshFeedbackSubmitButtons();
+}
 
 function showSection(id) {
+  ++feedbackGeneration;
+  invalidateReportAttachment();
   document.querySelectorAll('.fb-section').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
 }
@@ -1907,20 +1988,17 @@ function openFeedback() {
   overlay.classList.add('show');
   showSection('fbChoose');
   feedbackMode = '';
-  document.querySelectorAll('.fb-textarea').forEach(t => { t.value = ''; });
   attachGen++;
-  const attachBtn = document.getElementById('fbAttachReport');
-  attachBtn.disabled = false;
-  attachBtn.textContent = 'Attach Support Report';
-  document.querySelectorAll('.fb-rating-btn').forEach(b => b.classList.remove('selected'));
-  document.querySelectorAll('.fb-status').forEach(s => { s.textContent = ''; s.className = s.className.includes('fb-shot-status') ? 'fb-status fb-shot-status' : 'fb-status'; });
-  Object.keys(ratings).forEach(k => { ratings[k] = 0; });
-  clearScreenshot();
+  // Closing a form is not consent to discard its draft or an uncertain send.
+  refreshFeedbackSubmitButtons();
   refreshScreenshotCapability();
   loadSysInfo();
   releaseFeedbackTrap = installFocusTrap(overlay);
 }
 function closeFeedback() {
+  ++feedbackGeneration;
+  invalidateReportAttachment();
+  ++attachGen;
   document.getElementById('fbOverlay').classList.remove('show');
   if (releaseFeedbackTrap) { releaseFeedbackTrap(); releaseFeedbackTrap = null; }
 }
@@ -2205,59 +2283,70 @@ document.querySelectorAll('.fb-rating-btns').forEach(group => {
   group.querySelectorAll('.fb-rating-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       ratings[cat] = parseInt(btn.dataset.val);
+      markFeedbackDraftChanged('fbRatingStatus');
       group.querySelectorAll('.fb-rating-btn').forEach(b => b.classList.remove('selected'));
       btn.classList.add('selected');
-      const filled = Object.values(ratings).filter(v => v > 0).length;
-      document.getElementById('fbRatingSubmit').disabled = filled === 0;
+      refreshFeedbackSubmitButtons();
     });
   });
 });
-document.getElementById('fbBugText').addEventListener('input', refreshBugSubmit);
-document.getElementById('fbContactText').addEventListener('input', (e) => {
-  document.getElementById('fbContactSubmit').disabled = e.target.value.trim().length < 50;
-});
+for (const [fieldId, statusId] of [['fbBugText', 'fbBugStatus'], ['fbRatingText', 'fbRatingStatus'], ['fbContactText', 'fbContactStatus']]) {
+  document.getElementById(fieldId).addEventListener('input', () => {
+    markFeedbackDraftChanged(statusId);
+    refreshFeedbackSubmitButtons();
+  });
+}
 
 document.getElementById('fbViewReport').addEventListener('click', openSupportReport);
 
 // Bug-report attach flow: pull the sanitized report into the bug description
 // so one submission carries both. attachGen invalidates an in-flight build
 // when the modal is closed/reopened (openFeedback bumps it), so a stale IPC
-// completion can't write into a fresh form. Budget leaves headroom under the
-// proxy's 4,000-char MAX_TEXT_CHARS for the auto-appended system-info block.
-const MAX_ATTACH_CHARS = 3700;
+// completion cannot write into another form. Preserve the complete report or
+// leave the draft unchanged when it exceeds the canonical service byte limit.
 let attachGen = 0;
 document.getElementById('fbAttachReport').addEventListener('click', async () => {
+  if (attachReportBusy) return;
+  attachReportBusy = true;
+  refreshFeedbackSubmitButtons();
   const btn = document.getElementById('fbAttachReport');
   const status = document.getElementById('fbBugStatus');
   status.textContent = '';
   btn.disabled = true;
   btn.textContent = 'Attaching…';
   const gen = attachGen;
+  const generation = feedbackGeneration;
   try {
     const result = await window.electronAPI.supportReport({
       receipt: lastReceipt,
       logTail: logBuffer.join('\n'),
       stage:   lastStageLabel
     });
-    if (gen !== attachGen) return;
+    if (gen !== attachGen || generation !== feedbackGeneration) return;
     const md = result && result.markdown;
     if (!md) throw new Error('report unavailable');
     const ta = document.getElementById('fbBugText');
     const userText = ta.value.trim();
-    let combined = userText ? userText + '\n\n---\n' + md : md;
-    if (combined.length > MAX_ATTACH_CHARS) {
-      const marker = '\n…[report trimmed to fit the 4,000-character limit]';
-      combined = combined.slice(0, MAX_ATTACH_CHARS - marker.length) + marker;
-      status.textContent = 'The report was trimmed to fit the 4,000-character limit.';
+    const combined = userText ? userText + '\n\n---\n' + md : md;
+    if (new TextEncoder().encode(combined).byteLength > FEEDBACK_TEXT_MAX_BYTES) {
+      status.textContent = FEEDBACK.TEXT_TOO_LARGE;
+      btn.disabled = false;
+      btn.textContent = 'Attach Support Report';
+      return;
     }
     ta.value = combined;
     ta.dispatchEvent(new Event('input'));
     btn.textContent = 'Report attached'; // stays disabled: one attach per open
   } catch (err) {
-    if (gen !== attachGen) return;
+    if (gen !== attachGen || generation !== feedbackGeneration) return;
     btn.disabled = false;
     btn.textContent = 'Attach Support Report';
-    status.textContent = 'Could not build the report — try again.';
+    status.textContent = 'Could not build the report - try again.';
+  } finally {
+    if (gen === attachGen) {
+      attachReportBusy = false;
+      refreshFeedbackSubmitButtons();
+    }
   }
 });
 
@@ -2278,13 +2367,15 @@ let shotReadGen = 0;             // invalidates in-flight async file reads
 let shotReadBusy = false;        // read in flight: submit must wait
 
 function sniffImageBytes(u8) {
-  if (u8.length < 12) return null;
-  if (u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4e && u8[3] === 0x47 &&
-      u8[4] === 0x0d && u8[5] === 0x0a && u8[6] === 0x1a && u8[7] === 0x0a) return 'image/png';
-  if (u8[0] === 0xff && u8[1] === 0xd8 && u8[2] === 0xff) return 'image/jpeg';
+  // Match the canonical relay's header contract; these checks do not claim
+  // full image decoding or successful delivery.
+  if (u8.length >= 24 && u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4e && u8[3] === 0x47 &&
+      u8[4] === 0x0d && u8[5] === 0x0a && u8[6] === 0x1a && u8[7] === 0x0a &&
+      String.fromCharCode(...u8.slice(12, 16)) === 'IHDR') return 'image/png';
+  if (u8.length >= 4 && u8[0] === 0xff && u8[1] === 0xd8 && u8[2] === 0xff) return 'image/jpeg';
   const head = String.fromCharCode.apply(null, Array.from(u8.slice(0, 12)));
-  if (head.startsWith('GIF87a') || head.startsWith('GIF89a')) return 'image/gif';
-  if (head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP') return 'image/webp';
+  if (u8.length >= 13 && (head.startsWith('GIF87a') || head.startsWith('GIF89a'))) return 'image/gif';
+  if (u8.length >= 16 && head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP') return 'image/webp';
   return null;
 }
 
@@ -2294,16 +2385,31 @@ function shotStatus(msg, isError) {
   el.className = 'fb-status fb-shot-status' + (isError ? ' err' : '');
 }
 
+function markFeedbackDraftChanged(statusId) {
+  const status = document.getElementById(statusId);
+  status.textContent = FEEDBACK.DRAFT_CHANGED;
+  status.className = 'fb-status';
+}
+
 function refreshBugSubmit() {
   const btn = document.getElementById('fbBugSubmit');
   const len = document.getElementById('fbBugText').value.trim().length;
-  btn.disabled = shotReadBusy || len < 50;
+  btn.disabled = feedbackInFlight.has('fbBugStatus') || shotReadBusy || attachReportBusy || len < 50;
+}
+
+function refreshFeedbackSubmitButtons() {
+  refreshBugSubmit();
+  document.getElementById('fbRatingSubmit').disabled = feedbackInFlight.has('fbRatingStatus') ||
+    !Number.isInteger(ratings.overall) || ratings.overall < 1 || ratings.overall > 5;
+  document.getElementById('fbContactSubmit').disabled = feedbackInFlight.has('fbContactStatus') ||
+    document.getElementById('fbContactText').value.trim().length < 50;
 }
 
 function clearScreenshot() {
   shotReadGen++; // a queued async read completion must not resurrect state
   shotReadBusy = false;
   bugScreenshot = null;
+  markFeedbackDraftChanged('fbBugStatus');
   if (bugScreenshotUrl) { URL.revokeObjectURL(bugScreenshotUrl); bugScreenshotUrl = null; }
   document.getElementById('fbShotPreview').hidden = true;
   document.getElementById('fbShotRow').hidden = false;
@@ -2316,8 +2422,10 @@ async function refreshScreenshotCapability() {
   const block = document.getElementById('fbShotBlock');
   block.hidden = true;
   screenshotsCapable = false;
+  const generation = feedbackGeneration;
   try {
     const cap = await window.electronAPI.feedbackCapabilities();
+    if (generation !== feedbackGeneration) return;
     screenshotsCapable = !!(cap && cap.screenshots);
   } catch (_) { /* capability stays false */ }
   block.hidden = !screenshotsCapable;
@@ -2363,6 +2471,7 @@ async function setScreenshot(fileOrBlob, name) {
     }
     if (bugScreenshotUrl) URL.revokeObjectURL(bugScreenshotUrl);
     bugScreenshot = { bytes, mediaType, name: name || 'screenshot' };
+    markFeedbackDraftChanged('fbBugStatus');
     bugScreenshotUrl = URL.createObjectURL(new Blob([bytes], { type: mediaType }));
     document.getElementById('fbShotImg').src = bugScreenshotUrl;
     document.getElementById('fbShotName').textContent = bugScreenshot.name;
@@ -2446,11 +2555,13 @@ document.addEventListener('paste', (e) => {
 
 document.getElementById('fbBugSubmit').addEventListener('click', async () => {
   const text = document.getElementById('fbBugText').value.trim();
-  const sysInfo = document.getElementById('fbSysInfo').textContent;
-  const body = `${text}\n\n---\n**System Info**\n${sysInfo.split('\n').map(l => '- ' + l).join('\n')}`;
-  await submitFeedback('Bug Report', body, 'fbBugStatus', bugScreenshot);
+  await submitFeedback('Bug Report', text, 'fbBugStatus', bugScreenshot);
 });
 document.getElementById('fbRatingSubmit').addEventListener('click', async () => {
+  if (!Number.isInteger(ratings.overall) || ratings.overall < 1 || ratings.overall > 5) {
+    document.getElementById('fbRatingStatus').textContent = FEEDBACK.RATING_REQUIRED;
+    return;
+  }
   const filled = Object.entries(ratings).filter(([,v]) => v > 0);
   const avg = (filled.reduce((s,[,v]) => s + v, 0) / filled.length).toFixed(1);
   const comments = document.getElementById('fbRatingText').value.trim();
@@ -2462,7 +2573,7 @@ document.getElementById('fbRatingSubmit').addEventListener('click', async () => 
   body += `| **Average** | **${avg}/5** |\n`;
   if (comments) body += `\n### Comments\n${comments}\n`;
   body += `\n---\n_Submitted via 1132 Fixer app_\n\n<!-- RATING_DATA:${JSON.stringify({...ratings, avg: parseFloat(avg)})} -->`;
-  await submitFeedback('User Rating', body, 'fbRatingStatus');
+  await submitFeedback('User Rating', body, 'fbRatingStatus', undefined, ratings.overall);
 });
 document.getElementById('fbContactSubmit').addEventListener('click', async () => {
   const text = document.getElementById('fbContactText').value.trim();
@@ -2473,37 +2584,68 @@ const SUBMIT_BTN_FOR_STATUS = {
   fbBugStatus: 'fbBugSubmit', fbRatingStatus: 'fbRatingSubmit', fbContactStatus: 'fbContactSubmit',
 };
 
-async function submitFeedback(type, text, statusId, screenshot) {
+function feedbackDraftStamp(statusId) {
+  const field = { fbBugStatus: 'fbBugText', fbRatingStatus: 'fbRatingText', fbContactStatus: 'fbContactText' }[statusId];
+  return JSON.stringify([document.getElementById(field).value,
+    statusId === 'fbRatingStatus' ? ratings : null]);
+}
+
+function ownsFeedbackSubmission(generation, statusId, draftStamp, screenshot) {
+  return feedbackGeneration === generation && feedbackDraftStamp(statusId) === draftStamp &&
+    (statusId !== 'fbBugStatus' || bugScreenshot === screenshot);
+}
+
+async function submitFeedback(type, text, statusId, screenshot, rating) {
   const statusEl = document.getElementById(statusId);
-  // One submission at a time: a second click during the request would send a
-  // duplicate report (the legacy path has no server-side idempotency).
   const submitBtn = document.getElementById(SUBMIT_BTN_FOR_STATUS[statusId]);
-  if (submitBtn.disabled) return;
-  submitBtn.disabled = true;
-  statusEl.textContent = screenshot ? 'Submitting report + screenshot...' : 'Submitting...';
-  statusEl.className = 'fb-status';
-  try {
-    // The screenshot rides only when present; success below means the proxy
-    // accepted the WHOLE submission (report + screenshot in one request), so
-    // "Submitted successfully" can never overstate what was sent.
-    const shotPayload = screenshot
-      ? { bytes: screenshot.bytes, mediaType: screenshot.mediaType }
-      : undefined;
-    const result = await window.electronAPI.submitFeedback(type, text, shotPayload);
-    if (result.success) {
-      statusEl.textContent = 'Submitted successfully!';
-      statusEl.className = 'fb-status ok';
-      setTimeout(closeFeedback, 1500);
-      return; // stays disabled until the modal closes — nothing left to send
-    }
-    statusEl.textContent = result.error || FEEDBACK_FALLBACK;
-    statusEl.className = 'fb-status err';
-  } catch (err) {
-    statusEl.textContent = FEEDBACK_NETWORK;
-    statusEl.className = 'fb-status err';
+  if (!statusEl || !submitBtn || feedbackInFlight.has(statusId)) return;
+  if (statusId === 'fbBugStatus' && (shotReadBusy || attachReportBusy)) return;
+  if (typeof text !== 'string' || !text.trim()) {
+    statusEl.textContent = FEEDBACK.REJECTED;
+    return;
   }
-  submitBtn.disabled = false; // failed: let the user retry
-  if (statusId === 'fbBugStatus') refreshBugSubmit(); // re-apply length/read gates
+  if (new TextEncoder().encode(text).byteLength > FEEDBACK_TEXT_MAX_BYTES) {
+    statusEl.textContent = FEEDBACK.TEXT_TOO_LARGE;
+    return;
+  }
+  if (type === 'User Rating' && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
+    statusEl.textContent = FEEDBACK.RATING_REQUIRED;
+    return;
+  }
+  const generation = feedbackGeneration;
+  const draftStamp = feedbackDraftStamp(statusId);
+  feedbackInFlight.add(statusId);
+  submitBtn.disabled = true;
+  statusEl.textContent = screenshot ? FEEDBACK.SUBMITTING_IMAGE : FEEDBACK.SUBMITTING;
+  statusEl.className = 'fb-status';
+  let confirmed = false;
+  try {
+    const shotPayload = screenshot
+      ? { bytes: screenshot.bytes, mediaType: screenshot.mediaType } : undefined;
+    const result = await window.electronAPI.submitFeedback(type, text, shotPayload, rating);
+    if (!ownsFeedbackSubmission(generation, statusId, draftStamp, screenshot)) return;
+    if (result && result.success === true && result.delivery === 'acknowledged') {
+      confirmed = true;
+      statusEl.textContent = FEEDBACK.SUBMITTED;
+      statusEl.className = 'fb-status ok';
+    } else {
+      statusEl.textContent = result && result.error || FEEDBACK.SEND_UNKNOWN;
+      statusEl.className = 'fb-status err';
+    }
+  } catch (_) {
+    if (!ownsFeedbackSubmission(generation, statusId, draftStamp, screenshot)) return;
+    statusEl.textContent = FEEDBACK.SEND_UNKNOWN;
+    statusEl.className = 'fb-status err';
+  } finally {
+    feedbackInFlight.delete(statusId);
+    if (!ownsFeedbackSubmission(generation, statusId, draftStamp, screenshot) &&
+        [FEEDBACK.SUBMITTING, FEEDBACK.SUBMITTING_IMAGE].includes(statusEl.textContent)) {
+      statusEl.textContent = FEEDBACK.SEND_UNKNOWN;
+      statusEl.className = 'fb-status err';
+    }
+    refreshFeedbackSubmitButtons();
+    if (confirmed && ownsFeedbackSubmission(generation, statusId, draftStamp, screenshot)) submitBtn.disabled = true;
+  }
 }
 
 // ============================================================

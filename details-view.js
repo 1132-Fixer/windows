@@ -254,6 +254,219 @@ function receiptItemView(key, status, text) {
   return { key, label: RECEIPT_LABELS[key] || key, status, word: st.word, tone: st.tone, explain: st.tone === 'ready' ? '' : String(text || '') };
 }
 
+// Extra repair-result rows. Read identifiers and outcomes only: labels,
+// details, messages and nested payloads can contain private diagnostic data.
+// This model never copies those fields or turns an unknown result into Ready.
+const REPAIR_ATTENTION_LIMITS = Object.freeze({ entriesPerSource: 64, items: 12 });
+const REPAIR_ATTENTION_COPY = Object.freeze({
+  sessions: {
+    label: 'Helper programs and sign-in',
+    explain: 'Could not confirm that helper programs and sign-in sessions closed safely. Send a support report before another reset.'
+  },
+  accountPermissions: {
+    label: 'Helper account permissions',
+    explain: 'Could not confirm that the helper account has only the access it needs. Send a support report.'
+  },
+  cleanup: {
+    label: 'Old helper settings',
+    explain: 'Could not fully confirm that old helper settings were removed. Send a support report before another reset.'
+  },
+  profileRefresh: {
+    label: 'Windows profile refresh',
+    explain: 'Windows could not confirm the profile refresh. Save your work, restart Windows, then check again.'
+  },
+  account: {
+    label: 'New helper account',
+    explain: 'A fresh helper account could not be confirmed. Send a support report before treating the repair as complete.'
+  },
+  zoomLaunch: {
+    label: 'Zoom launch',
+    explain: 'The Zoom launch or restart reported a problem. Check Zoom, or send a support report.'
+  },
+  profileSetup: {
+    label: 'Helper profile setup',
+    explain: 'A fresh helper profile could not be confirmed. Send a support report before another reset.'
+  },
+  preferences: {
+    label: 'Zoom preferences',
+    explain: 'Some Zoom preferences could not be confirmed. Check the settings in Zoom.'
+  },
+  permissions: {
+    label: 'Camera and microphone setup',
+    explain: 'A camera or microphone setup step reported a problem. Check Windows privacy settings if Zoom cannot use them.'
+  },
+  camera: {
+    label: 'Camera permission',
+    explain: 'Windows reported a policy blocking camera access. Ask whoever manages this PC to check it.'
+  },
+  microphone: {
+    label: 'Microphone permission',
+    explain: 'Windows reported a policy blocking microphone access. Ask whoever manages this PC to check it.'
+  },
+  profilePermissions: {
+    label: 'Helper permission settings',
+    explain: 'A helper permission setup step reported a problem. Send a support report if Zoom cannot use the camera or microphone.'
+  },
+  cameraService: {
+    label: 'Camera service',
+    explain: 'Windows reported that the camera service was unavailable. Check camera access in Zoom, or ask whoever manages this PC for help.'
+  },
+  shortcut: {
+    label: 'Zoom shortcut',
+    explain: 'The desktop shortcut could not be prepared safely. Send a support report for help starting Zoom.'
+  },
+  verification: {
+    label: 'Repair verification',
+    explain: 'Some repair results were missing or could not be confirmed. Send a support report before treating the repair as complete.'
+  },
+  other: {
+    label: 'Other repair results',
+    explain: 'An additional repair result needs review. Send a support report for help.'
+  },
+  additional: {
+    label: 'More repair results',
+    explain: 'More repair results need review. Send a support report for the full result.'
+  }
+});
+const REPAIR_ATTENTION_STEPS = Object.freeze({
+  'close-sessions': 'sessions',
+  'remove-admin-rights': 'accountPermissions',
+  'data-clear': 'cleanup',
+  'profsvc-flush': 'profileRefresh',
+  'create-account': 'account',
+  'launch-zoom': 'zoomLaunch',
+  'relaunch': 'zoomLaunch',
+  'profile-setup': 'profileSetup',
+  'zoom-config': 'preferences',
+  'consent': 'permissions'
+});
+const REPAIR_ATTENTION_WARNINGS = Object.freeze({
+  logoff_partial: 'sessions',
+  profsvc_flush_failed: 'profileRefresh',
+  temp_or_suffixed_profile: 'profileSetup',
+  firstrun_missing: 'profileSetup',
+  firstrun_deploy_failed: 'profileSetup',
+  shortcut_failed: 'shortcut',
+  dpapi_seal_failed: 'shortcut',
+  stale_credential_cleanup_failed: 'shortcut',
+  gpo_deny_camera: 'camera',
+  gpo_deny_microphone: 'microphone',
+  consent_script_missing: 'permissions',
+  consent_script_error: 'permissions',
+  consent_exit_nonzero: 'permissions',
+  consent_hklm_write_fail: 'permissions',
+  camera_consent_unverified: 'permissions',
+  mic_consent_unverified: 'permissions',
+  consent_hku_load_failed: 'profilePermissions',
+  consent_hku_unload_failed: 'profilePermissions',
+  consent_hku_not_loaded: 'profilePermissions',
+  consent_hku_write_fail: 'profilePermissions',
+  frameserver_disabled: 'cameraService',
+  frameserver_missing: 'cameraService',
+  sid_unresolved: 'profileSetup',
+  ini_seed_failed: 'preferences',
+  ini_write_failed: 'preferences',
+  pref_copy_failed: 'preferences',
+  zoom_close_residual: 'preferences',
+  relaunch_failed: 'zoomLaunch',
+  verify_probe_failed: 'verification'
+});
+const REPAIR_ATTENTION_FAILED_WARNINGS = new Set([
+  'profsvc_flush_failed', 'temp_or_suffixed_profile', 'shortcut_failed',
+  'dpapi_seal_failed', 'stale_credential_cleanup_failed', 'gpo_deny_camera',
+  'gpo_deny_microphone', 'consent_hku_unload_failed', 'frameserver_disabled',
+  'frameserver_missing', 'relaunch_failed'
+]);
+
+function repairAttentionOwnValue(object, key) {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(object, key);
+    return descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value')
+      ? descriptor.value : undefined;
+  } catch (_) { return undefined; }
+}
+
+// Returns { items, tone, word, summary, truncated }. `items` use the existing
+// receipt-row shape and can be appended to the four receiptItemView rows.
+// An empty model means no extra attention was reported, not verified success.
+function buildRepairAttentionModel(steps, warnings, verdictAttention) {
+  const items = new Map();
+  let truncated = false;
+  let overflowFailed = false;
+  const add = (group, status) => {
+    if (items.has(group)) {
+      if (status === 'fail') items.get(group).status = 'fail';
+      return;
+    }
+    if (items.size >= REPAIR_ATTENTION_LIMITS.items) {
+      truncated = true;
+      overflowFailed = overflowFailed || status === 'fail';
+      return;
+    }
+    items.set(group, { group, status });
+  };
+  const knownGroup = (catalog, value) => typeof value === 'string'
+    && Object.prototype.hasOwnProperty.call(catalog, value) ? catalog[value] : null;
+  const visit = (entry, source) => {
+    let record = false;
+    try { record = entry !== null && typeof entry === 'object' && !Array.isArray(entry); }
+    catch (_) { /* A revoked proxy is missing evidence. */ }
+    if (!record) { add('verification', 'warn'); return; }
+    if (source === 'warnings') {
+      const code = repairAttentionOwnValue(entry, 'code');
+      const group = knownGroup(REPAIR_ATTENTION_WARNINGS, code);
+      add(group || 'other', group && REPAIR_ATTENTION_FAILED_WARNINGS.has(code) ? 'fail' : 'warn');
+      return;
+    }
+    const outcome = repairAttentionOwnValue(entry, 'outcome');
+    if (source === 'steps' && outcome === 'ok') return;
+    if (outcome !== 'warn' && outcome !== 'fail') { add('verification', 'warn'); return; }
+    const id = repairAttentionOwnValue(entry, 'id');
+    const group = knownGroup(REPAIR_ATTENTION_STEPS, id);
+    const evidence = typeof id === 'string' && id.length <= 64 && /^step-evidence(?:-[1-9][0-9]*)?$/.test(id);
+    add(group || (evidence ? 'verification' : 'other'), outcome);
+  };
+  const read = (list, source) => {
+    if (list === undefined) return;
+    let array = false;
+    try { array = Array.isArray(list); } catch (_) { /* Missing evidence. */ }
+    if (!array) { add('verification', 'warn'); return; }
+    const length = repairAttentionOwnValue(list, 'length');
+    if (!Number.isSafeInteger(length) || length < 0) { add('verification', 'warn'); return; }
+    if (length > REPAIR_ATTENTION_LIMITS.entriesPerSource) truncated = true;
+    for (let index = 0; index < Math.min(length, REPAIR_ATTENTION_LIMITS.entriesPerSource); index++) {
+      visit(repairAttentionOwnValue(list, String(index)), source);
+    }
+  };
+  read(steps, 'steps');
+  read(warnings, 'warnings');
+  read(verdictAttention, 'attention');
+  let rows = Array.from(items.values());
+  if (truncated) {
+    const omitted = rows.slice(REPAIR_ATTENTION_LIMITS.items - 1);
+    overflowFailed = overflowFailed || omitted.some(row => row.status === 'fail');
+    rows = rows.slice(0, REPAIR_ATTENTION_LIMITS.items - 1);
+    rows.push({ group: 'additional', status: overflowFailed ? 'fail' : 'warn' });
+  }
+  rows = rows.map(({ group, status }) => ({
+    key: `repair-${group}`,
+    label: REPAIR_ATTENTION_COPY[group].label,
+    status,
+    word: RECEIPT_TONE[status].word,
+    tone: RECEIPT_TONE[status].tone,
+    explain: REPAIR_ATTENTION_COPY[group].explain
+  }));
+  const tone = rows.length ? worstTone(rows.map(row => row.tone)) : null;
+  return {
+    items: rows,
+    tone,
+    word: tone === 'attention' ? 'Needs attention' : tone === 'unverified' ? 'Unable to verify' : null,
+    summary: tone === 'attention' ? 'Repair results need attention.'
+      : tone === 'unverified' ? 'Some repair results could not be verified.' : '',
+    truncated
+  };
+}
+
 // Words and patterns that must never reach the Details surface. Checked
 // by tools/details-view-smoke.js against every string this module can
 // emit, and available to the renderer as a last-line guard.
@@ -284,6 +497,8 @@ if (typeof module !== 'undefined' && module.exports) {
     checkView,
     buildDetailsModel,
     receiptItemView,
+    REPAIR_ATTENTION_LIMITS,
+    buildRepairAttentionModel,
     isPlainEnglish
   };
 }

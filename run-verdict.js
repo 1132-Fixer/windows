@@ -13,8 +13,10 @@
 //    green.
 //  - 'warn' steps and plain warnings never flip a run to partial — additive
 //    honesty only.
-//  - empty/missing steps preserve the legacy verdict exactly: success, with
-//    the warning-count headline when warnings exist.
+//  - success requires a nonempty, dense ledger of valid step records.
+//    Missing/malformed evidence or an unsupported outcome requires attention;
+//    warnings cannot replace that evidence. Step ids are not a fixed checklist
+//    here because some repair steps are conditional.
 
 const VERDICT_HEADERS = {
   success:   'FIX COMPLETE',
@@ -23,10 +25,39 @@ const VERDICT_HEADERS = {
 };
 
 function computeRunVerdict(steps, warnings, blockers) {
-  const stepList  = Array.isArray(steps)    ? steps.filter(s => s && typeof s === 'object') : [];
   const warnList  = Array.isArray(warnings) ? warnings  : [];
   const blockList = Array.isArray(blockers) ? blockers  : [];
-  const attention = stepList.filter(s => s.outcome === 'fail');
+  const attention = [];
+  const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+  const evidenceFailure = (index) => ({
+    id: index === undefined ? 'step-evidence' : `step-evidence-${index + 1}`,
+    label: 'Repair verification',
+    outcome: 'fail',
+    detail: index === undefined
+      ? 'The repair did not report complete step results. Run the fix again, or send a support report.'
+      : `The repair did not report valid evidence for step ${index + 1}. Run the fix again, or send a support report.`
+  });
+
+  if (!Array.isArray(steps) || steps.length === 0) {
+    attention.push(evidenceFailure());
+  } else {
+    // Enumerate reported entries instead of allocating one error per hole in
+    // a sparse array. Even a large missing range is one evidence failure.
+    const indexes = Object.getOwnPropertyNames(steps)
+      .filter(key => /^(0|[1-9][0-9]*)$/.test(key) && Number(key) < steps.length)
+      .map(Number);
+    if (indexes.length !== steps.length) attention.push(evidenceFailure());
+    for (const index of indexes) {
+      const step = steps[index];
+      const valid = step && typeof step === 'object' && !Array.isArray(step)
+        && hasOwn(step, 'id') && typeof step.id === 'string' && step.id.trim().length > 0
+        && hasOwn(step, 'label') && typeof step.label === 'string' && step.label.trim().length > 0
+        && hasOwn(step, 'outcome') && ['ok', 'warn', 'fail'].includes(step.outcome)
+        && (!hasOwn(step, 'detail') || typeof step.detail === 'string');
+      if (!valid) attention.push(evidenceFailure(index));
+      else if (step.outcome === 'fail') attention.push(step);
+    }
+  }
 
   if (blockList.length > 0) {
     return { verdict: 'failed', success: false, partial: false, header: VERDICT_HEADERS.failed, attention };

@@ -1,0 +1,36 @@
+name: Prepare release PR
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-prepare-main
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare version and changelog PR
+    if: github.repository == '1132-Fixer/windows' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      # PR-only. The repository's Actions PR-creation policy remains enforced.
+      # No PAT, self-approval, auto-merge, tag creation or publication here.
+      - name: Prepare one pending release PR
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+        with:
+          token: ${{ github.token }}
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json
+          target-branch: main
+          skip-github-release: true
+          skip-github-pull-request: false

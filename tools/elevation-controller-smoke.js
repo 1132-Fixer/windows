@@ -3,17 +3,14 @@
 /**
  * Elevation controller behaviour tests for 1132 Fixer.
  *
- * Drives createElevationController() with fake child-process runners so every
- * outcome is exercised without a UAC prompt: already elevated, approved,
- * cancelled, PowerShell missing, PowerShell launch error, probe timeout,
- * relaunch timeout, empty / malformed / unrelated output, nonzero exit,
- * Smart App Control style refusal, exit-before-output, output-without-exit,
- * special-character paths and arguments, and the no-temp-file guarantee.
+ * Fake runners cover elevation, UAC approval/decline, unavailable tools,
+ * launch/probe/relaunch failures, malformed results and interrupted output.
+ * Owned Node fixtures cover bounded children and inherited stdio.
  *
- * The last section runs the real System32 PowerShell (no -Verb RunAs) to
- * prove the -Command transport carries apostrophes, spaces, quotes, `$`,
- * backticks, semicolons and non-ASCII text byte-for-byte. It is skipped on
- * non-Windows hosts and reported as such.
+ * Live transport uses PowerShell 7 without RunAs or execution-policy changes.
+ * It preserves apostrophes, spaces, quotes, dollar signs, backticks, semicolons
+ * and Unicode through the production protected-host bootstrap and stdin.
+ * Missing PowerShell 7 fails usefully. UAC stays mocked throughout.
  */
 
 const fs = require('fs');
@@ -21,16 +18,44 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const elev = require('../src/main/elevation');
+const ps7Host = require('../src/main/powershell7');
+
+function requirePowerShell7() {
+  const command = process.env.PWSH7_PATH || (process.platform === 'win32' ? 'pwsh.exe' : 'pwsh');
+  if (process.env.PWSH7_PATH && (!path.isAbsolute(command) || !/^pwsh(?:\.exe)?$/i.test(path.basename(command)))) {
+    throw new Error('POWERSHELL7_REQUIRED_NOT_AVAILABLE: PWSH7_PATH must name an absolute pwsh executable.');
+  }
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "if ($PSVersionTable.PSEdition -ne 'Core' -or $PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 Core is required' }",
+    '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
+    "[pscustomobject]@{ version = $PSVersionTable.PSVersion.ToString(); edition = $PSVersionTable.PSEdition; executable = [IO.Path]::Combine($PSHOME, $(if ($IsWindows) { 'pwsh.exe' } else { 'pwsh' })) } | ConvertTo-Json -Compress"
+  ].join('; ');
+  const probe = spawnSync(command, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+    { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+  if (probe.error || probe.status !== 0) {
+    const detail = probe.error && probe.error.code || String(probe.stderr || 'version probe failed').trim().slice(0, 240);
+    throw new Error('POWERSHELL7_REQUIRED_NOT_AVAILABLE: native version probe failed (status ' +
+      probe.status + ', ' + detail + '). An installed PowerShell 7 must be available on PATH or PWSH7_PATH.');
+  }
+  let info;
+  try { info = JSON.parse(probe.stdout.trim()); } catch (_) { /* rejected below */ }
+  if (!info || info.edition !== 'Core' || typeof info.version !== 'string' ||
+      !/^\d+\./.test(info.version) || Number(info.version.split('.')[0]) < 7 ||
+      typeof info.executable !== 'string' || !path.isAbsolute(info.executable) ||
+      !/^pwsh(?:\.exe)?$/i.test(path.basename(info.executable))) {
+    throw new Error('POWERSHELL7_REQUIRED_NOT_AVAILABLE: the native host returned no valid PowerShell 7 identity.');
+  }
+  try { return { ...info, executable: fs.realpathSync(info.executable) }; }
+  catch (error) {
+    throw new Error('POWERSHELL7_REQUIRED_NOT_AVAILABLE: verified pwsh executable could not be resolved (' + error.code + ').');
+  }
+}
 
 let failures = 0;
-let skipped = 0;
 function check(cond, name) {
   if (cond) console.log(`  ok  ${name}`);
   else { console.error(`FAIL  ${name}`); failures++; }
-}
-function skip(name, why) {
-  console.log(`  skip ${name} (${why})`);
-  skipped++;
 }
 
 const HIGH = `Mandatory Label\\High Mandatory Level  Label  ${elev.HIGH_IL_SID}`;
@@ -44,18 +69,23 @@ function throwingSync() {
 }
 function recordingRunner(reply) {
   const calls = [];
-  const fn = async (cmd, args, timeoutMs) => {
-    calls.push({ cmd, args, timeoutMs });
-    const r = typeof reply === 'function' ? reply(cmd, args, timeoutMs) : reply;
-    return { outcome: 'ok', timedOut: false, code: 0, error: null, stdout: '', stderr: '', ms: 1, ...r };
+  const fn = async (cmd, args, timeoutMs, options) => {
+    calls.push({ cmd, args, timeoutMs, options });
+    const r = typeof reply === 'function' ? reply(cmd, args, timeoutMs, options) : reply;
+    return { outcome: 'ok', timedOut: false, code: 0, error: null, stdout: '', stderr: '', ms: 1, stdinComplete: true, ...r };
   };
   fn.calls = calls;
   return fn;
 }
+const protectedFs = {
+  realpathSync: value => value,
+  lstatSync: value => ({ isSymbolicLink: () => false, isFile: () => value === ps7Host.PWSH_PATH })
+};
 function controller(opts) {
   return elev.createElevationController({
     spawnSync: opts.sync,
     runTimed: opts.runner,
+    preparePowerShellScript: opts.prepareScript || (script => ps7Host.preparePowerShellScript(script, { fs: protectedFs })),
     probeMs: opts.probeMs || 50,
     relaunchMs: opts.relaunchMs || 50
   });
@@ -68,6 +98,8 @@ const RELAUNCH_OPTS = {
 };
 
 (async () => {
+  const ps7 = requirePowerShell7();
+  console.log('elevation-controller-smoke: native PowerShell ' + ps7.version + ' (' + ps7.edition + '); UAC stays mocked');
   console.log('elevation-controller-smoke: probe outcomes');
   {
     const runner = recordingRunner({});
@@ -88,8 +120,11 @@ const RELAUNCH_OPTS = {
     const c = controller({ sync: throwingSync(), runner });
     const r = await c.isElevated();
     check(r.elevated === true && r.method === 'token-elevation', 'whoami failure falls back to the token probe');
-    check(runner.calls.length === 1 && /powershell\.exe$/i.test(runner.calls[0].cmd), 'fallback runs System32 PowerShell');
+    check(runner.calls.length === 1 && runner.calls[0].cmd === ps7Host.PWSH_PATH, 'mock fallback uses the protected Core7 resolver');
     check(runner.calls[0].args.includes('-Command') && !runner.calls[0].args.includes('-File'), 'fallback is -Command, never -File');
+    check(JSON.stringify(runner.calls[0].args) === JSON.stringify(ps7Host.SCRIPT_ARGS), 'fallback argv contains only the fixed Core7 bootstrap');
+    check(Buffer.isBuffer(runner.calls[0].options.stdinInput) && runner.calls[0].options.stdinInput.toString() === elev.TOKEN_PROBE_PS,
+      'token probe source travels through bounded UTF8 stdin');
     check(runner.calls[0].timeoutMs === 50, 'token probe carries the probe deadline');
   }
   {
@@ -111,6 +146,21 @@ const RELAUNCH_OPTS = {
     const c = controller({ sync: fakeSync(''), runner: recordingRunner({ outcome: 'ok', code: 1, stdout: '' }) });
     const r = await c.isElevated();
     check(r.elevated === false && r.method === 'failed', 'nonzero exit without a sentinel fails closed');
+  }
+  for (const reply of [{ outcome: 'ok', code: 1 }, { outcome: 'timeout', timedOut: true }, { stdinComplete: false },
+    { cleanupConfirmed: false }, { stdoutTruncated: true }, { stderrTruncated: true }]) {
+    const c = controller({ sync: fakeSync(''), runner: recordingRunner({ stdout: 'TOKEN_ELEVATED=1\r\n', ...reply }) });
+    const r = await c.isElevated();
+    check(r.elevated === false && r.method === 'failed', 'positive token text cannot override failed exit, timeout, incomplete IO or uncertain cleanup');
+  }
+  {
+    const runner = recordingRunner({ stdout: 'TOKEN_ELEVATED=1\r\n' });
+    const missingFs = { realpathSync() { throw new Error('missing host'); } };
+    const c = controller({ sync: fakeSync(''), runner,
+      prepareScript: script => ps7Host.preparePowerShellScript(script, { fs: missingFs }) });
+    const r = await c.isElevated();
+    check(r.elevated === false && /PowerShell 7/.test(r.error), 'unavailable protected host fails the token probe usefully');
+    check(runner.calls.length === 0, 'missing Core7 host never falls back to another executable');
   }
   {
     const c = controller({ sync: fakeSync(''), runner: recordingRunner({ outcome: 'launch-error', code: -1, error: 'spawn ENOENT' }) });
@@ -135,11 +185,10 @@ const RELAUNCH_OPTS = {
     const r = await c.relaunchElevated(RELAUNCH_OPTS);
     check(r.started === true && r.outcome === 'started' && r.declined === false, 'UAC approved reports started');
     const call = runner.calls[0];
-    check(/\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/i.test(call.cmd), 'relaunch uses the absolute System32 PowerShell');
-    check(call.args[0] === '-NoProfile' && call.args[1] === '-NonInteractive' && call.args[2] === '-Command',
-      'relaunch argv is -NoProfile -NonInteractive -Command <script>');
-    check(call.args.length === 4, 'the script is one argv entry (not flattened into several)');
-    const script = call.args[3];
+    check(call.cmd === ps7Host.PWSH_PATH, 'mock relaunch uses the absolute protected Core7 host');
+    check(JSON.stringify(call.args) === JSON.stringify(ps7Host.SCRIPT_ARGS), 'relaunch argv is the fixed Core7 stdin bootstrap');
+    check(call.args.length === 5 && !call.args.join(' ').includes(RELAUNCH_OPTS.execPath), 'target-specific source is absent from argv');
+    const script = call.options.stdinInput.toString('utf8');
     check(/Start-Process -FilePath '/.test(script), 'Start-Process receives -FilePath');
     check(!/-LiteralPath/.test(script), 'Start-Process is not given -LiteralPath (not a Start-Process parameter)');
     check(/-Verb RunAs/.test(script), 'relaunch asks for the Windows approval prompt');
@@ -173,6 +222,24 @@ const RELAUNCH_OPTS = {
     const c = controller({ sync: fakeSync(MEDIUM), runner: recordingRunner({ outcome: 'ok', code: 0, stdout: '' }) });
     const r = await c.relaunchElevated(RELAUNCH_OPTS);
     check(r.started === false && r.outcome === 'failed', 'child exits before emitting a result: failed, not started');
+  }
+  for (const reply of [{ code: 1 }, { stdinComplete: false }, { stdoutTruncated: true }, { stderrTruncated: true }]) {
+    const c = controller({ sync: fakeSync(MEDIUM), runner: recordingRunner({ stdout: `${elev.RELAUNCH_STARTED}\r\n`, ...reply }) });
+    const r = await c.relaunchElevated(RELAUNCH_OPTS);
+    check(r.started === false && r.outcome === 'failed', 'started text cannot override failed exit or incomplete IO');
+  }
+  {
+    const runner = recordingRunner({ stdout: `${elev.RELAUNCH_STARTED}\r\n` });
+    const c = controller({ sync: fakeSync(MEDIUM), runner,
+      prepareScript: () => { throw new Error('host denied'); } });
+    const r = await c.relaunchElevated(RELAUNCH_OPTS);
+    check(r.outcome === 'launch-error' && /PowerShell 7/.test(r.launchError), 'missing protected Core7 produces useful relaunch failure');
+    check(runner.calls.length === 0, 'relaunch never selects an alternate host on resolver failure');
+  }
+  {
+    const c = controller({ sync: fakeSync(MEDIUM), runner: async () => { throw new Error('private runner exception'); } });
+    const r = await c.relaunchElevated(RELAUNCH_OPTS);
+    check(r.outcome === 'launch-error' && r.started === false && !r.launchError.includes('private'), 'throwing UAC runner resolves with sanitized launch error');
   }
   {
     const c = controller({ sync: fakeSync(MEDIUM), runner: recordingRunner({ outcome: 'ok', code: 1, stdout: 'At line:1 char:1 STARTED is not recognized' }) });
@@ -219,8 +286,10 @@ const RELAUNCH_OPTS = {
     check(elev.resolveSystemRoot({}, exists) === 'C:\\Windows', 'missing SystemRoot falls back to C:\\Windows');
     check(elev.resolveSystemRoot({ SystemRoot: 'D:\\Nope' }, exists) === 'C:\\Windows', 'nonexistent SystemRoot falls back');
     check(elev.resolveSystemRoot({}, () => false) === null, 'no Windows directory at all resolves to null');
-    check(elev.systemPowerShell({ SystemRoot: 'D:\\Win' }, exists) === 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'PowerShell path is absolute under SystemRoot');
-    check(elev.systemPowerShell({}, () => false) === null, 'PowerShell path is null without a Windows directory');
+    check(elev.systemPowerShell({ fs: protectedFs }) === ps7Host.PWSH_PATH, 'PowerShell uses the maintained protected Core7 path');
+    check(elev.systemPowerShell({ fs: { realpathSync() { throw new Error('not found'); } } }) === null, 'missing protected PowerShell resolves to null');
+    check(elev.systemPowerShell({ fs: { ...protectedFs, realpathSync: () => 'D:\\Untrusted\\pwsh.exe' } }) === null, 'redirected host is refused');
+    check(elev.systemPowerShell({ fs: { ...protectedFs, lstatSync: () => ({ isSymbolicLink: () => true }) } }) === null, 'reparse host ancestry is refused');
   }
 
   console.log('elevation-controller-smoke: no temporary script file');
@@ -229,6 +298,7 @@ const RELAUNCH_OPTS = {
     check(!/fixer-elev-/.test(src), 'fixer-elev- temp name is gone');
     check(!/['"]-File['"]/.test(src), 'no -File argument anywhere in the elevation module');
     check(!/writeFileSync|writeFile\(|os\.tmpdir/.test(src), 'elevation module never writes a file');
+    check(!/WindowsPowerShell|ExecutionPolicy|taskkill/.test(src), 'elevation has no legacy host, policy override or PID tree kill');
     check(/-LiteralPath/.test(src) === false || !/Start-Process[^\n]*-LiteralPath/.test(src), 'Start-Process never uses -LiteralPath');
     const before = fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith('fixer-elev-')).length;
     const c = controller({ sync: fakeSync(MEDIUM), runner: recordingRunner({ stdout: `${elev.RELAUNCH_STARTED}\r\n` }) });
@@ -253,32 +323,32 @@ const RELAUNCH_OPTS = {
     check(grand.outcome === 'ok' && /EARLY/.test(grand.stdout) && grand.ms < 3000, 'inherited handles do not hold runTimed open past the grace period');
   }
 
-  console.log('elevation-controller-smoke: -Command transport through real PowerShell');
-  if (process.platform !== 'win32') {
-    skip('PowerShell transport', 'not Windows');
-  } else {
-    const ps = elev.systemPowerShell();
-    if (!ps || !fs.existsSync(ps)) {
-      skip('PowerShell transport', 'System32 PowerShell not present');
-    } else {
-      const probe = "C:\\Users\\O'Brien\\Área ünïcode\\1132 \"Fixer\".exe $env:TEMP `x; y";
-      const script = [
-        'try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}',
-        `Write-Output ('ECHO=' + '${probe.replace(/'/g, "''")}')`
-      ].join('; ');
-      const r = spawnSync(ps, ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', timeout: 20000, windowsHide: true });
-      const line = String(r.stdout || '').split(/\r?\n/).find((l) => l.startsWith('ECHO='));
-      check(r.status === 0 && line === `ECHO=${probe}`, 'apostrophes, spaces, quotes, $, backtick, semicolon and Unicode survive -Command byte-for-byte');
-      const bad = spawnSync(ps, ['-NoProfile', '-NonInteractive', '-Command', "Start-Process -LiteralPath 'x' -ErrorAction Stop"], { encoding: 'utf8', timeout: 20000, windowsHide: true });
-      check(bad.status !== 0 && /LiteralPath/.test(String(bad.stderr || '') + String(bad.stdout || '')), 'this host rejects Start-Process -LiteralPath (documents why -FilePath is required)');
-    }
-  }
+  console.log('elevation-controller-smoke: fixed bootstrap and stdin through protected PowerShell 7');
+  {
+    const probe = "C:\\Users\\O'Brien\\Área ünïcode\\1132 \"Fixer\".exe $env:TEMP `x; y";
+    const script = [
+      'try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}',
+      "Write-Output ('ECHO=' + '" + probe.replace(/'/g, "''") + "')"
+    ].join('; ');
+    const invocation = ps7Host.preparePowerShellScript(script);
+    check(!invocation.args.join(' ').includes(probe), 'native quoting fixture remains out of bootstrap argv');
+    const r = await elev.runTimed(invocation.exe, invocation.args, 20000, { stdinInput: invocation.input });
+    const line = String(r.stdout || '').split(/\r?\n/).find(value => value.startsWith('ECHO='));
+    check(r.outcome === 'ok' && r.code === 0 && r.stdinComplete === true && line === 'ECHO=' + probe,
+      'apostrophes, spaces, quotes, $, backtick, semicolon and Unicode survive production stdin transport byte-for-byte');
 
+    // Parameter binding must fail before any launch. WhatIf also prevents
+    // launching a target if a future host ever adds this unsupported parameter.
+    const badInvocation = ps7Host.preparePowerShellScript("Start-Process -LiteralPath 'x' -WhatIf -ErrorAction Stop");
+    const bad = await elev.runTimed(badInvocation.exe, badInvocation.args, 20000, { stdinInput: badInvocation.input });
+    check(bad.code !== 0 && bad.stdinComplete === true && /LiteralPath/.test(String(bad.stderr || '') + String(bad.stdout || '')),
+      'PowerShell 7 rejects Start-Process -LiteralPath (the product uses -FilePath)');
+  }
   if (failures) {
-    console.error(`elevation-controller-smoke: ${failures} failure(s), ${skipped} skipped`);
+    console.error('elevation-controller-smoke: ' + failures + ' failure(s)');
     process.exit(1);
   }
-  console.log(`elevation-controller-smoke: all checks passed (${skipped} skipped)`);
+  console.log('elevation-controller-smoke: all checks passed; no transport checks skipped');
 })().catch((err) => {
   console.error('elevation-controller-smoke: crashed', err && err.stack || err);
   process.exit(1);

@@ -103,7 +103,17 @@ check(!/quitAndInstall|elevate\.exe/.test(renderer), 'renderer never names updat
 
 console.log('updater-handoff-smoke: release pipeline');
 check(/finalize-update-metadata\.mjs --dist dist --expect-version/.test(releaseYml), 'release.yml finalizes latest.yml against the tag before upload');
-check(releaseYml.indexOf('finalize-update-metadata') < releaseYml.indexOf('Create GitHub Release'), 'finalize runs before the release is created');
+const draftStep=releaseYml.indexOf('Create unpublished GitHub draft');
+const manifestStep=releaseYml.indexOf('Capture immutable upload manifest');
+const validationStep=releaseYml.indexOf('Validate identified draft assets before publication');
+check(draftStep>0 && manifestStep>0 && validationStep>draftStep && releaseYml.indexOf('finalize-update-metadata')<manifestStep && manifestStep<draftStep,
+  'finalize and immutable capture precede draft upload; uploaded bytes are validated while unpublished');
+check(/draft: true/.test(releaseYml) && !/draft: false/.test(releaseYml) && /overwrite_files: false/.test(releaseYml) && /fail_on_unmatched_files: true/.test(releaseYml),
+  'candidate workflow preserves unpublished non-overwriting draft admission');
+check(/validate-release-assets\.mjs.*--mode draft.*--release-id.*--manifest/.test(releaseYml),
+  'draft validation binds the returned release ID and exact local manifest');
+check(!/shell: bash/.test(releaseYml) && /PSVersionTable\.PSVersion\.Major -ne 7/.test(releaseYml),
+  'Windows draft workflow uses PowerShell7 without a legacy shell fallback');
 check(/finalize-update-metadata\.mjs --dist dist/.test(ciYml), 'ci.yml runs the same finalize step');
 check(/isAdminRightsRequired/.test(validate) && /sha512/.test(validate) && /matches tag/.test(validate), 'validate-release-assets checks flag, hash and tag on the published latest.yml');
 check(fs.existsSync(path.join(ROOT, 'scripts', 'finalize-update-metadata.mjs')), 'finalize-update-metadata.mjs exists');

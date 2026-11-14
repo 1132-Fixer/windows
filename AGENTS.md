@@ -18,9 +18,12 @@ this file.
   `.github/workflows/release.yml` from a `v*` tag. Releases are **unsigned**
   (see `docs/security/code-signing.md`); never claim otherwise, and never add
   signing secrets, SignPath, or self-signed roots.
-- Tracking: Botify Network Project 2 (`PVT_kwDODytvn84BfNBY`). Every issue and
-  PR here has a Project 2 item; an item is Done only after the change is
-  merged to `main` and verified there.
+- Tracking for the current operator-directed Windows repair and repository
+  closeout: use this repository's issues and pull requests. Botify Network
+  Project 2 membership is not a prerequisite for this product scope; do not
+  create or change Board records as a prerequisite. Keep existing associations
+  and history. Completion requires the applicable merge, release and
+  verification evidence, not a tracking-state change.
 - Code owners: `.github/CODEOWNERS` (`@JG2547`, `@patricktobias86`).
 
 ## Architecture
@@ -28,11 +31,11 @@ this file.
 | Layer | Files | Boundary |
 |---|---|---|
 | Main process | `main.js`, `src/main/*` | Only place that spawns processes, touches the registry, the file system or credentials. Every child process has a timeout and a single settle path. |
-| Elevation | `src/main/elevation.js` | `whoami /groups` integrity SID first, PowerShell token query only as a bounded fallback. UAC relaunch is `Start-Process -FilePath … -Verb RunAs` through System32 PowerShell `-Command`; **never a temp `.ps1`** (Smart App Control blocks it). Outcomes: `started`, `declined`, `timeout`, `launch-error`, `failed`. |
+| Elevation | `src/main/elevation.js`, `src/main/powershell7.js` | Bounded token/integrity evidence and UAC relaunch through the protected Core 7 x64 host, with UTF-8 stdin transport. No legacy host, temporary script or execution-policy bypass. Main injects its durable process-custody runner. Outcomes include `started`, `declined`, `timeout`, `launch-error`, `failed`; an unproved child exit retains custody. |
 | Security | `src/main/electron-security.js` | IPC channel allowlist, navigation/new-window denial, URL allowlist for Explore, path validation. Do not weaken it to fix a UI or startup problem. |
 | Preload | `preload.js`, `src/preload/compact-shell.js` | `contextIsolation` on, `nodeIntegration` off; exposes only the `window.electronAPI` surface. The compact shell maps renderer panes onto `body[data-compact-state]` (`checking`, `ready`, `blocked`, `fixing`, `cancelling`, `cancelled`, `success`, `error`, `notice`). |
 | Renderer | `index.html`, `renderer.js`, `messages.js` | All user-facing copy lives in `messages.js`; `index.html` design tokens are the single `:root` block. |
-| Repair | `main.js` (`run-fix`) | The real orchestrator: confirm once → refuse while signed in as the helper → stop helper Zoom → remove account/profile → recreate → configure → launch → verify → report. Idempotent; a second run repairs a partial run. |
+| Repair | `main.js` (`run-fix`), `src/main/repair-session.js`, `src/main/helper-reset-controller.js` | Confirm the exact target once; protect the operator; acquire the machine lease; bind the exact helper SID; prove shutdown and unloaded profile; purge and verify absence before recreation; verify Standard-user identity, configure, launch and read back the result. Native adapters must enforce fresh identity at each effect. Unknown or interrupted ownership blocks retry/quit/update; a second click is never evidence that a partial run can safely resume. Supported phase-specific recovery and actual disposable Windows acceptance remain unfinished; consult the acceptance matrix. |
 
 ## Design
 
@@ -79,10 +82,13 @@ this file.
   `Independent project. Not affiliated with Zoom.`, Support, Feedback and
   About; Explore is reachable only from the About dialog and is never
   landing chrome.
-- Screen composition: static 56px header (Back on the Details view only,
-  centered product mark, Exit), one centered column capped at 420px, static
-  48px footer. Which controls a screen may show is the allowlist in
-  `screen-actions.js`; the compact shell applies it after every renderer
+- Screen composition: the recorded Windows overlay uses a static 104px header
+  (Back on the Details view only, centered 80px product mark, Exit), one
+  centered column capped at 420px, and a static 48px footer.
+  `DESIGN-SYNC.md` records the divergence from the shared 56px header token;
+  the design-system update remains pending. This prose does not advance the
+  pin or establish rendered acceptance. Which controls a screen may show is
+  the allowlist in `screen-actions.js`; the compact shell applies it after every renderer
   change, so no control is ever hidden with CSS and none leaks between
   states. **View details** opens the in-place Details view (renderer
   `openDetails`) whose content comes from `details-view.js`: plain English
@@ -273,7 +279,8 @@ durable evidence and an actionable resolution path.
 
 - Work on a non-default branch; open a PR to `main`; every review thread
   resolved; required checks green on the exact head; merge; verify on `main`;
-  delete the branch; close the linked issue; update Project 2. A branch or an
+  delete the branch after preservation checks; close the linked issue and
+  record its completion evidence. A branch or an
   open PR is not completion.
 - Repository blobs are LF (`.gitattributes`); `git diff --check` must be clean.
 - Free GitHub features only.

@@ -7,9 +7,12 @@
 
 const fs = require('fs');
 const path = require('path');
+const vm = require('node:vm');
 
 const ROOT = path.join(__dirname, '..');
 const elev = require('../src/main/elevation');
+const ps7 = require('../src/main/powershell7');
+const bounded = require('../src/main/bounded-process');
 const messages = require('../messages');
 const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
 const renderer = fs.readFileSync(path.join(ROOT, 'renderer.js'), 'utf8');
@@ -19,6 +22,25 @@ const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
 const security = fs.readFileSync(path.join(ROOT, 'src', 'main', 'electron-security.js'), 'utf8');
 const shell = fs.readFileSync(path.join(ROOT, 'src', 'preload', 'compact-shell.js'), 'utf8');
 const afterPack = fs.readFileSync(path.join(ROOT, 'scripts', 'after-pack-verify-manifest.js'), 'utf8');
+const boundedSource = fs.readFileSync(path.join(ROOT, 'src', 'main', 'bounded-process.js'), 'utf8');
+const asynchronous = [];
+let finished = false;
+process.once('beforeExit', () => { if (!finished) { console.error('FAIL elevation-startup: unfinished async checks'); process.exitCode = 1; } });
+function shippedFunction(source, name) {
+  const match = new RegExp('(?:async )?function ' + name + '\\(').exec(source);
+  if (!match) throw new Error('Maintained function missing: ' + name);
+  const end = source.indexOf('\n}', match.index);
+  if (end < 0) throw new Error('Maintained function boundary missing: ' + name);
+  return source.slice(match.index, end + 2);
+}
+function shippedHandler(channel, adapters) {
+  const start = main.indexOf("ipcMain.handle('" + channel + "',");
+  const end = main.indexOf('\n});', start);
+  if (start < 0 || end < start) throw new Error('Maintained IPC handler missing: ' + channel);
+  let handler;
+  vm.runInNewContext(main.slice(start, end + 4), { ...adapters, ipcMain: { handle: (_name, fn) => { handler = fn; } } }, { timeout: 1000 });
+  return handler;
+}
 
 let failures = 0;
 function check(cond, name) {
@@ -33,14 +55,33 @@ check(main.includes('if (!elevated)') && main.includes('relaunchElevated()'),
 {
   const elevSrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'elevation.js'), 'utf8');
   check(/Start-Process[\s\S]*-Verb RunAs/.test(elevSrc), 'relaunch uses Windows runas');
-  check(elevSrc.includes("-Command") && elevSrc.includes('WindowsPowerShell'),
-    'relaunch uses System32 PowerShell -Command');
+  check(elevSrc.includes('preparePowerShellScript') && elevSrc.includes('resolvePowerShell7') && elevSrc.includes('stdinInput') &&
+    ps7.PWSH_PATH === 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' && ps7.SCRIPT_ARGS.includes('-Command'),
+    'relaunch uses the maintained protected Core7 host, fixed bootstrap and bounded stdin');
+  check(!/WindowsPowerShell|ExecutionPolicy|taskkill/.test(elevSrc), 'elevation selects no legacy host, policy bypass or PID tree kill');
   check(!elevSrc.includes('fixer-elev-') && !/['"]-File['"]/.test(elevSrc) && !/writeFileSync|os\.tmpdir/.test(elevSrc),
     'relaunch does not write a temp .ps1 (SAC blocks unknown scripts)');
   check(/Start-Process -FilePath '/.test(elevSrc) && !/Start-Process[^\n]*-LiteralPath/.test(elevSrc),
-    'Start-Process uses -FilePath (Windows PowerShell 5.1 has no -LiteralPath on Start-Process)');
-  check(elevSrc.includes("child.on('close'") && elevSrc.includes('EXIT_CLOSE_GRACE_MS'),
-    'child output is read through close, with a grace period for inherited handles');
+    'Start-Process uses its supported -FilePath parameter');
+  check(elevSrc.includes('createBoundedProcessRunner') && boundedSource.includes("child.on('close', onClose)") &&
+    elev.EXIT_CLOSE_GRACE_MS === bounded.DEFAULT_EXIT_CLOSE_GRACE_MS,
+    'shared bounded runner reads output through actual close with inherited-handle grace');
+  asynchronous.push(async () => {
+    const fakeFs = { realpathSync: value => value,
+      lstatSync: value => ({ isSymbolicLink: () => false, isFile: () => value === ps7.PWSH_PATH }) };
+    const run = vm.runInNewContext('(' + shippedFunction(elevSrc, 'runPsCommand') + ')', {
+      preparePowerShellScript: script => ps7.preparePowerShellScript(script, { fs: fakeFs })
+    });
+    const script = elev.buildRelaunchScript('C:\\Mock\\1132 Fixer.exe', ['--self-elevate-attempted']);
+    let call;
+    await run(script, 50, async (exe, args, timeoutMs, options) => { call = { exe, args, timeoutMs, options }; return { outcome: 'ok' }; });
+    check(call.exe === ps7.PWSH_PATH && JSON.stringify(call.args) === JSON.stringify(ps7.SCRIPT_ARGS), 'actual elevation helper selects only protected Core7 bootstrap');
+    check(call.options.stdinInput.toString('utf8') === script && !call.args.join(' ').includes('1132 Fixer.exe'), 'actual UAC script stays in stdin, outside argv');
+    check(call.timeoutMs === 50, 'actual helper preserves bounded UAC deadline');
+    let spawns = 0;
+    const denied = await run(script, 50, async () => { spawns++; }, () => { throw new Error('host unavailable'); });
+    check(denied.outcome === 'launch-error' && spawns === 0, 'unavailable protected host has no alternate executable fallback');
+  });
 }
 
 console.log('elevation-startup-smoke: already-elevated does not relaunch');
@@ -94,8 +135,15 @@ check(renderer.includes("if (!quiet)") && renderer.includes("setWizardPane('chec
   'Checking pane is only set on a non-quiet scan');
 
 console.log('elevation-startup-smoke: Frame Server cannot produce a false all-good result');
-check(main.includes("cards.frameServer = { status: 'warning'"),
-  'missing Frame Server is a warning, not a Ready blocker');
+asynchronous.push(async () => {
+  const handler = shippedHandler('preflight-scan', {
+    preflightCheck: async () => ({ ok: true, info: { elevated: true, zoomPath: 'C:\\Mock\\Zoom.exe', zoomInstall: {} }, blockers: [], warnings: [] }),
+    zoomDetect: { zoomStatusMessage: () => 'Synthetic Zoom installation' }, app: { getVersion: () => '6.4.0' }
+  });
+  const result = await handler();
+  check(result.cards.frameServer.status === 'warning' && /not.*verified|not.*confirmed/i.test(result.cards.frameServer.message), 'actual Frame Server card remains explicitly unverified warning');
+  check(result.canRunFix === true && result.overall === 'repairable', 'unknown Frame Server does not invent health success or block independent repair readiness');
+});
 check(!/Everything looks good/.test(messages.WIZARD.READY_TITLE + messages.WIZARD.READY_SUB),
   'Ready copy is not an all-good Zoom-health claim');
 
@@ -155,8 +203,20 @@ console.log('elevation-startup-smoke: parser unit tests');
     'dev relaunch keeps the app path');
 }
 
-if (failures) {
-  console.error(`elevation-startup-smoke: ${failures} failure(s)`);
-  process.exit(1);
-}
-console.log('elevation-startup-smoke: all checks passed');
+asynchronous.push(async () => {
+  for (const [recovery, expected] of [[{ status: 'clear', verified: true }, 'ready'], [{ status: 'blocked', verified: false }, 'blocked'], [{ status: 'checking', verified: false }, 'blocked']]) {
+    const handler = shippedHandler('startup-status', { Date: { now: () => 1000 }, elevation: { logStage: () => {} },
+      elevCtl: { snapshot: () => ({ elevated: true, method: 'integrity-level' }) }, os: { userInfo: () => ({ username: 'operator' }) },
+      FIX_USER: 'user1', nativeRecovery: recovery });
+    const result = await handler();
+    check(result.state === expected && (expected !== 'blocked' || result.stage === 'repair-recovery'), 'shipped startup cannot show Ready from unknown native recovery');
+  }
+});
+(async () => {
+  for (const invoke of asynchronous) {
+    try { await invoke(); } catch (error) { check(false, 'shipped function check failed: ' + error.message); }
+  }
+  if (failures) { console.error('elevation-startup-smoke: ' + failures + ' failure(s)'); process.exitCode = 1; }
+  else console.log('elevation-startup-smoke: all checks passed; shipped helpers use inert adapters');
+  finished = true;
+})().catch(error => { console.error('FAIL elevation-startup harness:', error.message); process.exitCode = 1; finished = true; });

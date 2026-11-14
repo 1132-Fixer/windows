@@ -364,3 +364,17 @@ and `tools/packaged-acceptance.js` assert the rendered result.
 
 Captures: `harness render — real page code and assets, mocked electronAPI`;
 the packaged `.exe` is Windows-only verification on the CI runner.
+
+## Exact helper purge confirmation (unreleased)
+
+Keep the existing single repair confirmation. It must disclose that the exact
+`C:\Users\user1` helper profile and all of its files are permanently removed
+before the fresh helper is created. Distinguish those files from the signed-in
+user's profile and other Windows profiles; do not promise that every personal
+file is preserved while deleting the helper's data. This is a Windows workflow
+and safety-copy decision. Shared tokens, assets and the reviewed pin are unchanged.
+
+The target path is meaningful in this confirmation because it identifies the
+data being erased. It does not authorize name-only deletion: the main process
+still binds the operation to the verified local SID and the native safety gates.
+Source regression checks do not establish rendered or native purge acceptance.

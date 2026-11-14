@@ -9,19 +9,20 @@
  *   - environment variables
  *   - whether an unrelated command happened to succeed (`net session`)
  *
- * Every child process here has an explicit timeout, is killed as a tree on
- * expiry, and settles exactly once. Every result carries an `outcome` so a
+ * Every child process here has an explicit timeout, owned-handle termination
+ * and a single settle path. Every result carries an `outcome` so a
  * caller can tell success, decline, timeout, launch error and failure apart.
  *
- * Nothing here writes a script file. Smart App Control treats an unknown
- * .ps1 under %TEMP% as "part of this app" and blocks it even when
- * powershell.exe itself is trusted, so every PowerShell call is `-Command`
- * with the script passed in memory.
+ * Scripts use the maintained protected PowerShell 7 host, fixed bootstrap
+ * argv and bounded UTF8 stdin. Nothing here writes a script file, changes
+ * execution policy, or selects a host from PATH or caller environment.
  */
 
 const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const { resolvePowerShell7, preparePowerShellScript } = require('./powershell7');
+const { createBoundedProcessRunner, DEFAULT_TIMEOUT_MS } = require('./bounded-process');
 
 const ELEVATE_RETRY_FLAG = '--self-elevate-attempted';
 const ELEVATION_PROBE_MS = 5000;
@@ -46,6 +47,7 @@ const TOKEN_PROBE_PS = [
   '$code = @"',
   'using System;',
   'using System.Runtime.InteropServices;',
+  '[assembly:DefaultDllImportSearchPaths(DllImportSearchPath.System32)]',
   'public static class TokenElevationQuery {',
   '  const int TokenElevation = 20;',
   '  const uint TOKEN_QUERY = 0x0008;',
@@ -78,13 +80,6 @@ function logStage(name, extra) {
   console.log(`[startup] ${name}${suffix}`);
 }
 
-function killTree(pid) {
-  if (!pid) return;
-  try {
-    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 8000 });
-  } catch (_) { /* already gone */ }
-}
-
 // %SystemRoot% is trusted only when it is an absolute directory that exists.
 // A missing or relative value (a stripped launcher environment) falls back to
 // C:\Windows. Returns null when no Windows directory can be found at all so
@@ -102,10 +97,9 @@ function resolveSystemRoot(env = process.env, existsSync = fs.existsSync) {
   return null;
 }
 
-function systemPowerShell(env = process.env, existsSync = fs.existsSync) {
-  const root = resolveSystemRoot(env, existsSync);
-  if (!root) return null;
-  return path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+function systemPowerShell(deps = {}) {
+  try { return resolvePowerShell7(deps); }
+  catch (_) { return null; }
 }
 
 function systemWhoami(env = process.env, existsSync = fs.existsSync) {
@@ -114,68 +108,46 @@ function systemWhoami(env = process.env, existsSync = fs.existsSync) {
   return path.win32.join(root, 'System32', 'whoami.exe');
 }
 
-// In-memory -Command only (see the module header). The script is one argv
-// entry: Node quotes it for CreateProcess and PowerShell reads the whole
-// argument as the command text, so no shell ever re-parses it.
-function runPsCommand(script, timeoutMs, spawnImpl) {
-  const exe = systemPowerShell();
-  if (!exe) {
+// The fixed Core bootstrap reads the internal script from bounded stdin.
+// Caller paths/arguments remain quoted PowerShell data inside that script.
+function runPsCommand(script, timeoutMs, spawnImpl, prepareImpl = preparePowerShellScript) {
+  let prepared;
+  try { prepared = prepareImpl(script); }
+  catch (_) {
     return Promise.resolve({
       outcome: 'launch-error', timedOut: false, code: -1,
-      error: 'Windows directory not found', stdout: '', stderr: '', ms: 0
+      error: 'PowerShell 7 x64 is unavailable at its supported protected installation.', stdout: '', stderr: '', ms: 0,
+      stdinComplete: false
     });
   }
   return spawnImpl(
-    exe,
-    ['-NoProfile', '-NonInteractive', '-Command', String(script)],
-    timeoutMs
+    prepared.exe, prepared.args, timeoutMs, { stdinInput: prepared.input }
   );
 }
 
-// Bounded child runner. Settles exactly once with one of:
-//   outcome 'ok'           — child exited (code may still be nonzero)
-//   outcome 'timeout'      — deadline hit; the process tree was killed
-//   outcome 'launch-error' — spawn itself failed (missing exe, EACCES, ...)
-function runTimed(command, args, timeoutMs) {
-  return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    let timer = null;
-    let graceTimer = null;
-    const started = Date.now();
-    let child;
-    const finish = (result) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      if (graceTimer) clearTimeout(graceTimer);
-      resolve({ ...result, stdout, stderr, ms: Date.now() - started });
-    };
-    try {
-      child = spawn(command, args, { windowsHide: true });
-    } catch (err) {
-      finish({ outcome: 'launch-error', timedOut: false, code: -1, error: err.message });
-      return;
-    }
-    timer = setTimeout(() => {
-      killTree(child.pid);
-      try { child.kill('SIGKILL'); } catch (_) {}
-      finish({ outcome: 'timeout', timedOut: true, code: -1, error: `timeout after ${timeoutMs}ms` });
-    }, timeoutMs);
-    if (child.stdout) child.stdout.on('data', (d) => { stdout += d.toString(); });
-    if (child.stderr) child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('error', (err) => finish({ outcome: 'launch-error', timedOut: false, code: -1, error: err.message }));
-    // `close` fires after stdio has drained, so the result carries every
-    // byte the child wrote. `exit` alone can arrive first with the tail of
-    // stdout still in flight — settling there dropped the STARTED line and
-    // reported a real relaunch as failed. If a grandchild holds the pipes
-    // open, the grace timer settles instead of waiting forever.
-    child.on('exit', (code) => {
-      graceTimer = setTimeout(() => finish({ outcome: 'ok', timedOut: false, code, error: null }), EXIT_CLOSE_GRACE_MS);
-    });
-    child.on('close', (code) => finish({ outcome: 'ok', timedOut: false, code, error: null }));
-  });
+const boundedRun = createBoundedProcessRunner({ spawn });
+// Keep the public UAC outcome vocabulary while sharing bounded IO, input
+// completion, owned-child custody and UTF8 capture with the main runner.
+function runTimed(command, args, timeoutMs, options = {}) {
+  const started = Date.now();
+  const effectiveTimeoutMs = timeoutMs === undefined || timeoutMs === 0 ? DEFAULT_TIMEOUT_MS : timeoutMs;
+  let stdinInput;
+  try {
+    if (!options || typeof options !== 'object' || Array.isArray(options)) throw new TypeError();
+    stdinInput = options.stdinInput;
+  } catch (_) {
+    return Promise.resolve({ outcome: 'launch-error', timedOut: false, code: -1, error: 'Invalid bounded process arguments.',
+      stdout: '', stderr: '', ms: Date.now() - started, stdinComplete: false });
+  }
+  return boundedRun(command, args, () => {}, {
+    timeoutMs: effectiveTimeoutMs, exitCloseGraceMs: EXIT_CLOSE_GRACE_MS, stdinInput
+  }).then(result => {
+    const outcome = result.timedOut ? 'timeout' : ['exited', 'exit-unclosed'].includes(result.outcome) ? 'ok' : 'launch-error';
+    const error = outcome === 'timeout' ? `timeout after ${effectiveTimeoutMs}ms` : outcome === 'launch-error'
+      ? 'The requested process could not complete safely (' + result.outcome + ').' : null;
+    return { ...result, outcome, error, ms: Date.now() - started };
+  }, () => ({ outcome: 'launch-error', timedOut: false, code: -1, error: 'Invalid bounded process arguments.',
+    stdout: '', stderr: '', ms: Date.now() - started, stdinComplete: stdinInput === undefined }));
 }
 
 function parseTokenProbe(stdout) {
@@ -238,6 +210,7 @@ function buildRelaunchScript(exe, args) {
 function createElevationController(deps = {}) {
   const spawnImpl = deps.runTimed || runTimed;
   const spawnSyncImpl = deps.spawnSync || spawnSync;
+  const prepareImpl = deps.preparePowerShellScript || preparePowerShellScript;
   const retryFlag = deps.retryFlag || ELEVATE_RETRY_FLAG;
   const probeMs = deps.probeMs || ELEVATION_PROBE_MS;
   const relaunchMs = deps.relaunchMs || UAC_RELAUNCH_MS;
@@ -270,8 +243,9 @@ function createElevationController(deps = {}) {
   }
 
   // Slow path, only when whoami gave nothing usable: the TOKEN_ELEVATION
-  // query through PowerShell, bounded by probeMs and tree-killed on expiry.
-  // Worst case before the window opens: whoami (2.5 s) + this (5 s).
+  // query through protected PowerShell 7, bounded by probeMs.
+  // Worst case includes whoami (2.5 s), the probe (5 s) and bounded
+  // termination grace (1 s).
   // Every branch returns; doubt is reported as not elevated, never as a
   // hang.
   async function probeToken() {
@@ -279,8 +253,10 @@ function createElevationController(deps = {}) {
     logStage('elevation.token', 'begin');
     const fast = probeWhoamiSync();
     if (fast) return fast;
-    const ps = await runPsCommand(TOKEN_PROBE_PS, probeMs, spawnImpl);
-    const parsed = parseTokenProbe(ps.stdout);
+    const ps = await runPsCommand(TOKEN_PROBE_PS, probeMs, spawnImpl, prepareImpl);
+    const parsed = ps.outcome === 'ok' && !ps.timedOut && ps.code === 0 && ps.stdinComplete !== false &&
+      ps.cleanupConfirmed !== false && ps.stdoutTruncated !== true && ps.stderrTruncated !== true
+      ? parseTokenProbe(ps.stdout) : { ok: false, elevated: null };
     if (parsed.ok) {
       logStage('elevation.token', `ok elevated=${parsed.elevated} ${Date.now() - t0}ms`);
       return { elevated: parsed.elevated, method: 'token-elevation', ms: Date.now() - t0, error: null };
@@ -331,11 +307,14 @@ function createElevationController(deps = {}) {
     });
     const script = buildRelaunchScript(exe, args);
     logStage('elevation.relaunch', 'Start-Process -Verb RunAs (no script file)');
-    const r = await runPsCommand(script, relaunchMs, spawnImpl);
+    let r;
+    try { r = await runPsCommand(script, relaunchMs, spawnImpl, prepareImpl); }
+    catch (_) { r = { outcome: 'launch-error', error: 'PowerShell 7 invocation failed.', stdout: '', stdinComplete: false }; }
     let outcome;
     if (r.outcome === 'timeout' || r.timedOut) outcome = 'timeout';
     else if (r.outcome === 'launch-error') outcome = 'launch-error';
-    else outcome = parseRelaunchOutput(r.stdout) || 'failed';
+    else outcome = r.stdinComplete === false || r.code !== 0 || r.stdoutTruncated === true || r.stderrTruncated === true
+      ? 'failed' : parseRelaunchOutput(r.stdout) || 'failed';
     const started = outcome === 'started';
     const declined = outcome === 'declined' || outcome === 'timeout';
     logStage('elevation.relaunch', outcome);

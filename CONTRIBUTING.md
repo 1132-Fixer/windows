@@ -118,7 +118,24 @@ What does **not** belong here:
 
 ## Releases
 
-Maintainers publish by pushing a `v*` tag. GitHub Actions builds Setup and Portable artifacts onto this repository's Releases. The feed a build polls is fixed at build time by `build.publish` in the commit it was built from; `main` sets that to `https://github.com/1132-Fixer/windows/releases/latest/download/latest.yml`, which the **next** build will use and which no shipped binary polls yet. Shipped v5.6.0 binaries poll the generic `botify-network.com` broker, and v5.5.1 and earlier poll the old Releases repo — see [`docs/development/updater-channel.md`](docs/development/updater-channel.md). Do not point the updater at a different repository without a documented migration. Do not delete `PrimeUpYourLife/1132-Fixer-Windows-Releases` while residual v5.5.1 clients still poll its `latest.yml`; archive it rather than deleting it. Version truth is `package.json`; do not bump it without a matching release.
+Maintainers publish by pushing a `v*` tag. GitHub Actions builds Setup and
+Portable artifacts onto this repository's Releases. The feed a build polls is
+fixed at build time by `build.publish` in that build's source commit. Current
+builds use `1132-Fixer/windows` GitHub Releases; v5.6.0 uses the generic
+`botify-network.com` broker.
+
+The legacy `PrimeUpYourLife/1132-Fixer-Windows-Releases` repository was
+intentionally deleted. Builds v5.5.1 and earlier still have that endpoint
+compiled in and cannot automatically discover current releases. Manual recovery
+is to install the latest Setup over the existing copy, or replace an old
+Portable build with the latest Portable build from this repository. Do not
+restore or recreate the legacy repository. See
+[`docs/development/updater-channel.md`](docs/development/updater-channel.md)
+and the owner decision in [issue #243](https://github.com/1132-Fixer/windows/issues/243).
+
+Do not point the updater at a different repository without a documented
+migration. Version truth is `package.json`; do not bump it without a matching
+release.
 
 ## Code of conduct
 

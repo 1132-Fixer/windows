@@ -25,7 +25,22 @@ const CHECK_ORDER = [
   { key: 'frameServer', label: 'Camera Frame Server', group: 'Camera service' }
 ];
 
+const PROCESS_RECOVERY = 'A Windows command may still be running. Do not start another fix or install an update until its state has been checked. Restarting the app alone does not confirm that it stopped.';
+
 const FRIENDLY_ERRORS = {
+  repair_recovery_required: PROCESS_RECOVERY,
+  repair_already_running: 'A repair is already running. Wait for its verified result before starting another one.',
+  target_authorization_required: 'The exact helper reset was not confirmed. No account or profile change was started.',
+  target_consent_unverified: 'The confirmed helper identity no longer matches the current Windows evidence. The repair stopped before erasing it.',
+  profile_privileges_unavailable: 'The required profile privileges are unavailable. Ask your administrator to review the current Windows policy; the repair cannot change it.',
+  profile_privilege_restore_unverified: PROCESS_RECOVERY,
+  standard_account_unverified: 'Windows could not confirm a complete Standard-user membership result for the helper. The repair stopped; review its recovery details before retrying.',
+  standard_account_privileged: 'The helper was found to have administrator privileges. The repair stopped to protect your computer; review its recovery details before retrying.',
+  process_cleanup_unverified: PROCESS_RECOVERY,
+  command_output_incomplete: 'A Windows command returned incomplete information. The fix stopped before using it. Check View details and the Support Report before trying again.',
+  process_teardown_unverified: 'The fix could not confirm that the helper programs stopped. No account or profile cleanup was started. Check View details and the Support Report before trying again.',
+  session_tools_unavailable: 'This Windows installation cannot currently verify helper sessions with the required tools. The fix stopped before account or profile cleanup. No reset was performed.',
+  session_teardown_unverified: 'The fix could not confirm that the helper sessions ended. No account or profile cleanup was started. Check View details and the Support Report before trying again.',
   not_elevated:             'Process is not running as Administrator. Re-launch the app elevated (right-click → Run as administrator).',
   running_as_target:        'You are currently signed in as user1. Sign in as a different administrator and try again.',
   preflight_failed:         'Environment check found one or more blockers. Look at the highlighted lines above — each one tells you what to fix before retrying.',
@@ -48,17 +63,17 @@ function friendlyError(code) {
   if (FRIENDLY_ERRORS[code]) return FRIENDLY_ERRORS[code];
   if (code) {
     return `Something went wrong and the fix could not finish (code: ${code}). ` +
-      'It is safe to run the fix again. If it keeps failing, send us the code with Feedback & Report.';
+      'Check View details and the Support Report before retrying. Use Feedback & Report if you need help.';
   }
   return 'Something went wrong and the fix could not finish. ' +
-    'It is safe to run the fix again. If it keeps failing, tell us what happened with Feedback & Report.';
+    'Check View details and the Support Report before retrying. Use Feedback & Report if you need help.';
 }
 
 // The fix flow threw before returning a result (IPC or renderer helper).
-// The fix is idempotent by design — re-running is always safe.
+// A returned failure does not prove that native work stopped or was rolled back.
 function unexpectedFixFailure(err) {
   const detail = err && err.message ? String(err.message) : '';
-  return 'The fix stopped before it could finish. It is safe to run the fix again.' +
+  return 'The fix stopped before it could finish. Check View details and the Support Report before trying again.' +
     (detail ? ` If this keeps happening, send us this detail with Feedback & Report: ${detail}` : '');
 }
 
@@ -291,9 +306,10 @@ const WIZARD = {
   PARTIAL_TITLE:  'Finished — some items need attention',
   PARTIAL_SUB:    'The fix ran, but some steps could not be completed. Open View details to see exactly what needs attention.',
   WARNINGS_SUB:   'The fix finished with warnings. Open View details to read them.',
+  SHORTCUT_DEFERRED: 'The shortcut was not changed because the repair could not be verified.',
   FAIL_TITLE:     "Couldn't complete the fix",
   CONFIRM_TITLE:  'Before we start',
-  CONFIRM_BODY:   '1132 Fixer will replace its helper account and helper profile. Your signed-in Windows account and personal files will not be changed. Zoom will open in the fresh helper environment. You can cancel only at safe checkpoints.',
+  CONFIRM_BODY:   '1132 Fixer permanently deletes C:\\Users\\user1 and all files in that helper profile, then creates a fresh helper account and opens Zoom. Your signed-in Windows account and other Windows profiles are preserved. Cancellation stops only at verified safe checkpoints.',
   CONFIRM_CONTINUE: 'Continue',
   CONFIRM_CANCEL: 'Go back',
   SHORTCUT_NOT_READY_TITLE: "Shortcut isn't ready yet",
@@ -394,9 +410,29 @@ const DISCLOSURE = {
   ARIA: 'Open Source. Independent project. Not affiliated with Zoom.'
 };
 
-// Feedback submit fallbacks (renderer side; main.js maps HTTP statuses).
+// Feedback copy shared by the renderer and the canonical support client.
+const FEEDBACK = Object.freeze({
+  NOT_CONFIGURED: 'Support reporting is unavailable. Your draft has been kept.',
+  REJECTED: 'The support service rejected this message. Review it before sending again.',
+  TEXT_TOO_LARGE: 'The message is too large. Keep a copy and shorten it before sending.',
+  FAILED: 'The message could not be sent. Your draft has been kept.',
+  RATING_REQUIRED: 'Choose an Overall rating before submitting the survey.',
+  BUSY: 'This form is already being submitted.',
+  SCREENSHOT_INVALID: 'The screenshot could not be verified. Choose a supported image up to 5 MB.',
+  RATE_LIMITED: 'Too many submissions. Keep your draft and try again later.',
+  TOO_LARGE: 'The submission is too large. Keep a copy and reduce the text or screenshot.',
+  UNAVAILABLE: 'Support reporting is unavailable. Keep your draft and try again later.',
+  SEND_UNKNOWN: 'Delivery could not be confirmed. Your draft has been kept. Sending again may create a duplicate.',
+  TIMEOUT: 'The send timed out and delivery could not be confirmed. Your draft has been kept.',
+  RETRY_WINDOW_EXPIRED: 'The earlier send is still unconfirmed and its retry window has ended. Keep your draft and check with support before sending it again.',
+  RETRY_CAPACITY: 'More submissions cannot be tracked safely in this session. Keep your draft and contact support.',
+  SUBMITTING: 'Submitting...',
+  SUBMITTING_IMAGE: 'Submitting report and screenshot...',
+  DRAFT_CHANGED: 'Draft changed. Submit it when you are ready.',
+  SUBMITTED: 'Submission confirmed.'
+});
 const FEEDBACK_FALLBACK = 'Could not send right now. Check your internet connection and try again in a minute.';
-const FEEDBACK_NETWORK  = 'Network error — the message was not sent. Check your internet connection and try again.';
+const FEEDBACK_NETWORK = FEEDBACK.SEND_UNKNOWN;
 
 // Support-report modal failure.
 function reportBuildFailure(err) {
@@ -546,12 +582,12 @@ if (typeof module !== 'undefined' && module.exports) {
     INACTIVITY,
     DISCOVERY,
     CHECK_ORDER,
-    FRIENDLY_ERRORS, friendlyError, unexpectedFixFailure, scanFailureMessage,
+    PROCESS_RECOVERY, FRIENDLY_ERRORS, friendlyError, unexpectedFixFailure, scanFailureMessage,
     shortcutFailureMessage, HKU_STATES, FRAME_SERVER_STATES, describeHku,
     describeFrameServer, receiptStatusFor, describeUnrecognized,
     ZOOM_RECOVERY, zoomRecoveryTechDetails, zoomInstallerRefusal,
     WIZARD_GROUPS, WIZARD, wizardFixFoundTitle, wizardFixFoundSub, wizardBlockedSub,
     EXPLORE_COPY, EXPLORE_CATEGORIES, EXPLORE_VIEW, DISCLOSURE,
-    FEEDBACK_FALLBACK, FEEDBACK_NETWORK, reportBuildFailure
+    FEEDBACK, FEEDBACK_FALLBACK, FEEDBACK_NETWORK, reportBuildFailure
   };
 }

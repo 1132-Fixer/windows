@@ -5,7 +5,8 @@
 // Contract:
 //   1. Renderer has no Node. contextIsolation on, sandbox on, nodeIntegration off.
 //   2. Preload exposes a fixed API. Main will not register any other ipcMain.handle.
-//   3. Invoke payloads are schema-checked; extra args are dropped, never forwarded.
+//   3. Invoke payloads are schema-checked; extra args are dropped or explicitly
+//      rejected for feedback, never forwarded.
 //   4. openExternal and the portable updater fetch only https hosts on an allowlist.
 //      The renderer cannot supply those URLs.
 //   5. Navigation away from the local index.html is denied.
@@ -76,7 +77,7 @@ const ACTIVITY_KINDS = Object.freeze(['pointermove', 'pointerdown', 'keydown', '
 const FEEDBACK_TYPES = Object.freeze(['Bug Report', 'User Rating', 'Contact']);
 const SCREENSHOT_MIME = Object.freeze(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
-const FEEDBACK_TEXT_MAX = 100 * 1024;
+const FEEDBACK_TEXT_MAX = 100 * 1024; // UTF-8 bytes, matching the relay.
 const SUPPORT_LOG_MAX = 256 * 1024;
 const SUPPORT_STAGE_MAX = 200;
 const SUPPORT_RECEIPT_MAX_KEYS = 32;
@@ -126,7 +127,7 @@ function exploreDestinationUrl(key) {
 
 const IPC_SCHEMAS = Object.freeze({
   'user-activity': { args: ['activity-kind'] },
-  'submit-feedback': { args: ['feedback-type', 'feedback-text', 'screenshot?'] },
+  'submit-feedback': { args: ['feedback-type', 'feedback-text', 'screenshot?', 'feedback-rating?'] },
   'support-report': { args: ['support-context?'] },
   'open-explore-destination': { args: ['explore-destination'] },
 });
@@ -340,7 +341,11 @@ function coerceArg(kind, value) {
       return { ok: true, value };
     case 'feedback-text':
       if (typeof value !== 'string') return { ok: false, reason: 'text not a string' };
-      if (value.length > FEEDBACK_TEXT_MAX) return { ok: false, reason: 'text too long' };
+      if (value.length > FEEDBACK_TEXT_MAX || Buffer.byteLength(value, 'utf8') > FEEDBACK_TEXT_MAX) return { ok: false, reason: 'text too long' };
+      return { ok: true, value };
+    case 'feedback-rating?':
+      if (value === undefined || value === null) return { ok: true, value: undefined };
+      if (!Number.isInteger(value) || value < 1 || value > 5) return { ok: false, reason: 'rating not allowed' };
       return { ok: true, value };
     case 'screenshot?': {
       if (value === undefined || value === null) return { ok: true, value: undefined };
@@ -401,6 +406,7 @@ function validateInvoke(channel, args) {
   const schema = IPC_SCHEMAS[channel];
   const incoming = Array.isArray(args) ? args : [];
   if (!schema) return { ok: true, args: [] };
+  if (channel === 'submit-feedback' && incoming.length > schema.args.length) return { ok: false, reason: 'too many feedback arguments' };
   const out = [];
   for (let i = 0; i < schema.args.length; i++) {
     const kind = schema.args[i];
@@ -415,6 +421,11 @@ function validateInvoke(channel, args) {
     const coerced = coerceArg(kind, value);
     if (!coerced.ok) return { ok: false, reason: `arg ${i}: ${coerced.reason}` };
     out.push(coerced.value);
+  }
+  if (channel === 'submit-feedback') {
+    if (out[0] === 'User Rating' && out[3] === undefined) return { ok: false, reason: 'rating required' };
+    if (out[0] !== 'User Rating' && out[3] !== undefined) return { ok: false, reason: 'rating type not allowed' };
+    if (out[0] !== 'Bug Report' && out[2] !== undefined) return { ok: false, reason: 'screenshot type not allowed' };
   }
   return { ok: true, args: out };
 }

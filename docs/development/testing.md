@@ -17,6 +17,35 @@ manifest bytes (`tools/release-checksums-smoke.js`: no CR, no BOM, final LF,
 sorted, hashes match, `sha256sum -c` passes unmodified; needs `sha256sum` —
 coreutils or Git for Windows).
 
+## Repair source regressions
+
+Run `npm run test:repair-source` from PowerShell 7 for the Node-only safety,
+process, cancellation, result, form and support-client regressions. These use
+inert native adapters, clocks, DOM elements and transport responses. They do
+not launch Electron, control a browser, delete a profile, install the app or
+submit a support message. CI runs this command in addition to `npm test`.
+
+The helper-reset controller fixes its target to `C:\Users\user1`. Its synthetic
+acceptance requires verified folder and profile-registration absence, with no
+residual or unknown owned paths, before account recreation. These receipts
+prove controller behavior only. Native adapters and their integration into
+the repair handler remain unfinished; this source unit is not a delivered
+native safety repair.
+
+The normal `npm test` chain includes two native PowerShell 7 transport drivers:
+`ps-encoding-smoke.js` and `elevation-controller-smoke.js`. Both verify the
+actual Core host, preserve Unicode and quoting checks, and fail usefully when
+PowerShell 7 is missing or a required fixture is refused. They do not change
+execution policy or launch Windows PowerShell 5.1. Elevation and UAC outcomes
+remain mocked; owned Node fixtures exercise bounded children and inherited
+stdio. The source regression command does not replace the complete suite.
+
+Rendered, packaged and destructive Windows acceptance are separate. Browser
+or desktop control needs explicit operator authorization for that purpose.
+Full account/profile purge and recreation must run in an authorized disposable
+Windows environment, including Windows Home; never on the operator's working
+profile or everyday workstation. Preserve security policies and required reviews.
+
 ## Rendered screens (headless Chromium)
 
 ```bash

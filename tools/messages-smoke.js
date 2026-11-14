@@ -43,7 +43,8 @@ for (const code of Object.keys(m.FRIENDLY_ERRORS)) {
 console.log('messages-smoke: fix/scan/shortcut failures');
 {
   const msg = m.unexpectedFixFailure(new Error('boom detail'));
-  check(msg.includes('safe to run the fix again'), 'unexpected failure says re-run is safe');
+  check(!/safe to (?:run|repeat)/i.test(msg), 'unexpected failure does not promise safe retry');
+  check(msg.includes('Support Report'), 'unexpected failure directs the user to evidence before retry');
   check(msg.includes('boom detail'), 'unexpected failure keeps detail for support');
   check(m.unexpectedFixFailure(null).length > 20, 'unexpected failure works without an error object');
 }
@@ -216,6 +217,10 @@ console.log('messages-smoke: wizard states (directive 2026-08-23)');
   check(wiz.READY_TITLE === 'Ready to fix Zoom', 'ready title is not a false all-good claim');
   check(!/Everything looks good/.test(wiz.READY_TITLE + wiz.READY_SUB), 'ready copy never says everything looks good');
   check(wiz.CONFIRM_TITLE === 'Before we start', 'destructive work has a confirmation title');
+  check(wiz.CONFIRM_BODY.includes('C:\\Users\\user1') && /permanently deletes.*all files/.test(wiz.CONFIRM_BODY),
+    'confirmation identifies the exact profile and complete permanent data removal');
+  check(/signed-in Windows account and other Windows profiles are preserved/.test(wiz.CONFIRM_BODY),
+    'confirmation distinguishes preserved profiles from the deleted helper data');
 
   // Self-elevation honesty: approval happens in the WINDOWS prompt, the
   // app never asks for a password, and a decline is reported as a decline.

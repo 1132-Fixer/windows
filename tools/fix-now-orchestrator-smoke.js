@@ -7,12 +7,15 @@
 
 const fs = require('fs');
 const path = require('path');
+const vm = require('node:vm');
 
 const ROOT = path.join(__dirname, '..');
 const renderer = fs.readFileSync(path.join(ROOT, 'renderer.js'), 'utf8');
 const preload = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');
 const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
 const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+const nativeSource = fs.readFileSync(path.join(ROOT, 'src', 'main', 'helper-reset-windows.js'), 'utf8');
+const provisionedSource = fs.readFileSync(path.join(ROOT, 'src', 'main', 'provisioned-helper-flow.js'), 'utf8');
 const messages = require('../messages.js');
 
 let failures = 0;
@@ -38,6 +41,12 @@ check(renderer.includes('await window.electronAPI.runFix()'), 'runFix invokes el
   const next = renderer.indexOf('\nfunction ', start + 1);
   const body = renderer.slice(start, next === -1 ? start + 600 : next);
   check(start !== -1 && !body.includes('launchZoomHelper'), 'Fix now handler does not call launchZoomHelper');
+  let confirmations = 0;
+  vm.runInNewContext(body + '\nonFixButtonClick();', { isRunning: false, scanInProgress: false, canRunFix: true,
+    fixBtn: {}, showFixConfirm: () => { confirmations++; },
+    runFix: () => { throw new Error('Fix must await confirmation'); },
+    launchZoomHelper: () => { throw new Error('Fix is not a launch shortcut'); } }, { timeout: 1000 });
+  check(confirmations === 1, 'actual shipped Fix now handler requests confirmation before repair or launch');
 }
 check(renderer.includes("showResultPane('ok', WIZARD.READY_TITLE, WIZARD.READY_SUB)"), 'healthy preflight uses READY copy');
 check(renderer.includes('setActions({ fix: true, shortcutOption: true, details: true })'), 'healthy preflight exposes Fix now');
@@ -51,8 +60,19 @@ check(preload.includes("launchZoomHelper: () => ipcRenderer.invoke('launch-zoom-
 check(main.includes("ipcMain.handle('run-fix'"), 'main registers run-fix');
 check(main.includes('async function runFixFlow'), 'complete repair orchestrator is runFixFlow');
 check(main.includes("ipcMain.handle('launch-zoom-helper'"), 'launch-zoom-helper remains separate');
-check(main.includes("Creating account '${FIX_USER}' as a standard user"), 'repair recreates helper as a standard user');
-check(main.includes('evaluateLaunchProfile'), 'TEMP-profile launch guard remains in the orchestrator');
+// A creation command or UI description cannot prove Standard membership.
+// This remains red until the native owner supplies the measured role contract.
+const roleFields = ['usersGroupSid', 'usersMembershipVerified', 'administratorsExcluded',
+  'groupEnumerationComplete', 'standardAccountVerified', 'membershipProofKind'];
+check(/function Assert-StandardAccount\b/.test(nativeSource) && /function Ensure-StandardAccountMembership\b/.test(nativeSource) &&
+  nativeSource.includes('NetLocalGroupGetMembers') && nativeSource.includes('S-1-5-32-545') && nativeSource.includes('S-1-5-32-544') &&
+  roleFields.every(field => nativeSource.includes(field)) && nativeSource.includes('raw-local-sid'),
+  'native repair proves exact SID Users membership and Administrators exclusion with complete raw-SID readback');
+check(main.includes('createRepairSession') && provisionedSource.includes('sameProfile(proof.profilePath)') &&
+  provisionedSource.includes('sameProfile(proof.registeredPath)') && provisionedSource.includes('proof.registeredSid === operation.accountSid') &&
+  provisionedSource.includes('profile.loaded === true') && provisionedSource.includes('profile.special === false') &&
+  provisionedSource.includes('profile.ownershipVerified === true') && nativeSource.includes('function Assert-Workflow'),
+  'maintained native/session flow guards TEMP, suffixed, foreign and unowned launch profiles');
 check(main.includes('alreadyRunning'), 'Open Zoom skips a duplicate helper Zoom process');
 
 console.log('fix-now-orchestrator-smoke: copy contract');
@@ -60,9 +80,13 @@ check(messages.WIZARD.READY_TITLE === 'Ready to fix Zoom', 'ready title');
 check(messages.WIZARD.READY_SUB.includes('Start Zoom with a fresh setup.'), 'ready description starts the fresh setup');
 check(messages.WIZARD.READY_SUB.includes('Your personal files won’t be changed.'), 'ready description does not claim personal files change');
 check(!/Everything looks good/.test(messages.WIZARD.READY_TITLE), 'not a false all-good title');
-check(messages.WIZARD.CONFIRM_BODY.includes('helper account and helper profile'), 'confirm names helper account replacement');
-check(messages.WIZARD.CONFIRM_BODY.includes('personal files will not be changed'), 'confirm protects the signed-in user');
-check(messages.WIZARD.CONFIRM_BODY.includes('cancel only at safe checkpoints'), 'confirm names cancellation bounds');
+const confirmation = messages.WIZARD.CONFIRM_BODY;
+check(confirmation.includes('C:\\Users\\user1') && /permanently deletes/i.test(confirmation) && /all files/i.test(confirmation) &&
+  /fresh helper account/i.test(confirmation), 'confirm names exact complete helper profile purge and fresh account replacement');
+check(/signed-in Windows account/i.test(confirmation) && /other Windows profiles are preserved/i.test(confirmation),
+  'confirm protects the signed-in account and other profile data');
+check(/Cancellation stops only at verified safe checkpoints/i.test(confirmation), 'confirm names verified safe cancellation bounds');
+check(renderer.includes('body.textContent = WIZARD.CONFIRM_BODY'), 'confirmation renders the approved complete-erasure explanation');
 check(messages.WIZARD.SUCCESS_TITLE === 'Complete', 'success title');
 check(messages.WIZARD.FAIL_TITLE === "Couldn't complete the fix", 'failure title');
 

@@ -6,6 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 const es = require('../src/main/electron-security');
 
 const ROOT = path.join(__dirname, '..');
@@ -59,6 +60,30 @@ console.log('electron-security-smoke: IPC allowlist rejects');
   const okFeedback = es.validateInvoke('submit-feedback', ['Bug Report', 'camera is black', undefined]);
   check(okFeedback.ok === true && okFeedback.args[0] === 'Bug Report', 'submit-feedback accepts catalog type');
 
+  const utf8Boundary = es.validateInvoke('submit-feedback', ['Contact', 'é'.repeat(50 * 1024)]);
+  check(utf8Boundary.ok === true, 'feedback IPC accepts exactly 100 KiB of UTF-8 text');
+  const utf8Oversize = es.validateInvoke('submit-feedback', ['Contact', 'é'.repeat(50 * 1024 + 1)]);
+  check(utf8Oversize.ok === false && /too long/.test(utf8Oversize.reason), 'feedback IPC rejects bytes over the limit even below the character limit');
+
+  for (const rating of [1, 2, 3, 4, 5]) {
+    const result = es.validateInvoke('submit-feedback', ['User Rating', 'Chosen rating', undefined, rating]);
+    check(result.ok === true && result.args[3] === rating, `feedback IPC carries integer rating ${rating} without dropping it`);
+  }
+  for (const rating of [undefined, null, 0, 6, 1.5, '4', false, NaN, Infinity]) {
+    check(es.validateInvoke('submit-feedback', ['User Rating', 'Chosen rating', undefined, rating]).ok === false,
+      `feedback IPC rejects missing or invalid rating ${String(rating)}`);
+  }
+  for (const type of ['Bug Report', 'Contact']) {
+    check(es.validateInvoke('submit-feedback', [type, 'Message', undefined, 4]).ok === false,
+      `feedback IPC rejects a rating on ${type}`);
+  }
+  for (const [type, rating] of [['Contact', undefined], ['User Rating', 4]]) {
+    check(es.validateInvoke('submit-feedback', [type, 'Message', { bytes: Buffer.alloc(16, 1), mediaType: 'image/png' }, rating]).ok === false,
+      `feedback IPC rejects a screenshot on ${type}`);
+  }
+  check(es.validateInvoke('submit-feedback', ['Bug Report', 'Message', undefined, undefined, 'extra']).ok === false,
+    'feedback IPC rejects undeclared extra arguments');
+
   const badShot = es.validateInvoke('submit-feedback', ['Bug Report', 'camera is black', { bytes: [1, 2, 3], mediaType: 'application/x-msdownload' }]);
   check(badShot.ok === false && /mediaType/.test(badShot.reason), 'submit-feedback rejects non-image screenshot');
 
@@ -88,6 +113,24 @@ console.log('electron-security-smoke: IPC allowlist rejects');
 
 console.log('electron-security-smoke: preload and main stay on the allowlist');
 {
+  let exposed = null;
+  const invokes = [];
+  const fakeRenderer = {
+    invoke(channel, ...args) { invokes.push({ channel, args }); },
+    on() {}, once() {}, removeListener() {}
+  };
+  vm.runInNewContext(preloadSrc, {
+    require(name) {
+      if (name !== 'electron') throw new Error('unexpected preload dependency');
+      return { contextBridge: { exposeInMainWorld(name, value) { if (name === 'electronAPI') exposed = value; } }, ipcRenderer: fakeRenderer };
+    }
+  }, { filename: 'preload.js' });
+  exposed.submitFeedback('User Rating', 'Chosen rating', undefined, 4);
+  check(invokes.length === 1 && invokes[0].channel === 'submit-feedback' && invokes[0].args[3] === 4,
+    'real preload transports the validated fourth rating argument');
+  exposed.submitFeedback('Bug Report', 'Message', undefined);
+  check(invokes[1].args[0] === 'Bug Report' && invokes[1].args[3] === undefined,
+    'real preload preserves existing three-argument bug callers');
   const invokeRe = /ipcRenderer\.invoke\('([^']+)'/g;
   const preloadInvokes = [];
   let m;

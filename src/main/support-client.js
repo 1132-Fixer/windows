@@ -1,221 +1,266 @@
 /**
- * Support-API client for bug reports that carry a screenshot (#141).
+ * Anonymous support adapter for the canonical stateless Discord relay.
+ * Only an explicit submission contacts the endpoint. Retry memory contains
+ * hashes and UUIDs, never report bodies, screenshots or account credentials.
  *
- * Plain-text reports keep the legacy /feedback path untouched. A report WITH
- * a screenshot needs the /v1 support API (the legacy contract caps bodies at
- * 8 KB and cannot carry an image), which authenticates with a per-install
- * principal token:
- *
- *   - The token is minted by POST /v1/principals on first use and returned
- *     exactly once. It is NOT a shipped secret — every install mints its own.
- *   - At rest it is sealed with Electron safeStorage (DPAPI on Windows) when
- *     available; a machine without safeStorage stores it plain in userData,
- *     which is already the app's private per-user directory.
- *   - The renderer never sees the token; screenshot bytes are never logged.
- *
- * The attach UI only renders when GET /health advertises
- * capabilities.screenshots (see feedback-capabilities in main.js), so this
- * path is dark until the support platform is activated server-side.
+ * Relay retry receipts last ten minutes in one process. They are not durable
+ * across relay/app restarts or replicas. An acknowledgement proves delivery,
+ * not staff review, resolution, or exactly-once delivery after a restart.
  */
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 const https = require('https');
-const http = require('http');
+const messages = require('../../messages');
 
-const PRINCIPAL_FILE = 'support-principal.json';
+const TEXT_MAX_BYTES = 100 * 1024;
+const SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
+const RESPONSE_MAX_BYTES = 16 * 1024;
+const REQUEST_TIMEOUT_MS = 30000;
+const RETRY_WINDOW_MS = 10 * 60 * 1000;
+const MAX_REQUEST_RECORDS = 32;
+const TYPES = new Set(['Bug Report', 'User Rating', 'Contact']);
 
-function endpointUrl(config, pathname) {
-  if (!config.FEEDBACK_PROXY_URL) return null;
-  let url;
+function endpointUrl(value) {
+  if (typeof value === 'string' && /[\u0000-\u001F\u007F]/.test(value)) return null;
+  if (typeof value !== 'string' || !/^https:\/\/[^\s?#]+$/i.test(value.trim())) return null;
   try {
-    url = new URL(pathname, config.FEEDBACK_PROXY_URL);
-  } catch (_) {
-    return null;
-  }
-  // Same plaintext refusal as the legacy path (localhost excepted, for dev).
-  if (url.protocol !== 'https:' && url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') {
-    return null;
-  }
-  return url;
+    const url = new URL(value.trim());
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return null;
+    if (!['/', '/v1/feedback', '/v1/feedback/'].includes(url.pathname)) return null;
+    url.pathname = '/v1/feedback';
+    return url;
+  } catch (_) { return null; }
 }
 
-/** Minimal JSON request helper; resolves { status, json } or rejects on network error. */
-function request(method, url, headers, bodyBuffer, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const transport = url.protocol === 'https:' ? https : http;
-    const req = transport.request({
-      hostname: url.hostname,
-      port: url.port || (url.protocol === 'https:' ? 443 : 80),
-      path: url.pathname,
-      method,
-      timeout: timeoutMs || 20000,
-      headers,
-    }, (res) => {
-      let data = '';
-      res.on('data', (c) => { data += c; });
-      res.on('end', () => {
-        let json = null;
-        try { json = JSON.parse(data); } catch (_) { /* non-JSON body */ }
-        resolve({ status: res.statusCode, json });
-      });
-    });
-    req.on('timeout', () => { req.destroy(new Error('timeout')); });
-    req.on('error', reject);
-    if (bodyBuffer) req.write(bodyBuffer);
-    req.end();
-  });
+function supportConfigRevision(value) {
+  const url = endpointUrl(value);
+  return crypto.createHash('sha256').update('1132-fixer-public-config-v1\0', 'utf8')
+    .update(url ? url.href : '', 'utf8').digest('hex');
 }
 
-/** GET /health -> { screenshots: boolean }. Never throws. */
-async function capabilities(config) {
-  const url = endpointUrl(config, '/health');
-  if (!url) return { screenshots: false };
-  try {
-    const r = await request('GET', url, {}, null, 5000);
-    return { screenshots: Boolean(r.json && r.json.capabilities && r.json.capabilities.screenshots) };
-  } catch (_) {
-    return { screenshots: false };
-  }
+function configuredUrl(config) {
+  if (!config || config.FEEDBACK_CONFIG_INTEGRITY === false) return null;
+  return endpointUrl(config.FEEDBACK_PROXY_URL);
 }
 
-// --- principal persistence -------------------------------------------
-
-function principalPath(userDataDir) {
-  return path.join(userDataDir, PRINCIPAL_FILE);
+// Local feature availability only. This does not claim service readiness and
+// never probes a remote health route just because a dialog was opened.
+function capabilities(config) {
+  const configured = Boolean(configuredUrl(config));
+  return { configured, screenshots: configured, statelessFeedback: configured, readiness: 'not-checked' };
 }
 
-function loadPrincipal(userDataDir, safeStorage) {
-  try {
-    const raw = JSON.parse(fs.readFileSync(principalPath(userDataDir), 'utf8'));
-    if (raw.sealed) {
-      if (!safeStorage || !safeStorage.isEncryptionAvailable()) return null;
-      const plain = safeStorage.decryptString(Buffer.from(raw.sealed, 'base64'));
-      return JSON.parse(plain);
-    }
-    if (raw.principalId && raw.token) return raw;
-    return null;
-  } catch (_) {
-    return null; // absent or corrupt -> re-register
-  }
+function copy(key) {
+  // Keep all transport outcomes in the shared, plain-English catalogue.
+  const catalogue = messages.FEEDBACK;
+  if (catalogue && typeof catalogue[key] === 'string') return catalogue[key];
+  return key === 'NETWORK' ? messages.FEEDBACK_NETWORK : messages.FEEDBACK_FALLBACK;
 }
 
-function savePrincipal(userDataDir, safeStorage, principal) {
-  const plain = JSON.stringify({ principalId: principal.principalId, token: principal.token });
-  const record = (safeStorage && safeStorage.isEncryptionAvailable())
-    ? { sealed: safeStorage.encryptString(plain).toString('base64') }
-    : JSON.parse(plain);
-  fs.writeFileSync(principalPath(userDataDir), JSON.stringify(record));
+function failure(code, key, details = {}) {
+  return { success: false, code, error: copy(key), delivery: 'not-sent', ...details };
 }
 
-function discardPrincipal(userDataDir) {
-  try { fs.unlinkSync(principalPath(userDataDir)); } catch (_) { /* already gone */ }
-}
-
-/** Register this install as a support principal. Returns principal or null. */
-async function registerPrincipal(config, version) {
-  const url = endpointUrl(config, '/v1/principals');
-  if (!url) return null;
-  const body = Buffer.from(JSON.stringify({ product: 'WINDOWS', appVersion: version }));
-  try {
-    const r = await request('POST', url, {
-      'Content-Type': 'application/json',
-      'Content-Length': body.length,
-      'User-Agent': `1132Fixer/${version}`,
-    }, body);
-    if (r.status === 201 && r.json && r.json.principalId && r.json.token) {
-      return { principalId: r.json.principalId, token: r.json.token };
-    }
-  } catch (_) { /* fall through */ }
+function imageType(bytes) {
+  // Match the canonical relay's structural checks, not just a magic prefix.
+  if (bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && bytes.subarray(12, 16).equals(Buffer.from('IHDR'))) return 'image/png';
+  if (bytes.length >= 4 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'image/jpeg';
+  if (bytes.length >= 13 && ['GIF87a', 'GIF89a'].some(header => bytes.subarray(0, 6).equals(Buffer.from(header)))) return 'image/gif';
+  if (bytes.length >= 16 && bytes.subarray(0, 4).equals(Buffer.from('RIFF')) && bytes.subarray(8, 12).equals(Buffer.from('WEBP'))) return 'image/webp';
   return null;
 }
 
-// --- bug submission with screenshot ----------------------------------
-
-/** Client-safe copy for the /v1 error surface; never a raw exception. */
-function messageFor(r) {
-  if (r.status === 429) return 'Too many submissions — try again later.';
-  if (r.status === 413) return 'The report is too large — remove the screenshot and try again.';
-  if (r.status === 400 && r.json && r.json.error && r.json.error.code === 'validation_failed') {
-    // Server validation messages are written as user-facing copy
-    // ("Only image files can be attached…", "Screenshot must be 5 MB or smaller.").
-    return r.json.error.message;
-  }
-  if (r.status === 503) return 'The support service is not available right now — try again later.';
-  return 'Submission failed';
+function postOnce({ url, body, requestId, version, transportRequest, timeoutMs, schedule, cancelSchedule }) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let req;
+    let response;
+    let timer;
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) cancelSchedule(timer);
+      if (error) {
+        // Finish first: destroy may synchronously emit error or close.
+        try { if (response && typeof response.destroy === 'function') response.destroy(); } catch (_) { /* already stopped */ }
+        try { if (req && typeof req.destroy === 'function') req.destroy(); } catch (_) { /* already stopped */ }
+        reject(error);
+      } else resolve(result);
+    };
+    const transportError = (code) => Object.assign(new Error(code), { code });
+    try {
+      req = transportRequest({
+        protocol: 'https:', hostname: url.hostname, port: url.port || 443,
+        path: '/v1/feedback', method: 'POST',
+        headers: {
+          'Content-Type': 'application/json', 'Content-Length': body.length,
+          'Idempotency-Key': requestId, 'User-Agent': '1132Fixer/' + version
+        }
+      }, (res) => {
+        response = res;
+        let size = 0;
+        const chunks = [];
+        res.on('error', () => finish(transportError('network')));
+        res.on('aborted', () => finish(transportError('network')));
+        res.on('close', () => { if (!res.complete) finish(transportError('network')); });
+        res.on('data', (chunk) => {
+          if (settled) return;
+          let bytes;
+          try { bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk); }
+          catch (_) { finish(transportError('invalid-response')); return; }
+          size += bytes.length;
+          if (size > RESPONSE_MAX_BYTES) { finish(transportError('invalid-response')); return; }
+          chunks.push(bytes);
+        });
+        res.on('end', () => {
+          if (settled) return;
+          let json;
+          try { json = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+          catch (_) { finish(transportError('invalid-response')); return; }
+          finish(null, { status: res.statusCode, json });
+        });
+      });
+      req.on('error', () => finish(transportError('network')));
+      req.on('close', () => { if (!response) finish(transportError('network')); });
+      if (settled) { if (typeof req.destroy === 'function') req.destroy(); return; }
+      timer = schedule(() => finish(transportError('timeout')), timeoutMs);
+      req.write(body);
+      req.end();
+    } catch (_) { finish(transportError('network')); }
+  });
 }
 
-/**
- * Submit a bug report with a screenshot via POST /v1/cases.
- * screenshot = { bytes: Buffer, mediaType: string }.
- * Returns { success, caseRef? , error? } — success ONLY on a 201 from the
- * proxy, so the UI can never claim a screenshot was sent when it was not.
- */
-async function submitBugWithScreenshot(opts) {
-  const { config, userDataDir, safeStorage, version, osLabel, text, screenshot } = opts;
-  const url = endpointUrl(config, '/v1/cases');
-  if (!url) return { success: false, error: 'Feedback service not configured' };
-
-  let principal = loadPrincipal(userDataDir, safeStorage);
-  if (!principal) {
-    principal = await registerPrincipal(config, version);
-    if (!principal) return { success: false, error: 'Could not reach the support service — try again later.' };
-    savePrincipal(userDataDir, safeStorage, principal);
-  }
-
-  // The service enforces a 3-char title minimum; fall back whenever the
-  // derived excerpt is shorter (e.g. "OK" followed by blank lines), not only
-  // when it is empty — otherwise the whole submission dies on a "title"
-  // error for a field the UI does not have.
-  const titleText = text.slice(0, 80).replace(/\s+/g, ' ').trim();
-  const payload = {
-    type: 'bug',
-    title: titleText.length >= 3 ? titleText : 'Bug report',
-    description: text,
-    os: osLabel,
-    appVersion: version,
-    screenshot: { data: screenshot.bytes.toString('base64'), mediaType: screenshot.mediaType },
+function createSupportClient({
+  transportRequest = https.request, timeoutMs = REQUEST_TIMEOUT_MS,
+  clock = Date.now, schedule = setTimeout, cancelSchedule = clearTimeout
+} = {}) {
+  // Fingerprints include the form type and endpoint. Keep bounded identities
+  // across edits, not just the latest identity per form: A -> B -> A must not
+  // replace an unresolved UUID or silently repost an acknowledged draft.
+  // Never evict at capacity, including when an unknown retry window expires.
+  // Retain only hashes, UUIDs and outcome/time metadata, not report payloads.
+  const records = new Map();
+  const activeTypes = new Set();
+  const deadline = Number.isFinite(timeoutMs)
+    ? Math.min(REQUEST_TIMEOUT_MS, Math.max(1, Math.floor(timeoutMs))) : REQUEST_TIMEOUT_MS;
+  const now = () => {
+    try { const value = clock(); return Number.isSafeInteger(value) && value > 0 ? value : null; }
+    catch (_) { return null; }
   };
-  const body = Buffer.from(JSON.stringify(payload));
-  // The key derives from the submission content, so a user retry after an
-  // ambiguous failure (timeout after the server committed) replays the stored
-  // response instead of creating a duplicate case. Editing the report or the
-  // screenshot changes the body and therefore the key.
-  const idemKey = 'fx-' + crypto.createHash('sha256').update(body).digest('hex').slice(0, 40);
-  const headers = (p) => ({
-    'Content-Type': 'application/json',
-    'Content-Length': body.length,
-    'User-Agent': `1132Fixer/${version}`,
-    Authorization: `Bearer ${p.token}`,
-    'Idempotency-Key': idemKey,
+  const uncertainty = (attempt) => ({
+    delivery: 'unknown', requestId: attempt.requestId,
+    retryUntilMs: attempt.windowStartedAtMs + RETRY_WINDOW_MS,
+    retryScope: 'same-app-and-relay-processes'
   });
 
-  try {
-    let r = await request('POST', url, headers(principal), body);
-    if (r.status === 401) {
-      // Token revoked or the service pepper rotated: mint a fresh principal
-      // once and retry; a second 401 is surfaced honestly.
-      discardPrincipal(userDataDir);
-      const fresh = await registerPrincipal(config, version);
-      if (!fresh) return { success: false, error: 'Could not reach the support service — try again later.' };
-      savePrincipal(userDataDir, safeStorage, fresh);
-      r = await request('POST', url, headers(fresh), body);
-    }
-    if (r.status === 201 && r.json && r.json.caseRef) {
-      if (!r.json.screenshotAttached) {
-        // Defensive: a 201 without the attachment must not read as "sent".
-        return { success: false, error: 'The report went through but the screenshot did not — try again.' };
+  async function submitFeedback(options = {}) {
+    if (!options || typeof options !== 'object' || Array.isArray(options)) return failure('invalid-input', 'REJECTED');
+    const { config, type, text, version, screenshot, rating } = options;
+    const url = configuredUrl(config);
+    if (!url) return failure('not-configured', 'NOT_CONFIGURED');
+    if (!TYPES.has(type) || typeof text !== 'string' || !text.trim()) return failure('invalid-input', 'REJECTED');
+    if (Buffer.byteLength(text, 'utf8') > TEXT_MAX_BYTES) return failure('text-too-large', 'TEXT_TOO_LARGE');
+    if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) return failure('invalid-version', 'FAILED');
+    if (type === 'User Rating' && (!Number.isInteger(rating) || rating < 1 || rating > 5)) return failure('rating-required', 'RATING_REQUIRED');
+    if (type !== 'User Rating' && rating !== undefined) return failure('invalid-rating', 'REJECTED');
+    if (activeTypes.has(type)) return failure('busy', 'BUSY');
+
+    const payload = { type, text, version };
+    if (type === 'User Rating') payload.rating = rating;
+    if (screenshot !== undefined && screenshot !== null) {
+      if (type !== 'Bug Report' || !screenshot || typeof screenshot !== 'object') return failure('invalid-screenshot', 'SCREENSHOT_INVALID');
+      let bytes;
+      try {
+        const input = screenshot.bytes;
+        const size = Buffer.isBuffer(input) || ArrayBuffer.isView(input) || input instanceof ArrayBuffer
+          ? input.byteLength : Array.isArray(input) ? input.length : null;
+        // Bound allocation before converting a caller-controlled byte container.
+        if (!Number.isSafeInteger(size) || size < 1 || size > SCREENSHOT_MAX_BYTES) return failure('invalid-screenshot', 'SCREENSHOT_INVALID');
+        bytes = Buffer.from(input);
+      } catch (_) { /* invalid input */ }
+      if (!bytes || !bytes.length || bytes.length > SCREENSHOT_MAX_BYTES || imageType(bytes) !== screenshot.mediaType) {
+        return failure('invalid-screenshot', 'SCREENSHOT_INVALID');
       }
-      return { success: true, caseRef: r.json.caseRef };
+      payload.screenshot = { data: bytes.toString('base64'), mediaType: screenshot.mediaType };
     }
-    return { success: false, error: messageFor(r) };
-  } catch (err) {
-    return { success: false, error: err && err.message === 'timeout'
-      ? 'The support service timed out — try again later.'
-      : 'Network error' };
+    const startedAt = now();
+    if (startedAt === null || startedAt > Number.MAX_SAFE_INTEGER - RETRY_WINDOW_MS) return failure('clock-unavailable', 'FAILED');
+    const fingerprint = crypto.createHash('sha256').update(url.href).update('\0').update(JSON.stringify(payload)).digest('hex');
+    const previous = records.get(fingerprint);
+    if (previous && previous.acknowledged) {
+      const receipt = previous;
+      return { success: true, delivery: 'acknowledged', requestId: receipt.requestId,
+        replayed: true, receiptScope: 'same-app-process' };
+    }
+    if (!previous && records.size >= MAX_REQUEST_RECORDS) {
+      return failure('client-history-full', 'RETRY_CAPACITY', { retryable: false });
+    }
+    const attempt = previous || { requestId: crypto.randomUUID(), unknown: false,
+      acknowledged: false, windowStartedAtMs: startedAt };
+
+    if (attempt.unknown && (startedAt < attempt.windowStartedAtMs || startedAt >= attempt.windowStartedAtMs + RETRY_WINDOW_MS)) {
+      return failure('delivery-unresolved', 'RETRY_WINDOW_EXPIRED', { ...uncertainty(attempt), retryable: false });
+    }
+    // A definitively rejected attempt may be retried later. The first possible
+    // unacknowledged send starts the conservative relay-cache window.
+    if (!attempt.unknown) attempt.windowStartedAtMs = startedAt;
+    records.set(fingerprint, attempt);
+    activeTypes.add(type);
+    const markUnknown = (code, key) => {
+      attempt.unknown = true;
+      const checkedAt = now();
+      const retryable = checkedAt !== null && checkedAt >= attempt.windowStartedAtMs &&
+        checkedAt < attempt.windowStartedAtMs + RETRY_WINDOW_MS;
+      return failure(code, retryable ? key : 'RETRY_WINDOW_EXPIRED', { ...uncertainty(attempt), retryable });
+    };
+    try {
+      const body = Buffer.from(JSON.stringify({ requestId: attempt.requestId, ...payload }));
+      const result = await postOnce({
+        url, body, requestId: attempt.requestId, version, transportRequest,
+        timeoutMs: deadline, schedule, cancelSchedule
+      });
+      if (result.status === 201 && result.json && result.json.success === true && result.json.requestId === attempt.requestId) {
+        attempt.acknowledged = true;
+        attempt.unknown = false;
+        return { success: true, delivery: 'acknowledged', requestId: attempt.requestId };
+      }
+      if (result.status === 201) return markUnknown('invalid-acknowledgement', 'SEND_UNKNOWN');
+      const remoteCode = result.json && result.json.error && result.json.error.code;
+      if (remoteCode === 'send_unknown') return markUnknown('send-unknown', 'SEND_UNKNOWN');
+      const key = result.status === 429 ? 'RATE_LIMITED'
+        : result.status === 413 ? 'TOO_LARGE'
+          : result.status >= 500 ? 'UNAVAILABLE' : 'REJECTED';
+      const definiteRejection = (result.status >= 400 && result.status < 500) ||
+        ['support_cutover_pending', 'busy', 'rate_limited', 'discord_rate_limited'].includes(remoteCode);
+      if (!definiteRejection) return markUnknown('send-unknown', 'SEND_UNKNOWN');
+      if (attempt.unknown) return markUnknown('submission-rejected', key);
+      return failure('submission-rejected', key, { requestId: attempt.requestId, retryable: true });
+    } catch (error) {
+      return markUnknown(error.code === 'timeout' ? 'timeout' : error.code === 'invalid-response'
+        ? 'invalid-response' : 'network', error.code === 'timeout' ? 'TIMEOUT' : 'SEND_UNKNOWN');
+    } finally {
+      activeTypes.delete(type);
+    }
   }
+
+  return { capabilities, submitFeedback };
 }
 
-module.exports = { capabilities, submitBugWithScreenshot };
+const defaultClient = createSupportClient();
+
+// Compatibility for callers of the earlier screenshot-only adapter.
+// Deliberately ignore old userDataDir/safeStorage/osLabel fields. No old
+// credential is read, persisted, migrated or deleted, and no caseRef is invented.
+function submitBugWithScreenshot(opts = {}) {
+  return defaultClient.submitFeedback({
+    config: opts.config, type: 'Bug Report', text: opts.text,
+    version: opts.version, screenshot: opts.screenshot
+  });
+}
+
+module.exports = {
+  capabilities, createSupportClient, submitFeedback: defaultClient.submitFeedback,
+  submitBugWithScreenshot, endpointUrl, supportConfigRevision,
+  TEXT_MAX_BYTES, SCREENSHOT_MAX_BYTES, RESPONSE_MAX_BYTES, REQUEST_TIMEOUT_MS, RETRY_WINDOW_MS, MAX_REQUEST_RECORDS
+};

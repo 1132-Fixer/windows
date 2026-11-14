@@ -1,8 +1,17 @@
 # Release process and trust chain
 
-A release of 1132 Fixer for Windows is produced by pushing a `v*` tag reachable
-from `main`. That runs [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
-on a hosted `windows-latest` runner.
+A stable `vX.Y.Z` tag starts immutable **draft preparation** in
+[`.github/workflows/release.yml`](../../.github/workflows/release.yml) on a
+hosted `windows-latest` runner using PowerShell 7. The candidate workflow
+leaves its release unpublished. It does not activate a reviewed publisher or
+prove native acceptance. No release from this repair lane has been published.
+
+The separate publication policy is implemented in
+[`scripts/release-policy.mjs`](../../scripts/release-policy.mjs). Its required
+authenticated fact collector, real native-evidence verifier and publication
+adapter remain to be integrated. Fixture-green policy tests do not supply
+those capabilities. Keep that delivery blocker visible; do not manually
+publish a draft to bypass it.
 
 This document describes the chain a user's download depends on, link by link,
 and states honestly which links exist today.
@@ -22,13 +31,13 @@ source  ->  CI tests  ->  build  ->  security checks  ->  signing
 | 1 | Source | present | `main`, tag reachable from it |
 | 2 | CI tests | present | `ci.yml` — smoke suites, feedback-proxy suites, both build targets |
 | 3 | Build | present | `release.yml` — `electron-builder --win --x64 -p never` |
-| 4 | Security checks | present | `npm audit` advisory-only in CI; packaging inventory + allowlist enforced in both CI and release |
+| 4 | Security checks | enforced in candidate source | `npm audit --audit-level=high` failure fails its required context; packaging inventory + allowlist enforced in both CI and draft preparation |
 | 5 | Signing | **absent** | no certificate configured — see [`../security/code-signing.md`](../security/code-signing.md) |
 | 6 | Signature verification | present, and currently reports UNSIGNED | `scripts/check-signature-state.mjs` |
 | 7 | Checksums | present | `checksums-sha256.txt`, generated from `dist/*.exe` |
 | 8 | SBOM | present | `scripts/generate-sbom.mjs` — SPDX 2.3 JSON, attached to the release |
-| 9 | GitHub Release | present | `softprops/action-gh-release`, assets attached |
-| 10 | Updater metadata | present | `latest.yml`, validated by `scripts/validate-release-assets.mjs` |
+| 9 | GitHub draft | candidate implemented | exact upload manifest, no existing-release overwrite, identified draft and immutable asset-byte readback; public publisher integration pending |
+| 10 | Updater metadata | candidate verified before publication | `latest.yml`, authenticated asset-ID reads and local manifest comparison by `scripts/validate-release-assets.mjs`; installed update acceptance still separate |
 
 A link marked absent or planned is not a defect being hidden; it is the reason
 this document exists. Nothing downstream may claim a property that an absent
@@ -38,7 +47,8 @@ link would have provided.
 
 ### 1. Source
 
-Tag format is validated first: `v1.2.3` or `v1.2.3-rc.1`. Anything else fails
+Tag format is validated first: stable `v1.2.3`. Prereleases are refused until
+their feed/channel behavior is implemented and tested. Anything else fails
 before checkout. All release runs share one concurrency group, so re-running an
 old tag cannot race the current one.
 
@@ -48,8 +58,12 @@ old tag cannot race the current one.
 from `npm test`, the feedback-proxy suites (both the Postgres-backed framework
 suite and the legacy no-database suite), and both Windows build targets.
 
-`release.yml` does **not** re-run the test suite. A tag is expected to point at
-a commit CI has already validated on `main`.
+`release.yml` does **not** re-run the complete test suite. Preparation is not
+publication approval. Publication admission must freshly verify exact reviewed
+`main`, every required check with its expected app identity, independent final
+PR-head code-owner approval and unresolved-thread state. It also requires real
+acceptance tied to the final Setup/Portable artifact digests. A historical green
+build, hand-written acceptance flag or `--test-copy` run cannot satisfy it.
 
 ### 3. Build
 
@@ -68,7 +82,9 @@ The build step then verifies at least two `.exe` files exist, one matching
 
 ### 4. Security checks
 
-`npm audit --audit-level=high` runs in CI, advisory only.
+`npm audit --audit-level=high` runs in CI and its failure is enforced in the
+candidate workflow. No `continue-on-error` converts a vulnerability failure
+into a green required context. Ruleset administration is separate and unchanged.
 
 `scripts/package-inventory.mjs` runs in both CI and the release job. It walks
 `dist/win-unpacked`, reads the `resources/app.asar` header, writes

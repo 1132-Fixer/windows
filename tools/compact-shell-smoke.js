@@ -94,4 +94,6 @@ if (failures) {
   console.error(`compact-shell-smoke: ${failures} failure(s)`);
   process.exit(1);
 }
+// Keep the observer/event regressions in the existing Node-only test entry.
+require('./compact-shell-observer-smoke');
 console.log('compact-shell-smoke: all checks passed');

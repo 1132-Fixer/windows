@@ -56,7 +56,7 @@ check(messages.DISCOVERY.BODY === 'Discover other products and tools designed to
 check(messages.DISCOVERY.BUTTON === 'Explore Our Products', 'button copy');
 check(/couldn’t open that page. Please try again\./.test(messages.DISCOVERY.FAILED), 'failure copy is human-readable');
 check(messages.WIZARD.SUCCESS_TITLE === 'Complete' && messages.WIZARD.SUCCESS_SUB === 'Zoom has been fixed and is ready to use.', 'Complete headline and confirmation copy');
-check(shell.includes("noticeTitle.textContent = 'Complete'") && shell.includes("'Zoom has been fixed and is ready to use.'"), 'compact shell paints the same Complete copy');
+check(shell.includes("setElementText(noticeTitle, 'Complete')") && /setElementText\(noticeSub,[\s\S]*?: 'Zoom has been fixed and is ready to use\.'\)/.test(shell), 'compact shell paints the same Complete copy through guarded text updates');
 const section = html.slice(html.indexOf('<section class="discovery"'), html.indexOf('</section>', html.indexOf('<section class="discovery"')));
 check(section.includes('id="discoverySection"') && section.includes(' hidden'), 'section exists and starts hidden');
 check(/aria-labelledby="discoveryTitle"/.test(section) && /<h3[^>]*id="discoveryTitle">Explore more tools<\/h3>/.test(section), 'section is labelled by its heading');

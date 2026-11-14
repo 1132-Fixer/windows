@@ -268,36 +268,58 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
     let cancelRequested = false;
     let exitAfterCancel = false;
     let quitAfterCancelScheduled = false;
+    let quitAfterCancelTimer = null;
+    let repairEpoch = 0;
 
     function resetCancelButton() {
       cancelRequested = false;
-      cancelBtn.disabled = false;
-      cancelBtn.textContent = 'Cancel fix';
+      setElementDisabled(cancelBtn, false);
+      setElementText(cancelBtn, 'Cancel fix');
+    }
+
+    function resetCancellationState() {
+      exitAfterCancel = false;
+      quitAfterCancelScheduled = false;
+      if (quitAfterCancelTimer !== null) {
+        window.clearTimeout(quitAfterCancelTimer);
+        quitAfterCancelTimer = null;
+      }
+      setElementHidden(exitOverlay, true);
+      resetCancelButton();
+    }
+
+    function repairStillRunning(epoch) {
+      const outcome = document.documentElement.dataset.fixOutcome || '';
+      return epoch === repairEpoch && activePane() === 'fixing'
+        && (outcome === 'running' || outcome === '');
     }
 
     // Cancel is cooperative: preload routes the request through the
     // fix-cancellation broker and the repair stops only at a known-safe
     // workflow boundary.
     async function askForCancellation({ exitWhenDone = false } = {}) {
+      exitAfterCancel = exitAfterCancel || exitWhenDone;
       if (cancelRequested) return;
       cancelRequested = true;
-      exitAfterCancel = exitAfterCancel || exitWhenDone;
-      cancelBtn.disabled = true;
-      cancelBtn.textContent = 'Cancelling…';
+      const epoch = repairEpoch;
+      setElementDisabled(cancelBtn, true);
+      setElementText(cancelBtn, 'Cancelling…');
       scheduleSync();
       if (typeof requestCancel !== 'function') {
-        resetCancelButton();
+        resetCancellationState();
         scheduleSync();
         return;
       }
       try {
         const result = await requestCancel();
+        if (!repairStillRunning(epoch)) return;
         if (!result || result.cancelRequested !== true) {
-          resetCancelButton();
+          resetCancellationState();
           scheduleSync();
         }
       } catch (_) {
-        resetCancelButton();
+        if (!repairStillRunning(epoch)) return;
+        resetCancellationState();
         scheduleSync();
       }
     }
@@ -340,6 +362,18 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
       if (el && el.hidden !== hidden) el.hidden = hidden;
     }
 
+    function setElementText(el, text) {
+      if (el && el.textContent !== text) el.textContent = text;
+    }
+
+    function setElementDisabled(el, disabled) {
+      if (el && el.disabled !== disabled) el.disabled = disabled;
+    }
+
+    function setElementAttribute(el, name, value) {
+      if (el && el.getAttribute(name) !== value) el.setAttribute(name, value);
+    }
+
     function sourceTone() {
       return statusBadge.getAttribute('data-tone') || '';
     }
@@ -357,10 +391,10 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
         }
       }
       const view = compactStageView(stage);
-      fixDetail.textContent = view.detail;
-      stepLine.textContent = `Step ${view.step} of ${FIX_STAGE_COUNT}`;
-      stepLine.setAttribute('aria-valuenow', String(view.step));
-      stepLine.setAttribute('aria-valuetext', `Step ${view.step} of ${FIX_STAGE_COUNT}: ${view.detail}`);
+      setElementText(fixDetail, view.detail);
+      setElementText(stepLine, `Step ${view.step} of ${FIX_STAGE_COUNT}`);
+      setElementAttribute(stepLine, 'aria-valuenow', String(view.step));
+      setElementAttribute(stepLine, 'aria-valuetext', `Step ${view.step} of ${FIX_STAGE_COUNT}: ${view.detail}`);
     }
 
     let syncing = false;
@@ -397,11 +431,11 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
 
     function sync() {
       const state = deriveState();
-      document.body.dataset.compactState = state;
+      if (document.body.dataset.compactState !== state) document.body.dataset.compactState = state;
       const view = document.body.dataset.view || '';
 
-      if (checkingTitle) checkingTitle.textContent = 'Checking…';
-      if (fixingTitle) fixingTitle.textContent = 'Fixing Zoom';
+      setElementText(checkingTitle, 'Checking…');
+      setElementText(fixingTitle, state === 'cancelling' ? 'Cancelling…' : 'Fixing Zoom');
       // Product discovery exists on the verified Complete screen only.
       if (state !== 'success') setElementHidden(document.getElementById('discoverySection'), true);
 
@@ -411,13 +445,13 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
       setElementHidden(doneBtn, state !== 'success');
 
       if (state === 'ready') {
-        if (resultTitle) resultTitle.textContent = 'Ready to fix Zoom';
+        setElementText(resultTitle, 'Ready to fix Zoom');
         if (resultSub) {
-          resultSub.textContent = 'Start Zoom with a fresh setup.\nYour personal files won’t be changed.';
-          resultSub.hidden = false;
+          setElementText(resultSub, 'Start Zoom with a fresh setup.\nYour personal files won’t be changed.');
+          setElementHidden(resultSub, false);
         }
         setElementHidden(fixBtn, false);
-        if (fixBtn.textContent !== 'Starting after check…') fixBtn.textContent = 'Fix now';
+        if (fixBtn.textContent !== 'Starting after check…') setElementText(fixBtn, 'Fix now');
         setElementHidden(launchBtn, true);
         setElementHidden(shortcutBtn, true);
         setElementHidden(shortcutOpt, false);
@@ -425,49 +459,53 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
         setElementHidden(detailsBtn, false);
       } else if (state === 'fixing' || state === 'cancelling') {
         if (state === 'cancelling') {
-          if (fixingTitle) fixingTitle.textContent = 'Cancelling…';
-          fixDetail.textContent = 'Finishing the current step safely…';
-          cancelBtn.disabled = true;
-          cancelBtn.textContent = 'Cancelling…';
+          setElementText(fixDetail, 'Finishing the current step safely…');
+          setElementDisabled(cancelBtn, true);
+          setElementText(cancelBtn, 'Cancelling…');
         } else {
-          cancelBtn.disabled = false;
-          cancelBtn.textContent = 'Cancel fix';
+          setElementDisabled(cancelBtn, false);
+          setElementText(cancelBtn, 'Cancel fix');
           updateFixingProgress();
         }
         // Keep the single details disclosure available during work.
         setElementHidden(detailsBtn, false);
       } else if (state === 'cancelled') {
-        if (noticeTitle) noticeTitle.textContent = 'Fix cancelled';
+        setElementText(noticeTitle, 'Fix cancelled');
         if (noticeSub) {
-          noticeSub.textContent = 'Nothing else will be changed.';
-          noticeSub.hidden = false;
+          setElementText(noticeSub, 'Nothing else will be changed.');
+          setElementHidden(noticeSub, false);
         }
         setElementHidden(launchBtn, true);
         setElementHidden(shortcutBtn, true);
         setElementHidden(rescanBtn, true);
         setElementHidden(detailsBtn, false);
         setElementHidden(supportBtn, true);
-        if (!fixBtn.hidden) fixBtn.textContent = 'Try again';
+        if (!fixBtn.hidden) setElementText(fixBtn, 'Try again');
         resetCancelButton();
         if (exitAfterCancel && !quitAfterCancelScheduled && typeof requestQuit === 'function') {
           quitAfterCancelScheduled = true;
-          window.setTimeout(() => requestQuit(), 0);
+          const epoch = repairEpoch;
+          quitAfterCancelTimer = window.setTimeout(() => {
+            if (epoch !== repairEpoch) return;
+            quitAfterCancelTimer = null;
+            if (document.documentElement.dataset.fixOutcome === 'cancelled') requestQuit();
+          }, 0);
         }
       } else if (state === 'success') {
-        if (noticeTitle) noticeTitle.textContent = 'Complete';
+        setElementText(noticeTitle, 'Complete');
         if (noticeSub) {
-          noticeSub.textContent = document.documentElement.dataset.fixOutcome === 'cancel-too-late'
+          setElementText(noticeSub, document.documentElement.dataset.fixOutcome === 'cancel-too-late'
             ? 'Zoom has been fixed and is ready to use. The fix finished before it could be cancelled.'
-            : 'Zoom has been fixed and is ready to use.';
-          noticeSub.hidden = false;
+            : 'Zoom has been fixed and is ready to use.');
+          setElementHidden(noticeSub, false);
         }
-        resetCancelButton();
+        resetCancellationState();
         // Product discovery: only here, and only when main reported a usable
         // destination (renderer sets data-products-available at start).
         setElementHidden(document.getElementById('discoverySection'), document.body.dataset.productsAvailable !== 'true');
         setElementHidden(document.getElementById('productsBtn'), document.body.dataset.productsAvailable !== 'true');
         setElementHidden(launchBtn, false);
-        launchBtn.textContent = 'Open Zoom';
+        setElementText(launchBtn, 'Open Zoom');
         setElementHidden(rescanBtn, true);
         setElementHidden(detailsBtn, false);
         setElementHidden(supportBtn, true);
@@ -479,11 +517,27 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
       applyGate(state, document, view);
     }
 
-    const observer = new MutationObserver(scheduleSync);
+    const observer = new MutationObserver((records) => {
+      const outcomes = records.filter(record => record.target === document.documentElement
+        && record.attributeName === 'data-fix-outcome');
+      for (let index = 0; index < outcomes.length; index++) {
+        // A terminal result and the next run can arrive before the next frame.
+        // Each record's new value is the next record's old value, or today's
+        // attribute value for the last record.
+        const value = index + 1 < outcomes.length
+          ? outcomes[index + 1].oldValue
+          : document.documentElement.dataset.fixOutcome;
+        if (value === 'running') {
+          ++repairEpoch;
+          resetCancellationState();
+        }
+      }
+      scheduleSync();
+    });
     observer.observe(wizard, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden', 'data-state', 'data-tone'] });
     observer.observe(actionArea, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden', 'disabled'] });
     observer.observe(statusBadge, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden', 'data-tone'] });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-fix-outcome'] });
+    observer.observe(document.documentElement, { attributes: true, attributeOldValue: true, attributeFilter: ['data-fix-outcome'] });
     observer.observe(document.body, { attributes: true, attributeFilter: ['data-view'] });
 
     // Renderer initialization runs in its own DOMContentLoaded listener after
