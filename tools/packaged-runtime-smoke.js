@@ -50,6 +50,11 @@ function hostIsElevated() {
 }
 const nativeElevated = hostIsElevated();
 let elevatedFixturesNotRun = '';
+// The two fixtures are required checks (AGENTS.md: never skip a required
+// check). Without elevation the default run therefore still FAILS, with a
+// plain reason. A developer who wants only the checks that can run on this
+// host asks for that explicitly; that reduced run is not the required suite.
+const allowNotElevated = process.argv.includes('--allow-not-elevated');
 // CI is the authority for the elevated fixtures. If a CI host is ever not
 // elevated, that must fail loudly, not turn into a quiet NOT RUN.
 if (process.env.GITHUB_ACTIONS === 'true' && process.platform === 'win32' && !mockedOnly) {
@@ -2564,6 +2569,13 @@ public static class FixerIdentityDiagnosticFixtureV1 {
   if (process.platform === 'win32' && !mockedOnly && elevatedFixturesNotRun) {
     // Never "authoritative": two fixtures did not run, and the line says why.
     console.log(`packaged-runtime-smoke: ${checks} check groups passed; NOT RUN: profile identity and cleanup fixtures (${elevatedFixturesNotRun})`);
+    if (allowNotElevated) {
+      console.log('packaged-runtime-smoke: reduced run (--allow-not-elevated). This is not the required suite.');
+    } else {
+      console.error('packaged-runtime-smoke: BLOCKED. Two required fixtures could not run on this host, so the required suite is not complete. ' +
+        'This is a host condition, not a product defect. Run from an elevated PowerShell 7, or pass --allow-not-elevated for a reduced run that is not the required suite.');
+      process.exitCode = 1;
+    }
   } else {
     console.log(process.platform === 'win32' && !mockedOnly
       ? `packaged-runtime-smoke: ${checks} authoritative runtime gate checks passed`
