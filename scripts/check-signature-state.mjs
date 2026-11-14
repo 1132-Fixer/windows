@@ -43,8 +43,16 @@ const win = pkg.build?.win ?? {};
 const verifyFlag = win.verifyUpdateCodeSignature === true;
 const expectedPublisher = win.signtoolOptions?.publisherName ?? win.publisherName ?? null;
 
-// A certificate was offered to this build if either variable carries a value.
-const certConfigured = Boolean(process.env.CSC_LINK) || Boolean(process.env.WIN_CSC_LINK);
+// Cloud signing (Microsoft Artifact Signing) is resolved by
+// scripts/signing-config.mjs, which already refuses a certificate subject
+// other than the declared publisher. The expected publisher stays the one
+// declared in package.json.
+const cloudSigningConfigured = process.env.ARTIFACT_SIGNING_CONFIGURED === 'true';
+
+// A certificate was offered to this build if a certificate variable carries a
+// value or cloud signing was configured. A configured build that comes out
+// unsigned is a failure, never an "intentional unsigned build".
+const certConfigured = Boolean(process.env.CSC_LINK) || Boolean(process.env.WIN_CSC_LINK) || cloudSigningConfigured;
 
 const errors = [];
 const fail = (msg) => { errors.push(msg); console.error(`FAIL: ${msg}`); };
