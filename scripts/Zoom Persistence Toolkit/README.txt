@@ -1,4 +1,7 @@
-Zoom Persistence Toolkit
+Zoom Persistence Toolkit (read-only diagnostics)
+
+Not part of the 1132 Fixer app and not shipped in any release.
+Every script here only reads the computer and writes report files.
 
 Includes:
 1) Snapshot script:
@@ -12,23 +15,14 @@ Includes:
      - Diff JSON
      - Forensic comparison matrix (CSV + Markdown)
 
-3) Hardened install:
-   - Zoom-Hardened-Install.ps1
-   Downloads the Zoom MSI, installs with MSI properties that reduce persistence (e.g., AutoStartAfterReboot=0),
-   disables client auto-update via Zoom AU2 policy key, and removes any Zoom Run entries.
-
-4) Monitoring:
+3) Monitoring:
    - Zoom-Monitor.ps1
-   Checks for (re)creation of persistence artifacts and logs alerts.
-   Optional runner:
-     - Install-MonitorTask.ps1 creates a scheduled task to run Zoom-Monitor.ps1 at logon and every hour.
+   Checks for (re)creation of persistence artifacts and logs alerts. Run it by hand.
 
 Runners:
 - RUN_01_Snapshot_Before.cmd
 - RUN_02_Snapshot_After.cmd
 - RUN_03_Diff_And_Matrix.cmd
-- RUN_04_Hardened_Install.cmd
-- RUN_05_Install_Monitor_Task.cmd
 
 All runners auto-elevate and keep the admin PowerShell window open.
 
@@ -36,3 +30,8 @@ Outputs:
 - .\Snapshots\ZoomSnapshot_*.json
 - .\Diff\ZoomDiff_*.json, .csv, .md
 - .\Monitor\ZoomMonitor_*.log, Windows Event Log source: ZoomPersistenceMonitor
+
+Retired on 2026-11-14 (issue 229): Zoom-Hardened-Install.ps1 and Install-MonitorTask.ps1,
+with their runners. They changed the computer (MSI install, registry policy, a scheduled
+task that ran with highest privileges) and recorded no way back. They remain in Git history.
+See docs/security/tool-scripts-disposition.md.
