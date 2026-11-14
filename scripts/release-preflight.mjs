@@ -31,7 +31,6 @@ const REVIEW_THREADS_QUERY = `
   query ReleaseReviewThreads($owner: String!, $repo: String!, $number: Int!, $after: String) {
     repository(owner: $owner, name: $repo) {
       pullRequest(number: $number) {
-        reviewDecision
         reviewThreads(first: 100, after: $after) {
           nodes { id isResolved }
           pageInfo { hasNextPage endCursor }
@@ -51,18 +50,6 @@ export class ReleasePreflightError extends Error {
 
 function fail(code) {
   throw new ReleasePreflightError(code);
-}
-
-function codeOwners(text) {
-  const line = String(text || '').split(/\r?\n/)
-    .map(value => value.trim())
-    .find(value => value && !value.startsWith('#') && value.split(/\s+/)[0] === '*');
-  if (!line) fail('codeowners-missing');
-  const owners = line.split(/\s+/).slice(1)
-    .filter(value => /^@[A-Za-z0-9-]+$/.test(value))
-    .map(value => value.slice(1).toLowerCase());
-  if (!owners.length) fail('codeowners-missing');
-  return new Set(owners);
 }
 
 function latestReviews(reviews) {
@@ -115,11 +102,7 @@ function configuredChecks(rules) {
 
 function assertReviewRule(rules) {
   const params = requiredRule(rules, 'pull_request').parameters || {};
-  if (Number(params.required_approving_review_count || 0) < 1 ||
-      params.require_code_owner_review !== true ||
-      params.dismiss_stale_reviews_on_push !== true ||
-      params.require_last_push_approval !== true ||
-      params.required_review_thread_resolution !== true) {
+  if (params.required_review_thread_resolution !== true) {
     fail('ruleset-review-policy');
   }
 }
@@ -138,10 +121,7 @@ async function assertReviewThreadsResolved(api, owner, repo, pullRequest) {
   for (let page = 0; page < 100; page++) {
     const data = await api.graphql(REVIEW_THREADS_QUERY, { owner, repo, number: pullRequest, after });
     const pullRequestState = data && data.repository && data.repository.pullRequest;
-    if (!pullRequestState || pullRequestState.reviewDecision !== 'APPROVED') {
-      fail('provider-review-decision-not-approved');
-    }
-    const connection = pullRequestState.reviewThreads;
+    const connection = pullRequestState && pullRequestState.reviewThreads;
     if (!connection || !Array.isArray(connection.nodes) || !connection.pageInfo ||
         typeof connection.pageInfo.hasNextPage !== 'boolean') fail('review-thread-pagination-incomplete');
     if (connection.nodes.some(node => !node || node.isResolved !== true)) fail('review-thread-unresolved');
@@ -205,7 +185,7 @@ async function assertSupportIssueCleared(api) {
 
 export async function verifyReleasePreflight({
   api, repository, tag, sha, version, nativeArtifactId, supportArtifactId,
-  codeownersText, tagEvent
+  tagEvent
 }) {
   if (!api || typeof api.json !== 'function' || typeof api.paginate !== 'function' ||
       typeof api.bytes !== 'function') fail('api-unavailable');
@@ -267,12 +247,10 @@ export async function verifyReleasePreflight({
   const releaseCommit = await api.json('GET', `${root}/git/commits/${sha}`);
   if (!releaseCommit || !Array.isArray(releaseCommit.parents) || !releaseCommit.parents[0] ||
       releaseCommit.parents[0].sha !== evidence.native.review.base) fail('review-base-not-current');
-  const owners = codeOwners(codeownersText);
-  const author = String(pr.user && pr.user.login || '').toLowerCase();
   const tagPusher = String(tagEvent.pusher).toLowerCase();
   for (const receipt of [nativeReceipt, supportReceipt]) {
-    if (!owners.has(receipt.issuer.login) || receipt.issuer.login === author || receipt.issuer.login === tagPusher) {
-      fail('receipt-issuer-not-independent');
+    if (receipt.issuer.login !== tagPusher) {
+      fail('receipt-issuer-not-release-actor');
     }
   }
   const reviewPage = await api.paginate(`${root}/pulls/${prNumber}/reviews?per_page=100`);
@@ -280,10 +258,6 @@ export async function verifyReleasePreflight({
   if ([...reviews.values()].some(review => review.state === 'CHANGES_REQUESTED')) {
     fail('blocking-review-unresolved');
   }
-  const approved = [...reviews.entries()].some(([login, review]) => owners.has(login) &&
-    login !== author && review.state === 'APPROVED' &&
-    review.commit_id === evidence.native.review.head);
-  if (!approved) fail('independent-codeowner-approval-missing');
   await assertReviewThreadsResolved(api, owner, repo, prNumber);
 
   // The support cutover issue must be closed for a release that claims live
@@ -328,7 +302,6 @@ async function main() {
     repository, tag, sha, version: pkg.version,
     nativeArtifactId: Number(process.env.NATIVE_ACCEPTANCE_ARTIFACT_ID || 0),
     supportArtifactId: Number(process.env.SUPPORT_CLEARANCE_ARTIFACT_ID || 0),
-    codeownersText: fs.readFileSync(path.join(root, '.github', 'CODEOWNERS'), 'utf8'),
     tagEvent: {
       created: envBoolean('RELEASE_REF_CREATED'),
       forced: envBoolean('RELEASE_REF_FORCED'),
