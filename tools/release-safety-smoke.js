@@ -1230,6 +1230,48 @@ function cleanupExactFiles(filePaths, directory) {
   });
   assert.deepEqual(fetched.bytes, nativeBytes);
 
+  {
+    suitePhase = 'Actions artifact media type';
+    const candidateBytes = Buffer.from('Actions candidate archive');
+    const digest = `sha256:${receiptSha256(candidateBytes)}`;
+    const metadataPath = `/repos/1132-Fixer/windows/actions/artifacts/${candidateArtifactId}`;
+    const archivePath = `${metadataPath}/zip`;
+    const metadata = new Map(jsonResponses);
+    metadata.set(metadataPath, candidateMetadata(candidateBytes.length, digest));
+    const archives = new Map(byteResponses);
+    archives.set(archivePath, candidateBytes);
+    const artifactRest = createGitHubRestClient({
+      token: 'fixture-token', userAgent: 'fixture-agent',
+      async fetchImpl(url, options) {
+        const apiPath = new URL(url).pathname;
+        if (archives.has(apiPath)) {
+          // Actions artifact API rejects octet-stream before redirecting to ZIP storage.
+          if (options.headers.Accept !== 'application/vnd.github+json') return response({ status: 415 });
+          const archive = archives.get(apiPath);
+          return response({ bytes: archive, body: closedByteStream([archive]) });
+        }
+        if (metadata.has(apiPath)) return response({ json: metadata.get(apiPath) });
+        throw new Error(`unexpected artifact fixture path ${apiPath}`);
+      }
+    });
+    await assert.rejects(artifactRest.request('GET', archivePath, { accept: 'application/octet-stream' }),
+      error => error.code === 'github-api-failed', 'the fixture reproduces the live HTTP 415');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-artifact-media-'));
+    const out = path.join(dir, 'candidate.zip');
+    try {
+      await downloadReleaseCandidate(candidateInput(artifactRest, out, digest));
+      assert.deepEqual(fs.readFileSync(out), candidateBytes);
+      for (const [kind, artifactId, expected] of [['native', 7001, nativeBytes], ['support', 7002, supportBytes]]) {
+        const receipt = await fetchAuthoritativeReceipt({
+          api: artifactRest, repository: '1132-Fixer/windows', artifactId, head: sourceHead, kind
+        });
+        assert.deepEqual(receipt.bytes, expected);
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
   const bytes = ['setup', 'portable', 'latest'].map(value => Buffer.from(value));
   const assets = bytes.map((value, index) => ({
     name: ['Setup.exe', 'Portable.exe', 'latest.yml'][index],
