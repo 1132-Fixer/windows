@@ -97,10 +97,11 @@ published, so 6.5.0 also contains every change listed under 6.4.1 below.
 - Smart App Control is on for that computer but is not the cause: PowerShell
   runs in full language mode, the script policy check takes 13 milliseconds,
   and Windows logged no script block.
-- Not established: which program holds the process. The computer runs a
-  third-party antivirus product and Microsoft Defender is in passive mode. The
-  hold was not traced to a product, because that needs a change on the
-  computer.
+- Later read-only diagnostics traced the hold on that computer to Surfshark
+  Antivirus's real-time protection. Its engine log names the probe files and
+  a Protection Cloud request that times out after 27 seconds (#266). Microsoft
+  Defender is in passive mode. Why the slow starts began on 2026-11-05 is not
+  established, and 6.5.0 itself has not run on that computer.
 - Not established: whether other affected computers have the same cause.
 - Not changed: the helper's desktop shortcut and first-run setup still start a
   script file. On such a computer Zoom can open about 27 seconds late from the
