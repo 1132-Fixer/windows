@@ -49,6 +49,7 @@ function loadHandler(options = {}) {
       };
     },
     updaterCtl: options.updater || null,
+    startupTimingLines: () => options.timingLines || [],
     FIX_USER: 'user1',
   };
   // No require, process, filesystem, native process, network or clipboard API
@@ -89,6 +90,15 @@ async function main() {
       md.includes('**Administrator:** NO') &&
       md.includes('### Preflight summary') &&
       !md.includes('### Last fix receipt') && !md.includes('### Recent log');
+  });
+  await check('contract.startup-timings', async () => {
+    const lines = ['Whole check: 20110 ms',
+      'account-and-policy: PowerShell start not reached; step 20003 ms; limit 20000 ms; timeout true; reason slow-start'];
+    const without = await report(undefined, {});
+    const withTimings = await report(undefined, { timingLines: lines });
+    return !without.includes('### Startup check timings') &&
+      withTimings.includes('### Startup check timings') &&
+      lines.every(line => withTimings.includes(`- ${line}`));
   });
   await check('contract.validated-context', async () => {
     const md = await report({ stage: 'launch', receipt: { camera: 'allowed' }, logTail: 'complete' });

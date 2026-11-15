@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Startup check: a slow start of Windows PowerShell is named.** When a
+  startup check step runs out of time because Windows PowerShell itself
+  needed most of the step's time limit to start, the app now says so:
+  "Windows PowerShell was slow to start on this computer. Security software
+  can cause this." Before, it said only that the step did not finish in time.
+  The app measures the time from starting PowerShell to the first line of
+  each step. It names no product, because it cannot know which one holds the
+  start. A step that starts quickly and then runs out of time is still
+  reported as a plain time-out (#275).
+- **Support Report: startup check timings.** The report now lists, for each
+  startup check step, the PowerShell start time, the step time, the time
+  limit and the reason. These are numbers only (#275).
+- The nine startup checks keep one time limit for each of the two steps. Each
+  check takes 1 to 100 ms once PowerShell runs, so a limit for each check
+  would change nothing (#275).
+
 ## [6.5.0] - 2026-11-14
 
 6.5.0 is the first release after 6.4.0. Version 6.4.1 was prepared but never

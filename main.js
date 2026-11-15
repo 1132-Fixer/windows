@@ -1309,8 +1309,12 @@ function sleep(ms) {
 }
 
 function runProcess(exe, args, onLine, opts = {}) {
-  const { heartbeatMs = 0, heartbeatLabel = '', timeoutMs = 60000, stdin = null } = opts;
+  const { heartbeatMs = 0, heartbeatLabel = '', timeoutMs = 60000, stdin = null, startMarker = null } = opts;
   return new Promise((resolve) => {
+    // startMarker: a fixed first line the script prints. The time from spawn
+    // to that line is how long the program needed to start (#275). The line
+    // is removed from the captured output and never reaches onLine.
+    let startMs = null;
     let stdoutBuf = '';
     let stderrBuf = '';
     const stdoutDecoder = new StringDecoder('utf8');
@@ -1324,7 +1328,8 @@ function runProcess(exe, args, onLine, opts = {}) {
       child = spawnWindowsTool(exe, args, { windowsHide: true });
     } catch (err) {
       onLine(`Failed to launch ${exe}: ${err.message}`, 'err');
-      resolve({ code: -1, stdout: '', stderr: err.message, timedOut: false, errorCode: err.code || 'launch_error' });
+      resolve({ code: -1, stdout: '', stderr: err.message, timedOut: false, errorCode: err.code || 'launch_error',
+        startMs: null, elapsedMs: Date.now() - started });
       return;
     }
     activeChildren.add(child);
@@ -1355,9 +1360,16 @@ function runProcess(exe, args, onLine, opts = {}) {
       const text = (kind === 'err' ? stderrDecoder : stdoutDecoder).write(buf);
       if (kind === 'err') stderrBuf += text; else stdoutBuf += text;
       lastOutputAt = Date.now();
+      if (kind !== 'err' && startMarker && startMs === null) {
+        const stripped = windowsTools.stripStartMarker(stdoutBuf);
+        if (stripped.seen) {
+          startMs = lastOutputAt - started;
+          stdoutBuf = stripped.text;
+        }
+      }
       text.split(/\r?\n/).forEach(line => {
         const trimmed = line.replace(/\s+$/, '');
-        if (trimmed) onLine(trimmed, kind);
+        if (trimmed && trimmed !== startMarker) onLine(trimmed, kind);
       });
     };
     child.stdout.on('data', d => emit(d, 'out'));
@@ -1422,7 +1434,8 @@ function runProcess(exe, args, onLine, opts = {}) {
       stderrBuf += stderrDecoder.end();
       settled = true;
       cleanup();
-      resolve({ code, stdout: stdoutBuf, stderr: stderrBuf, timedOut, errorCode });
+      resolve({ code, stdout: stdoutBuf, stderr: stderrBuf, timedOut, errorCode,
+        startMs, elapsedMs: Date.now() - started });
     };
     child.on('error', err => {
       if (settled || terminationUnproved || unprovedChildTrees.has(child)) return;
@@ -1473,8 +1486,13 @@ function runProcess(exe, args, onLine, opts = {}) {
 // setter needs a console handle; the shared preamble falls back to UTF-8
 // stream writers when PowerShell starts without a console.
 async function runPSScript(scriptContent, onLine, opts = {}) {
-  return runProcess('powershell.exe', windowsTools.PS_STDIN_ARGS,
-    onLine, { ...opts, stdin: windowsTools.prepareScript(scriptContent) });
+  const { startMarker = false, ...processOpts } = opts;
+  const timed = startMarker === true;
+  return runProcess('powershell.exe', windowsTools.PS_STDIN_ARGS, onLine, {
+    ...processOpts,
+    startMarker: timed ? windowsTools.PS_START_MARKER : null,
+    stdin: windowsTools.prepareScript(scriptContent, { startMarker: timed })
+  });
 }
 
 // Zoom-launch runner. Start-Process -Credential
@@ -1680,7 +1698,7 @@ async function preflightCheck() {
       $r['seclogon_starttype'] = 'MISSING'
     }
     $r | ConvertTo-Json -Compress
-  `, { timeoutMs: 20000 });
+  `, { timeoutMs: startupScan.STEP_LIMITS_MS.WINDOWS_CHECKS, startMarker: true });
 
   // Elevation
   const elevated = await isElevatedSync();
@@ -1733,15 +1751,20 @@ async function preflightCheck() {
   const inventory = windowsTools.parseProbe(probe, allTools);
   info.tools = inventory.tools;
   info.toolPaths = inventory.tool_paths || {};
-  info.toolProbe = { exitCode: probe.code, errorCode: probe.errorCode || null, timedOut: !!probe.timedOut };
+  const toolTiming = startupScan.stepTiming(startupScan.OPERATIONS.WINDOWS_CHECKS, probe, startupScan.STEP_LIMITS_MS.WINDOWS_CHECKS);
+  info.toolProbe = { exitCode: probe.code, errorCode: probe.errorCode || null, timedOut: !!probe.timedOut,
+    timing: toolTiming, timingLine: startupScan.timingLine(toolTiming) };
   info.seclogon = {
     ...inventory.seclogon
   };
   if (!inventory.ok) {
     blockers.push({
       code: inventory.diagnostic.code,
+      ...(toolTiming.reason ? { reason: toolTiming.reason } : {}),
       message: inventory.diagnostic.code === 'tool_probe_timeout'
-        ? messages.WINDOWS_TOOLS.PROBE_TIMEOUT : messages.WINDOWS_TOOLS.PROBE_FAILED
+        ? (toolTiming.reason === startupScan.REASONS.SLOW_START
+          ? messages.WINDOWS_TOOLS.PROBE_SLOW_START : messages.WINDOWS_TOOLS.PROBE_TIMEOUT)
+        : messages.WINDOWS_TOOLS.PROBE_FAILED
     });
     // No valid inventory means unknown, not absent. Never infer service or
     // per-tool failures from a failed process or incomplete response.
@@ -5152,9 +5175,9 @@ const SCAN_CARDS_FROM_ACCOUNT_PROBE = Object.freeze(['helperUser', 'helperProfil
 function logScanIssues(issues, elapsedMs) {
   for (const issue of issues) {
     try {
-      updaterLog.warn('startup-scan.issue', { operation: issue.operation, kind: issue.kind, code: issue.code, elapsedMs });
+      updaterLog.warn('startup-scan.issue', { operation: issue.operation, kind: issue.kind, code: issue.code, reason: issue.reason || 'none', elapsedMs });
     } catch (_) { /* logging never fails the scan */ }
-    console.warn(`[startup] scan issue operation=${issue.operation} kind=${issue.kind} code=${issue.code} ${elapsedMs}ms`);
+    console.warn(`[startup] scan issue operation=${issue.operation} kind=${issue.kind} code=${issue.code} reason=${issue.reason || 'none'} ${elapsedMs}ms`);
   }
 }
 
@@ -5162,11 +5185,14 @@ function logScanIssues(issues, elapsedMs) {
 // scan all share the scan that is already running, so a retry can never
 // start a second set of PowerShell workers. The scan never rejects: a
 // failure is returned as named issues with every unaffected result kept.
+// Timings of the last completed startup check, for the support report.
+let lastScanTimings = null;
 const runPreflightScan = startupScan.createSingleFlight(async () => {
   const t0 = Date.now();
   try {
     const result = await buildPreflightScan();
     result.scanElapsedMs = Date.now() - t0;
+    lastScanTimings = { elapsedMs: result.scanElapsedMs, steps: result.scanTimings || [] };
     if (result.scanIssues.length) logScanIssues(result.scanIssues, result.scanElapsedMs);
     return result;
   } catch (err) {
@@ -5177,6 +5203,14 @@ const runPreflightScan = startupScan.createSingleFlight(async () => {
   }
 });
 ipcMain.handle('preflight-scan', () => runPreflightScan());
+
+// Support-report lines for the last completed startup check. Empty before
+// the first check has finished.
+function startupTimingLines() {
+  if (!lastScanTimings) return [];
+  return [`Whole check: ${lastScanTimings.elapsedMs} ms`]
+    .concat(lastScanTimings.steps.map((step) => startupScan.timingLine(step)));
+}
 
 async function buildPreflightScan() {
   // All three probes (base preflight, user1 existence, policy/FrameServer/HKU)
@@ -5258,7 +5292,7 @@ async function buildPreflightScan() {
       } catch {}
     }
     $out | ConvertTo-Json -Compress
-  `, { timeoutMs: 20000 });
+  `, { timeoutMs: startupScan.STEP_LIMITS_MS.ACCOUNT_PROBE, startMarker: true });
 
   // A rejected input no longer rejects the scan. It becomes a named issue,
   // its own cards are reported as not checked, and the other input's
@@ -5326,18 +5360,28 @@ async function buildPreflightScan() {
       probeFailed = true;
     }
   }
+  // Start and step durations of both workers: numbers only, kept for the
+  // log and the support report. A step that timed out because PowerShell
+  // itself was slow to start says so instead of a plain "timed out".
+  const accountTiming = startupScan.stepTiming(startupScan.OPERATIONS.ACCOUNT_PROBE, probe, startupScan.STEP_LIMITS_MS.ACCOUNT_PROBE);
+  const scanTimings = [];
+  if (pre.info && pre.info.toolProbe && pre.info.toolProbe.timing) scanTimings.push(pre.info.toolProbe.timing);
+  if (settled.values.probe.ok) scanTimings.push(accountTiming);
   if (probeFailed && settled.values.probe.ok) {
     scanIssues.push({
       operation: startupScan.OPERATIONS.ACCOUNT_PROBE,
       kind: probe.timedOut ? startupScan.KINDS.TIMEOUT : startupScan.KINDS.ERROR,
-      code: probe.timedOut ? 'probe_timeout' : (probeText ? 'probe_unreadable' : 'probe_no_output')
+      code: probe.timedOut ? 'probe_timeout' : (probeText ? 'probe_unreadable' : 'probe_no_output'),
+      ...(accountTiming.reason ? { reason: accountTiming.reason } : {})
     });
   }
   if (!probeFailed && probeData.user1_exists &&
       (probeData.user1_identity_verified !== true || probeData.user1_admin_verified !== true)) {
     probeFailed = true;
   }
-  const probeFailMsg = probe.timedOut
+  const probeFailMsg = accountTiming.reason === startupScan.REASONS.SLOW_START
+    ? messages.STARTUP_FAILURE.SLOW_START_VALUE
+    : probe.timedOut
     ? 'Probe timed out after 20s — Windows Defender or another AV may be holding PowerShell. FIX NOW can still run. To clear this, add 1132 Fixer to your antivirus exclusions; the checklist re-scans when you come back to this window.'
     : 'PowerShell probe failed — could not read this value. FIX NOW can still run; the checklist re-scans when you come back to this window.';
 
@@ -5475,7 +5519,7 @@ async function buildPreflightScan() {
         ? SCAN_CARDS_FROM_ACCOUNT_PROBE
         : []);
     for (const key of keys) {
-      cards[key] = startupScan.unknownCard(SCAN_CARD_LABELS[key], issue.operation, issue.kind);
+      cards[key] = startupScan.unknownCard(SCAN_CARD_LABELS[key], issue.operation, issue.kind, issue.reason);
     }
   }
 
@@ -5493,7 +5537,8 @@ async function buildPreflightScan() {
     blockers: pre.blockers,
     warnings: pre.warnings,
     info: pre.info,
-    scanIssues
+    scanIssues,
+    scanTimings
   };
 }
 
@@ -5570,11 +5615,20 @@ ipcMain.handle('support-report', async (_event, context = {}) => {
     const probe = preflight.info && preflight.info.toolProbe;
     if (probe) {
       md.push(`- Windows tool check: exit ${probe.exitCode === null ? 'unknown' : probe.exitCode}; timeout ${probe.timedOut === true}; error ${probe.errorCode || 'none'}`);
+      if (typeof probe.timingLine === 'string') md.push(`- Windows tool check timing: ${probe.timingLine}`);
       md.push(`- App architecture: ${process.arch}`);
       for (const [name, toolPath] of Object.entries(preflight.info.toolPaths || {})) {
         md.push(`- ${name}: ${sanitize(toolPath)}`);
       }
     }
+    md.push('');
+  }
+  // Numbers only. Shows whether a startup check was slow because Windows
+  // PowerShell was slow to start, or because the step itself was slow.
+  const timingLines = startupTimingLines();
+  if (timingLines.length) {
+    md.push('### Startup check timings');
+    for (const line of timingLines) md.push(`- ${line}`);
     md.push('');
   }
   if (receipt) {

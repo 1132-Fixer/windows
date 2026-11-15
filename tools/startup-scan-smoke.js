@@ -25,6 +25,8 @@ const { EventEmitter } = require('events');
 
 const scan = require('../src/main/startup-scan');
 const messages = require('../messages');
+const { PS_START_MARKER, prepareScript, stripStartMarker } = require('../src/main/windows-tools');
+const { mock } = require('node:test');
 
 let failures = 0;
 function check(cond, name) {
@@ -48,6 +50,8 @@ function anything(name) {
   });
 }
 
+let quietDepth = 0;
+let quietSaved = null;
 function loadMain(workers) {
   const root = path.join(__dirname, '..');
   const handlers = new Map();
@@ -73,6 +77,8 @@ function loadMain(workers) {
     spawn(command, args) {
       const child = new EventEmitter();
       child.pid = 1000 + spawned.length;
+      child.exitCode = null;
+      child.signalCode = null;
       child.stdout = new EventEmitter();
       child.stderr = new EventEmitter();
       child.stdout.setEncoding = () => {};
@@ -89,11 +95,20 @@ function loadMain(workers) {
       spawned.push(record);
       function respond() {
         const plan = workers.answer(script, command, args) || {};
-        if (plan.hang) return; // never answers: the caller's own timeout must fire
-        if (plan.stdout) child.stdout.emit('data', Buffer.from(plan.stdout, 'utf8'));
-        const code = typeof plan.code === 'number' ? plan.code : 0;
-        child.emit('exit', code, null);
-        child.emit('close', code, null);
+        // A timed script prints its start marker first. startDelayMs holds
+        // that line back: a PowerShell process that is slow to start (#275).
+        // held: the process never reaches the script at all.
+        if (plan.held) return;
+        const afterStart = () => {
+          if (script.includes(PS_START_MARKER)) child.stdout.emit('data', Buffer.from(`${PS_START_MARKER}\r\n`, 'utf8'));
+          if (plan.hang) return; // never answers: the caller's own timeout must fire
+          if (plan.stdout) child.stdout.emit('data', Buffer.from(plan.stdout, 'utf8'));
+          const code = typeof plan.code === 'number' ? plan.code : 0;
+          child.exitCode = code;
+          child.emit('exit', code, null);
+          child.emit('close', code, null);
+        };
+        if (plan.startDelayMs > 0) setTimeout(afterStart, plan.startDelayMs); else afterStart();
       }
       setImmediate(() => child.emit('spawn'));
       return child;
@@ -131,9 +146,13 @@ function loadMain(workers) {
   return {
     handlers, spawned,
     scan: async () => {
-      const saved = { log: console.log, warn: console.warn };
-      console.log = () => {}; console.warn = () => {};
-      try { return await handlers.get('preflight-scan')({}); } finally { console.log = saved.log; console.warn = saved.warn; }
+      // Overlapping calls share one quiet period. Saving and restoring per
+      // call left console.log replaced after three overlapping scans, which
+      // hid every later "ok" line of this file.
+      if (quietDepth++ === 0) { quietSaved = { log: console.log, warn: console.warn }; console.log = () => {}; console.warn = () => {}; }
+      try { return await handlers.get('preflight-scan')({}); } finally {
+        if (--quietDepth === 0) { console.log = quietSaved.log; console.warn = quietSaved.warn; }
+      }
     }
   };
 }
@@ -284,6 +303,123 @@ function classify(script) {
     const before = m.spawned.length;
     await m.scan();
     check(accountStarts === 2 && m.spawned.length > before, 'a retry after the scan finished runs a fresh scan');
+  }
+
+  console.log('startup-scan-smoke: slow PowerShell start is measured and named (#275)');
+  {
+    // Helpers.
+    check(scan.timeoutReason({ timedOut: true, startMs: null }, 20000) === 'slow-start', 'a step that timed out before PowerShell reached the script is a slow start');
+    check(scan.timeoutReason({ timedOut: true, startMs: 15000 }, 20000) === 'slow-start', 'a start that used most of the limit is a slow start');
+    check(scan.timeoutReason({ timedOut: true, startMs: 400 }, 20000) === null, 'a quick start followed by a slow step is a plain timeout, not a slow start');
+    check(scan.timeoutReason({ timedOut: false, startMs: 19000 }, 20000) === null, 'a step that finished is never given a timeout reason');
+    check(scan.timeoutReason({ timedOut: true, startMs: null }, 0) === null && scan.timeoutReason(null, 20000) === null, 'no limit or no result gives no reason');
+    const timing = scan.stepTiming('account-and-policy', { timedOut: true, startMs: null, elapsedMs: 20003.4 }, 20000);
+    check(timing.reason === 'slow-start' && timing.startMs === null && timing.elapsedMs === 20003 && timing.limitMs === 20000, 'a step timing holds numbers only');
+    const line = scan.timingLine(timing);
+    check(/PowerShell start not reached/.test(line) && /step 20003 ms/.test(line) && /reason slow-start/.test(line), 'the support-report line carries start time, step time and reason');
+    const card = scan.unknownCard('Zoom Workplace', 'windows-checks', 'timeout', 'slow-start');
+    check(card.status === 'unknown' && /PowerShell was slow to start/.test(card.message) && /Security software can cause this/.test(card.message), 'the card names the slow start');
+    check(!/slow to start/.test(scan.unknownCard('X', 'windows-checks', 'error', 'slow-start').message), 'an error is never described as a slow start');
+
+    // Transport.
+    const prepared = prepareScript('Write-Output 1', { startMarker: true });
+    check(prepared.includes(`[Console]::Out.WriteLine('${PS_START_MARKER}')`) && prepared.indexOf(PS_START_MARKER) < prepared.indexOf('Resolve-FixerTool'), 'a timed script prints the marker before anything else runs');
+    check(!prepareScript('Write-Output 1').includes(PS_START_MARKER), 'an untimed script is unchanged');
+    check(stripStartMarker(`${PS_START_MARKER}\r\n{"a":1}`).text === '{"a":1}' && stripStartMarker(`${PS_START_MARKER}\r\n{"a":1}`).seen, 'the marker line is removed from captured output');
+    check(stripStartMarker(PS_START_MARKER.slice(0, 10)).seen === false && stripStartMarker(PS_START_MARKER).seen === false, 'a partial marker line is not counted as started');
+
+    // Copy.
+    const slow = { operation: 'account-and-policy', kind: 'timeout', code: 'probe_timeout', reason: 'slow-start' };
+    const full = messages.startupFailureSub(slow);
+    check(/Windows PowerShell was slow to start on this computer/.test(full) && /Security software can cause this/.test(full) && /nothing was changed/.test(full), 'the result sentence gives the specific reason');
+    check(/slow to start/.test(messages.startupFailureSub(slow, { unverified: 6, total: 9 })), 'the partial sentence gives the specific reason');
+    check(/slow to start/.test(messages.startupFailureLogLine(slow)) && /code probe_timeout/.test(messages.startupFailureLogLine(slow)), 'the details log line gives the reason and the code');
+    check(!/slow to start/.test(messages.startupFailureSub({ operation: 'account-and-policy', kind: 'timeout' })), 'a plain timeout does not claim a slow start');
+    check(!/slow to start/.test(messages.startupFailureSub({ operation: 'account-and-policy', kind: 'error', reason: 'slow-start' })), 'an error does not claim a slow start');
+    const allCopy = [full, messages.WINDOWS_TOOLS.PROBE_SLOW_START, scan.SLOW_START_CARD, messages.STARTUP_FAILURE.SLOW_START_VALUE].join(' ');
+    const sources = ['main.js', 'src/main/startup-scan.js'].map((f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8')).join('\n');
+    check(!/slow to start on this computer/.test(sources) && scan.SLOW_START_CARD === messages.STARTUP_FAILURE.SLOW_START_CARD, 'the slow-start sentences live in messages.js only');
+    check(!/defender|antivirus|norton|mcafee|kaspersky|bitdefender|avast|eset|sophos|crowdstrike/i.test(allCopy), 'the reason names no product');
+  }
+  {
+    // Real handler, healthy answers, account worker start delayed a little:
+    // the result still parses (marker stripped) and carries the timings.
+    const m = loadMain({
+      answer(script) {
+        const kind = classify(script);
+        if (kind === 'account') return { stdout: healthyAccountProbe(), startDelayMs: 120 };
+        if (kind === 'tools') return { stdout: JSON.stringify(Object.assign(Object.fromEntries(TOOL_NAMES.map((t) => [t, true])), { seclogon_status: 'Running', seclogon_starttype: 'Manual' })) };
+        return { stdout: '' };
+      }
+    });
+    const r = await m.scan();
+    const account = (r.scanTimings || []).find((t) => t.operation === 'account-and-policy');
+    const tools = (r.scanTimings || []).find((t) => t.operation === 'windows-checks');
+    check(!!account && account.startMs >= 100 && account.elapsedMs >= account.startMs && account.timedOut === false && account.reason === null, 'the delayed start is measured from spawn to the first line');
+    check(!!tools && Number.isFinite(tools.startMs) && tools.startMs < account.startMs, 'the other step has its own, shorter start time');
+    check(r.cards.camPolicy.status === 'ready' && !r.scanIssues.length, 'the marker line never reaches the parsed result');
+    const report = await m.handlers.get('support-report')({}, {});
+    check(/### Startup check timings/.test(report.markdown) && /account-and-policy: PowerShell start \d+ ms; step \d+ ms; limit 20000 ms; timeout false; reason none/.test(report.markdown), 'the support report carries the start time and step durations');
+    check(/Windows tool check timing: windows-checks: PowerShell start/.test(report.markdown), 'the support report carries the Windows tool check timing');
+  }
+  for (const held of [
+    { name: 'never reaches the script', plan: { held: true } },
+    { name: 'starts after 15 of 20 seconds, then cannot finish', plan: { startDelayMs: 15000, hang: true } }
+  ]) {
+    // Real handler with the spawn held, on a mocked clock: the step's own
+    // 20 s limit fires and the issue says PowerShell was slow to start.
+    const m = loadMain({
+      answer(script) {
+        const kind = classify(script);
+        if (kind === 'account') return held.plan;
+        if (kind === 'tools') return { stdout: JSON.stringify(Object.assign(Object.fromEntries(TOOL_NAMES.map((t) => [t, true])), { seclogon_status: 'Running', seclogon_starttype: 'Manual' })) };
+        return { stdout: '' };
+      }
+    });
+    mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+    let r;
+    try {
+      const pending = m.scan();
+      for (let i = 0; i < 25; i++) { await tick(); await tick(); mock.timers.tick(1000); }
+      for (let i = 0; i < 10; i++) await tick();
+      r = await Promise.race([pending, new Promise((resolve) => setImmediate(() => setImmediate(() => resolve(null))))]);
+    } finally {
+      mock.timers.reset();
+    }
+    check(!!r, `held start (${held.name}): the scan settles when the step limit fires`);
+    if (r) {
+      const issue = r.scanIssues.find((i) => i.operation === 'account-and-policy');
+      check(!!issue && issue.kind === 'timeout' && issue.code === 'probe_timeout' && issue.reason === 'slow-start', `held start (${held.name}): the issue carries the reason slow-start`);
+      const timing = r.scanTimings.find((t) => t.operation === 'account-and-policy');
+      check(!!timing && timing.timedOut === true && timing.reason === 'slow-start' && (held.plan.held ? timing.startMs === null : timing.startMs >= 15000), `held start (${held.name}): the measured start time is recorded`);
+      check(/PowerShell was slow to start/.test(r.cards.camPolicy.message) && r.cards.camPolicy.status !== 'ready', `held start (${held.name}): the affected checks say why`);
+      check(r.cards.zoom && r.cards.zoom.status !== 'unknown', `held start (${held.name}): the step that ran keeps its results`);
+      check(/slow to start/.test(messages.startupFailureLogLine(issue)), `held start (${held.name}): the window's log line gives the reason`);
+    }
+  }
+  {
+    // Negative control: PowerShell starts at once and the step itself hangs.
+    const m = loadMain({
+      answer(script) {
+        const kind = classify(script);
+        if (kind === 'account') return { hang: true };
+        if (kind === 'tools') return { stdout: JSON.stringify(Object.assign(Object.fromEntries(TOOL_NAMES.map((t) => [t, true])), { seclogon_status: 'Running', seclogon_starttype: 'Manual' })) };
+        return { stdout: '' };
+      }
+    });
+    mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+    let r;
+    try {
+      const pending = m.scan();
+      for (let i = 0; i < 25; i++) { await tick(); await tick(); mock.timers.tick(1000); }
+      for (let i = 0; i < 10; i++) await tick();
+      r = await Promise.race([pending, new Promise((resolve) => setImmediate(() => setImmediate(() => resolve(null))))]);
+    } finally {
+      mock.timers.reset();
+    }
+    const issue = r && r.scanIssues.find((i) => i.operation === 'account-and-policy');
+    check(!!issue && issue.kind === 'timeout' && !issue.reason, 'a quick start with a slow step stays a plain timeout');
+    check(!!r && !/slow to start/.test(r.cards.camPolicy.message), 'a plain timeout is not described as a slow start');
   }
 
   console.log('startup-scan-smoke: copy says what happened');
