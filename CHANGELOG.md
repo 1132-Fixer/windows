@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.5.0] - 2026-11-14
+
+6.5.0 is the first release after 6.4.0. Version 6.4.1 was prepared but never
+published, so 6.5.0 also contains every change listed under 6.4.1 below.
+
 ### Changed
 
 - **Startup check: a slow start of Windows PowerShell is named.** When a
@@ -24,11 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The nine startup checks keep one time limit for each of the two steps. Each
   check takes 1 to 100 ms once PowerShell runs, so a limit for each check
   would change nothing (#275).
-
-## [6.5.0] - 2026-11-14
-
-6.5.0 is the first release after 6.4.0. Version 6.4.1 was prepared but never
-published, so 6.5.0 also contains every change listed under 6.4.1 below.
 
 ### Added
 
