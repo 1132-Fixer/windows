@@ -223,7 +223,10 @@ export async function verifyReleasePreflight({
   for (const requirement of required) {
     const matches = checkRuns.filter(run => run && run.name === requirement.context &&
       Number(run.app && run.app.id) === requirement.integrationId && run.head_sha === sha);
-    if (matches.length !== 1 || matches[0].status !== 'completed' || matches[0].conclusion !== 'success') {
+    // Push CI and operator-requested diagnostics create separate check suites
+    // on the same commit. Every matching run must pass; a second successful
+    // suite must not make a protected, fully tested commit unreleasable.
+    if (!matches.length || matches.some(run => run.status !== 'completed' || run.conclusion !== 'success')) {
       fail('required-check-not-green');
     }
   }

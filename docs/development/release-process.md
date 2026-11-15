@@ -52,8 +52,10 @@ requires its commit to equal current `main`. It does not use a Release object's
 
 The preflight also requires `package.json` to equal the tag version, the active
 branch rules to retain all seven named checks and required thread resolution,
-and each check to be green on that SHA
-under its required integration. It paginates reviews and review threads to
+and every matching check run to be green on that SHA under its required
+integration. Push CI and manually dispatched diagnostics may each report the
+same check name. Both must finish successfully; a failed, cancelled or unfinished
+run still blocks release. It paginates reviews and review threads to
 exhaustion. Every thread must be resolved. No current blocking review can
 remain. No code-owner or other PR approval is required for release. The release
 actor approves publication by issuing both evidence receipts and pushing the
