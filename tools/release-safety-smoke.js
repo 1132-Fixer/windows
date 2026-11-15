@@ -910,6 +910,22 @@ function cleanupExactFiles(filePaths, directory) {
       error => error.code === 'required-check-not-green', 'failed required check stops before receipt access');
   }
   {
+    const checkPath = `/repos/1132-Fixer/windows/commits/${sourceHead}/check-runs?filter=latest&per_page=100`;
+    const changed = new Map(pageResponses);
+    const checkState = clone(changed.get(checkPath));
+    checkState.items.push({ ...checkState.items[0], id: 101 });
+    changed.set(checkPath, checkState);
+    await verifyReleasePreflight({ ...preflightInput, api: makeApi({ pageMap: changed }) });
+    for (const [status, conclusion] of [['completed', 'failure'], ['completed', 'cancelled'], ['in_progress', null]]) {
+      const invalid = clone(checkState);
+      Object.assign(invalid.items[invalid.items.length - 1], { status, conclusion });
+      changed.set(checkPath, invalid);
+      await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi({ pageMap: changed }) }),
+        error => error.code === 'required-check-not-green',
+        `a ${status}/${conclusion} additional run blocks release even when another run passed`);
+    }
+  }
+  {
     const changed = new Map(pageResponses);
     const changedRules = clone(rules);
     changedRules[1].parameters.required_review_thread_resolution = false;
