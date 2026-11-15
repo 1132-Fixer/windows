@@ -53,6 +53,52 @@ function isTimeoutError(err) {
   return /ETIMEDOUT|\btimeout\b|timed out/i.test(text);
 }
 
+// Why a step timed out, when the measurements can tell (#275). A timed
+// script prints one fixed line as soon as PowerShell reaches it; startMs is
+// the time from spawn to that line, or null when the line never arrived.
+// If the start alone used at least half of the step's limit, or the script
+// was never reached at all, the step did not run slowly: PowerShell was slow
+// to start. Security software holding the new process is the measured cause
+// (#266), but the app cannot know which program does it and names none.
+// One time limit per scan step. The checks inside a step take 1 to 100 ms
+// each once PowerShell runs (#266), so a limit per check would add nothing:
+// what uses the limit is the start of PowerShell, and that is measured and
+// reported on its own.
+const STEP_LIMITS_MS = Object.freeze({ WINDOWS_CHECKS: 20000, ACCOUNT_PROBE: 20000 });
+
+const REASONS = Object.freeze({ SLOW_START: 'slow-start' });
+const SLOW_START_SHARE = 0.5;
+
+function timeoutReason(result, limitMs) {
+  if (!result || result.timedOut !== true) return null;
+  if (!(Number.isFinite(limitMs) && limitMs > 0)) return null;
+  const startMs = result.startMs;
+  if (startMs === null || startMs === undefined) return REASONS.SLOW_START;
+  if (!Number.isFinite(startMs) || startMs < 0) return null;
+  return startMs >= limitMs * SLOW_START_SHARE ? REASONS.SLOW_START : null;
+}
+
+// Numbers only: safe for the log and the support report.
+function stepTiming(operation, result, limitMs) {
+  const ms = (value) => (Number.isFinite(value) && value >= 0 ? Math.round(value) : null);
+  const r = result || {};
+  return {
+    operation,
+    startMs: ms(r.startMs),
+    elapsedMs: ms(r.elapsedMs),
+    limitMs: ms(limitMs),
+    timedOut: r.timedOut === true,
+    reason: timeoutReason(r, limitMs)
+  };
+}
+
+function timingLine(timing) {
+  const t = timing || {};
+  const show = (value) => (Number.isFinite(value) ? `${value} ms` : 'not reached');
+  return `${t.operation || 'scan'}: PowerShell start ${show(t.startMs)}; step ${show(t.elapsedMs)}; ` +
+    `limit ${show(t.limitMs)}; timeout ${t.timedOut === true}; reason ${t.reason || 'none'}`;
+}
+
 function issueFor(operation, err) {
   return {
     operation,
@@ -80,11 +126,15 @@ async function settleInputs(inputs) {
   return { values, issues };
 }
 
-function unknownCard(label, operation, kind) {
+const SLOW_START_CARD =
+  'Not checked: Windows PowerShell was slow to start on this computer. Security software can cause this. Nothing was changed. Choose Try again.';
+
+function unknownCard(label, operation, kind, reason) {
   const what = operationLabel(operation);
-  const message = kind === KINDS.TIMEOUT
+  let message = kind === KINDS.TIMEOUT
     ? `Not checked: ${what} did not finish in time. Nothing was changed. Choose Try again.`
     : `Not checked: ${what} could not run. Nothing was changed. Choose Try again.`;
+  if (kind === KINDS.TIMEOUT && reason === REASONS.SLOW_START) message = SLOW_START_CARD;
   return { status: 'unknown', label, message, unverified: true };
 }
 
@@ -102,6 +152,7 @@ function failedScanResult(issue, labels, elapsedMs) {
     warnings: [],
     info: {},
     scanIssues: [issue],
+    scanTimings: [],
     scanElapsedMs: elapsedMs
   };
 }
@@ -125,6 +176,13 @@ function createSingleFlight(run) {
 
 module.exports = {
   KINDS,
+  REASONS,
+  STEP_LIMITS_MS,
+  SLOW_START_SHARE,
+  SLOW_START_CARD,
+  timeoutReason,
+  stepTiming,
+  timingLine,
   OPERATIONS,
   OPERATION_LABELS,
   operationLabel,

@@ -152,9 +152,28 @@ const PS_TOOL_PREAMBLE = [
   ''
 ].join('\r\n');
 
-function prepareScript(script) {
+// First line a timed script prints. The time from spawn to this line is the
+// time PowerShell itself needed to start and reach the script (#275). It is
+// fixed text: no path, no user name, nothing from the caller.
+const PS_START_MARKER = '##1132-fixer-powershell-started##';
+const PS_START_MARKER_LINE = `[Console]::Out.WriteLine('${PS_START_MARKER}')\r\n`;
+
+function prepareScript(script, options = {}) {
   if (typeof script !== 'string') throw new TypeError('PowerShell script must be a string.');
-  return PS_UTF8_OUTPUT_PREAMBLE + PS_TOOL_PREAMBLE + script;
+  const marker = options && options.startMarker === true ? PS_START_MARKER_LINE : '';
+  return PS_UTF8_OUTPUT_PREAMBLE + marker + PS_TOOL_PREAMBLE + script;
+}
+
+// Removes the start-marker line from captured stdout. Returns the text
+// without it and whether the complete line was present.
+function stripStartMarker(text) {
+  const value = typeof text === 'string' ? text : '';
+  const at = value.indexOf(PS_START_MARKER);
+  if (at === -1) return { text: value, seen: false };
+  const after = value.slice(at + PS_START_MARKER.length);
+  const eol = /^\r?\n/.exec(after);
+  if (!eol) return { text: value, seen: false };
+  return { text: value.slice(0, at) + after.slice(eol[0].length), seen: true };
 }
 
 const SERVICE_STATUS = new Set([
@@ -226,5 +245,5 @@ function parseProbe(result, allTools) {
 
 module.exports = {
   WINDOWS_TOOLS, createToolResolver, resolveSystemRoot, resolveTool,
-  PS_UTF8_OUTPUT_PREAMBLE, PS_STDIN_ARGS, prepareScript, parseProbe
+  PS_UTF8_OUTPUT_PREAMBLE, PS_STDIN_ARGS, PS_START_MARKER, prepareScript, stripStartMarker, parseProbe
 };

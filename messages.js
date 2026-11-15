@@ -32,6 +32,9 @@ const WINDOWS_TOOLS = {
   READY:         'Windows tools are ready.',
   PROBE_FAILED:  'The app could not check the Windows tools needed to start the repair. Try again. If this repeats, use Support Report.',
   PROBE_TIMEOUT: 'The check for Windows tools took too long. Try again. If this repeats, use Support Report.',
+  // The check did not run slowly: Windows PowerShell itself took most of the
+  // time limit to start (#275). No product is named; the app cannot know one.
+  PROBE_SLOW_START: 'Windows PowerShell was slow to start on this computer, so the check for Windows tools did not finish in time. Security software can cause this. Try again. If this repeats, use Support Report.',
   MISSING:       'The app could not find a required tool in the Windows system folder. Use Support Report for the checked paths.'
 };
 
@@ -623,7 +626,11 @@ const STARTUP_FAILURE = {
   TIMEOUT_SUB: 'The startup check stopped because {op} did not finish in time. The check only reads settings, so nothing was changed on this computer.',
   ERROR_SUB: 'The startup check stopped because {op} could not run. The check only reads settings, so nothing was changed on this computer.',
   PARTIAL_SUB: '{n} of {total} checks could not be verified because {op} {why}. The other results are shown in View details. Nothing was changed on this computer.',
+  // reason 'slow-start': the start of Windows PowerShell used most of the
+  // step's time limit, measured from the process start to its first line.
+  SLOW_START_SUB: 'The startup check stopped because Windows PowerShell was slow to start on this computer, so {op} did not finish in time. Security software can cause this. The check only reads settings, so nothing was changed on this computer.',
   WHY_TIMEOUT: 'did not finish in time',
+  WHY_SLOW_START: 'did not finish in time: Windows PowerShell was slow to start on this computer, which security software can cause',
   WHY_ERROR: 'could not run',
   LOG_LINE: 'Startup check: {op} {why} (code {code}).'
 };
@@ -633,14 +640,21 @@ function startupFailureSub(issue, counts) {
   const i = issue && typeof issue === 'object' ? issue : {};
   const op = STARTUP_FAILURE.OPERATIONS[i.operation] || STARTUP_FAILURE.OPERATIONS.scan;
   const timeout = i.kind === 'timeout';
+  const slowStart = timeout && i.reason === 'slow-start';
   if (counts && counts.unverified > 0 && counts.unverified < counts.total) {
     return STARTUP_FAILURE.PARTIAL_SUB
       .replace('{n}', String(counts.unverified))
       .replace('{total}', String(counts.total))
       .replace('{op}', op)
-      .replace('{why}', timeout ? STARTUP_FAILURE.WHY_TIMEOUT : STARTUP_FAILURE.WHY_ERROR);
+      .replace('{why}', startupFailureWhy(i));
   }
+  if (slowStart) return STARTUP_FAILURE.SLOW_START_SUB.replace('{op}', op);
   return (timeout ? STARTUP_FAILURE.TIMEOUT_SUB : STARTUP_FAILURE.ERROR_SUB).replace('{op}', op);
+}
+
+function startupFailureWhy(issue) {
+  if (!issue || issue.kind !== 'timeout') return STARTUP_FAILURE.WHY_ERROR;
+  return issue.reason === 'slow-start' ? STARTUP_FAILURE.WHY_SLOW_START : STARTUP_FAILURE.WHY_TIMEOUT;
 }
 
 function startupFailureLogLine(issue) {
@@ -649,7 +663,7 @@ function startupFailureLogLine(issue) {
   const code = typeof i.code === 'string' && /^[A-Za-z0-9_.:-]{1,48}$/.test(i.code) ? i.code : 'unknown';
   return STARTUP_FAILURE.LOG_LINE
     .replace('{op}', op)
-    .replace('{why}', i.kind === 'timeout' ? STARTUP_FAILURE.WHY_TIMEOUT : STARTUP_FAILURE.WHY_ERROR)
+    .replace('{why}', startupFailureWhy(i))
     .replace('{code}', code);
 }
 
