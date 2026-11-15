@@ -338,7 +338,7 @@ export async function fetchAuthoritativeReceipt({ api, repository, artifactId, h
       run.conclusion !== 'success' || !run.repository || run.repository.full_name !== repository ||
       !actor || triggeringActor !== actor) fail('receipt-issuer-run');
   const archive = await api.bytes(`${root}/actions/artifacts/${artifactId}/zip`, {
-    accept: 'application/octet-stream', maxBytes: RECEIPT_ARCHIVE_LIMIT,
+    accept: 'application/vnd.github+json', maxBytes: RECEIPT_ARCHIVE_LIMIT,
     errorCode: 'receipt-download-failed', sizeCode: 'receipt-archive-invalid',
     followRedirects: true
   });

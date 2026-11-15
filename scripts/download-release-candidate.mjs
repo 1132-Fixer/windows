@@ -183,7 +183,7 @@ export async function downloadReleaseCandidate({
       fail('candidate-download-partial-open');
     }
     const archive = await api.request('GET', `${base}/actions/artifacts/${artifactId}/zip`, {
-      accept: 'application/octet-stream', errorCode: 'candidate-download-failed', followRedirects: true
+      accept: 'application/vnd.github+json', errorCode: 'candidate-download-failed', followRedirects: true
     });
     if (!archive.body) fail('candidate-download-body');
     const declaredSize = declaredContentLength(archive);
