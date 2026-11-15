@@ -336,7 +336,9 @@ function classify(script) {
     check(/slow to start/.test(messages.startupFailureLogLine(slow)) && /code probe_timeout/.test(messages.startupFailureLogLine(slow)), 'the details log line gives the reason and the code');
     check(!/slow to start/.test(messages.startupFailureSub({ operation: 'account-and-policy', kind: 'timeout' })), 'a plain timeout does not claim a slow start');
     check(!/slow to start/.test(messages.startupFailureSub({ operation: 'account-and-policy', kind: 'error', reason: 'slow-start' })), 'an error does not claim a slow start');
-    const allCopy = [full, messages.WINDOWS_TOOLS.PROBE_SLOW_START, scan.SLOW_START_CARD].join(' ');
+    const allCopy = [full, messages.WINDOWS_TOOLS.PROBE_SLOW_START, scan.SLOW_START_CARD, messages.STARTUP_FAILURE.SLOW_START_VALUE].join(' ');
+    const sources = ['main.js', 'src/main/startup-scan.js'].map((f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8')).join('\n');
+    check(!/slow to start on this computer/.test(sources) && scan.SLOW_START_CARD === messages.STARTUP_FAILURE.SLOW_START_CARD, 'the slow-start sentences live in messages.js only');
     check(!/defender|antivirus|norton|mcafee|kaspersky|bitdefender|avast|eset|sophos|crowdstrike/i.test(allCopy), 'the reason names no product');
   }
   {

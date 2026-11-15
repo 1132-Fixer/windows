@@ -629,6 +629,10 @@ const STARTUP_FAILURE = {
   // reason 'slow-start': the start of Windows PowerShell used most of the
   // step's time limit, measured from the process start to its first line.
   SLOW_START_SUB: 'The startup check stopped because Windows PowerShell was slow to start on this computer, so {op} did not finish in time. Security software can cause this. The check only reads settings, so nothing was changed on this computer.',
+  // One check on the Details view whose step never ran for that reason.
+  SLOW_START_CARD: 'Not checked: Windows PowerShell was slow to start on this computer. Security software can cause this. Nothing was changed. Choose Try again.',
+  // One value of the account and policy step that could not be read in time.
+  SLOW_START_VALUE: 'Windows PowerShell was slow to start on this computer, so this value could not be read in time. Security software can cause this. Nothing was changed. The checklist re-scans when you come back to this window.',
   WHY_TIMEOUT: 'did not finish in time',
   WHY_SLOW_START: 'did not finish in time: Windows PowerShell was slow to start on this computer, which security software can cause',
   WHY_ERROR: 'could not run',

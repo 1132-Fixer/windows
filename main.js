@@ -5380,7 +5380,7 @@ async function buildPreflightScan() {
     probeFailed = true;
   }
   const probeFailMsg = accountTiming.reason === startupScan.REASONS.SLOW_START
-    ? 'Windows PowerShell was slow to start on this computer, so this value could not be read in time. Security software can cause this. Nothing was changed. The checklist re-scans when you come back to this window.'
+    ? messages.STARTUP_FAILURE.SLOW_START_VALUE
     : probe.timedOut
     ? 'Probe timed out after 20s — Windows Defender or another AV may be holding PowerShell. FIX NOW can still run. To clear this, add 1132 Fixer to your antivirus exclusions; the checklist re-scans when you come back to this window.'
     : 'PowerShell probe failed — could not read this value. FIX NOW can still run; the checklist re-scans when you come back to this window.';

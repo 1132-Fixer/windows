@@ -18,6 +18,8 @@
  *     instead of starting a second set of worker processes.
  */
 
+const { STARTUP_FAILURE } = require('../../messages');
+
 const KINDS = Object.freeze({ TIMEOUT: 'timeout', ERROR: 'error', UNAVAILABLE: 'unavailable' });
 
 const OPERATIONS = Object.freeze({
@@ -126,8 +128,8 @@ async function settleInputs(inputs) {
   return { values, issues };
 }
 
-const SLOW_START_CARD =
-  'Not checked: Windows PowerShell was slow to start on this computer. Security software can cause this. Nothing was changed. Choose Try again.';
+// Copy lives in messages.js; this module only chooses the sentence.
+const SLOW_START_CARD = STARTUP_FAILURE.SLOW_START_CARD;
 
 function unknownCard(label, operation, kind, reason) {
   const what = operationLabel(operation);
