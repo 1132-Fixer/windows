@@ -313,7 +313,7 @@ build host, so running the shipped `.exe` remains Windows-only verification.
 
 ## Compact repair panel — token reconciliation (2026-09-04, closed 2026-09-05)
 
-Pinned design source: `design-system` @ `f8b7687d743e5a854f98e0a20a56d3e9b7d5e406`
+Pinned design source: `design-system` @ `962d621b5f3040dbf5b9ead03bcc52f1d48098ca`
 ([1132-Fixer/design-system#4](https://github.com/1132-Fixer/design-system/pull/4),
 closes [#196](https://github.com/1132-Fixer/windows/issues/196)). The shipped
 Windows panel (6.2.0 onward) follows the **operator acceptance spec of
@@ -371,7 +371,7 @@ Rules that follow from this:
 
 ## Ready screen and Details view (2026-09-04)
 
-Pinned design source: `design-system` @ `f8b7687d743e5a854f98e0a20a56d3e9b7d5e406`
+Pinned design source: `design-system` @ `962d621b5f3040dbf5b9ead03bcc52f1d48098ca`
 (`docs/platforms/windows.md`, `docs/08-components.md`, `04-spacing.md`,
 `05-layout.md`, `09-accessibility.md`, `07-motion.md`). Tokens are the `:root`
 block in `index.html`, recorded in the design system as the Windows overlay
