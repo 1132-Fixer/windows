@@ -185,7 +185,7 @@ function runFixtures(consumer) {
   }
   for (const file of ['package.json', 'main.js', 'preload.js', 'renderer.js', 'index.html', 'run-verdict.js',
     'src/main/helper-reset-controller.js', 'src/preload/compact-shell.js', 'assets/brand/app-mark.png',
-    'assets/explore/make-it-gif.png', '.runtime-config', '.config/settings.json', 'assets/.hidden-icon.png']) {
+    'assets/explore/make-it-gif.png', 'assets/design/tokens.css', '.runtime-config', '.config/settings.json', 'assets/.hidden-icon.png']) {
     record('main includes ' + file, admits(mainFilter, file), true);
   }
   for (const file of ['tools/packaging-globs-smoke.js', 'docs/development/notes.txt', 'scripts/native.ps1',

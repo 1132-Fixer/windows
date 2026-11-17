@@ -51,7 +51,15 @@ if (fs.existsSync(windowsDoc) && fs.existsSync(windowsTokens)) {
   check(!/No shipped Windows UI exists yet/.test(doc), 'platforms/windows.md no longer says no Windows UI ships');
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const root = /:root \{([\s\S]*?)\n    \}/.exec(html)[1];
-  const cssVar = (name) => (new RegExp(`--${name}:\\s*(#[0-9A-Fa-f]{6})`).exec(root) || [])[1];
+  // The :root block gives design-system tokens short names. Resolve each
+  // alias through the shipped token file, so this still proves that the
+  // colour the app renders equals the pinned windows.json value.
+  const shipped = new Map([...fs.readFileSync(path.join(ROOT, 'assets', 'design', 'tokens.css'), 'utf8')
+    .matchAll(/^\s*(--[a-z0-9-]+):\s*([^;]+);/gm)].map((match) => [match[1], match[2].trim()]));
+  const cssVar = (name) => {
+    const alias = (new RegExp(`--${name}:\\s*var\\((--[a-z0-9-]+)\\);`).exec(root) || [])[1];
+    return alias ? shipped.get(alias) : undefined;
+  };
   const pairs = [['bg', 'background'], ['panel', 'surface'], ['panel-2', 'surface-2'], ['accent', 'primary'], ['accent-2', 'primary-hover'], ['accent-pressed', 'primary-pressed'], ['focus', 'focus'], ['success', 'success'], ['warning', 'warning'], ['danger', 'error'], ['text', 'text-primary'], ['muted', 'text-secondary'], ['dim', 'text-muted'], ['border', 'border'], ['border-strong', 'border-strong']];
   for (const [css, tok] of pairs) {
     check((cssVar(css) || '').toUpperCase() === String(tokens.colors[tok] || '').toUpperCase(), `--${css} ${cssVar(css)} == windows.json ${tok} ${tokens.colors[tok]}`);

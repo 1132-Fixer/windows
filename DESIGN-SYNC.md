@@ -338,17 +338,32 @@ still govern macOS, the Chrome extension and the website.
 | Border | `border` `#2B3D57`, `border-strong` `#3B5578` | `--border`, `--border-strong` | recorded |
 | Radii | control 10 / card 14 / modal 18 / pill 999 | `--r-sm` / `--r-md` / `--r-lg` / `--r-pill` | recorded |
 | Spacing | 4 8 12 16 20 24 32 40 (`20`/`40` Explore + feedback dialogs only) | `--s-1` … `--s-8` | recorded |
-| Window | default 520×600, min 440×520, header 56, footer 48, content max 420 | `main.js` `compactWindowBounds`, `index.html` APP SHELL — **header is 104 with an 80px mark since the landing rebalance (2026-09-05)**; `tokens/windows.json` still records 56 | divergence (design-system update pending) |
+| Window | default 520×600, min 440×520, header 56, footer 48, content max 420 | `main.js` `compactWindowBounds`, `index.html` APP SHELL — header 104 with an 80px mark since the landing rebalance (2026-09-05); `tokens/windows.json` records 104 and 80 since design-system `f8b7687` | match |
 | Typography | Segoe UI Variable stack, 14/400 body; screen title 24/32/700 | same | match |
 | Motion | 150–250 ms, reduced-motion honoured | transitions ≤ 250 ms, `prefers-reduced-motion` in `index.html` and the compact shell | match |
 
 Rules that follow from this:
 
-- One token authority: `index.html` has exactly one `:root` block. The compact
-  shell (`src/preload/compact-shell.js`) reads `var(--…)` from it and defines
+- One token authority, and it is the design system (2026-11-17). The values
+  in the table above are no longer copied by hand. `assets/design/tokens.css`
+  is an exact copy of the design system's generated `css/tokens.windows.css`
+  at the pinned commit; `.brand-assets.tsv` maps it, so the brand guard fails
+  when the copy differs. `index.html` links that file and has exactly one
+  `:root` block, which only gives the tokens the short names in the "Shipped
+  app token" column. `tools/design-tokens-smoke.js` fails when the block
+  states a value of its own. The compact shell
+  (`src/preload/compact-shell.js`) reads `var(--…)` from the block and defines
   no hex of its own.
+- To change a token: change it in `1132-Fixer/design-system`, let the sync
+  pull request move the pin and the copy, and review the result here. Never
+  edit `assets/design/tokens.css`.
+- Not yet in the design system, and therefore still stated in the block: the
+  three `--shadow-*` values. The monospace font stack in `index.html` also
+  differs from the design system's. Both are listed for a design-system
+  change, not for a local override.
 - Status tints (`--success-bg`, `--warning-bg`, `--danger-bg`, `--accent-bg`)
-  are derived from the current status colours, not from an earlier palette.
+  are mixed from the current status colours with `color-mix`, so they follow
+  the token.
 - Every focusable control shows the `--focus-ring`; `tools/packaged-acceptance.js`
   checks this on the packaged build for every visible control.
 
