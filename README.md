@@ -136,8 +136,9 @@ Password: random — a fresh one is generated on every fix run
 
 - The fix runs on your PC.
 - The app does not send a report unless you press **Submit**.
+- The Support Report is sent only if you select **Include Support Report** in the Bug Report form.
 - Support reports hide common private values such as usernames, profile paths, and SIDs.
-- Read any report before you attach it.
+- Read any report before you include it.
 
 ## Quick help
 
