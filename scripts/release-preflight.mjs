@@ -12,7 +12,10 @@ import {
 
 const SHA40 = /^[a-f0-9]{40}$/;
 const ZERO_SHA = '0'.repeat(40);
-const SUPPORT_REPOSITORY = '1132-Fixer/support-requests-bug-reporting';
+// The current repository name. GitHub answers a request for a former name
+// with the current name in `repository_url`, so a former name here can never
+// match and would refuse every release.
+const SUPPORT_REPOSITORY = '1132-Fixer/support-reporting';
 const SUPPORT_ISSUE = 2;
 const SUPPORT_SUPERSESSION_LIMIT = 8;
 const SUPPORT_REPOSITORY_URL = `https://api.github.com/repos/${SUPPORT_REPOSITORY}`;
@@ -153,7 +156,7 @@ function supportSupersessionTarget(issue) {
     return null;
   }
   if (!labels.includes('superseded')) fail('support-supersession-invalid');
-  const match = /^\s*Superseded-by:\s*https:\/\/github\.com\/1132-Fixer\/support-requests-bug-reporting\/issues\/([1-9]\d*)\s*$/i
+  const match = /^\s*Superseded-by:\s*https:\/\/github\.com\/1132-Fixer\/support-reporting\/issues\/([1-9]\d*)\s*$/i
     .exec(markers[0]);
   if (!match) fail('support-supersession-invalid');
   const target = Number(match[1]);

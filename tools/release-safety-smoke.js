@@ -756,8 +756,8 @@ function cleanupExactFiles(filePaths, directory) {
   });
   const supportIssue = (number, overrides = {}) => ({
     number,
-    url: `https://api.github.com/repos/1132-Fixer/support-requests-bug-reporting/issues/${number}`,
-    repository_url: 'https://api.github.com/repos/1132-Fixer/support-requests-bug-reporting',
+    url: `https://api.github.com/repos/1132-Fixer/support-reporting/issues/${number}`,
+    repository_url: 'https://api.github.com/repos/1132-Fixer/support-reporting',
     state: 'closed', closed_at: '2026-10-08T12:00:00Z', labels: [], body: '',
     ...overrides
   });
@@ -782,7 +782,7 @@ function cleanupExactFiles(filePaths, directory) {
       base: { ref: 'main' }, head: { sha: reviewedHead }, user: { login: 'author' }
     }],
     [`/repos/1132-Fixer/windows/git/commits/${sourceHead}`, { parents: [{ sha: reviewedBase }] }],
-    ['/repos/1132-Fixer/support-requests-bug-reporting/issues/2', supportIssue(2)],
+    ['/repos/1132-Fixer/support-reporting/issues/2', supportIssue(2)],
     ['/repos/1132-Fixer/windows/actions/runs/1132', {
       id: 1132, head_sha: sourceHead, event: 'push', status: 'completed',
       conclusion: 'success', path: '.github/workflows/ci.yml'
@@ -860,7 +860,7 @@ function cleanupExactFiles(filePaths, directory) {
   const preflight = await verifyReleasePreflight({ ...preflightInput, api });
   assert.equal(preflight.requiredChecks.length, 7);
   assert.equal(preflight.nativeReceipt.issuer.login, 'patricktobias86');
-  assert.ok(api.calls.indexOf('json /repos/1132-Fixer/support-requests-bug-reporting/issues/2') <
+  assert.ok(api.calls.indexOf('json /repos/1132-Fixer/support-reporting/issues/2') <
     api.calls.indexOf('json /repos/1132-Fixer/windows/actions/runs/1132'),
   'support issue clearance is authoritative and precedes candidate access');
   assert.equal(api.calls.filter(call => call.startsWith('graphql ')).length, 2,
@@ -1027,7 +1027,7 @@ function cleanupExactFiles(filePaths, directory) {
   }
   {
     const changed = new Map(jsonResponses);
-    changed.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/2',
+    changed.set('/repos/1132-Fixer/support-reporting/issues/2',
       supportIssue(2, { state: 'open', closed_at: null }));
     const issueApi = makeApi({ jsonMap: changed });
     await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: issueApi }),
@@ -1060,7 +1060,7 @@ function cleanupExactFiles(filePaths, directory) {
       7001, 8001, `native-acceptance-receipt-${sourceHead}`, boundNativeArchive));
     changedJson.set('/repos/1132-Fixer/windows/actions/artifacts/7002', artifact(
       7002, 8002, `support-clearance-receipt-${sourceHead}`, unavailableArchive));
-    changedJson.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/2',
+    changedJson.set('/repos/1132-Fixer/support-reporting/issues/2',
       supportIssue(2, { state: 'open', closed_at: null }));
     const changedBytes = new Map(byteResponses);
     changedBytes.set('/repos/1132-Fixer/windows/actions/artifacts/7001/zip', boundNativeArchive);
@@ -1068,7 +1068,7 @@ function cleanupExactFiles(filePaths, directory) {
     const unavailableApi = makeApi({ jsonMap: changedJson, byteMap: changedBytes });
     const result = await verifyReleasePreflight({ ...preflightInput, api: unavailableApi });
     assert.equal(result.evidence.support.availability, 'unavailable');
-    assert.equal(unavailableApi.calls.includes('json /repos/1132-Fixer/support-requests-bug-reporting/issues/2'), false,
+    assert.equal(unavailableApi.calls.includes('json /repos/1132-Fixer/support-reporting/issues/2'), false,
       'a declared-unavailable release does not depend on the support cutover issue');
     assert.ok(unavailableApi.calls.includes('json /repos/1132-Fixer/windows/actions/runs/1132'),
       'candidate verification still runs for a declared-unavailable release');
@@ -1078,30 +1078,30 @@ function cleanupExactFiles(filePaths, directory) {
   }
   {
     const changed = new Map(jsonResponses);
-    changed.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/2', supportIssue(2, {
+    changed.set('/repos/1132-Fixer/support-reporting/issues/2', supportIssue(2, {
       state: 'open', closed_at: null, labels: [{ name: 'superseded' }],
-      body: 'Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/3'
+      body: 'Superseded-by: https://github.com/1132-Fixer/support-reporting/issues/3'
     }));
-    changed.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/3', supportIssue(3));
+    changed.set('/repos/1132-Fixer/support-reporting/issues/3', supportIssue(3));
     const issueApi = makeApi({ jsonMap: changed });
     const superseded = await verifyReleasePreflight({ ...preflightInput, api: issueApi });
     assert.equal(superseded.artifact.id, 6401,
       'a fetched terminal issue in the expected repository permits candidate readback');
-    assert.ok(issueApi.calls.indexOf('json /repos/1132-Fixer/support-requests-bug-reporting/issues/3') <
+    assert.ok(issueApi.calls.indexOf('json /repos/1132-Fixer/support-reporting/issues/3') <
       issueApi.calls.indexOf('json /repos/1132-Fixer/windows/actions/runs/1132'),
     'the terminal supersession target is validated before candidate metadata');
   }
   const supersessionFixture = (issue2, issue3) => {
     const changed = new Map(jsonResponses);
-    changed.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/2', issue2);
+    changed.set('/repos/1132-Fixer/support-reporting/issues/2', issue2);
     if (issue3 !== undefined) {
-      changed.set('/repos/1132-Fixer/support-requests-bug-reporting/issues/3', issue3);
+      changed.set('/repos/1132-Fixer/support-reporting/issues/3', issue3);
     }
     return changed;
   };
   const supersededTo = target => supportIssue(2, {
     state: 'open', closed_at: null, labels: [{ name: 'superseded' }],
-    body: `Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/${target}`
+    body: `Superseded-by: https://github.com/1132-Fixer/support-reporting/issues/${target}`
   });
   for (const [name, changed, code] of [
     ['missing supersession target', supersessionFixture(supersededTo(3), null), 'support-issue-target-invalid'],
@@ -1124,8 +1124,8 @@ function cleanupExactFiles(filePaths, directory) {
     ['multiple supersession markers', supersessionFixture(supportIssue(2, {
       state: 'open', closed_at: null, labels: [{ name: 'superseded' }],
       body: [
-        'Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/3',
-        'Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/4'
+        'Superseded-by: https://github.com/1132-Fixer/support-reporting/issues/3',
+        'Superseded-by: https://github.com/1132-Fixer/support-reporting/issues/4'
       ].join('\n')
     })), 'support-supersession-ambiguous']
   ]) {
@@ -1138,7 +1138,7 @@ function cleanupExactFiles(filePaths, directory) {
   {
     const changed = supersessionFixture(supersededTo(3), supportIssue(3, {
       state: 'open', closed_at: null, labels: [{ name: 'superseded' }],
-      body: 'Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/2'
+      body: 'Superseded-by: https://github.com/1132-Fixer/support-reporting/issues/2'
     }));
     const issueApi = makeApi({ jsonMap: changed });
     await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: issueApi }),
@@ -1148,9 +1148,9 @@ function cleanupExactFiles(filePaths, directory) {
   {
     const changed = new Map(jsonResponses);
     for (let issue = 2; issue <= 9; issue++) {
-      changed.set(`/repos/1132-Fixer/support-requests-bug-reporting/issues/${issue}`, supportIssue(issue, {
+      changed.set(`/repos/1132-Fixer/support-reporting/issues/${issue}`, supportIssue(issue, {
         state: 'open', closed_at: null, labels: [{ name: 'superseded' }],
-        body: `Superseded-by: https://github.com/1132-Fixer/support-requests-bug-reporting/issues/${issue + 1}`
+        body: `Superseded-by: https://github.com/1132-Fixer/support-reporting/issues/${issue + 1}`
       }));
     }
     const issueApi = makeApi({ jsonMap: changed });

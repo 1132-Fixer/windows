@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/1132-Fixer/support-reporting/blob/main/contract/feedback.v1.schema.json",
+  "title": "1132 Fixer support report, contract version 1",
+  "description": "Body of POST /v1/feedback. Every 1132 Fixer product sends this same shape.",
+  "type": "object",
+  "required": ["type", "text"],
+  "additionalProperties": false,
+  "properties": {
+    "requestId": {
+      "description": "Client-made UUID. A retry of the same content sends the same value. It must equal the Idempotency-Key header when both are sent.",
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+    "type": {
+      "description": "Kind of report.",
+      "enum": ["Bug Report", "User Rating", "Contact", "Feedback", "Feature Request"]
+    },
+    "text": {
+      "description": "The words of the person who sends the report. At least one visible character. 102400 bytes or fewer as UTF-8: x-maxUtf8Bytes is not standard JSON Schema; the checker in validate.js applies it.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 102400,
+      "x-maxUtf8Bytes": 102400,
+      "pattern": "[^\\s\\u0000-\\u001F\\u007F]"
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 120
+    },
+    "product": {
+      "description": "The 1132 Fixer product that sends the report. The order of this list has no meaning.",
+      "enum": ["browser", "macos", "website", "windows"]
+    },
+    "version": {
+      "description": "Version of the product that sends the report.",
+      "type": "string",
+      "maxLength": 40
+    },
+    "os": {
+      "description": "Operating system or browser name and version.",
+      "type": "string",
+      "maxLength": 120
+    },
+    "rating": {
+      "description": "Required with type User Rating. Not permitted with any other type.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "screenshot": {
+      "type": "object",
+      "required": ["data", "mediaType"],
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "description": "Base64 image bytes. The decoded image is 5 MiB or smaller.",
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 6990508,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+        },
+        "mediaType": {
+          "enum": ["image/png", "image/jpeg", "image/webp", "image/gif"]
+        }
+      }
+    },
+    "diagnostics": {
+      "description": "Technical report that the product made. Sent only when the person agreed to send it; see consent.",
+      "type": "object",
+      "required": ["format", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "const": "markdown"
+        },
+        "text": {
+          "description": "At least one visible character. 65536 bytes or fewer as UTF-8 (x-maxUtf8Bytes, applied by validate.js).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "x-maxUtf8Bytes": 65536,
+          "pattern": "[^\\s\\u0000-\\u001F\\u007F]"
+        }
+      }
+    },
+    "consent": {
+      "description": "What the person agreed to send in this one report.",
+      "type": "object",
+      "required": ["diagnostics"],
+      "additionalProperties": false,
+      "properties": {
+        "diagnostics": {
+          "description": "True only when the person chose to attach the diagnostics to this report.",
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["type"],
+        "properties": { "type": { "const": "User Rating" } }
+      },
+      "then": { "required": ["rating"] },
+      "else": { "not": { "required": ["rating"] } }
+    },
+    {
+      "if": { "required": ["diagnostics"] },
+      "then": {
+        "required": ["consent"],
+        "properties": {
+          "consent": {
+            "properties": { "diagnostics": { "const": true } }
+          }
+        }
+      }
+    }
+  ]
+}
