@@ -35,5 +35,6 @@ Public documentation for the Windows app. The product page is the root
 - [Zoom 1132 finding](history/zoom-1132-finding.md)
 - [Helper-account credential follow-up](history/security-followup-static-helper-account.md)
 - [QA checklist v5.3.6](history/qa-checklist-v5.3.6.md)
+- [Release notes v5.3.10](history/release-notes-v5.3.10.md)
 
 Independent project. Not affiliated with, sponsored by, or endorsed by Zoom Communications, Inc.

@@ -6,8 +6,9 @@ Old artifacts kept for reference. **Not used by the Electron app.**
 
 The original standalone batch script the app was modeled on. The current
 production behavior lives in [`../main.js`](../main.js)'s `run-fix` IPC
-handler, which mirrors the more thorough `reset-user.bat` flow while
-excluding media transfer and Zoom group-policy registry edits.
+handler, which mirrors the more thorough flow of a later script,
+`reset-user.bat` (no longer in this repository), while excluding media
+transfer and Zoom group-policy registry edits.
 
 Kept here so the original lineage is greppable. `user.bat` is also
 excluded from the electron-builder `files` whitelist via `!*.bat`, so it
