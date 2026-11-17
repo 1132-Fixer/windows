@@ -357,13 +357,16 @@ Rules that follow from this:
 - To change a token: change it in `1132-Fixer/design-system`, let the sync
   pull request move the pin and the copy, and review the result here. Never
   edit `assets/design/tokens.css`.
-- Not yet in the design system, and therefore still stated in the block: the
-  three `--shadow-*` values. The monospace font stack in `index.html` also
-  differs from the design system's. Both are listed for a design-system
-  change, not for a local override.
-- Status tints (`--success-bg`, `--warning-bg`, `--danger-bg`, `--accent-bg`)
-  are mixed from the current status colours with `color-mix`, so they follow
-  the token.
+- No rule in `index.html` or in the compact shell states a colour, a shadow
+  or a font family. Shadows are the design-system `--shadow-*` tokens,
+  diagnostic text uses `--font-mono`, and the Explore dialog uses the
+  `--color-explore-*` tokens. `tools/design-tokens-smoke.js` fails when a
+  colour value or a font name returns.
+- Tints (status tints, hover fills, the Explore outline) are mixed from a
+  token with `color-mix`, so they follow the token. A tint is not a token.
+- `main.js` states the window background colour once, because the window
+  paints it before the page loads. The smoke compares it with the
+  `--color-background` token.
 - Every focusable control shows the `--focus-ring`; `tools/packaged-acceptance.js`
   checks this on the packaged build for every visible control.
 

@@ -18,15 +18,14 @@ function check(condition, name) {
   console.log(`  ok  ${name}`);
 }
 
-// Values that the design system has no token for yet. Each one is listed here
-// on purpose; moving one into the design system removes it from this list.
+// The one composed value in the block. It is built only from two aliases in
+// the same block, so it states no colour of its own.
 const LOCAL_VALUES = Object.freeze({
-  '--shadow-sm': '0 6px 14px rgba(8, 12, 24, 0.12)',
-  '--shadow-md': '0 10px 22px rgba(8, 12, 24, 0.14)',
-  '--shadow-lg': '0 14px 28px rgba(8, 12, 24, 0.16)',
-  // Built only from two aliases in the same block.
   '--focus-ring': '0 0 0 2px var(--bg), 0 0 0 4px var(--focus)',
 });
+// A colour stated in a rule instead of taken from a token.
+const COLOUR_LITERAL = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\(/g;
+const withoutComments = (css) => css.replace(/\/\*[\s\S]*?\*\//g, '');
 const TOKEN = /^var\((--[a-z0-9-]+)\)$/;
 const TINT = /^color-mix\(in srgb, var\((--color-[a-z0-9-]+)\) (\d{1,2})%, transparent\)$/;
 
@@ -80,5 +79,24 @@ for (const name of Object.keys(LOCAL_VALUES)) check(aliases.has(name), `the list
 check(!/#[0-9a-fA-F]{6}\b/.test(block[1].replace(/\/\*[\s\S]*?\*\//g, '')), 'no hex colour in the block');
 check((page.match(/font-family:\s*var\(--font-sans\)/g) || []).length === 2 && !/font-family:\s*'Segoe UI/.test(page), 'the text font comes from the design system');
 check(defined.get('--window-header') === '104px' && defined.get('--window-header-mark') === '80px' && defined.get('--window-footer') === '48px', 'the header, mark and footer sizes are the design-system window tokens');
+
+console.log('design-tokens-smoke: no rule states a colour, a shadow or a font stack of its own');
+const styles = [...page.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((match) => withoutComments(match[1])).join('\n');
+check(styles.length > 10000, 'the page stylesheet was read');
+const colours = styles.match(COLOUR_LITERAL) || [];
+check(colours.length === 0, `no colour value in the page stylesheet${colours.length ? ': ' + [...new Set(colours)].slice(0, 8).join(' ') : ''}`);
+const shell = withoutComments(read('src/preload/compact-shell.js').replace(/\/\/.*$/gm, ''));
+const shellColours = shell.match(COLOUR_LITERAL) || [];
+check(shellColours.length === 0, `no colour value in the compact shell stylesheet${shellColours.length ? ': ' + [...new Set(shellColours)].join(' ') : ''}`);
+for (const name of ['--shadow-sm', '--shadow-md', '--shadow-lg', '--shadow-dialog']) {
+  check(defined.has(name) && !aliases.has(name), `${name} is a design-system token and the block does not declare it again`);
+}
+const usedTokens = new Set([...styles.matchAll(/var\((--(?:color|shadow|font|space|radius|window|type|motion)-[a-z0-9-]+)\)/g)].map((match) => match[1]));
+const unknownTokens = [...usedTokens].filter((name) => !defined.has(name));
+check(usedTokens.size >= 40 && unknownTokens.length === 0, `every design-system name used in a rule exists in the token file (${usedTokens.size})${unknownTokens.length ? ': ' + unknownTokens.join(' ') : ''}`);
+check(!/\bmonospace\b|'[A-Z][A-Za-z ]+'/.test(styles.replace(/content:\s*'[^']*'/g, '')) && (styles.match(/var\(--font-mono\)/g) || []).length === 4, 'diagnostic text uses the shared monospace stack, and no rule names a font family');
+// The window paints this colour before the page loads, so it cannot read CSS.
+const windowColour = /backgroundColor:\s*'(#[0-9A-Fa-f]{6})'/.exec(read('main.js'));
+check(Boolean(windowColour) && windowColour[1].toUpperCase() === String(defined.get('--color-background')).toUpperCase(), 'the window background colour in main.js equals the design-system background token');
 
 console.log(`\ndesign-tokens-smoke: ${checks} checks passed`);

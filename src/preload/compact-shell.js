@@ -104,7 +104,7 @@ body[data-compact-state="cancelling"] #cancelFixBtn { opacity: 0.72; }
   display: grid;
   place-items: center;
   padding: var(--s-6);
-  background: rgba(15, 23, 36, 0.72);
+  background: var(--scrim);
   -webkit-app-region: no-drag;
 }
 .compact-exit-overlay[hidden] { display: none; }
