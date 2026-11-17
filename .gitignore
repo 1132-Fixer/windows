@@ -1,12 +1,11 @@
 # Build-time injected config — never commit (see scripts/inject-config.js)
 src/main/config.generated.js
 
-# Secrets. The feedback proxy's GH_ISSUES_TOKEN lives in .env locally and in the
-# deploy platform's env vars in production — never in this repo, and never in
-# the desktop app (it would ship inside app.asar). See feedback-proxy/README.md.
+# Secrets. The app holds no service credential: the support service keeps its
+# own in its deployment, in a separate repository. A local .env must never
+# enter this repo or the desktop app (it would ship inside app.asar).
 .env
 .env.*
-!.env.example
 
 # Signing material. A code signing certificate or key must never enter this
 # repository, on any branch. Local signing reads CSC_LINK from the environment.
