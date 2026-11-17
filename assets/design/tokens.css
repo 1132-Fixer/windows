@@ -10,6 +10,7 @@
   --color-error: #F05D67;
   --color-text-primary: #F5F7FB;
   --color-text-secondary: #A8B5C7;
+  --color-text-on-primary: #FFFFFF;
   --color-border: #2B3D57;
   --color-overlay: rgba(15,23,36,0.72);
   --color-gradient-brand-start: #FFD24C;
@@ -22,6 +23,14 @@
   --color-primary-hover: #3B8AE8;
   --color-primary-pressed: #286BC2;
   --color-focus: #71AFFF;
+  --color-explore-accent: #3A82F7;
+  --color-explore-accent-text: #8FB6F5;
+  --color-explore-hero-text: #A9BEDE;
+  --color-explore-hero-start: #1F2E4C;
+  --color-explore-hero-end: #1B2740;
+  --color-explore-violet: #7C6BF0;
+  --color-explore-purple: #A855D6;
+  --color-explore-border: rgba(122,148,190,0.34);
   --space-4: 4px;
   --space-8: 8px;
   --space-12: 12px;
@@ -69,6 +78,10 @@
   --motion-base-easing: ease-in-out;
   --motion-slow-duration: 250ms;
   --motion-slow-easing: ease-in-out;
+  --shadow-sm: 0 6px 14px rgba(8,12,24,0.12);
+  --shadow-md: 0 10px 22px rgba(8,12,24,0.14);
+  --shadow-lg: 0 14px 28px rgba(8,12,24,0.16);
+  --shadow-dialog: 0 24px 64px rgba(0,0,0,0.46);
   --window-default-width: 520px;
   --window-default-height: 600px;
   --window-minimum-width: 440px;
