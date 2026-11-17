@@ -99,7 +99,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimizeWindow: () => ipcRenderer.invoke('window-minimize'),
   maximizeWindow: () => ipcRenderer.invoke('window-maximize'),
   quitApp: () => ipcRenderer.invoke('quit-app'),
-  submitFeedback: (type, text, screenshot, rating) => ipcRenderer.invoke('submit-feedback', type, text, screenshot, rating),
+  submitFeedback: (type, text, screenshot, rating, diagnostics) => ipcRenderer.invoke('submit-feedback', type, text, screenshot, rating, diagnostics),
   feedbackCapabilities: () => ipcRenderer.invoke('feedback-capabilities'),
   getVersion: () => ipcRenderer.invoke('get-version'),
   getSystemInfo: () => ipcRenderer.invoke('get-system-info')

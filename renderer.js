@@ -2010,9 +2010,10 @@ function openFeedback() {
   document.querySelectorAll('.fb-textarea').forEach(t => { t.value = ''; });
   attachGen++;
   attachReportBusy = false;
+  attachedReport = null; // a new form never inherits an earlier choice
   const attachBtn = document.getElementById('fbAttachReport');
   attachBtn.disabled = false;
-  attachBtn.textContent = 'Attach Support Report';
+  attachBtn.textContent = FEEDBACK.REPORT_INCLUDE;
   document.querySelectorAll('.fb-rating-btns').forEach(group => {
     group.querySelectorAll('.fb-rating-btn').forEach((btn, index) => {
       btn.classList.remove('selected');
@@ -2470,20 +2471,42 @@ document.getElementById('fbContactText').addEventListener('input', (e) => {
 
 document.getElementById('fbViewReport').addEventListener('click', openSupportReport);
 
-// Bug-report attach flow: pull the sanitized report into the bug description
-// so one submission carries both. attachGen invalidates an in-flight build
+// Bug-report consent flow. The Support Report leaves this computer only when
+// the person selects the control below for this one bug report. The report is
+// kept apart from the message: it is sent as its own field together with the
+// consent statement, and the service refuses it without that statement. A
+// second press withdraws the choice. attachGen invalidates an in-flight build
 // when the modal is closed/reopened (openFeedback bumps it), so a stale IPC
-// completion can't write into a fresh form. The full report must fit the
-// service's UTF-8 byte limit; keep the draft intact instead of cutting it.
+// completion can't write into a fresh form.
 const FEEDBACK_TEXT_MAX_BYTES = 100 * 1024;
+const FEEDBACK_REPORT_MAX_BYTES = 64 * 1024;
+// The form can be taller than the window, and its status line is the last
+// element. A message that nobody can see is not a message: bring it into view.
+function revealFeedbackStatus(el) {
+  if (!el || !el.textContent) return;
+  // The status line is the last element of its section, so the end of the
+  // card shows it with the card's normal bottom padding.
+  const card = el.closest('.fb-card');
+  if (card) card.scrollTop = card.scrollHeight;
+}
 let attachGen = 0;
 let attachReportBusy = false;
+let attachedReport = null; // the report text the person chose to include, or null
 document.getElementById('fbAttachReport').addEventListener('click', async () => {
   const btn = document.getElementById('fbAttachReport');
   const status = document.getElementById('fbBugStatus');
   status.textContent = '';
+  status.className = 'fb-status';
+  if (attachedReport !== null) {
+    attachedReport = null;
+    btn.textContent = FEEDBACK.REPORT_INCLUDE;
+    status.textContent = FEEDBACK.REPORT_NOT_INCLUDED;
+    revealFeedbackStatus(status);
+    refreshBugSubmit();
+    return;
+  }
   btn.disabled = true;
-  btn.textContent = 'Attaching…';
+  btn.textContent = FEEDBACK.REPORT_PREPARING;
   attachReportBusy = true;
   refreshBugSubmit();
   const gen = attachGen;
@@ -2496,28 +2519,28 @@ document.getElementById('fbAttachReport').addEventListener('click', async () => 
     if (gen !== attachGen) return;
     const md = result && result.markdown;
     if (!md) throw new Error('report unavailable');
-    const ta = document.getElementById('fbBugText');
-    const userText = ta.value.trim();
-    const combined = userText ? userText + '\n\n---\n' + md : md;
-    if (new TextEncoder().encode(combined).length > FEEDBACK_TEXT_MAX_BYTES) {
-      btn.disabled = false;
-      btn.textContent = 'Attach Support Report';
-      status.textContent = FEEDBACK.ATTACH_TOO_LARGE;
+    if (new TextEncoder().encode(md).length > FEEDBACK_REPORT_MAX_BYTES) {
+      btn.textContent = FEEDBACK.REPORT_INCLUDE;
+      status.textContent = FEEDBACK.DIAGNOSTICS_TOO_LARGE;
       status.className = 'fb-status err';
       return;
     }
-    ta.value = combined;
-    ta.dispatchEvent(new Event('input'));
-    btn.textContent = 'Report attached'; // stays disabled: one attach per open
+    attachedReport = md;
+    // The label names the next action, and the status line (a live region)
+    // states what will be sent.
+    btn.textContent = FEEDBACK.REPORT_REMOVE;
+    status.textContent = FEEDBACK.REPORT_INCLUDED;
   } catch (err) {
     if (gen !== attachGen) return;
-    btn.disabled = false;
-    btn.textContent = 'Attach Support Report';
-    status.textContent = 'Could not build the report — try again.';
+    btn.textContent = FEEDBACK.REPORT_INCLUDE;
+    status.textContent = FEEDBACK.REPORT_BUILD_FAILED;
+    status.className = 'fb-status err';
   } finally {
     if (gen === attachGen) {
+      btn.disabled = false;
       attachReportBusy = false;
       refreshBugSubmit();
+      revealFeedbackStatus(status);
     }
   }
 });
@@ -2558,7 +2581,8 @@ function shotStatus(msg, isError) {
 function refreshBugSubmit() {
   const btn = document.getElementById('fbBugSubmit');
   const len = document.getElementById('fbBugText').value.trim().length;
-  btn.disabled = shotReadBusy || attachReportBusy || feedbackSending.has('fbBugStatus') || len < 50;
+  // A description of 50 characters, or the Support Report, is enough to send.
+  btn.disabled = shotReadBusy || attachReportBusy || feedbackSending.has('fbBugStatus') || (len < 50 && attachedReport === null);
 }
 
 function clearScreenshot() {
@@ -2707,8 +2731,9 @@ document.addEventListener('paste', (e) => {
 });
 
 document.getElementById('fbBugSubmit').addEventListener('click', async () => {
-  const text = document.getElementById('fbBugText').value.trim();
-  await submitFeedback('Bug Report', text, 'fbBugStatus', bugScreenshot);
+  const written = document.getElementById('fbBugText').value.trim();
+  const text = written || (attachedReport !== null ? FEEDBACK.REPORT_ONLY_TEXT : '');
+  await submitFeedback('Bug Report', text, 'fbBugStatus', bugScreenshot, undefined, attachedReport);
 });
 document.getElementById('fbRatingSubmit').addEventListener('click', async () => {
   if (ratings.overall < 1 || ratings.overall > 5) {
@@ -2735,7 +2760,7 @@ const SUBMIT_BTN_FOR_STATUS = {
   fbBugStatus: 'fbBugSubmit', fbRatingStatus: 'fbRatingSubmit', fbContactStatus: 'fbContactSubmit',
 };
 
-async function submitFeedback(type, text, statusId, screenshot, rating) {
+async function submitFeedback(type, text, statusId, screenshot, rating, report) {
   const statusEl = document.getElementById(statusId);
   // One user-triggered exchange at a time. Drafts remain intact on failure.
   const submitBtn = document.getElementById(SUBMIT_BTN_FOR_STATUS[statusId]);
@@ -2781,16 +2806,23 @@ async function submitFeedback(type, text, statusId, screenshot, rating) {
   submitBtn.disabled = true;
   statusEl.textContent = FEEDBACK.SENDING;
   statusEl.className = 'fb-status';
+  revealFeedbackStatus(statusEl);
   try {
     // This is an outbound acknowledgement only. No delivery or follow-up UI.
     const shotPayload = screenshot
       ? { bytes: screenshot.bytes, mediaType: screenshot.mediaType }
       : undefined;
-    const result = await window.electronAPI.submitFeedback(type, text, shotPayload, rating);
+    // `report` is set only when the person chose to include the Support
+    // Report in this bug report. That choice is the consent that is sent.
+    const diagnostics = typeof report === 'string'
+      ? { markdown: report, consent: true }
+      : undefined;
+    const result = await window.electronAPI.submitFeedback(type, text, shotPayload, rating, diagnostics);
     if (gen !== feedbackGen) return;
     if (result.success) {
       statusEl.textContent = FEEDBACK.SENT;
       statusEl.className = 'fb-status ok';
+      revealFeedbackStatus(statusEl);
       awaitingClose = true;
       setTimeout(() => {
         if (gen === feedbackGen) closeFeedback();
@@ -2811,6 +2843,7 @@ async function submitFeedback(type, text, statusId, screenshot, rating) {
   }
   submitBtn.disabled = false; // failed: let the user retry
   if (statusId === 'fbBugStatus') refreshBugSubmit(); // re-apply length/read gates
+  revealFeedbackStatus(statusEl); // the failure reason must be seen
 }
 
 // ============================================================

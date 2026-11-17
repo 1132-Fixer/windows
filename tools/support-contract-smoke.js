@@ -107,6 +107,27 @@ async function run() {
   check(support.DIAGNOSTICS_MAX_BYTES === contract.schema.properties.diagnostics.properties.text['x-maxUtf8Bytes'], 'the client diagnostics limit is the contract limit');
   check(support.TEXT_MAX_BYTES === contract.schema.properties.text['x-maxUtf8Bytes'], 'the client text limit is the contract limit');
 
+  console.log('support-contract-smoke: the form sends the Support Report only by choice');
+  const renderer = fs.readFileSync(path.join(root, 'renderer.js'), 'utf8');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(root, 'preload.js'), 'utf8');
+  const page = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  check(!/ta\.value\s*=\s*combined/.test(renderer) && !/userText \+ '\\n\\n---\\n' \+ md/.test(renderer), 'the Support Report is no longer merged into the message text');
+  check(/let attachedReport = null;/.test(renderer) && /attachedReport = null; \/\/ a new form never inherits an earlier choice/.test(renderer), 'a new form starts with no Support Report included');
+  check(/if \(attachedReport !== null\) \{\s*attachedReport = null;/.test(renderer), 'a second press withdraws the choice');
+  check(/typeof report === 'string'\s*\?\s*\{ markdown: report, consent: true \}\s*:\s*undefined/.test(renderer), 'the form states consent only together with an included report');
+  check(/submitFeedback\('Bug Report', text, 'fbBugStatus', bugScreenshot, undefined, attachedReport\)/.test(renderer), 'only the Bug Report form can include the report');
+  check((renderer.match(/submitFeedback\('(User Rating|Contact)'[^;]*;/g) || []).every((call) => !/attachedReport/.test(call)), 'the rating and feedback forms never send diagnostics');
+  check(/invoke\('submit-feedback', type, text, screenshot, rating, diagnostics\)/.test(preload), 'the bridge passes the choice to the main process');
+  check(/consentDiagnostics: Boolean\(diagnostics\) && diagnostics\.consent === true/.test(main), 'the main process forwards consent only when it is exactly true');
+  check(/diagnostics: diagnostics && typeof diagnostics\.markdown === 'string' \? diagnostics\.markdown : ''/.test(main), 'a malformed report argument is refused by the client, not dropped');
+  check(/id="fbAttachReport">Include Support Report<\/button>/.test(page), 'the control starts as "Include Support Report"');
+  for (const key of ['REPORT_INCLUDE', 'REPORT_REMOVE', 'REPORT_INCLUDED', 'REPORT_NOT_INCLUDED', 'REPORT_BUILD_FAILED', 'REPORT_ONLY_TEXT', 'DIAGNOSTICS_TOO_LARGE']) {
+    check(typeof FEEDBACK[key] === 'string' && FEEDBACK[key].length > 0, `copy exists: ${key}`);
+  }
+  check(contract.validate({ type: 'Bug Report', text: FEEDBACK.REPORT_ONLY_TEXT, version, product: 'windows',
+    diagnostics: { format: 'markdown', text: 'report' }, consent: { diagnostics: true } }).valid, 'a report with no written description still passes the contract');
+
   console.log(`\nsupport-contract-smoke: ${checks} checks passed`);
 }
 
