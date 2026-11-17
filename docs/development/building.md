@@ -14,6 +14,11 @@ npm run build:installer
 npm run build:all # both targets, dist/
 ```
 
+Each build script first runs `scripts/inject-config.js`, which writes the public
+support address into the build. With `FEEDBACK_PROXY_URL` not set, the build
+succeeds and in-app submissions are off. See the
+[Configuration reference](configuration.md).
+
 All build scripts pass `--publish never` — do not remove it (electron-builder
 auto-detects CI and would try to publish to the wrong repo; see CHANGELOG
 history around v5.3.x for the incident).

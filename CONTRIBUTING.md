@@ -20,7 +20,7 @@ npm test
 npm start
 ```
 
-`git clone` creates a `windows/` directory (the repository name), so `cd windows` is the correct next step. `npm start` launches the Electron app. Most engine tests do not require Zoom.
+`git clone` creates a `windows/` directory (the repository name), so `cd windows` is the correct next step. `npm start` launches the Electron app. Most engine tests do not require Zoom. No settings file is needed; the [Configuration reference](docs/development/configuration.md) lists the optional build setting.
 
 ## Finding work
 

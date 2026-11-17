@@ -188,6 +188,10 @@ Build (Windows x64):
 npm run build:all
 ```
 
+The app needs no settings file to build or start. The one optional build
+setting and the repository variables are in the
+[Configuration reference](docs/development/configuration.md).
+
 The GitHub Copilot app reads [`.github/github-app.yml`](.github/github-app.yml)
 after you review and accept the repository configuration. It provides manual
 dependency installation, tests, portable builds and installer builds. Nothing

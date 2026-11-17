@@ -16,8 +16,11 @@ this file.
 - Canonical repository: <https://github.com/1132-Fixer/windows>, default branch
   `main`. Releases are GitHub Releases on this repository, built by
   `.github/workflows/release.yml` from a `v*` tag. Releases are **unsigned**
-  (see `docs/security/code-signing.md`); never claim otherwise, and never add
-  signing secrets, SignPath, or self-signed roots.
+  (see `docs/security/code-signing.md`); never claim otherwise. Never put
+  signing material in the repository, and never add SignPath or self-signed
+  roots. The only prepared signing path is Microsoft Artifact Signing
+  (`docs/security/code-signing.md` section 5.1); it stays off until every
+  value in `scripts/signing-config.mjs` is set in the repository settings.
 - Tracking: Botify Network Project 2 (`PVT_kwDODytvn84BfNBY`). Every issue and
   PR here has a Project 2 item; an item is Done only after the change is
   merged to `main` and verified there.
