@@ -31,6 +31,8 @@ function check(cond, name) {
 }
 
 const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+// The shipped copy of the design system's token file for this product.
+const designTokens = fs.readFileSync(path.join(ROOT, 'assets', 'design', 'tokens.css'), 'utf8');
 const shell = fs.readFileSync(path.join(ROOT, 'src', 'preload', 'compact-shell.js'), 'utf8');
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const manifest = fs.readFileSync(path.join(ROOT, '.brand-assets.tsv'), 'utf8');
@@ -71,8 +73,9 @@ console.log(`  hash  assets/icon.ico ${iconHash}`);
 console.log('brand-placement-smoke: main header references the product mark');
 check(/<img class="app-mark" src="assets\/brand\/app-mark\.png" srcset="assets\/brand\/app-mark\.png 96w, assets\/logo-transparent\.png 256w" sizes="80px" width="80" height="80" alt="1132 Fixer" draggable="false">/.test(html),
   'index.html header img is the canonical gear with the 256px export for 125%/150%');
-check(/--mark-size:\s*80px;/.test(html) && /--header-h:\s*104px;/.test(html),
-  'mark size (80px) and header height (104px) are :root tokens');
+check(/--mark-size:\s*var\(--window-header-mark\);/.test(html) && /--header-h:\s*var\(--window-header\);/.test(html) &&
+  /^\s*--window-header-mark:\s*80px;$/m.test(designTokens) && /^\s*--window-header:\s*104px;$/m.test(designTokens),
+  'mark size (80px) and header height (104px) are :root tokens that come from the design system');
 check(/\.app-mark\s*\{[\s\S]*?grid-column:\s*2;[\s\S]*?width:\s*var\(--mark-size\);[\s\S]*?height:\s*var\(--mark-size\);[\s\S]*?object-fit:\s*contain;/.test(html),
   'index.html places a contain-fit 80px mark in the middle grid track');
 check(!/\.app-mark\s*\{[^}]*(position:\s*absolute|transform:)/.test(html),
