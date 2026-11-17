@@ -61,6 +61,8 @@ jobs:
         run: node tools/support-submission-smoke.js
       - name: Verify support release readiness contract
         run: node tools/support-release-smoke.js
+      - name: Verify the shared support contract copy and every request against it
+        run: node tools/support-contract-smoke.js
 
   build:
     name: Build & Test

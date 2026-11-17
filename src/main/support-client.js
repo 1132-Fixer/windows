@@ -10,9 +10,11 @@
 const crypto = require('crypto');
 const https = require('https');
 const { FEEDBACK } = require('../../messages');
+const contract = require('./support-contract');
 
 const TYPES = Object.freeze(['Bug Report', 'User Rating', 'Contact']);
 const TEXT_MAX_BYTES = 100 * 1024;
+const DIAGNOSTICS_MAX_BYTES = 64 * 1024;
 const SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
 const RESPONSE_MAX_BYTES = 16 * 1024;
 const REQUEST_TIMEOUT_MS = 30000;
@@ -127,7 +129,7 @@ function createSupportClient({ transportRequest = https.request, timeoutMs = REQ
   const activeTypes = new Set();
   const deadline = Math.min(REQUEST_TIMEOUT_MS, Math.max(1, timeoutMs));
 
-  async function submitFeedback({ config, type, text, version, screenshot, rating } = {}) {
+  async function submitFeedback({ config, type, text, version, screenshot, rating, diagnostics, consentDiagnostics } = {}) {
     const url = endpointUrl(config && config.FEEDBACK_PROXY_URL);
     if (!url) return { success: false, error: FEEDBACK.NOT_CONFIGURED };
     if (!TYPES.includes(type) || typeof text !== 'string' || !text.trim()) {
@@ -139,7 +141,19 @@ function createSupportClient({ transportRequest = https.request, timeoutMs = REQ
     if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) {
       return { success: false, error: FEEDBACK.FAILED };
     }
-    const payload = { type, text, version };
+    const payload = { type, text, version, product: contract.PRODUCT };
+    // Diagnostics leave this computer only when the person chose to include
+    // them in this one report. The service refuses them without that statement.
+    if (diagnostics !== undefined && diagnostics !== null) {
+      if (consentDiagnostics !== true || typeof diagnostics !== 'string' || !diagnostics.trim()) {
+        return { success: false, error: FEEDBACK.REJECTED };
+      }
+      if (Buffer.byteLength(diagnostics, 'utf8') > DIAGNOSTICS_MAX_BYTES) {
+        return { success: false, error: FEEDBACK.DIAGNOSTICS_TOO_LARGE };
+      }
+      payload.diagnostics = { format: 'markdown', text: diagnostics };
+      payload.consent = { diagnostics: true };
+    }
     if (type === 'User Rating') {
       if (!Number.isInteger(rating) || rating < 1 || rating > 5) return { success: false, error: FEEDBACK.RATING_REQUIRED };
       payload.rating = rating;
@@ -154,6 +168,8 @@ function createSupportClient({ transportRequest = https.request, timeoutMs = REQ
       }
       payload.screenshot = { data: bytes.toString('base64'), mediaType: screenshot.mediaType };
     }
+    // Fail closed: a request that the shared contract does not accept is never sent.
+    if (!contract.validate(payload).valid) return { success: false, error: FEEDBACK.REJECTED };
     if (activeTypes.has(type)) return { success: false, error: FEEDBACK.BUSY };
     const fingerprint = crypto.createHash('sha256').update(url.href).update(JSON.stringify(payload)).digest('hex');
     const previous = attempts.get(type);
@@ -185,5 +201,6 @@ module.exports = {
   endpointUrl,
   supportConfigRevision,
   TEXT_MAX_BYTES,
-  SCREENSHOT_MAX_BYTES
+  SCREENSHOT_MAX_BYTES,
+  DIAGNOSTICS_MAX_BYTES
 };

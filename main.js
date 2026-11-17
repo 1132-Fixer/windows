@@ -5131,7 +5131,8 @@ ipcMain.handle('get-system-info', async () => {
 ipcMain.handle('feedback-capabilities', () => supportClient.capabilities(config));
 
 // User-triggered submissions use one neutral, credential-free adapter.
-// Version is the only automatic metadata; optional diagnostics are user chosen.
+// The app version and the fixed product name are the only automatic metadata;
+// optional diagnostics are user chosen.
 ipcMain.handle('submit-feedback', async (event, type, text, screenshot, rating) => {
   return supportClient.submitFeedback({
     config,

@@ -16,6 +16,7 @@ Public documentation for the Windows app. The product page is the root
 - [Architecture](development/architecture.md)
 - [Building](development/building.md)
 - [Configuration reference](development/configuration.md)
+- [Support contract](development/support-contract.md)
 - [Testing](development/testing.md)
 - [Release process](development/release-process.md)
 - [Updater channel](development/updater-channel.md)

@@ -7,6 +7,9 @@ import { supportIsDeclaredUnavailable, validateReleaseEvidence } from './release
 
 const require = createRequire(import.meta.url);
 const { endpointUrl, supportConfigRevision } = require('../src/main/support-client');
+// The contract that this build sends. The deployed service must report the
+// same version and schema fingerprint, or the two have drifted apart.
+const { pin: contractPin } = require('../src/main/support-contract');
 
 function expectedSupportIdentity(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -51,6 +54,8 @@ export async function verifySupportEndpoint(value, expected, fetchImpl = fetch) 
     const state = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     if (state.ok !== true || state.service !== '1132-fixer-support' || state.configured !== true ||
         state.capabilities?.feedback !== true || state.capabilities?.statelessFeedback !== true ||
+        state.contract?.version !== contractPin.version ||
+        state.contract?.schemaSha256 !== contractPin.schemaSha256 ||
         state.deploymentRevision !== identity.backendDeploymentRevision ||
         state.destinationFingerprint !== identity.destinationFingerprint ||
         state.acknowledgementFingerprint !== identity.acknowledgementFingerprint) {

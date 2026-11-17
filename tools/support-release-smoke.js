@@ -6,6 +6,7 @@ const path = require('node:path');
 (async () => {
   const { verifySupportEndpoint } = await import('../scripts/verify-support-endpoint.mjs');
   const { supportConfigRevision } = require('../src/main/support-client');
+  const { pin: contractPin } = require('../src/main/support-contract');
   const publicEndpoint = 'https://support.example/v1/feedback';
   const identity = {
     endpointConfigRevision: supportConfigRevision(publicEndpoint),
@@ -15,6 +16,7 @@ const path = require('node:path');
   };
   const ready = { ok: true, configured: true, service: '1132-fixer-support',
     capabilities: { feedback: true, statelessFeedback: true, screenshots: false },
+    contract: { version: contractPin.version, schemaSha256: contractPin.schemaSha256 },
     deploymentRevision: identity.backendDeploymentRevision,
     destinationFingerprint: identity.destinationFingerprint,
     acknowledgementFingerprint: identity.acknowledgementFingerprint };
@@ -39,6 +41,10 @@ const path = require('node:path');
   for (const state of [
     {}, { ...ready, ok: false }, { ...ready, configured: false }, { ...ready, service: 'other' },
     { ...ready, capabilities: { feedback: true } },
+    // A service that speaks another contract, or reports none, is refused.
+    { ...ready, contract: undefined },
+    { ...ready, contract: { version: contractPin.version + 1, schemaSha256: contractPin.schemaSha256 } },
+    { ...ready, contract: { version: contractPin.version, schemaSha256: '4'.repeat(64) } },
     { ...ready, deploymentRevision: '4'.repeat(40) },
     { ...ready, destinationFingerprint: '4'.repeat(64) },
     { ...ready, acknowledgementFingerprint: '4'.repeat(64) }

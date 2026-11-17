@@ -1,0 +1,11 @@
+{
+  "source": "1132-Fixer/support-reporting",
+  "path": "contract/",
+  "commit": "1d31d41dddc637e2b09bcbd3843fe37d6a7adeab",
+  "version": 1,
+  "schemaSha256": "6dfc5fb8712cf45a1670b82b9e48d5002c279f8393a1b09b5fa830792f52a3da",
+  "files": {
+    "feedback.v1.schema.json": "6dfc5fb8712cf45a1670b82b9e48d5002c279f8393a1b09b5fa830792f52a3da",
+    "validate.js": "743ad3039bbfa9bd60a881e28aa89a143d92f1e57e215b0ee2c6b3741c3e64ec"
+  }
+}

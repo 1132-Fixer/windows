@@ -132,7 +132,8 @@ async function run() {
       const call = calls.at(-1);
       check(call.method === 'POST' && call.path === '/v1/feedback', `${type} uses the same service route`);
       check(call.headers['idempotency-key'] === call.body.requestId && /^[0-9a-f-]{36}$/.test(call.body.requestId), `${type} has a temporary request ID`);
-      check(!call.headers.authorization && Object.keys(call.body).sort().join(',') === (type === 'User Rating' ? 'rating,requestId,text,type,version' : 'requestId,text,type,version'), `${type} sends no credential or automatic device inventory`);
+      // `product` is the fixed word "windows": it names this app, not the computer.
+      check(!call.headers.authorization && Object.keys(call.body).sort().join(',') === (type === 'User Rating' ? 'product,rating,requestId,text,type,version' : 'product,requestId,text,type,version') && call.body.product === 'windows', `${type} sends no credential or automatic device inventory`);
     }
 
     const image = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(24)]);
@@ -340,7 +341,11 @@ async function run() {
   console.log('support-submission-smoke: build injection secret rejection');
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'fixer-public-config-'));
   try {
-    for (const relative of ['scripts/inject-config.js', 'src/main/support-client.js', 'messages.js']) {
+    // Everything that scripts/inject-config.js loads: the client and the
+    // contract copy that the client checks requests against.
+    for (const relative of ['scripts/inject-config.js', 'src/main/support-client.js', 'messages.js',
+      'src/main/support-contract/index.js', 'src/main/support-contract/pin.json',
+      'src/main/support-contract/feedback.v1.schema.json', 'src/main/support-contract/validate.js']) {
       const target = path.join(temp, relative);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.copyFileSync(path.join(root, relative), target);

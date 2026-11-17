@@ -454,6 +454,7 @@ const FEEDBACK = Object.freeze({
   TOO_LARGE: 'The request is too large. Shorten the message or remove the screenshot. Your draft is kept.',
   TEXT_TOO_LARGE: 'The message exceeds 100 KB. Shorten it and try again. Your draft is kept.',
   ATTACH_TOO_LARGE: 'This report would exceed 100 KB. Your draft is unchanged. Copy the report or shorten your message.',
+  DIAGNOSTICS_TOO_LARGE: 'The Support Report is too large to include. Your draft is kept. Send your message without the report.',
   SCREENSHOT_INVALID: 'Attach a PNG, JPEG, WebP or GIF screenshot of 5 MB or less. Your draft is kept.',
   BUSY: 'This request is still sending. Wait before trying again.',
   RATING_REQUIRED: 'Choose your overall rating from 1 to 5 before sending.',

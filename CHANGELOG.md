@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Feedback: the request follows the shared support contract.** The report
+  that the app sends is now defined in one place, the support service
+  repository, and the app ships an exact copy of that contract with a
+  recorded fingerprint. Before a request leaves the computer, the app checks
+  it against the contract; a request that does not pass is not sent. Each
+  request now names its product (`windows`). This is a fixed word, not
+  information about the computer.
+- **Release check: the support service must speak the same contract.** The
+  release readiness check now also refuses a support service whose contract
+  version or schema fingerprint differs from the copy in the build.
+
+### Fixed
+
+- **Release preflight: the support repository name.** The preflight named the
+  support repository by its former name. GitHub answers with the current name,
+  so the identity check could never pass. The preflight now uses the current
+  name, `1132-Fixer/support-reporting`.
+
 ## [6.5.0] - 2026-11-14
 
 6.5.0 is the first release after 6.4.0. Version 6.4.1 was prepared but never
