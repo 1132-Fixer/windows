@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Bug Report: the Support Report is sent only by your choice.** The button
+  **Attach Support Report** is now **Include Support Report**. Before, it
+  copied the report into your message, where it stayed until you deleted it
+  by hand. Now the report stays apart from your message and is sent as a
+  separate attachment, only when you include it. **Remove Support Report**
+  withdraws the choice before you send, and a new form never starts with the
+  report included. The support service refuses a report that arrives without
+  this choice.
+- **Feedback: status messages stay in view.** When the form is taller than
+  the window, the form now scrolls to its status line when a message appears
+  there (for example "Sending…" or the reason for a failure).
 - **Feedback: the request follows the shared support contract.** The report
   that the app sends is now defined in one place, the support service
   repository, and the app ships an exact copy of that contract with a

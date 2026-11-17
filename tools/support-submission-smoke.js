@@ -192,6 +192,7 @@ async function run() {
       elements[id].closest = () => ({ querySelectorAll: () => [elements.fbBugText] });
     }
     const closeTimers = [];
+    const bridgeDiagnostics = []; // fifth bridge argument of each submission
     const context = {
       FEEDBACK, FEEDBACK_FALLBACK: FEEDBACK.FAILED, FEEDBACK_NETWORK: FEEDBACK.NETWORK,
       FEEDBACK_TEXT_MAX_BYTES: support.TEXT_MAX_BYTES, TextEncoder, feedbackGen: 1,
@@ -199,14 +200,19 @@ async function run() {
       feedbackEditorLocks: new WeakMap(),
       SUBMIT_BTN_FOR_STATUS: { fbBugStatus: 'fbBugSubmit', fbRatingStatus: 'fbRatingSubmit', fbContactStatus: 'fbContactSubmit' },
       document: { getElementById: id => elements[id] },
-      window: { electronAPI: { submitFeedback: (type, text, screenshot, rating) => submit({ type, text, screenshot, rating }) } },
+      window: { electronAPI: { submitFeedback: (type, text, screenshot, rating, diagnostics) => {
+        bridgeDiagnostics.push(diagnostics);
+        return submit({ type, text, screenshot, rating });
+      } } },
       setTimeout: callback => { closeTimers.push(callback); return 1; }, closeFeedback() {}, refreshBugSubmit() {},
+      revealFeedbackStatus() {},
     };
     vm.createContext(context);
     vm.runInContext(renderer.slice(fnStart, fnEnd), context);
     mode = 'ok';
     await context.submitFeedback('Bug Report', 'Draft remains here', 'fbBugStatus');
     check(elements.fbBugStatus.textContent === 'Sent', 'successful HTTP acknowledgement shows exactly Sent');
+    check(bridgeDiagnostics.length === 1 && bridgeDiagnostics[0] === undefined, 'a submission with no included report passes no diagnostics to the bridge');
     check(elements.fbBugText.disabled, 'submitted draft stays stable until the acknowledgement closes');
     closeTimers.shift()();
     check(!elements.fbBugText.disabled, 'form editors unlock after Sent closes');
@@ -265,7 +271,8 @@ async function run() {
         window: { electronAPI: { submitFeedback: () => new Promise(resolve => { resolveSubmission = resolve; }) } },
         setTimeout: callback => { staleTimers.push(callback); return staleTimers.length; },
         closeFeedback: () => { closeCalls++; },
-        refreshBugSubmit: () => { bugSubmit.disabled = false; }
+        refreshBugSubmit: () => { bugSubmit.disabled = false; },
+        revealFeedbackStatus() {}
       };
       vm.createContext(formContext);
       vm.runInContext([

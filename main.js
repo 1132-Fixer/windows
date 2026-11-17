@@ -5133,7 +5133,16 @@ ipcMain.handle('feedback-capabilities', () => supportClient.capabilities(config)
 // User-triggered submissions use one neutral, credential-free adapter.
 // The app version and the fixed product name are the only automatic metadata;
 // optional diagnostics are user chosen.
-ipcMain.handle('submit-feedback', async (event, type, text, screenshot, rating) => {
+ipcMain.handle('submit-feedback', async (event, type, text, screenshot, rating, diagnostics) => {
+  // The form passes the Support Report only when the person chose to include
+  // it in this one report. Anything else in that argument reaches the client
+  // as a report without consent, which the client refuses: a malformed
+  // argument must never turn into a report that is sent without its
+  // diagnostics while the person believes that they were included.
+  const report = diagnostics === undefined || diagnostics === null ? {} : {
+    diagnostics: diagnostics && typeof diagnostics.markdown === 'string' ? diagnostics.markdown : '',
+    consentDiagnostics: Boolean(diagnostics) && diagnostics.consent === true,
+  };
   return supportClient.submitFeedback({
     config,
     type,
@@ -5141,6 +5150,7 @@ ipcMain.handle('submit-feedback', async (event, type, text, screenshot, rating) 
     version: app.getVersion(),
     screenshot,
     rating,
+    ...report,
   });
 });
 

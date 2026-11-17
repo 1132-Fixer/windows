@@ -23,9 +23,11 @@ Never edit the two copied files here.
   `product: "windows"`.
 - Before a request leaves the computer, the client checks it against the
   schema. A request that the contract does not accept is not sent.
-- Diagnostics (the Support Report) are sent as their own field only when the
-  caller states that the person chose to include them in that one report. The
-  client then sends
+- Diagnostics (the Support Report) are sent only when the person selects
+  **Include Support Report** in the Bug Report form for that one report. The
+  form passes that choice through `submit-feedback`; a new form never inherits
+  it, and a second press withdraws it. The report is not merged into the
+  message text. The client then sends
   `diagnostics: { format: "markdown", text }` together with
   `consent: { diagnostics: true }`. The service refuses diagnostics that come
   without that statement.

@@ -453,8 +453,16 @@ const FEEDBACK = Object.freeze({
   REJECTED: 'Check your message and try again. Your draft is kept.',
   TOO_LARGE: 'The request is too large. Shorten the message or remove the screenshot. Your draft is kept.',
   TEXT_TOO_LARGE: 'The message exceeds 100 KB. Shorten it and try again. Your draft is kept.',
-  ATTACH_TOO_LARGE: 'This report would exceed 100 KB. Your draft is unchanged. Copy the report or shorten your message.',
   DIAGNOSTICS_TOO_LARGE: 'The Support Report is too large to include. Your draft is kept. Send your message without the report.',
+  // Bug Report form: the Support Report is sent only after the person selects
+  // the control, and a second press withdraws that choice.
+  REPORT_INCLUDE: 'Include Support Report',
+  REPORT_REMOVE: 'Remove Support Report',
+  REPORT_PREPARING: 'Preparing…',
+  REPORT_INCLUDED: 'The Support Report will be sent with this bug report. You can preview it first.',
+  REPORT_NOT_INCLUDED: 'The Support Report will not be sent.',
+  REPORT_BUILD_FAILED: 'Could not build the Support Report. Your draft is kept. You can try again.',
+  REPORT_ONLY_TEXT: 'No description was written. The Support Report is included.',
   SCREENSHOT_INVALID: 'Attach a PNG, JPEG, WebP or GIF screenshot of 5 MB or less. Your draft is kept.',
   BUSY: 'This request is still sending. Wait before trying again.',
   RATING_REQUIRED: 'Choose your overall rating from 1 to 5 before sending.',
