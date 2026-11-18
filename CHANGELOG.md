@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Colours, shadows and fonts come from the design system only.** The page
+  styles no longer state a colour, a shadow or a font family of their own.
+  Two small things look different. The dimmed background behind the
+  confirmation, About, idle and update dialogs now has the design-system
+  tone, the same as behind the Feedback dialogs; it is slightly lighter
+  than before. The update diagnostics text uses the same monospace font as
+  the other diagnostic text.
 - **Bug Report: the Support Report is sent only by your choice.** The button
   **Attach Support Report** is now **Include Support Report**. Before, it
   copied the report into your message, where it stayed until you deleted it

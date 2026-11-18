@@ -104,7 +104,7 @@ body[data-compact-state="cancelling"] #cancelFixBtn { opacity: 0.72; }
   display: grid;
   place-items: center;
   padding: var(--s-6);
-  background: rgba(15, 23, 36, 0.72);
+  background: var(--scrim);
   -webkit-app-region: no-drag;
 }
 .compact-exit-overlay[hidden] { display: none; }
@@ -134,7 +134,7 @@ body[data-compact-state="cancelling"] #cancelFixBtn { opacity: 0.72; }
 }
 .compact-exit-dialog button:hover { background: var(--panel-2); }
 .compact-exit-dialog button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.compact-exit-dialog .compact-exit-confirm { background: var(--danger); border-color: var(--danger); color: #fff; }
+.compact-exit-dialog .compact-exit-confirm { background: var(--danger); border-color: var(--danger); color: var(--on-accent); }
 
 @media (prefers-reduced-motion: reduce) {
   .compact-spinner { animation: none; border-top-color: var(--border-strong); }
