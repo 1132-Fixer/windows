@@ -74,6 +74,10 @@ const DETAILS_CHECKS = Object.freeze({
       repairable: 'Needs a reset. Fix now takes care of this.',
       warning: 'Could not fully check the helper account. The fix can still run.',
       unknown: 'Could not fully check the helper account. The fix can still run.'
+    },
+    // Scan reasons that need their own sentence (only while Needs attention).
+    explainByReason: {
+      legacy_admin: 'Has administrator rights. If an older version set up this account, it may still use a password that was the same on every computer. Fix now replaces it with a standard account and a new password.'
     }
   },
   helperProfile: {
@@ -145,11 +149,13 @@ function normalizeStatus(status) {
   return Object.prototype.hasOwnProperty.call(DETAILS_STATUS, status) ? status : 'unknown';
 }
 
-function checkView(key, fallbackLabel, status) {
+function checkView(key, fallbackLabel, status, reason) {
   const s = normalizeStatus(status);
   const spec = DETAILS_CHECKS[key] || { label: fallbackLabel || key, description: '', explain: {} };
   const st = detailsStatusFor(s);
-  const explain = (spec.explain && spec.explain[s]) || DETAILS_EXPLAIN_DEFAULT[s] || '';
+  const byReason = s === 'repairable' && typeof reason === 'string' && spec.explainByReason &&
+    Object.prototype.hasOwnProperty.call(spec.explainByReason, reason) ? spec.explainByReason[reason] : '';
+  const explain = byReason || (spec.explain && spec.explain[s]) || DETAILS_EXPLAIN_DEFAULT[s] || '';
   return {
     key,
     label: spec.label,
@@ -190,8 +196,9 @@ function categorySummary(cat) {
 // Returns the full Details model: categories in scan order, each with its
 // translated checks, counts, tone and one summary line; plus an overall
 // headline and count line for the summary strip.
-function buildDetailsModel(statusByKey, order) {
+function buildDetailsModel(statusByKey, order, reasonByKey) {
   const by = statusByKey && typeof statusByKey === 'object' ? statusByKey : {};
+  const reasons = reasonByKey && typeof reasonByKey === 'object' ? reasonByKey : {};
   const list = Array.isArray(order) ? order : [];
   const categories = [];
   for (const c of list) {
@@ -202,7 +209,7 @@ function buildDetailsModel(statusByKey, order) {
     }
     // A key the scan never reported is unknown — never silently Ready.
     const status = Object.prototype.hasOwnProperty.call(by, c.key) ? by[c.key] : 'unknown';
-    cat.checks.push(checkView(c.key, c.label, status));
+    cat.checks.push(checkView(c.key, c.label, status, reasons[c.key]));
   }
   for (const cat of categories) {
     cat.tone = worstTone(cat.checks.map((x) => x.tone));

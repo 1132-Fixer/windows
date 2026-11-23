@@ -2,6 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const vm = require('node:vm');
+const { readyPaneFor } = require('../messages');
 const { compactStageView } = require('../src/preload/compact-shell');
 
 const ROOT = path.join(__dirname, '..');
@@ -19,9 +21,6 @@ console.log('compact-shell-smoke: requested four-state copy');
 for (const text of [
   'Checking…',
   'Making sure everything',
-  'Ready to fix Zoom',
-  'Start Zoom with a fresh setup.',
-  'Review the helper account and profile changes before continuing.',
   'Fixing Zoom',
   'Getting things ready…',
   'Step ${view.step} of ${FIX_STAGE_COUNT}',
@@ -30,6 +29,54 @@ for (const text of [
   'Open Zoom'
 ]) {
   check(shell.includes(text), `shell covers ${JSON.stringify(text)}`);
+}
+
+// Run the shipped mutation observer against in-memory elements. A second
+// sync after the renderer paints previously replaced a real warning with Ready.
+{
+  function element() {
+    return {
+      hidden: false, dataset: {}, classList: { add() {}, contains() { return false; } },
+      appendChild() {}, addEventListener() {}, setAttribute() {}, getAttribute() { return null; },
+      querySelector() { return element(); }
+    };
+  }
+  const elements = new Map();
+  function byId(id) {
+    if (!elements.has(id)) elements.set(id, element());
+    return elements.get(id);
+  }
+  byId('wizResult').classList.contains = name => name === 'active';
+  byId('elevateBtn').hidden = true;
+  byId('zoomRecovery').hidden = true;
+  const document = {
+    body: element(), head: element(), documentElement: element(), readyState: 'complete',
+    createElement: element, getElementById: byId, querySelector: element
+  };
+  let notifyMutation;
+  class FixtureObserver {
+    constructor(callback) { notifyMutation = callback; }
+    observe() {}
+  }
+  const context = {
+    module: { exports: {} }, document, MutationObserver: FixtureObserver, console,
+    window: { setTimeout() {}, requestAnimationFrame(callback) { callback(); } }
+  };
+  vm.runInNewContext(shell, context);
+  context.module.exports.installCompactShell();
+  for (const legacyAdmin of [false, true, false]) {
+    const pane = readyPaneFor(legacyAdmin);
+    byId('wizResultTitle').textContent = pane.title;
+    byId('wizResultSub').textContent = pane.sub;
+    byId('wizResultSub').hidden = false;
+    notifyMutation();
+    check(document.body.dataset.compactState === 'ready' && !byId('fixBtn').hidden &&
+      byId('wizResultTitle').textContent === pane.title && byId('wizResultSub').textContent === pane.sub &&
+      !byId('wizResultSub').hidden, `compact sync keeps the ${pane.tone} ready result and Fix now`);
+  }
+  check(shell.includes('#wizResultGlyph[data-tone="ok"]') &&
+    !shell.includes('body[data-compact-state="ready"] #wizResultGlyph,'),
+    'compact ready styling hides only the ordinary result glyph');
 }
 check(html.includes('<span>View details</span>'), 'View details is the static disclosure label');
 

@@ -5404,23 +5404,16 @@ async function buildPreflightScan() {
   // reserved for states FIX NOW actually has to repair.
   const helperProfileDir = `C:\\Users\\${FIX_USER}`;
   const helperProfileExists = fs.existsSync(helperProfileDir);
-  if (probeFailed) {
-    cards.helperUser = { status: 'warning', label: 'Helper account', message: probeFailMsg };
-  } else {
-    const helperExists = !!probeData.user1_exists;
-    const helperAdmin  = !!probeData.user1_admin;
-    if (!helperExists && !helperProfileExists) {
-      cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' will be created on FIX NOW.` };
-    } else if (helperExists && helperAdmin) {
-      cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' has administrator rights it no longer needs — FIX NOW will remove them.` };
-    } else if (helperExists && helperProfileExists) {
-      cards.helperUser = { status: 'ready', label: 'Helper account', message: `'${FIX_USER}' is set up — standard account, profile present. FIX NOW rebuilds it fresh.` };
-    } else if (helperExists) {
-      cards.helperUser = { status: 'repairable', label: 'Helper account', message: `'${FIX_USER}' account exists but no profile yet. FIX NOW will reset.` };
-    } else {
-      cards.helperUser = { status: 'warning', label: 'Helper account', message: `Stale profile folder at ${helperProfileDir} with no account. FIX NOW will clean it up.` };
-    }
-  }
+  cards.helperUser = startupScan.helperAccountCard({
+    probeFailed,
+    probeFailMessage: probeFailMsg,
+    exists: !!probeData.user1_exists,
+    admin: !!probeData.user1_admin,
+    profileExists: helperProfileExists,
+    user: FIX_USER,
+    profileDir: helperProfileDir,
+    copy: messages.HELPER_ACCOUNT
+  });
 
   // --- Helper profile (TEMP / canonical / ownership / ProfileList) --
   // Inventory only. A TEMP ProfileImagePath is repairable (FIX NOW

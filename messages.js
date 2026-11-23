@@ -288,6 +288,8 @@ const WIZARD_GROUPS = CHECK_ORDER.reduce((groups, c) => {
 const WIZARD = {
   // Ready means the tool can run the repair. It is NOT a claim that Zoom
   // error 1132 is absent, that the helper account works, or that Zoom is healthy.
+  LEGACY_HELPER_TITLE: 'Run Fix now once to secure the helper account',
+  LEGACY_HELPER_SUB:   'The helper account on this PC has administrator rights. If 1132 Fixer 5.2.0 to 5.5.1 or the old user.bat script set up this account, it may still use a password that was the same on every computer.\nFix now replaces it with a standard account and a new random password. Nothing changes until you press Fix now.',
   READY_TITLE:    'Ready to fix Zoom',
   READY_SUB:      'Start Zoom with a fresh setup.\nReview the helper account and profile changes before continuing.',
   CHECKING_TITLE: 'Checking…',
@@ -709,8 +711,33 @@ const DISCOVERY = {
   FAILED: 'We couldn’t open that page. Please try again.'
 };
 
+// Helper account (user1) checklist copy. 1132 Fixer 5.2.0 to 5.5.1 created
+// user1 as an administrator with a password that was the same on every
+// computer where it ran. 5.6.0 and later never add user1 to Administrators,
+// and every completed FIX NOW deletes and recreates it as a standard account
+// with a new random password. So user1 in Administrators most likely comes
+// from those versions (or the old user.bat script, or a manual change), and
+// a FIX NOW has not completed since. Never state the old password.
+const HELPER_ACCOUNT = Object.freeze({
+  WILL_CREATE: (user) => `'${user}' will be created on FIX NOW.`,
+  LEGACY_ADMIN: (user) => `'${user}' has administrator rights. It may have been set up by an older 1132 Fixer (5.5.1 or earlier) or the old user.bat script, with a password that was the same on every computer. Press FIX NOW once: it replaces '${user}' with a standard account and a new random password.`,
+  READY: (user) => `'${user}' is set up — standard account, profile present. FIX NOW rebuilds it fresh.`,
+  NO_PROFILE: (user) => `'${user}' account exists but no profile yet. FIX NOW will reset.`,
+  STALE_PROFILE: (profileDir) => `Stale profile folder at ${profileDir} with no account. FIX NOW will clean it up.`
+});
+
+// Result pane after a scan that allows Fix now. A helper account left with
+// administrator rights (scan reason 'legacy_admin') gets a warning pane;
+// Fix now stays available and nothing changes until the user presses it.
+function readyPaneFor(legacyHelperAdmin) {
+  return legacyHelperAdmin === true
+    ? { tone: 'warn', title: WIZARD.LEGACY_HELPER_TITLE, sub: WIZARD.LEGACY_HELPER_SUB }
+    : { tone: 'ok', title: WIZARD.READY_TITLE, sub: WIZARD.READY_SUB };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
+    HELPER_ACCOUNT, readyPaneFor,
     UPDATE,
     UPDATE_SETTINGS,
     STARTUP_FAILURE, startupFailureSub, startupFailureLogLine,

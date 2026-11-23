@@ -210,6 +210,55 @@ function classify(script) {
     check(!rejecting.isRunning(), 'a rejected scan frees the slot too (no stuck retry)');
   }
 
+  console.log('startup-scan-smoke: helper account card (legacy administrator user1)');
+  {
+    const base = {
+      probeFailed: false, probeFailMessage: 'probe failed', user: 'user1',
+      profileDir: 'C:\\Users\\user1', copy: messages.HELPER_ACCOUNT
+    };
+    const adminCard = scan.helperAccountCard({ ...base, exists: true, admin: true, profileExists: true });
+    check(adminCard.status === 'repairable' && adminCard.reason === 'legacy_admin',
+      'user1 present and in Administrators: repairable with reason legacy_admin (FIX NOW handles it)');
+    check(/older 1132 Fixer \(5\.5\.1 or earlier\)/.test(adminCard.message) && /administrator rights/.test(adminCard.message) &&
+      /same on every computer/.test(adminCard.message) && /Press FIX NOW once/.test(adminCard.message) &&
+      /new random password/.test(adminCard.message), 'the warning names the risk and the one action');
+    // Built at run time from the account name; no password literal here.
+    const statesPassword = new RegExp(`password[^.]{0,40}\\b${base.user}\\b`, 'i');
+    check(!/password(?: is|:)\s*\S/i.test(adminCard.message) && !statesPassword.test(adminCard.message),
+      'the warning never states a password');
+    const noProfileAdmin = scan.helperAccountCard({ ...base, exists: true, admin: true, profileExists: false });
+    check(noProfileAdmin.message === adminCard.message, 'an administrator user1 is warned about with or without a profile');
+    const standard = scan.helperAccountCard({ ...base, exists: true, admin: false, profileExists: true });
+    check(standard.status === 'ready' && !standard.reason && !/administrator|same on every computer/.test(standard.message),
+      'user1 present as a standard account: no warning');
+    const absent = scan.helperAccountCard({ ...base, exists: false, admin: false, profileExists: false });
+    check(absent.status === 'ready' && !absent.reason && /will be created/.test(absent.message), 'user1 absent: no warning');
+    // The warning the user actually sees: the result pane after the scan.
+    const warnPane = messages.readyPaneFor(true);
+    check(warnPane.tone === 'warn' && warnPane.title === messages.WIZARD.LEGACY_HELPER_TITLE &&
+      /administrator rights/.test(warnPane.sub) && /If .*may still use a password that was the same on every computer/.test(warnPane.sub) &&
+      /Nothing changes until you press Fix now/.test(warnPane.sub) && !statesPassword.test(warnPane.sub) &&
+      !new RegExp(`\\b${base.user}\\b`).test(warnPane.title + warnPane.sub),
+    'legacy administrator: the result pane is a warning that names the risk and the one action, no account name, no password');
+    const readyPane = messages.readyPaneFor(false);
+    check(readyPane.tone === 'ok' && readyPane.title === messages.WIZARD.READY_TITLE && readyPane.sub === messages.WIZARD.READY_SUB,
+      'standard or absent helper account: the usual ready pane');
+    check(messages.readyPaneFor('yes').tone === 'ok', 'only an explicit true selects the warning pane');
+    const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'renderer.js'), 'utf8');
+    check(rendererSource.includes("legacyHelperAdmin: statusByKey.helperUser === 'repairable' && reasonByKey.helperUser === 'legacy_admin'") &&
+      rendererSource.includes('const pane = readyPaneFor(legacyHelperAdmin === true);') &&
+      rendererSource.includes('showResultPane(pane.tone, pane.title, pane.sub);') &&
+      rendererSource.includes('buildDetailsModel(lastScan.statusByKey, CHECK_ORDER, lastScan.reasonByKey)'),
+    'the renderer shows the warning pane and passes the reason to View details');
+    const failed = scan.helperAccountCard({ ...base, probeFailed: true, exists: true, admin: true, profileExists: true });
+    check(failed.status === 'warning' && failed.message === 'probe failed',
+      'a failed probe is reported as unverified, never as an administrator account');
+    const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+    check(mainSource.includes('cards.helperUser = startupScan.helperAccountCard({') &&
+      mainSource.includes('admin: !!probeData.user1_admin'),
+      'the real scan handler builds the card with this function from the account probe');
+  }
+
   console.log('startup-scan-smoke: real scan handler — healthy computer');
   {
     const tools = {}; for (const t of TOOL_NAMES) tools[t] = true;

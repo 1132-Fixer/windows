@@ -396,6 +396,10 @@ block in `index.html`, recorded in the design system as the Windows overlay
 └ footer 48px ── v6.3.2  Independent project. …   Support Feedback About ┘
 ```
 
+- The renderer owns the result title, description and glyph. The compact
+  ready state hides the ordinary success glyph. When the helper account has
+  administrator rights, it keeps the renderer's warning glyph and explanation
+  alongside Fix now. Both results use the same confirmation flow.
 - Header (landing rebalance 2026-09-05): a 104px band on `--panel` with a
   hairline divider; `grid-template-columns: 1fr auto 1fr` with
   `place-items: center`, the product mark in the middle track (`grid-column: 2`,

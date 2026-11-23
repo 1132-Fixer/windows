@@ -50,8 +50,8 @@ body.compact-shell-enabled #wizChecking .wiz-checks { display: none; }
 }
 @keyframes compact-spin { to { transform: rotate(360deg); } }
 
-/* READY: no glyph above the title; the copy carries the state. */
-body[data-compact-state="ready"] #wizResultGlyph,
+/* Ordinary ready copy stands alone. A repairable warning keeps its glyph. */
+body[data-compact-state="ready"] #wizResultGlyph[data-tone="ok"],
 body[data-compact-state="ready"] #zoomRecovery,
 body[data-compact-state="ready"] #fixDisabledNote { display: none; }
 
@@ -260,8 +260,6 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
       fixing: document.getElementById('wizFixing'),
       notice: document.getElementById('wizNotice')
     };
-    const resultTitle = document.getElementById('wizResultTitle');
-    const resultSub = document.getElementById('wizResultSub');
     const noticeTitle = document.getElementById('wizNoticeTitle');
     const noticeSub = document.getElementById('wizNoticeSub');
     const zoomRecovery = document.getElementById('zoomRecovery');
@@ -411,11 +409,7 @@ function installCompactShell({ requestCancel, requestQuit, gate } = {}) {
       setElementHidden(doneBtn, state !== 'success');
 
       if (state === 'ready') {
-        if (resultTitle) resultTitle.textContent = 'Ready to fix Zoom';
-        if (resultSub) {
-          resultSub.textContent = 'Start Zoom with a fresh setup.\nReview the helper account and profile changes before continuing.';
-          resultSub.hidden = false;
-        }
+        // The renderer has already selected the headline and tone for this scan.
         setElementHidden(fixBtn, false);
         if (fixBtn.textContent !== 'Starting after check…') fixBtn.textContent = 'Fix now';
         setElementHidden(launchBtn, true);
