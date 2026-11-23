@@ -117,12 +117,14 @@ published, so 6.5.0 also contains every change listed under 6.4.1 below.
   name, `1132-Fixer/support-reporting`.
 - **Release preflight and publisher: the immutable-release setting.** GitHub
   shows this setting only to a caller with the Administration read
-  permission. The workflow token cannot have that permission, so GitHub
-  answered "not found" and both checks read the setting as off, on a
-  repository where it is on. Both checks now read the setting with a separate
-  repository secret, `RELEASE_SETTINGS_READ_TOKEN`, that has only that read
-  permission. All other calls still use the workflow token. Without the
-  secret, both checks still refuse the release.
+  permission. The workflow token cannot have that permission: GitHub refuses
+  it (HTTP 403), so no release could pass, on a repository where the setting
+  is on. Both checks now read the setting with a separate repository secret,
+  `RELEASE_SETTINGS_READ_TOKEN`, that has only that read permission. All
+  other calls still use the workflow token. A missing secret stops the
+  release with its own error code before any request. After publication, the
+  publisher also reads the release back and requires GitHub to report it as
+  immutable.
 
 ### Cause on one affected computer (#266)
 

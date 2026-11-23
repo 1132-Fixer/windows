@@ -1333,7 +1333,7 @@ function cleanupExactFiles(filePaths, directory) {
   }));
   const publicationApi = ({
     uploadAt = -1, readbackAt = -1, wrongTagTarget = false,
-    immutableState = { enabled: true, enforced_by_owner: false }
+    immutableState = { enabled: true, enforced_by_owner: false }, immutableAfterPublish = true
   } = {}) => {
     const state = { draft: null, public: false, latest: null, assets: [], uploadIndex: 0, tagReads: 0 };
     return {
@@ -1343,7 +1343,7 @@ function cleanupExactFiles(filePaths, directory) {
         return { tag, tagObjectSha, targetSha: wrongTagTarget ? 'f'.repeat(40) : sourceHead };
       },
       getImmutableReleaseState: async () => immutableState,
-      getReleaseByTag: async () => null,
+      getReleaseByTag: async () => (state.public ? { ...state.draft, immutable: immutableAfterPublish } : null),
       createDraft: async ({ tag, prerelease }) => (state.draft = {
         id: 44, draft: true, tag_name: tag, prerelease
       }),
@@ -1485,6 +1485,24 @@ function cleanupExactFiles(filePaths, directory) {
     assert.equal(publication.state.latest.id, 44);
     assert.equal(publication.state.tagReads, 3, 'annotated tag is read before draft, after draft and after publication');
   }
+  {
+    const publication = publicationApi({ immutableAfterPublish: false });
+    await assert.rejects(publishRelease({
+      api: publication, repository: '1132-Fixer/windows', tag: `v${version}`,
+      head: sourceHead, version, assets
+    }), error => error.code === 'publication-not-immutable',
+    'a published release that GitHub does not report as immutable fails the publication');
+  }
+  {
+    const { requireSettingsToken } = await import('../scripts/github-rest.mjs');
+    assert.equal(requireSettingsToken({ RELEASE_SETTINGS_READ_TOKEN: ' fixture-settings-token ' }, 'x'),
+      'fixture-settings-token');
+    for (const env of [{}, { RELEASE_SETTINGS_READ_TOKEN: '' }, { RELEASE_SETTINGS_READ_TOKEN: '   ' }]) {
+      assert.throws(() => requireSettingsToken(env, 'release-settings-token-missing'),
+        error => error.code === 'release-settings-token-missing',
+        'a missing or blank settings token fails with its own code before any network call');
+    }
+  }
 
   suitePhase = 'release workflow binding';
   const releaseYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
@@ -1508,8 +1526,17 @@ function cleanupExactFiles(filePaths, directory) {
     !releaseYml.includes('NATIVE_ACCEPTANCE_MANIFEST') &&
     !releaseYml.includes('SUPPORT_RELEASE_CLEARANCE'),
   'release consumes immutable receipt identifiers, never self-authored JSON variables');
-  assert.equal(releaseYml.split('RELEASE_SETTINGS_READ_TOKEN: ${{ secrets.RELEASE_SETTINGS_READ_TOKEN }}').length - 1, 2,
-    'preflight and publication both read the immutable-release setting with the settings token');
+  {
+    // The settings token reaches exactly two steps: the preflight gate and the
+    // publication transaction. Any other step that receives it widens exposure.
+    const secretLine = 'RELEASE_SETTINGS_READ_TOKEN: ${{ secrets.RELEASE_SETTINGS_READ_TOKEN }}';
+    const steps = releaseYml.split(/\n      - name: /).slice(1);
+    const holders = steps.filter(step => step.includes(secretLine)).map(step => step.split('\n')[0].trim());
+    assert.deepEqual(holders, ['Verify source, checks and release evidence', 'Draft, verify and publish exact assets'],
+      'only the preflight gate and the publication step receive the settings token');
+    assert.equal(releaseYml.split('RELEASE_SETTINGS_READ_TOKEN').length - 1, 4,
+      'the settings token is named only on those two env lines (variable and secret name each)');
+  }
   assert.ok(evidenceYml.includes('workflow_dispatch:') &&
     evidenceYml.includes('node scripts/issue-release-evidence.mjs') &&
     evidenceYml.includes('overwrite: false'),

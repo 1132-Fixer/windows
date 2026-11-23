@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createGitHubRestClient } from './github-rest.mjs';
+import { createGitHubRestClient, requireSettingsToken } from './github-rest.mjs';
 import {
   fetchAuthoritativeReceipt,
   supportIsDeclaredUnavailable,
@@ -216,10 +216,12 @@ export async function verifyReleasePreflight({
   if (!tagObject || tagObject.tag !== tag || !tagObject.object ||
       tagObject.object.type !== 'commit' || tagObject.object.sha !== sha) fail('annotated-tag-identity');
   // GitHub serves this setting only to a caller with Administration: read.
-  // The workflow GITHUB_TOKEN cannot hold that permission and gets 404, the
-  // same answer as "disabled". The settings client carries a separate token
-  // with that one read permission; without it this check still fails closed.
-  const immutableReleases = await (settingsApi || api).json('GET', `${root}/immutable-releases`, undefined, { allow404: true });
+  // The workflow GITHUB_TOKEN cannot hold that permission (measured: 403). The
+  // settings client carries a separate token with that one read permission.
+  // With it, a 404 is a permission or scope fault, not "disabled".
+  const immutableReleases = settingsApi
+    ? await settingsApi.json('GET', `${root}/immutable-releases`, undefined, { allow404: false })
+    : await api.json('GET', `${root}/immutable-releases`, undefined, { allow404: true });
   if (!immutableReleases || immutableReleases.enabled !== true) fail('immutable-releases-required');
 
   const rules = pageItems(await api.paginate(`${root}/rules/branches/main?per_page=100`), 'ruleset-pagination-incomplete');
@@ -308,12 +310,10 @@ async function main() {
   if (!token) fail('github-token-missing');
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-  const settingsToken = process.env.RELEASE_SETTINGS_READ_TOKEN || '';
+  const settingsToken = requireSettingsToken(process.env, 'release-settings-token-missing');
   const result = await verifyReleasePreflight({
     api: createGitHubRestClient({ token, userAgent: '1132-fixer-release-preflight' }),
-    settingsApi: settingsToken
-      ? createGitHubRestClient({ token: settingsToken, userAgent: '1132-fixer-release-preflight' })
-      : undefined,
+    settingsApi: createGitHubRestClient({ token: settingsToken, userAgent: '1132-fixer-release-preflight' }),
     repository, tag, sha, version: pkg.version,
     nativeArtifactId: Number(process.env.NATIVE_ACCEPTANCE_ARTIFACT_ID || 0),
     supportArtifactId: Number(process.env.SUPPORT_CLEARANCE_ARTIFACT_ID || 0),

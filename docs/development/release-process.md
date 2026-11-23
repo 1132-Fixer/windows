@@ -92,8 +92,11 @@ in a bounded chain and requires the final issue to be closed before it reads
 candidate metadata. Preflight and the publisher also require immutable releases
 to be enabled before either can create a draft. Both read that setting with the
 repository secret `RELEASE_SETTINGS_READ_TOKEN` (Administration: read only),
-because GitHub answers `GITHUB_TOKEN` with "not found" for it. Without the
-secret, both refuse the release.
+because GitHub refuses `GITHUB_TOKEN` for it (HTTP 403). Without the secret,
+both stop with `release-settings-token-missing` or
+`publication-settings-token-missing`. After publication, the publisher reads
+the release back and fails with `publication-not-immutable` unless GitHub
+reports it as immutable.
 
 #### Releasing while the support service is not live
 
