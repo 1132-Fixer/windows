@@ -925,6 +925,16 @@ function cleanupExactFiles(filePaths, directory) {
     }
     await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi(), settingsApi: {} }),
       error => error.code === 'api-unavailable', 'a malformed settings client fails closed');
+    // Real transport: with the settings token, HTTP 404 or 403 is a settings-read fault, never "disabled".
+    for (const status of [404, 403, 401]) {
+      const settingsRest = createGitHubRestClient({
+        token: 'fixture-settings-token', userAgent: 'fixture-agent',
+        fetchImpl: async () => response({ status, json: { message: 'fixture' } })
+      });
+      await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi(), settingsApi: settingsRest }),
+        error => error.code === 'release-settings-read-failed',
+        `settings token answered ${status}: release-settings-read-failed`);
+    }
   }
   {
     const changed = new Map(pageResponses);
@@ -1273,6 +1283,18 @@ function cleanupExactFiles(filePaths, directory) {
       globalThis.fetch = originalFetch;
     }
   }
+  for (const status of [404, 403]) {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => response({ status, json: { message: 'fixture' } });
+    try {
+      await assert.rejects(githubReleaseApi({
+        repository: '1132-Fixer/windows', token: 'fixture-token', settingsToken: 'fixture-settings-token'
+      }).getImmutableReleaseState(), error => error.code === 'publication-settings-read-failed',
+      `publisher: settings token answered ${status}: publication-settings-read-failed, not "disabled"`);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
 
   const receiptOnlyApi = makeApi();
   const fetched = await fetchAuthoritativeReceipt({
@@ -1333,7 +1355,8 @@ function cleanupExactFiles(filePaths, directory) {
   }));
   const publicationApi = ({
     uploadAt = -1, readbackAt = -1, wrongTagTarget = false,
-    immutableState = { enabled: true, enforced_by_owner: false }, immutableAfterPublish = true
+    immutableState = { enabled: true, enforced_by_owner: false }, immutableAfterPublish = true,
+    finalRelease = null
   } = {}) => {
     const state = { draft: null, public: false, latest: null, assets: [], uploadIndex: 0, tagReads: 0 };
     return {
@@ -1343,7 +1366,12 @@ function cleanupExactFiles(filePaths, directory) {
         return { tag, tagObjectSha, targetSha: wrongTagTarget ? 'f'.repeat(40) : sourceHead };
       },
       getImmutableReleaseState: async () => immutableState,
-      getReleaseByTag: async () => (state.public ? { ...state.draft, immutable: immutableAfterPublish } : null),
+      getReleaseByTag: async () => {
+        if (!state.public) return null;
+        state.finalReads = (state.finalReads || 0) + 1;
+        if (finalRelease) return finalRelease(state);
+        return { ...state.draft, immutable: immutableAfterPublish };
+      },
       createDraft: async ({ tag, prerelease }) => (state.draft = {
         id: 44, draft: true, tag_name: tag, prerelease
       }),
@@ -1485,13 +1513,32 @@ function cleanupExactFiles(filePaths, directory) {
     assert.equal(publication.state.latest.id, 44);
     assert.equal(publication.state.tagReads, 3, 'annotated tag is read before draft, after draft and after publication');
   }
-  {
-    const publication = publicationApi({ immutableAfterPublish: false });
+  for (const [name, finalRelease] of [
+    ['not immutable', state => ({ ...state.draft, immutable: false })],
+    ['immutable field missing', state => ({ ...state.draft })],
+    ['another release id', state => ({ ...state.draft, id: 45, immutable: true })],
+    ['still a draft', state => ({ ...state.draft, draft: true, immutable: true })],
+    ['no release found', () => null]
+  ]) {
+    const publication = publicationApi({ finalRelease });
     await assert.rejects(publishRelease({
       api: publication, repository: '1132-Fixer/windows', tag: `v${version}`,
-      head: sourceHead, version, assets
-    }), error => error.code === 'publication-not-immutable',
-    'a published release that GitHub does not report as immutable fails the publication');
+      head: sourceHead, version, assets, immutableReadbackDelaysMs: [0, 0]
+    }), error => error.code === 'publication-not-immutable', `post-publication readback: ${name} fails`);
+    assert.equal(publication.state.public, true, `${name}: detection only, the release is already public`);
+    assert.equal(publication.state.latest.id, 44, `${name}: the latest-state check ran before the readback failure`);
+  }
+  {
+    // GitHub may set the immutable flag a moment after publication: bounded retries.
+    const publication = publicationApi({
+      finalRelease: state => ({ ...state.draft, immutable: state.finalReads >= 3 })
+    });
+    const published = await publishRelease({
+      api: publication, repository: '1132-Fixer/windows', tag: `v${version}`,
+      head: sourceHead, version, assets, immutableReadbackDelaysMs: [0, 0]
+    });
+    assert.equal(published.id, 44);
+    assert.equal(publication.state.finalReads, 3, 'readback retries until GitHub reports immutable, at most 3 reads');
   }
   {
     const { requireSettingsToken } = await import('../scripts/github-rest.mjs');
@@ -1536,6 +1583,8 @@ function cleanupExactFiles(filePaths, directory) {
       'only the preflight gate and the publication step receive the settings token');
     assert.equal(releaseYml.split('RELEASE_SETTINGS_READ_TOKEN').length - 1, 4,
       'the settings token is named only on those two env lines (variable and secret name each)');
+    assert.ok(!/toJSON\(\s*secrets/.test(releaseYml) && !/secrets\[/.test(releaseYml),
+      'no step receives the secrets object or a computed secret name');
   }
   assert.ok(evidenceYml.includes('workflow_dispatch:') &&
     evidenceYml.includes('node scripts/issue-release-evidence.mjs') &&

@@ -94,9 +94,15 @@ to be enabled before either can create a draft. Both read that setting with the
 repository secret `RELEASE_SETTINGS_READ_TOKEN` (Administration: read only),
 because GitHub refuses `GITHUB_TOKEN` for it (HTTP 403). Without the secret,
 both stop with `release-settings-token-missing` or
-`publication-settings-token-missing`. After publication, the publisher reads
-the release back and fails with `publication-not-immutable` unless GitHub
-reports it as immutable.
+`publication-settings-token-missing`. A settings token that GitHub refuses
+stops them with `release-settings-read-failed` or
+`publication-settings-read-failed`. After publication, the publisher reads the
+release back (up to three reads) and fails with `publication-not-immutable`
+unless GitHub reports it as immutable. That check detects; it cannot prevent:
+the release is already public and its assets were hash-verified before
+publication. Do not delete or re-tag it (a rerun stops at
+`publication-release-exists`). Check the repository's immutable-release
+setting and ship the next version.
 
 #### Releasing while the support service is not live
 

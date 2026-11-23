@@ -85,7 +85,10 @@ export function releaseBody(version, { supportUnavailable = false, changes = '' 
   return lines.join('\n');
 }
 
-export async function publishRelease({ api, repository, tag, head, version, assets, supportUnavailable = false, changes = '' }) {
+export async function publishRelease({
+  api, repository, tag, head, version, assets, supportUnavailable = false, changes = '',
+  immutableReadbackDelaysMs = [2000, 5000]
+}) {
   if (!api || typeof api.getReleaseByTag !== 'function' ||
       typeof api.resolveTag !== 'function' ||
       typeof api.getImmutableReleaseState !== 'function' ||
@@ -138,14 +141,23 @@ export async function publishRelease({ api, repository, tag, head, version, asse
   }
   const publishedTag = await api.resolveTag(tag);
   if (!publishedTag || publishedTag.tag !== tag || publishedTag.targetSha !== head) fail('publication-tag-identity');
-  // Read the published release back: GitHub must report it as immutable.
-  const finalRelease = await api.getReleaseByTag(tag);
-  if (!finalRelease || finalRelease.id !== draft.id || finalRelease.draft !== false ||
-      finalRelease.immutable !== true) fail('publication-not-immutable');
   if (!prerelease) {
     const latest = await api.getLatestRelease();
     if (!latest || latest.id !== draft.id || latest.tag_name !== tag || latest.draft !== false) fail('publication-latest-state');
   }
+  // Detection, not prevention: the release is already public here. Read it
+  // back (bounded retries for GitHub's lag) and require GitHub to report it
+  // as immutable. A failure leaves the published, hash-verified release in
+  // place; a rerun stops at publication-release-exists. The operator checks
+  // the repository's immutable-release setting and ships the next version.
+  let finalRelease = null;
+  for (let attempt = 0; attempt <= immutableReadbackDelaysMs.length; attempt++) {
+    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, immutableReadbackDelaysMs[attempt - 1]));
+    finalRelease = await api.getReleaseByTag(tag);
+    if (finalRelease && finalRelease.immutable === true) break;
+  }
+  if (!finalRelease || finalRelease.id !== draft.id || finalRelease.draft !== false ||
+      finalRelease.immutable !== true) fail('publication-not-immutable');
   return published;
 }
 
@@ -164,7 +176,9 @@ export function githubReleaseApi({ repository, token, settingsToken = '' }) {
   }
   return {
     getImmutableReleaseState: () => settingsClient.json('GET', `${apiBase}/immutable-releases`, null,
-      { allow404: !settingsToken, errorCode: 'publication-api-failed' }),
+      settingsToken
+        ? { allow404: false, errorCode: 'publication-settings-read-failed' }
+        : { allow404: true, errorCode: 'publication-api-failed' }),
     getReleaseByTag: tag => json('GET', `${apiBase}/releases/tags/${encodeURIComponent(tag)}`, null, true),
     createDraft: input => json('POST', `${apiBase}/releases`, {
       tag_name: input.tag,

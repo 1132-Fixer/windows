@@ -124,7 +124,8 @@ published, so 6.5.0 also contains every change listed under 6.4.1 below.
   other calls still use the workflow token. A missing secret stops the
   release with its own error code before any request. After publication, the
   publisher also reads the release back and requires GitHub to report it as
-  immutable.
+  immutable. That last check can only report a fault: the release is already
+  public at that point.
 
 ### Cause on one affected computer (#266)
 

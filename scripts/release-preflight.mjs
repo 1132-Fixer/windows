@@ -220,7 +220,8 @@ export async function verifyReleasePreflight({
   // settings client carries a separate token with that one read permission.
   // With it, a 404 is a permission or scope fault, not "disabled".
   const immutableReleases = settingsApi
-    ? await settingsApi.json('GET', `${root}/immutable-releases`, undefined, { allow404: false })
+    ? await settingsApi.json('GET', `${root}/immutable-releases`, undefined,
+      { allow404: false, errorCode: 'release-settings-read-failed' })
     : await api.json('GET', `${root}/immutable-releases`, undefined, { allow404: true });
   if (!immutableReleases || immutableReleases.enabled !== true) fail('immutable-releases-required');
 
