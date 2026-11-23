@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createGitHubRestClient, optionalSettingsToken } from './github-rest.mjs';
+import { createGitHubRestClient, settingsMode } from './github-rest.mjs';
 import { supportIsDeclaredUnavailable, validateReleaseEvidence } from './release-evidence.mjs';
 import { verifyCandidateManifest } from './release-candidate.mjs';
 
@@ -171,7 +171,9 @@ export function githubReleaseApi({ repository, token, settingsToken = '' }) {
   // The immutable-release setting needs Administration: read, which the
   // workflow GITHUB_TOKEN cannot hold (measured: 403). Only that one read uses
   // the separate settings token. With it, a 404 is a permission or scope
-  // fault, not "disabled"; without it the publication still fails closed.
+  // fault, not "disabled". Without it, main() does not call this read (local
+  // pre-tag readback mode); the workflow-token fallback below then fails
+  // closed (403) if anything calls it.
   const settingsClient = settingsToken
     ? createGitHubRestClient({ token: settingsToken, userAgent: '1132-fixer-release-publisher' })
     : client;
@@ -295,14 +297,14 @@ async function main() {
     portableSha256: evidence.native.packages.portable.packageSha256
   });
   const assets = exactAssets(dist, candidate);
-  const settingsToken = optionalSettingsToken(process.env);
-  if (!settingsToken) {
+  const { settingsToken, immutableSettingReadLocally } = settingsMode(process.env);
+  if (immutableSettingReadLocally) {
     console.log('[release-publish] WARNING RELEASE_SETTINGS_READ_TOKEN absent: the immutable-release setting ' +
       'is not read before publication; the post-publication readback still requires immutable=true');
   }
   const published = await publishRelease({
     api: githubReleaseApi({ repository, token, settingsToken }),
-    immutableSettingReadLocally: !settingsToken,
+    immutableSettingReadLocally,
     repository, tag, head, version, assets,
     supportUnavailable: supportIsDeclaredUnavailable(evidence.support),
     changes: readReleaseChanges(version)

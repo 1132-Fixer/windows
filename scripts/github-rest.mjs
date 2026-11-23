@@ -40,6 +40,13 @@ export function optionalSettingsToken(env) {
   return typeof env.RELEASE_SETTINGS_READ_TOKEN === 'string' ? env.RELEASE_SETTINGS_READ_TOKEN.trim() : '';
 }
 
+// The one place both release jobs decide the mode: token present = read the
+// setting in CI; token absent or blank = local pre-tag readback in the tag.
+export function settingsMode(env) {
+  const settingsToken = optionalSettingsToken(env);
+  return { settingsToken, immutableSettingReadLocally: settingsToken === '' };
+}
+
 export function nextLink(value) {
   if (!value) return null;
   if (typeof value !== 'string' || value.length > 16384) fail('github-pagination-link');

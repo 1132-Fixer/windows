@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createGitHubRestClient, optionalSettingsToken } from './github-rest.mjs';
+import { createGitHubRestClient, settingsMode } from './github-rest.mjs';
 import {
   fetchAuthoritativeReceipt,
   supportIsDeclaredUnavailable,
@@ -46,7 +46,10 @@ const REVIEW_THREADS_QUERY = `
 // Local pre-tag readback of the immutable-release setting, carried in the
 // annotated tag message when RELEASE_SETTINGS_READ_TOKEN does not exist:
 //   immutable-releases-readback: status=200 enabled=true account=<login> utc=<ISO 8601 Z>
-const READBACK_LINE = /^immutable-releases-readback:\s*(.*)$/gm;
+// Self-attested by the release actor: CI checks its form, account and time, not
+// the GitHub setting itself. An off setting is caught only after publication.
+const READBACK_LINE = /^immutable-releases-readback:[ \t]*([^\r\n]*)\r?$/gm;
+const READBACK_KEYS = new Set(['status', 'enabled', 'account', 'utc']);
 const READBACK_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 export function parseImmutableReadback(message) {
@@ -54,9 +57,9 @@ export function parseImmutableReadback(message) {
   if (!lines.length) fail('immutable-readback-missing');
   if (lines.length > 1) fail('immutable-readback-invalid');
   const fields = {};
-  for (const pair of lines[0][1].trim().split(/\s+/)) {
+  for (const pair of lines[0][1].trim().split(/[ \t]+/)) {
     const match = /^([a-z]+)=(\S+)$/.exec(pair);
-    if (!match || Object.hasOwn(fields, match[1])) fail('immutable-readback-invalid');
+    if (!match || !READBACK_KEYS.has(match[1]) || Object.hasOwn(fields, match[1])) fail('immutable-readback-invalid');
     fields[match[1]] = match[2];
   }
   if (fields.status !== '200' || fields.enabled !== 'true' ||
@@ -211,8 +214,9 @@ async function assertSupportIssueCleared(api) {
 
 export async function verifyReleasePreflight({
   api, repository, tag, sha, version, nativeArtifactId, supportArtifactId,
-  tagEvent, settingsApi, immutableSettingReadLocally = false
+  tagEvent, settingsApi, immutableSettingReadLocally = false, now = Date.now()
 }) {
+  if (typeof immutableSettingReadLocally !== 'boolean') fail('api-unavailable');
   if (!api || typeof api.json !== 'function' || typeof api.paginate !== 'function' ||
       typeof api.bytes !== 'function') fail('api-unavailable');
   if (settingsApi !== undefined && (!settingsApi || typeof settingsApi.json !== 'function')) fail('api-unavailable');
@@ -257,7 +261,9 @@ export async function verifyReleasePreflight({
     const tagTime = Date.parse(tagObject.tagger && tagObject.tagger.date || '');
     if (Number.isNaN(commitTime) || Number.isNaN(tagTime)) fail('immutable-readback-invalid');
     if (immutableReadback.time < commitTime) fail('immutable-readback-stale');
-    if (immutableReadback.time > tagTime + READBACK_CLOCK_SKEW_MS) fail('immutable-readback-invalid');
+    // Upper bounds catch mistakes only: the pusher's git client sets the tagger date.
+    if (immutableReadback.time > tagTime + READBACK_CLOCK_SKEW_MS ||
+        immutableReadback.time > now + READBACK_CLOCK_SKEW_MS) fail('immutable-readback-invalid');
   }
   if (!immutableSettingReadLocally) {
     const immutableReleases = settingsApi
@@ -355,8 +361,8 @@ async function main() {
   if (!token) fail('github-token-missing');
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-  const settingsToken = optionalSettingsToken(process.env);
-  if (!settingsToken) {
+  const { settingsToken, immutableSettingReadLocally } = settingsMode(process.env);
+  if (immutableSettingReadLocally) {
     console.log('[release-preflight] WARNING RELEASE_SETTINGS_READ_TOKEN absent: the immutable-release setting ' +
       'is not read in CI; it rests on the release actor\'s local pre-tag readback and the post-publication readback');
   }
@@ -365,7 +371,7 @@ async function main() {
     settingsApi: settingsToken
       ? createGitHubRestClient({ token: settingsToken, userAgent: '1132-fixer-release-preflight' })
       : undefined,
-    immutableSettingReadLocally: !settingsToken,
+    immutableSettingReadLocally,
     repository, tag, sha, version: pkg.version,
     nativeArtifactId: Number(process.env.NATIVE_ACCEPTANCE_ARTIFACT_ID || 0),
     supportArtifactId: Number(process.env.SUPPORT_CLEARANCE_ARTIFACT_ID || 0),

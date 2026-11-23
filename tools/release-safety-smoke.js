@@ -767,8 +767,8 @@ function cleanupExactFiles(filePaths, directory) {
     [`/repos/1132-Fixer/windows/git/ref/tags/v${version}`, { object: { type: 'tag', sha: tagObjectSha } }],
     [`/repos/1132-Fixer/windows/git/tags/${tagObjectSha}`, {
       tag: `v${version}`, object: { type: 'commit', sha: sourceHead },
-      tagger: { date: '2026-11-23T12:10:00Z' },
-      message: `1132 Fixer v${version}\n\nimmutable-releases-readback: status=200 enabled=true account=patricktobias86 utc=2026-11-23T12:05:00Z\n`
+      tagger: { date: '2026-11-01T12:10:00Z' },
+      message: `1132 Fixer v${version}\n\nimmutable-releases-readback: status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:05:00Z\n`
     }],
     ['/repos/1132-Fixer/windows/immutable-releases', { enabled: true, enforced_by_owner: false }],
     ['/repos/1132-Fixer/windows/actions/artifacts/7001', artifact(
@@ -784,7 +784,7 @@ function cleanupExactFiles(filePaths, directory) {
       base: { ref: 'main' }, head: { sha: reviewedHead }, user: { login: 'author' }
     }],
     [`/repos/1132-Fixer/windows/git/commits/${sourceHead}`, {
-      parents: [{ sha: reviewedBase }], committer: { date: '2026-11-23T12:00:00Z' }
+      parents: [{ sha: reviewedBase }], committer: { date: '2026-11-01T12:00:00Z' }
     }],
     ['/repos/1132-Fixer/support-reporting/issues/2', supportIssue(2)],
     ['/repos/1132-Fixer/windows/actions/runs/1132', {
@@ -940,14 +940,17 @@ function cleanupExactFiles(filePaths, directory) {
       const line = (fields) => `immutable-releases-readback: ${fields}`;
       for (const [name, change, code] of [
         ['no readback line', { message: '1132 Fixer\n' }, 'immutable-readback-missing'],
-        ['two readback lines', { message: `${line('status=200 enabled=true account=patricktobias86 utc=2026-11-23T12:05:00Z')}\n${line('status=200 enabled=true account=patricktobias86 utc=2026-11-23T12:06:00Z')}` }, 'immutable-readback-invalid'],
-        ['setting reported off', { message: line('status=200 enabled=false account=patricktobias86 utc=2026-11-23T12:05:00Z') }, 'immutable-readback-invalid'],
-        ['not a 200 answer', { message: line('status=404 enabled=true account=patricktobias86 utc=2026-11-23T12:05:00Z') }, 'immutable-readback-invalid'],
+        ['two readback lines', { message: `${line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:05:00Z')}\n${line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:06:00Z')}` }, 'immutable-readback-invalid'],
+        ['setting reported off', { message: line('status=200 enabled=false account=patricktobias86 utc=2026-11-01T12:05:00Z') }, 'immutable-readback-invalid'],
+        ['not a 200 answer', { message: line('status=404 enabled=true account=patricktobias86 utc=2026-11-01T12:05:00Z') }, 'immutable-readback-invalid'],
         ['no UTC time', { message: line('status=200 enabled=true account=patricktobias86') }, 'immutable-readback-invalid'],
-        ['another account', { message: line('status=200 enabled=true account=someone-else utc=2026-11-23T12:05:00Z') }, 'immutable-readback-account-mismatch'],
-        ['older than the tagged commit', { message: line('status=200 enabled=true account=patricktobias86 utc=2026-11-23T11:59:59Z') }, 'immutable-readback-stale'],
-        ['after the tag', { message: line('status=200 enabled=true account=patricktobias86 utc=2026-11-23T12:20:00Z') }, 'immutable-readback-invalid'],
-        ['tag without tagger date', { tagger: undefined }, 'immutable-readback-invalid']
+        ['another account', { message: line('status=200 enabled=true account=someone-else utc=2026-11-01T12:05:00Z') }, 'immutable-readback-account-mismatch'],
+        ['older than the tagged commit', { message: line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T11:59:59Z') }, 'immutable-readback-stale'],
+        ['after the tag', { message: line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:20:00Z') }, 'immutable-readback-invalid'],
+        ['tag without tagger date', { tagger: undefined }, 'immutable-readback-invalid'],
+        ['unknown key', { message: line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:05:00Z token=x') }, 'immutable-readback-invalid'],
+        ['fields on the next line', { message: 'immutable-releases-readback:\nstatus=200 enabled=true account=patricktobias86 utc=2026-11-01T12:05:00Z' }, 'immutable-readback-invalid'],
+        ['indented marker', { message: `  ${line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:05:00Z')}` }, 'immutable-readback-missing']
       ]) {
         const readbackMap = new Map(jsonResponses);
         readbackMap.set(tagPath, { ...baseTag, ...change });
@@ -955,10 +958,35 @@ function cleanupExactFiles(filePaths, directory) {
           ...preflightInput, api: makeApi({ jsonMap: readbackMap }), immutableSettingReadLocally: true
         }), error => error.code === code, `local readback: ${name} fails closed (${code})`);
       }
+      for (const [name, message] of [
+        ['mixed-case account, CRLF', `1132 Fixer\r\n${line('status=200 enabled=true account=PatrickTobias86 utc=2026-11-01T12:05:00Z')}\r\n`],
+        ['exactly at the commit time', line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:00:00Z')],
+        ['exactly at the tag time plus five minutes', line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:15:00Z')]
+      ]) {
+        const readbackMap = new Map(jsonResponses);
+        readbackMap.set(tagPath, { ...baseTag, message });
+        await verifyReleasePreflight({ ...preflightInput, api: makeApi({ jsonMap: readbackMap }), immutableSettingReadLocally: true });
+      }
+      await assert.rejects(verifyReleasePreflight({
+        ...preflightInput, api: makeApi(), immutableSettingReadLocally: true, now: Date.parse('2026-11-01T11:00:00Z')
+      }), error => error.code === 'immutable-readback-invalid', 'a readback in the future of the CI clock fails');
+      await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi(), immutableSettingReadLocally: 'yes' }),
+        error => error.code === 'api-unavailable', 'a non-boolean mode fails closed');
+      {
+        const { settingsMode } = await import('../scripts/github-rest.mjs');
+        assert.deepEqual(settingsMode({}), { settingsToken: '', immutableSettingReadLocally: true });
+        assert.deepEqual(settingsMode({ RELEASE_SETTINGS_READ_TOKEN: '  ' }), { settingsToken: '', immutableSettingReadLocally: true });
+        assert.deepEqual(settingsMode({ RELEASE_SETTINGS_READ_TOKEN: ' t ' }), { settingsToken: 't', immutableSettingReadLocally: false });
+        for (const file of ['release-preflight.mjs', 'publish-release.mjs']) {
+          const source = fs.readFileSync(path.join(ROOT, 'scripts', file), 'utf8');
+          assert.ok(/settingsMode\(process\.env\)/.test(source) && !/immutableSettingReadLocally:\s*(true|!)/.test(source),
+            `${file} main() takes the mode only from settingsMode(process.env)`);
+        }
+      }
       {
         const accepted = await verifyReleasePreflight({ ...preflightInput, api: makeApi(), immutableSettingReadLocally: true });
         assert.deepEqual(accepted.immutableReadback,
-          { account: 'patricktobias86', utc: '2026-11-23T12:05:00Z', time: Date.parse('2026-11-23T12:05:00Z') },
+          { account: 'patricktobias86', utc: '2026-11-01T12:05:00Z', time: Date.parse('2026-11-01T12:05:00Z') },
           'the accepted local readback is returned for the release log');
       }
       await assert.rejects(verifyReleasePreflight({

@@ -125,7 +125,8 @@ published, so 6.5.0 also contains every change listed under 6.4.1 below.
   only that read and warns. The release actor then reads the setting locally
   right before tagging and writes the result into the annotated tag message;
   preflight refuses a missing, malformed, foreign or stale (older than the
-  tagged commit) readback. After publication, the
+  tagged commit) readback. That line is self-attested: without the secret, a
+  setting that is off is found only after publication. After publication, the
   publisher also reads the release back and requires GitHub to report it as
   immutable. That last check can only report a fault: the release is already
   public at that point.

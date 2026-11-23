@@ -76,8 +76,9 @@ jobs:
         id: gate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Administration: read only, for the immutable-release setting.
-          # GITHUB_TOKEN cannot read it. Missing token = the gate fails closed.
+          # Optional; Administration: read only, for the immutable-release
+          # setting (GITHUB_TOKEN cannot read it). Without it, preflight
+          # requires the local readback line in the annotated tag message.
           RELEASE_SETTINGS_READ_TOKEN: ${{ secrets.RELEASE_SETTINGS_READ_TOKEN }}
           NATIVE_ACCEPTANCE_ARTIFACT_ID: ${{ vars.NATIVE_ACCEPTANCE_ARTIFACT_ID }}
           SUPPORT_CLEARANCE_ARTIFACT_ID: ${{ vars.SUPPORT_CLEARANCE_ARTIFACT_ID }}
