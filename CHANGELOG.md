@@ -86,10 +86,13 @@ published, so 6.5.0 also contains every change listed under 6.4.1 below.
 
 - **`legacy/user.bat`.** The original standalone batch script set a fixed
   password for the local `user1` helper account. It was never packaged and
-  nothing ran it, but it published a known password, so it is removed. Earlier
-  commits still contain it. A computer that once ran that script keeps the
-  fixed password until **FIX NOW** runs once; FIX NOW deletes and recreates
-  `user1` with a new random password. Installing 6.5.0 alone does not change it.
+  nothing ran it, so it is removed. Removing it does not close the exposure:
+  1132 Fixer 5.2.0 to 5.5.1 set the same fixed password on every FIX NOW run,
+  and that value stays public in those releases and in earlier commits. Only a
+  completed **FIX NOW** run on 5.6.0 or later replaces it: the run deletes and
+  recreates `user1` with a new random password. Installing 6.5.0 does not
+  change the password. The 6.5.0 release notes tell affected users to run
+  FIX NOW once and check that it reports success.
 
 ### Fixed
 
