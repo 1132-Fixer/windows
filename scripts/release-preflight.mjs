@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createGitHubRestClient, requireSettingsToken } from './github-rest.mjs';
+import { createGitHubRestClient, optionalSettingsToken } from './github-rest.mjs';
 import {
   fetchAuthoritativeReceipt,
   supportIsDeclaredUnavailable,
@@ -188,7 +188,7 @@ async function assertSupportIssueCleared(api) {
 
 export async function verifyReleasePreflight({
   api, repository, tag, sha, version, nativeArtifactId, supportArtifactId,
-  tagEvent, settingsApi
+  tagEvent, settingsApi, immutableSettingReadLocally = false
 }) {
   if (!api || typeof api.json !== 'function' || typeof api.paginate !== 'function' ||
       typeof api.bytes !== 'function') fail('api-unavailable');
@@ -219,11 +219,19 @@ export async function verifyReleasePreflight({
   // The workflow GITHUB_TOKEN cannot hold that permission (measured: 403). The
   // settings client carries a separate token with that one read permission.
   // With it, a 404 is a permission or scope fault, not "disabled".
-  const immutableReleases = settingsApi
-    ? await settingsApi.json('GET', `${root}/immutable-releases`, undefined,
-      { allow404: false, errorCode: 'release-settings-read-failed' })
-    : await api.json('GET', `${root}/immutable-releases`, undefined, { allow404: true });
-  if (!immutableReleases || immutableReleases.enabled !== true) fail('immutable-releases-required');
+  // Without RELEASE_SETTINGS_READ_TOKEN (immutableSettingReadLocally), CI cannot
+  // read the setting at all. The release actor then reads it locally before the
+  // tag (docs/development/release-process.md, "Immutable-release setting") and
+  // the publisher's post-publication readback still requires immutable=true.
+  if (!immutableSettingReadLocally) {
+    const immutableReleases = settingsApi
+      ? await settingsApi.json('GET', `${root}/immutable-releases`, undefined,
+        { allow404: false, errorCode: 'release-settings-read-failed' })
+      : await api.json('GET', `${root}/immutable-releases`, undefined, { allow404: true });
+    if (!immutableReleases || immutableReleases.enabled !== true) fail('immutable-releases-required');
+  } else if (settingsApi !== undefined) {
+    fail('api-unavailable');
+  }
 
   const rules = pageItems(await api.paginate(`${root}/rules/branches/main?per_page=100`), 'ruleset-pagination-incomplete');
   assertReviewRule(rules);
@@ -311,10 +319,17 @@ async function main() {
   if (!token) fail('github-token-missing');
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-  const settingsToken = requireSettingsToken(process.env, 'release-settings-token-missing');
+  const settingsToken = optionalSettingsToken(process.env);
+  if (!settingsToken) {
+    console.log('[release-preflight] WARNING RELEASE_SETTINGS_READ_TOKEN absent: the immutable-release setting ' +
+      'is not read in CI; it rests on the release actor\'s local pre-tag readback and the post-publication readback');
+  }
   const result = await verifyReleasePreflight({
     api: createGitHubRestClient({ token, userAgent: '1132-fixer-release-preflight' }),
-    settingsApi: createGitHubRestClient({ token: settingsToken, userAgent: '1132-fixer-release-preflight' }),
+    settingsApi: settingsToken
+      ? createGitHubRestClient({ token: settingsToken, userAgent: '1132-fixer-release-preflight' })
+      : undefined,
+    immutableSettingReadLocally: !settingsToken,
     repository, tag, sha, version: pkg.version,
     nativeArtifactId: Number(process.env.NATIVE_ACCEPTANCE_ARTIFACT_ID || 0),
     supportArtifactId: Number(process.env.SUPPORT_CLEARANCE_ARTIFACT_ID || 0),

@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createGitHubRestClient, requireSettingsToken } from './github-rest.mjs';
+import { createGitHubRestClient, optionalSettingsToken } from './github-rest.mjs';
 import { supportIsDeclaredUnavailable, validateReleaseEvidence } from './release-evidence.mjs';
 import { verifyCandidateManifest } from './release-candidate.mjs';
 
@@ -87,7 +87,7 @@ export function releaseBody(version, { supportUnavailable = false, changes = '' 
 
 export async function publishRelease({
   api, repository, tag, head, version, assets, supportUnavailable = false, changes = '',
-  immutableReadbackDelaysMs = [2000, 5000]
+  immutableReadbackDelaysMs = [2000, 5000], immutableSettingReadLocally = false
 }) {
   if (!api || typeof api.getReleaseByTag !== 'function' ||
       typeof api.resolveTag !== 'function' ||
@@ -99,8 +99,12 @@ export async function publishRelease({
         !/^[a-f0-9]{64}$/.test(asset.sha256 || ''))) fail('publication-input');
   const initialTag = await api.resolveTag(tag);
   if (!initialTag || initialTag.tag !== tag || initialTag.targetSha !== head) fail('publication-tag-identity');
-  const immutableReleases = await api.getImmutableReleaseState();
-  if (!immutableReleases || immutableReleases.enabled !== true) fail('publication-immutable-releases-required');
+  // Without the settings token the setting was read locally by the release
+  // actor before the tag; the post-publication readback below still applies.
+  if (immutableSettingReadLocally !== true) {
+    const immutableReleases = await api.getImmutableReleaseState();
+    if (!immutableReleases || immutableReleases.enabled !== true) fail('publication-immutable-releases-required');
+  }
   if (await api.getReleaseByTag(tag)) fail('publication-release-exists');
   const prerelease = version.includes('-');
   const draft = await api.createDraft({
@@ -291,10 +295,14 @@ async function main() {
     portableSha256: evidence.native.packages.portable.packageSha256
   });
   const assets = exactAssets(dist, candidate);
+  const settingsToken = optionalSettingsToken(process.env);
+  if (!settingsToken) {
+    console.log('[release-publish] WARNING RELEASE_SETTINGS_READ_TOKEN absent: the immutable-release setting ' +
+      'is not read before publication; the post-publication readback still requires immutable=true');
+  }
   const published = await publishRelease({
-    api: githubReleaseApi({
-      repository, token, settingsToken: requireSettingsToken(process.env, 'publication-settings-token-missing')
-    }),
+    api: githubReleaseApi({ repository, token, settingsToken }),
+    immutableSettingReadLocally: !settingsToken,
     repository, tag, head, version, assets,
     supportUnavailable: supportIsDeclaredUnavailable(evidence.support),
     changes: readReleaseChanges(version)

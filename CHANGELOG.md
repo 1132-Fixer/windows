@@ -119,10 +119,11 @@ published, so 6.5.0 also contains every change listed under 6.4.1 below.
   shows this setting only to a caller with the Administration read
   permission. The workflow token cannot have that permission: GitHub refuses
   it (HTTP 403), so no release could pass, on a repository where the setting
-  is on. Both checks now read the setting with a separate repository secret,
-  `RELEASE_SETTINGS_READ_TOKEN`, that has only that read permission. All
-  other calls still use the workflow token. A missing secret stops the
-  release with its own error code before any request. After publication, the
+  is on. When the optional repository secret `RELEASE_SETTINGS_READ_TOKEN`
+  (only that read permission) exists, both checks read the setting with it;
+  all other calls still use the workflow token. Without the secret, CI skips
+  only that read and warns, and the release actor records a local readback of
+  the setting in the release receipt before the tag. After publication, the
   publisher also reads the release back and requires GitHub to report it as
   immutable. That last check can only report a fault: the release is already
   public at that point.

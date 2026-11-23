@@ -90,11 +90,12 @@ and all six support journeys. Support issue #2 must be closed or carry the
 explicit durable supersession marker. Preflight fetches every referenced issue
 in a bounded chain and requires the final issue to be closed before it reads
 candidate metadata. Preflight and the publisher also require immutable releases
-to be enabled before either can create a draft. Both read that setting with the
-repository secret `RELEASE_SETTINGS_READ_TOKEN` (Administration: read only),
-because GitHub refuses `GITHUB_TOKEN` for it (HTTP 403). Without the secret,
-both stop with `release-settings-token-missing` or
-`publication-settings-token-missing`. A settings token that GitHub refuses
+to be enabled before either can create a draft. GitHub refuses `GITHUB_TOKEN`
+for that setting (HTTP 403). When the optional repository secret
+`RELEASE_SETTINGS_READ_TOKEN` (Administration: read only) exists, both read the
+setting in CI with it. When it does not exist, CI skips only that read, prints
+a warning, and the release actor must make the **local pre-tag readback**
+below. A settings token that GitHub refuses
 stops them with `release-settings-read-failed` or
 `publication-settings-read-failed`. After publication, the publisher reads the
 release back (up to three reads) and fails with `publication-not-immutable`
@@ -103,6 +104,18 @@ the release is already public and its assets were hash-verified before
 publication. Do not delete or re-tag it (a rerun stops at
 `publication-release-exists`). Check the repository's immutable-release
 setting and ship the next version.
+
+**Local pre-tag readback (no settings secret).** Right before pushing the tag,
+an administrator of the repository runs, under their own existing `gh` login:
+
+```powershell
+gh api repos/1132-Fixer/windows/immutable-releases -i
+```
+
+Record the HTTP status (must be `200`), the `enabled` value (must be `true`),
+the account, and the UTC time in the release receipt. Never record a token.
+Any other answer stops the release. The post-publication readback still
+requires GitHub to report the published release as immutable.
 
 #### Releasing while the support service is not live
 

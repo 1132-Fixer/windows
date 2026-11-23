@@ -31,13 +31,13 @@ function endpointUrl(value) {
 }
 
 // The immutable-release setting needs Administration: read. The workflow
-// GITHUB_TOKEN cannot hold it (GitHub answers 403). Release tooling reads that
-// one setting with RELEASE_SETTINGS_READ_TOKEN and fails with its own code,
-// before any network call, when the secret is missing or blank.
-export function requireSettingsToken(env, code) {
-  const value = typeof env.RELEASE_SETTINGS_READ_TOKEN === 'string' ? env.RELEASE_SETTINGS_READ_TOKEN.trim() : '';
-  if (!value) fail(code);
-  return value;
+// GITHUB_TOKEN cannot hold it (GitHub answers 403). With the optional secret
+// RELEASE_SETTINGS_READ_TOKEN, release tooling reads that one setting in CI.
+// Without it, tooling skips only that in-CI read (the release actor reads the
+// setting locally before the tag) and keeps the post-publication
+// immutable=true readback. A blank value counts as absent.
+export function optionalSettingsToken(env) {
+  return typeof env.RELEASE_SETTINGS_READ_TOKEN === 'string' ? env.RELEASE_SETTINGS_READ_TOKEN.trim() : '';
 }
 
 export function nextLink(value) {

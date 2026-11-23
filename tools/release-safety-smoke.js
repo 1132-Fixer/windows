@@ -925,6 +925,21 @@ function cleanupExactFiles(filePaths, directory) {
     }
     await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi(), settingsApi: {} }),
       error => error.code === 'api-unavailable', 'a malformed settings client fails closed');
+    {
+      // No settings token: the setting is read locally by the release actor; CI skips only that read.
+      const localApi = makeApi({ jsonMap: changed });
+      await verifyReleasePreflight({ ...preflightInput, api: localApi, immutableSettingReadLocally: true });
+      assert.equal(localApi.calls.includes('json /repos/1132-Fixer/windows/immutable-releases'), false,
+        'without the settings token the workflow token does not read the setting');
+      await assert.rejects(verifyReleasePreflight({
+        ...preflightInput, api: makeApi(), settingsApi: makeApi(), immutableSettingReadLocally: true
+      }), error => error.code === 'api-unavailable', 'a settings client and a local read together is a wiring fault');
+      const { optionalSettingsToken } = await import('../scripts/github-rest.mjs');
+      for (const env of [{}, { RELEASE_SETTINGS_READ_TOKEN: '' }, { RELEASE_SETTINGS_READ_TOKEN: '  ' }]) {
+        assert.equal(optionalSettingsToken(env), '', 'a missing or blank settings token counts as absent');
+      }
+      assert.equal(optionalSettingsToken({ RELEASE_SETTINGS_READ_TOKEN: ' x-token ' }), 'x-token');
+    }
     // Real transport: with the settings token, HTTP 404 or 403 is a settings-read fault, never "disabled".
     for (const status of [404, 403, 401]) {
       const settingsRest = createGitHubRestClient({
@@ -1529,6 +1544,21 @@ function cleanupExactFiles(filePaths, directory) {
     assert.equal(publication.state.latest.id, 44, `${name}: the latest-state check ran before the readback failure`);
   }
   {
+    // No settings token: no pre-publication read of the setting, the readback still decides.
+    const unread = publicationApi({ immutableState: null });
+    const published = await publishRelease({
+      api: unread, repository: '1132-Fixer/windows', tag: `v${version}`,
+      head: sourceHead, version, assets, immutableReadbackDelaysMs: [0, 0], immutableSettingReadLocally: true
+    });
+    assert.equal(published.id, 44, 'without the settings token publication proceeds on the local pre-tag read');
+    const mutable = publicationApi({ immutableState: null, immutableAfterPublish: false });
+    await assert.rejects(publishRelease({
+      api: mutable, repository: '1132-Fixer/windows', tag: `v${version}`,
+      head: sourceHead, version, assets, immutableReadbackDelaysMs: [0, 0], immutableSettingReadLocally: true
+    }), error => error.code === 'publication-not-immutable',
+    'without the settings token the post-publication readback still requires immutable=true');
+  }
+  {
     // GitHub may set the immutable flag a moment after publication: bounded retries.
     const publication = publicationApi({
       finalRelease: state => ({ ...state.draft, immutable: state.finalReads >= 3 })
@@ -1539,16 +1569,6 @@ function cleanupExactFiles(filePaths, directory) {
     });
     assert.equal(published.id, 44);
     assert.equal(publication.state.finalReads, 3, 'readback retries until GitHub reports immutable, at most 3 reads');
-  }
-  {
-    const { requireSettingsToken } = await import('../scripts/github-rest.mjs');
-    assert.equal(requireSettingsToken({ RELEASE_SETTINGS_READ_TOKEN: ' fixture-settings-token ' }, 'x'),
-      'fixture-settings-token');
-    for (const env of [{}, { RELEASE_SETTINGS_READ_TOKEN: '' }, { RELEASE_SETTINGS_READ_TOKEN: '   ' }]) {
-      assert.throws(() => requireSettingsToken(env, 'release-settings-token-missing'),
-        error => error.code === 'release-settings-token-missing',
-        'a missing or blank settings token fails with its own code before any network call');
-    }
   }
 
   suitePhase = 'release workflow binding';
