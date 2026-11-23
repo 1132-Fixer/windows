@@ -39,7 +39,11 @@ check(renderer.includes('await window.electronAPI.runFix()'), 'runFix invokes el
   const body = renderer.slice(start, next === -1 ? start + 600 : next);
   check(start !== -1 && !body.includes('launchZoomHelper'), 'Fix now handler does not call launchZoomHelper');
 }
-check(renderer.includes("showResultPane('ok', WIZARD.READY_TITLE, WIZARD.READY_SUB)"), 'healthy preflight uses READY copy');
+const healthyPane = messages.readyPaneFor(false);
+check(healthyPane.tone === 'ok' && healthyPane.title === messages.WIZARD.READY_TITLE &&
+  healthyPane.sub === messages.WIZARD.READY_SUB &&
+  /const pane = readyPaneFor\(legacyHelperAdmin === true\);\s*showResultPane\(pane\.tone, pane\.title, pane\.sub\);/.test(renderer),
+  'healthy preflight displays the normal ready title and description');
 check(renderer.includes('setActions({ fix: true, shortcutOption: true, details: true })'), 'healthy preflight exposes Fix now');
 check(!renderer.includes("shortcutLabel: shortcutMissing ? 'Create desktop shortcut' : 'Recreate desktop shortcut'"),
   'healthy preflight no longer promotes Recreate desktop shortcut as a competing primary');

@@ -128,8 +128,8 @@ check(/showUnableToComplete\(\(err && err\.stage\) \|\| 'startup-status', err &&
   'a timeout and an error are reported differently');
 
 console.log('elevation-startup-smoke: successful preflight reaches Ready to fix Zoom');
-check(renderer.includes("status.state === 'need-elevation'") && renderer.includes('WIZARD.READY_TITLE'),
-  'elevated startup shows Ready copy');
+check(/if \(status\.state === 'need-elevation' \|\| status\.elevated !== true\) \{\s*showAdminRequired\(\)/.test(renderer),
+  'startup shows the administrator prompt when elevation is required');
 check(renderer.includes('runEnvironmentScan({ quiet: true })'),
   'full scan is quiet and cannot put Checking back on screen');
 {
@@ -140,7 +140,7 @@ check(renderer.includes('runEnvironmentScan({ quiet: true })'),
   const end = renderer.indexOf('\n}\n', start);
   const startup = start >= 0 && end > start ? renderer.slice(start, end) : '';
   check(startup.length > 0, 'startup sequence source is found');
-  check(!startup.includes('WIZARD.READY_TITLE') && !startup.includes('fix: true'),
+  check(!startup.includes('WIZARD.READY_TITLE') && !startup.includes('readyPaneFor(') && !startup.includes('fix: true'),
     'startup never shows Ready or Fix now before the first environment scan');
   check(/canRunFix = false;\s*signalUpdateAppReady\(\);\s*runEnvironmentScan\(\{ quiet: true \}\);/.test(startup),
     'elevated startup stays on Checking and hands the result to the first scan');
