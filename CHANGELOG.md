@@ -88,11 +88,11 @@ published, so 6.5.0 also contains every change listed under 6.4.1 below.
   password for the local `user1` helper account. It was never packaged and
   nothing ran it, so it is removed. Removing it does not close the exposure:
   1132 Fixer 5.2.0 to 5.5.1 set the same fixed password on every FIX NOW run,
-  and that value stays public in those releases and in earlier commits. Only a
-  completed **FIX NOW** run on 5.6.0 or later replaces it: the run deletes and
-  recreates `user1` with a new random password. Installing 6.5.0 does not
-  change the password. The 6.5.0 release notes tell affected users to run
-  FIX NOW once and check that it reports success.
+  and that value stays public in those releases and in earlier commits.
+  On 5.6.0 or later, **FIX NOW** recreates `user1` with a new random
+  password during the repair. Installing 6.5.0 alone leaves the current
+  password in place. The release notes explain what to do if neither a
+  later repair nor an administrator has replaced the shared password.
 
 ### Fixed
 

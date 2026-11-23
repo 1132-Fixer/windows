@@ -12,8 +12,8 @@ contain it.
 Removing the file does not close the exposure. 1132 Fixer 5.2.0 to 5.5.1 set
 the same fixed password on every FIX NOW run, and that value stays public in
 those releases. Since 5.6.0, the `run-fix` handler in [`../main.js`](../main.js)
-deletes and recreates `user1` with a new random password on every completed
-FIX NOW run (`helper-credential.js`); no password is stored in plain text.
-Installing or upgrading does not change the password. A computer that last
-completed FIX NOW with 5.5.1 or earlier, or ran `user.bat`, keeps the fixed
-password until a FIX NOW run on 5.6.0 or later completes.
+deletes and recreates `user1` with a new random password during FIX NOW
+(`helper-credential.js`). The app stores the new credential encrypted.
+Installing or upgrading alone leaves the account
+untouched. If neither a later repair nor an administrator has replaced
+the shared password, follow the [6.5.0 release guidance](../docs/releases/6.5.0.md#helper-account-password).
