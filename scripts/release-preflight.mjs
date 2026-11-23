@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createGitHubRestClient } from './github-rest.mjs';
+import { createGitHubRestClient, settingsMode } from './github-rest.mjs';
 import {
   fetchAuthoritativeReceipt,
   supportIsDeclaredUnavailable,
@@ -42,6 +42,32 @@ const REVIEW_THREADS_QUERY = `
     }
   }
 `;
+
+// Local pre-tag readback of the immutable-release setting, carried in the
+// annotated tag message when RELEASE_SETTINGS_READ_TOKEN does not exist:
+//   immutable-releases-readback: status=200 enabled=true account=<login> utc=<ISO 8601 Z>
+// Self-attested by the release actor: CI checks its form, account and time, not
+// the GitHub setting itself. An off setting is caught only after publication.
+const READBACK_LINE = /^immutable-releases-readback:[ \t]*([^\r\n]*)\r?$/gm;
+const READBACK_KEYS = new Set(['status', 'enabled', 'account', 'utc']);
+const READBACK_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+export function parseImmutableReadback(message) {
+  const lines = [...String(message || '').matchAll(READBACK_LINE)];
+  if (!lines.length) fail('immutable-readback-missing');
+  if (lines.length > 1) fail('immutable-readback-invalid');
+  const fields = {};
+  for (const pair of lines[0][1].trim().split(/[ \t]+/)) {
+    const match = /^([a-z]+)=(\S+)$/.exec(pair);
+    if (!match || !READBACK_KEYS.has(match[1]) || Object.hasOwn(fields, match[1])) fail('immutable-readback-invalid');
+    fields[match[1]] = match[2];
+  }
+  if (fields.status !== '200' || fields.enabled !== 'true' ||
+      !/^[A-Za-z0-9-]{1,39}$/.test(fields.account || '') ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(fields.utc || '') ||
+      Number.isNaN(Date.parse(fields.utc))) fail('immutable-readback-invalid');
+  return { account: fields.account.toLowerCase(), utc: fields.utc, time: Date.parse(fields.utc) };
+}
 
 export class ReleasePreflightError extends Error {
   constructor(code) {
@@ -188,10 +214,12 @@ async function assertSupportIssueCleared(api) {
 
 export async function verifyReleasePreflight({
   api, repository, tag, sha, version, nativeArtifactId, supportArtifactId,
-  tagEvent
+  tagEvent, settingsApi, immutableSettingReadLocally = false, now = Date.now()
 }) {
+  if (typeof immutableSettingReadLocally !== 'boolean' || !Number.isFinite(now)) fail('api-unavailable');
   if (!api || typeof api.json !== 'function' || typeof api.paginate !== 'function' ||
       typeof api.bytes !== 'function') fail('api-unavailable');
+  if (settingsApi !== undefined && (!settingsApi || typeof settingsApi.json !== 'function')) fail('api-unavailable');
   assertNewTagEvent(tagEvent);
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository || '')) fail('repository-invalid');
   if (!/^v\d+\.\d+\.\d+(?:-[A-Za-z0-9.]+)?$/.test(tag || '')) fail('tag-invalid');
@@ -214,8 +242,38 @@ export async function verifyReleasePreflight({
   const tagObject = await api.json('GET', `${root}/git/tags/${tagRef.object.sha}`);
   if (!tagObject || tagObject.tag !== tag || !tagObject.object ||
       tagObject.object.type !== 'commit' || tagObject.object.sha !== sha) fail('annotated-tag-identity');
-  const immutableReleases = await api.json('GET', `${root}/immutable-releases`, undefined, { allow404: true });
-  if (!immutableReleases || immutableReleases.enabled !== true) fail('immutable-releases-required');
+  // GitHub serves this setting only to a caller with Administration: read.
+  // The workflow GITHUB_TOKEN cannot hold that permission (measured: 403). The
+  // settings client carries a separate token with that one read permission.
+  // With it, a 404 is a permission or scope fault, not "disabled".
+  // Without RELEASE_SETTINGS_READ_TOKEN (immutableSettingReadLocally), CI cannot
+  // read the setting at all. The release actor reads it locally right before
+  // the tag and records the result in the annotated tag message
+  // (docs/development/release-process.md, "Local pre-tag readback"). Missing,
+  // malformed, foreign or stale (older than the tagged commit) fails closed.
+  // The publisher's post-publication readback still requires immutable=true.
+  let immutableReadback = null;
+  if (immutableSettingReadLocally) {
+    immutableReadback = parseImmutableReadback(tagObject.message);
+    if (immutableReadback.account !== String(tagEvent.pusher).toLowerCase()) fail('immutable-readback-account-mismatch');
+    const taggedCommit = await api.json('GET', `${root}/git/commits/${sha}`);
+    const commitTime = Date.parse(taggedCommit && taggedCommit.committer && taggedCommit.committer.date || '');
+    const tagTime = Date.parse(tagObject.tagger && tagObject.tagger.date || '');
+    if (Number.isNaN(commitTime) || Number.isNaN(tagTime)) fail('immutable-readback-invalid');
+    if (immutableReadback.time < commitTime) fail('immutable-readback-stale');
+    // Upper bounds catch mistakes only: the pusher's git client sets the tagger date.
+    if (immutableReadback.time > tagTime + READBACK_CLOCK_SKEW_MS ||
+        immutableReadback.time > now + READBACK_CLOCK_SKEW_MS) fail('immutable-readback-invalid');
+  }
+  if (!immutableSettingReadLocally) {
+    const immutableReleases = settingsApi
+      ? await settingsApi.json('GET', `${root}/immutable-releases`, undefined,
+        { allow404: false, errorCode: 'release-settings-read-failed' })
+      : await api.json('GET', `${root}/immutable-releases`, undefined, { allow404: true });
+    if (!immutableReleases || immutableReleases.enabled !== true) fail('immutable-releases-required');
+  } else if (settingsApi !== undefined) {
+    fail('api-unavailable');
+  }
 
   const rules = pageItems(await api.paginate(`${root}/rules/branches/main?per_page=100`), 'ruleset-pagination-incomplete');
   assertReviewRule(rules);
@@ -286,7 +344,7 @@ export async function verifyReleasePreflight({
       !artifact.workflow_run || artifact.workflow_run.id !== runId || artifact.workflow_run.head_sha !== sha) {
     fail('candidate-artifact-invalid');
   }
-  return { evidence, requiredChecks: required, artifact, nativeReceipt, supportReceipt };
+  return { evidence, requiredChecks: required, artifact, nativeReceipt, supportReceipt, immutableReadback };
 }
 
 function envBoolean(name) {
@@ -303,8 +361,17 @@ async function main() {
   if (!token) fail('github-token-missing');
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const { settingsToken, immutableSettingReadLocally } = settingsMode(process.env);
+  if (immutableSettingReadLocally) {
+    console.log('[release-preflight] WARNING RELEASE_SETTINGS_READ_TOKEN absent: the immutable-release setting ' +
+      'is not read in CI; it rests on the release actor\'s local pre-tag readback and the post-publication readback');
+  }
   const result = await verifyReleasePreflight({
     api: createGitHubRestClient({ token, userAgent: '1132-fixer-release-preflight' }),
+    settingsApi: settingsToken
+      ? createGitHubRestClient({ token: settingsToken, userAgent: '1132-fixer-release-preflight' })
+      : undefined,
+    immutableSettingReadLocally,
     repository, tag, sha, version: pkg.version,
     nativeArtifactId: Number(process.env.NATIVE_ACCEPTANCE_ARTIFACT_ID || 0),
     supportArtifactId: Number(process.env.SUPPORT_CLEARANCE_ARTIFACT_ID || 0),
@@ -316,6 +383,9 @@ async function main() {
       pusher: process.env.RELEASE_TAG_PUSHER || ''
     }
   });
+  if (result.immutableReadback) {
+    console.log(`[release-preflight] immutable-release setting: local readback by ${result.immutableReadback.account} at ${result.immutableReadback.utc} (status 200, enabled true)`);
+  }
   const output = process.env.GITHUB_OUTPUT;
   if (!output) fail('github-output-missing');
   const rows = {

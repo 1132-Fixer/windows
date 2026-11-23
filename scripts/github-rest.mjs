@@ -30,6 +30,23 @@ function endpointUrl(value) {
   return url.href;
 }
 
+// The immutable-release setting needs Administration: read. The workflow
+// GITHUB_TOKEN cannot hold it (GitHub answers 403). With the optional secret
+// RELEASE_SETTINGS_READ_TOKEN, release tooling reads that one setting in CI.
+// Without it, tooling skips only that in-CI read (the release actor reads the
+// setting locally before the tag) and keeps the post-publication
+// immutable=true readback. A blank value counts as absent.
+export function optionalSettingsToken(env) {
+  return typeof env.RELEASE_SETTINGS_READ_TOKEN === 'string' ? env.RELEASE_SETTINGS_READ_TOKEN.trim() : '';
+}
+
+// The one place both release jobs decide the mode: token present = read the
+// setting in CI; token absent or blank = local pre-tag readback in the tag.
+export function settingsMode(env) {
+  const settingsToken = optionalSettingsToken(env);
+  return { settingsToken, immutableSettingReadLocally: settingsToken === '' };
+}
+
 export function nextLink(value) {
   if (!value) return null;
   if (typeof value !== 'string' || value.length > 16384) fail('github-pagination-link');

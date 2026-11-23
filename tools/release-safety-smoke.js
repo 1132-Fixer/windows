@@ -766,7 +766,9 @@ function cleanupExactFiles(filePaths, directory) {
     ['/repos/1132-Fixer/windows/git/ref/heads/main', { object: { type: 'commit', sha: sourceHead } }],
     [`/repos/1132-Fixer/windows/git/ref/tags/v${version}`, { object: { type: 'tag', sha: tagObjectSha } }],
     [`/repos/1132-Fixer/windows/git/tags/${tagObjectSha}`, {
-      tag: `v${version}`, object: { type: 'commit', sha: sourceHead }
+      tag: `v${version}`, object: { type: 'commit', sha: sourceHead },
+      tagger: { date: '2026-11-01T12:10:00Z' },
+      message: `1132 Fixer v${version}\n\nimmutable-releases-readback: status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:05:00Z\n`
     }],
     ['/repos/1132-Fixer/windows/immutable-releases', { enabled: true, enforced_by_owner: false }],
     ['/repos/1132-Fixer/windows/actions/artifacts/7001', artifact(
@@ -781,7 +783,9 @@ function cleanupExactFiles(filePaths, directory) {
       state: 'closed', merged: true, merge_commit_sha: sourceHead,
       base: { ref: 'main' }, head: { sha: reviewedHead }, user: { login: 'author' }
     }],
-    [`/repos/1132-Fixer/windows/git/commits/${sourceHead}`, { parents: [{ sha: reviewedBase }] }],
+    [`/repos/1132-Fixer/windows/git/commits/${sourceHead}`, {
+      parents: [{ sha: reviewedBase }], committer: { date: '2026-11-01T12:00:00Z' }
+    }],
     ['/repos/1132-Fixer/support-reporting/issues/2', supportIssue(2)],
     ['/repos/1132-Fixer/windows/actions/runs/1132', {
       id: 1132, head_sha: sourceHead, event: 'push', status: 'completed',
@@ -900,6 +904,118 @@ function cleanupExactFiles(filePaths, directory) {
       error => error.code === 'immutable-releases-required', `${name} fails closed`);
     assert.equal(immutableApi.calls.includes('json /repos/1132-Fixer/windows/actions/runs/1132'), false,
       `${name} stops before candidate metadata`);
+  }
+  {
+    // GITHUB_TOKEN gets 404 from the immutable-release endpoint (it cannot
+    // hold Administration: read). The settings client answers instead.
+    const changed = new Map(jsonResponses);
+    changed.set('/repos/1132-Fixer/windows/immutable-releases', null);
+    const tokenApi = makeApi({ jsonMap: changed });
+    const settingsApi = makeApi();
+    await verifyReleasePreflight({ ...preflightInput, api: tokenApi, settingsApi });
+    assert.equal(tokenApi.calls.includes('json /repos/1132-Fixer/windows/immutable-releases'), false,
+      'the immutable-release setting is not read with the workflow token when a settings client exists');
+    assert.deepEqual(settingsApi.calls, ['json /repos/1132-Fixer/windows/immutable-releases'],
+      'the settings client reads only the immutable-release setting');
+    for (const [name, state] of [
+      ['settings token reads disabled', { enabled: false, enforced_by_owner: false }],
+      ['settings token gets 404', null]
+    ]) {
+      const settingsChanged = new Map(jsonResponses);
+      settingsChanged.set('/repos/1132-Fixer/windows/immutable-releases', state);
+      await assert.rejects(verifyReleasePreflight({
+        ...preflightInput, api: makeApi(), settingsApi: makeApi({ jsonMap: settingsChanged })
+      }), error => error.code === 'immutable-releases-required', `${name} fails closed`);
+    }
+    await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi(), settingsApi: {} }),
+      error => error.code === 'api-unavailable', 'a malformed settings client fails closed');
+    {
+      // No settings token: the setting is read locally by the release actor; CI skips only that read.
+      const localApi = makeApi({ jsonMap: changed });
+      await verifyReleasePreflight({ ...preflightInput, api: localApi, immutableSettingReadLocally: true });
+      assert.equal(localApi.calls.includes('json /repos/1132-Fixer/windows/immutable-releases'), false,
+        'without the settings token the workflow token does not read the setting');
+      const tagPath = `/repos/1132-Fixer/windows/git/tags/${tagObjectSha}`;
+      const baseTag = jsonResponses.get(tagPath);
+      const line = (fields) => `immutable-releases-readback: ${fields}`;
+      for (const [name, change, code] of [
+        ['no readback line', { message: '1132 Fixer\n' }, 'immutable-readback-missing'],
+        ['two readback lines', { message: `${line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:05:00Z')}\n${line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:06:00Z')}` }, 'immutable-readback-invalid'],
+        ['setting reported off', { message: line('status=200 enabled=false account=patricktobias86 utc=2026-11-01T12:05:00Z') }, 'immutable-readback-invalid'],
+        ['not a 200 answer', { message: line('status=404 enabled=true account=patricktobias86 utc=2026-11-01T12:05:00Z') }, 'immutable-readback-invalid'],
+        ['no UTC time', { message: line('status=200 enabled=true account=patricktobias86') }, 'immutable-readback-invalid'],
+        ['another account', { message: line('status=200 enabled=true account=someone-else utc=2026-11-01T12:05:00Z') }, 'immutable-readback-account-mismatch'],
+        ['older than the tagged commit', { message: line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T11:59:59Z') }, 'immutable-readback-stale'],
+        ['after the tag', { message: line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:20:00Z') }, 'immutable-readback-invalid'],
+        ['tag without tagger date', { tagger: undefined }, 'immutable-readback-invalid'],
+        ['unknown key', { message: line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:05:00Z token=x') }, 'immutable-readback-invalid'],
+        ['fields on the next line', { message: 'immutable-releases-readback:\nstatus=200 enabled=true account=patricktobias86 utc=2026-11-01T12:05:00Z' }, 'immutable-readback-invalid'],
+        ['indented marker', { message: `  ${line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:05:00Z')}` }, 'immutable-readback-missing']
+      ]) {
+        const readbackMap = new Map(jsonResponses);
+        readbackMap.set(tagPath, { ...baseTag, ...change });
+        await assert.rejects(verifyReleasePreflight({
+          ...preflightInput, api: makeApi({ jsonMap: readbackMap }), immutableSettingReadLocally: true
+        }), error => error.code === code, `local readback: ${name} fails closed (${code})`);
+      }
+      for (const [name, message] of [
+        ['mixed-case account, CRLF', `1132 Fixer\r\n${line('status=200 enabled=true account=PatrickTobias86 utc=2026-11-01T12:05:00Z')}\r\n`],
+        ['exactly at the commit time', line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:00:00Z')],
+        ['exactly at the tag time plus five minutes', line('status=200 enabled=true account=patricktobias86 utc=2026-11-01T12:15:00Z')]
+      ]) {
+        const readbackMap = new Map(jsonResponses);
+        readbackMap.set(tagPath, { ...baseTag, message });
+        await verifyReleasePreflight({ ...preflightInput, api: makeApi({ jsonMap: readbackMap }), immutableSettingReadLocally: true });
+      }
+      await assert.rejects(verifyReleasePreflight({
+        ...preflightInput, api: makeApi(), immutableSettingReadLocally: true, now: Date.parse('2026-11-01T11:00:00Z')
+      }), error => error.code === 'immutable-readback-invalid', 'a readback in the future of the CI clock fails');
+      await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi(), immutableSettingReadLocally: 'yes' }),
+        error => error.code === 'api-unavailable', 'a non-boolean mode fails closed');
+      await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi(), immutableSettingReadLocally: true, now: NaN }),
+        error => error.code === 'api-unavailable', 'a clock that is not a number fails closed');
+      {
+        const { settingsMode } = await import('../scripts/github-rest.mjs');
+        assert.deepEqual(settingsMode({}), { settingsToken: '', immutableSettingReadLocally: true });
+        assert.deepEqual(settingsMode({ RELEASE_SETTINGS_READ_TOKEN: '  ' }), { settingsToken: '', immutableSettingReadLocally: true });
+        assert.deepEqual(settingsMode({ RELEASE_SETTINGS_READ_TOKEN: ' t ' }), { settingsToken: 't', immutableSettingReadLocally: false });
+        for (const file of ['release-preflight.mjs', 'publish-release.mjs']) {
+          // Only main() is checked: the exported functions keep `= false` as their default parameter.
+          const full = fs.readFileSync(path.join(ROOT, 'scripts', file), 'utf8');
+          const mainStart = full.indexOf('async function main()');
+          assert.ok(mainStart > 0, `${file} has a main() function`);
+          const source = full.slice(mainStart);
+          assert.ok(source.includes('const { settingsToken, immutableSettingReadLocally } = settingsMode(process.env);') &&
+            !/immutableSettingReadLocally:\s*(true|false|!)/.test(source) &&
+            !/immutableSettingReadLocally\s*=\s*(true|false)\b/.test(source),
+            `${file} main() takes the mode only from settingsMode(process.env)`);
+        }
+      }
+      {
+        const accepted = await verifyReleasePreflight({ ...preflightInput, api: makeApi(), immutableSettingReadLocally: true });
+        assert.deepEqual(accepted.immutableReadback,
+          { account: 'patricktobias86', utc: '2026-11-01T12:05:00Z', time: Date.parse('2026-11-01T12:05:00Z') },
+          'the accepted local readback is returned for the release log');
+      }
+      await assert.rejects(verifyReleasePreflight({
+        ...preflightInput, api: makeApi(), settingsApi: makeApi(), immutableSettingReadLocally: true
+      }), error => error.code === 'api-unavailable', 'a settings client and a local read together is a wiring fault');
+      const { optionalSettingsToken } = await import('../scripts/github-rest.mjs');
+      for (const env of [{}, { RELEASE_SETTINGS_READ_TOKEN: '' }, { RELEASE_SETTINGS_READ_TOKEN: '  ' }]) {
+        assert.equal(optionalSettingsToken(env), '', 'a missing or blank settings token counts as absent');
+      }
+      assert.equal(optionalSettingsToken({ RELEASE_SETTINGS_READ_TOKEN: ' x-token ' }), 'x-token');
+    }
+    // Real transport: with the settings token, HTTP 404 or 403 is a settings-read fault, never "disabled".
+    for (const status of [404, 403, 401]) {
+      const settingsRest = createGitHubRestClient({
+        token: 'fixture-settings-token', userAgent: 'fixture-agent',
+        fetchImpl: async () => response({ status, json: { message: 'fixture' } })
+      });
+      await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi(), settingsApi: settingsRest }),
+        error => error.code === 'release-settings-read-failed',
+        `settings token answered ${status}: release-settings-read-failed`);
+    }
   }
   {
     const changed = new Map(pageResponses);
@@ -1222,6 +1338,44 @@ function cleanupExactFiles(filePaths, directory) {
       globalThis.fetch = originalFetch;
     }
   }
+  {
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, authorization: options.headers.Authorization });
+      return url.endsWith('/immutable-releases')
+        ? response({ json: { enabled: true, enforced_by_owner: false } })
+        : response({ status: 404, json: { message: 'Not Found' } });
+    };
+    try {
+      const publication = githubReleaseApi({
+        repository: '1132-Fixer/windows', token: 'fixture-token', settingsToken: 'fixture-settings-token'
+      });
+      const state = await publication.getImmutableReleaseState();
+      assert.equal(state.enabled, true);
+      await publication.getReleaseByTag('v9.9.9');
+      assert.deepEqual(calls, [
+        { url: 'https://api.github.com/repos/1132-Fixer/windows/immutable-releases',
+          authorization: 'Bearer fixture-settings-token' },
+        { url: 'https://api.github.com/repos/1132-Fixer/windows/releases/tags/v9.9.9',
+          authorization: 'Bearer fixture-token' }
+      ], 'only the immutable-release read uses the settings token');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+  for (const status of [404, 403]) {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => response({ status, json: { message: 'fixture' } });
+    try {
+      await assert.rejects(githubReleaseApi({
+        repository: '1132-Fixer/windows', token: 'fixture-token', settingsToken: 'fixture-settings-token'
+      }).getImmutableReleaseState(), error => error.code === 'publication-settings-read-failed',
+      `publisher: settings token answered ${status}: publication-settings-read-failed, not "disabled"`);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
 
   const receiptOnlyApi = makeApi();
   const fetched = await fetchAuthoritativeReceipt({
@@ -1282,7 +1436,8 @@ function cleanupExactFiles(filePaths, directory) {
   }));
   const publicationApi = ({
     uploadAt = -1, readbackAt = -1, wrongTagTarget = false,
-    immutableState = { enabled: true, enforced_by_owner: false }
+    immutableState = { enabled: true, enforced_by_owner: false }, immutableAfterPublish = true,
+    finalRelease = null
   } = {}) => {
     const state = { draft: null, public: false, latest: null, assets: [], uploadIndex: 0, tagReads: 0 };
     return {
@@ -1292,7 +1447,12 @@ function cleanupExactFiles(filePaths, directory) {
         return { tag, tagObjectSha, targetSha: wrongTagTarget ? 'f'.repeat(40) : sourceHead };
       },
       getImmutableReleaseState: async () => immutableState,
-      getReleaseByTag: async () => null,
+      getReleaseByTag: async () => {
+        if (!state.public) return null;
+        state.finalReads = (state.finalReads || 0) + 1;
+        if (finalRelease) return finalRelease(state);
+        return { ...state.draft, immutable: immutableAfterPublish };
+      },
       createDraft: async ({ tag, prerelease }) => (state.draft = {
         id: 44, draft: true, tag_name: tag, prerelease
       }),
@@ -1434,6 +1594,48 @@ function cleanupExactFiles(filePaths, directory) {
     assert.equal(publication.state.latest.id, 44);
     assert.equal(publication.state.tagReads, 3, 'annotated tag is read before draft, after draft and after publication');
   }
+  for (const [name, finalRelease] of [
+    ['not immutable', state => ({ ...state.draft, immutable: false })],
+    ['immutable field missing', state => ({ ...state.draft })],
+    ['another release id', state => ({ ...state.draft, id: 45, immutable: true })],
+    ['still a draft', state => ({ ...state.draft, draft: true, immutable: true })],
+    ['no release found', () => null]
+  ]) {
+    const publication = publicationApi({ finalRelease });
+    await assert.rejects(publishRelease({
+      api: publication, repository: '1132-Fixer/windows', tag: `v${version}`,
+      head: sourceHead, version, assets, immutableReadbackDelaysMs: [0, 0]
+    }), error => error.code === 'publication-not-immutable', `post-publication readback: ${name} fails`);
+    assert.equal(publication.state.public, true, `${name}: detection only, the release is already public`);
+    assert.equal(publication.state.latest.id, 44, `${name}: the latest-state check ran before the readback failure`);
+  }
+  {
+    // No settings token: no pre-publication read of the setting, the readback still decides.
+    const unread = publicationApi({ immutableState: null });
+    const published = await publishRelease({
+      api: unread, repository: '1132-Fixer/windows', tag: `v${version}`,
+      head: sourceHead, version, assets, immutableReadbackDelaysMs: [0, 0], immutableSettingReadLocally: true
+    });
+    assert.equal(published.id, 44, 'without the settings token publication proceeds on the local pre-tag read');
+    const mutable = publicationApi({ immutableState: null, immutableAfterPublish: false });
+    await assert.rejects(publishRelease({
+      api: mutable, repository: '1132-Fixer/windows', tag: `v${version}`,
+      head: sourceHead, version, assets, immutableReadbackDelaysMs: [0, 0], immutableSettingReadLocally: true
+    }), error => error.code === 'publication-not-immutable',
+    'without the settings token the post-publication readback still requires immutable=true');
+  }
+  {
+    // GitHub may set the immutable flag a moment after publication: bounded retries.
+    const publication = publicationApi({
+      finalRelease: state => ({ ...state.draft, immutable: state.finalReads >= 3 })
+    });
+    const published = await publishRelease({
+      api: publication, repository: '1132-Fixer/windows', tag: `v${version}`,
+      head: sourceHead, version, assets, immutableReadbackDelaysMs: [0, 0]
+    });
+    assert.equal(published.id, 44);
+    assert.equal(publication.state.finalReads, 3, 'readback retries until GitHub reports immutable, at most 3 reads');
+  }
 
   suitePhase = 'release workflow binding';
   const releaseYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
@@ -1457,6 +1659,19 @@ function cleanupExactFiles(filePaths, directory) {
     !releaseYml.includes('NATIVE_ACCEPTANCE_MANIFEST') &&
     !releaseYml.includes('SUPPORT_RELEASE_CLEARANCE'),
   'release consumes immutable receipt identifiers, never self-authored JSON variables');
+  {
+    // The settings token reaches exactly two steps: the preflight gate and the
+    // publication transaction. Any other step that receives it widens exposure.
+    const secretLine = 'RELEASE_SETTINGS_READ_TOKEN: ${{ secrets.RELEASE_SETTINGS_READ_TOKEN }}';
+    const steps = releaseYml.split(/\n      - name: /).slice(1);
+    const holders = steps.filter(step => step.includes(secretLine)).map(step => step.split('\n')[0].trim());
+    assert.deepEqual(holders, ['Verify source, checks and release evidence', 'Draft, verify and publish exact assets'],
+      'only the preflight gate and the publication step receive the settings token');
+    assert.equal(releaseYml.split('RELEASE_SETTINGS_READ_TOKEN').length - 1, 4,
+      'the settings token is named only on those two env lines (variable and secret name each)');
+    assert.ok(!/toJSON\(\s*secrets/.test(releaseYml) && !/secrets\[/.test(releaseYml),
+      'no step receives the secrets object or a computed secret name');
+  }
   assert.ok(evidenceYml.includes('workflow_dispatch:') &&
     evidenceYml.includes('node scripts/issue-release-evidence.mjs') &&
     evidenceYml.includes('overwrite: false'),

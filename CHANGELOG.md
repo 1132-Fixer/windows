@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.5.0] - 2026-11-23
+
+6.5.0 is the first release after 6.4.0. Version 6.4.1 was prepared but never
+published, so 6.5.0 also contains every change listed under 6.4.1 below.
+
 ### Changed
 
 - **Colours, shadows and fonts come from the design system only.** The page
@@ -37,21 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Release check: the support service must speak the same contract.** The
   release readiness check now also refuses a support service whose contract
   version or schema fingerprint differs from the copy in the build.
-
-### Fixed
-
-- **Release preflight: the support repository name.** The preflight named the
-  support repository by its former name. GitHub answers with the current name,
-  so the identity check could never pass. The preflight now uses the current
-  name, `1132-Fixer/support-reporting`.
-
-## [6.5.0] - 2026-11-14
-
-6.5.0 is the first release after 6.4.0. Version 6.4.1 was prepared but never
-published, so 6.5.0 also contains every change listed under 6.4.1 below.
-
-### Changed
-
 - **Startup check: a slow start of Windows PowerShell is named.** When a
   startup check step runs out of time because Windows PowerShell itself
   needed most of the step's time limit to start, the app now says so:
@@ -121,6 +111,25 @@ published, so 6.5.0 also contains every change listed under 6.4.1 below.
   with a script file. It sends the script text through standard input, as every
   other step already does. On the affected computer a script-file start was
   held for 27 seconds, against a 30 second limit for this step (#266).
+- **Release preflight: the support repository name.** The preflight named the
+  support repository by its former name. GitHub answers with the current name,
+  so the identity check could never pass. The preflight now uses the current
+  name, `1132-Fixer/support-reporting`.
+- **Release preflight and publisher: the immutable-release setting.** GitHub
+  shows this setting only to a caller with the Administration read
+  permission. The workflow token cannot have that permission: GitHub refuses
+  it (HTTP 403), so no release could pass, on a repository where the setting
+  is on. When the optional repository secret `RELEASE_SETTINGS_READ_TOKEN`
+  (only that read permission) exists, both checks read the setting with it;
+  all other calls still use the workflow token. Without the secret, CI skips
+  only that read and warns. The release actor then reads the setting locally
+  right before tagging and writes the result into the annotated tag message;
+  preflight refuses a missing, malformed, foreign or stale (older than the
+  tagged commit) readback. That line is self-attested: without the secret, a
+  setting that is off is found only after publication. After publication, the
+  publisher also reads the release back and requires GitHub to report it as
+  immutable. That last check can only report a fault: the release is already
+  public at that point.
 
 ### Cause on one affected computer (#266)
 
@@ -1370,6 +1379,8 @@ The following manual cases must pass before tagging the release:
 - Direct publish of releases to the `1132-Fixer-Windows-Releases` repo
   for the auto-updater.
 
+[Unreleased]: https://github.com/1132-Fixer/windows/compare/v6.5.0...HEAD
+[6.5.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.5.0
 [6.4.1]: https://github.com/1132-Fixer/windows/releases/tag/v6.4.1
 [6.4.0]: https://github.com/1132-Fixer/windows/releases/tag/v6.4.0
 [6.3.3]: https://github.com/1132-Fixer/windows/releases/tag/v6.3.3

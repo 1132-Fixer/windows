@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createGitHubRestClient } from './github-rest.mjs';
+import { createGitHubRestClient, settingsMode } from './github-rest.mjs';
 import { supportIsDeclaredUnavailable, validateReleaseEvidence } from './release-evidence.mjs';
 import { verifyCandidateManifest } from './release-candidate.mjs';
 
@@ -85,7 +85,10 @@ export function releaseBody(version, { supportUnavailable = false, changes = '' 
   return lines.join('\n');
 }
 
-export async function publishRelease({ api, repository, tag, head, version, assets, supportUnavailable = false, changes = '' }) {
+export async function publishRelease({
+  api, repository, tag, head, version, assets, supportUnavailable = false, changes = '',
+  immutableReadbackDelaysMs = [2000, 5000], immutableSettingReadLocally = false
+}) {
   if (!api || typeof api.getReleaseByTag !== 'function' ||
       typeof api.resolveTag !== 'function' ||
       typeof api.getImmutableReleaseState !== 'function' ||
@@ -96,8 +99,12 @@ export async function publishRelease({ api, repository, tag, head, version, asse
         !/^[a-f0-9]{64}$/.test(asset.sha256 || ''))) fail('publication-input');
   const initialTag = await api.resolveTag(tag);
   if (!initialTag || initialTag.tag !== tag || initialTag.targetSha !== head) fail('publication-tag-identity');
-  const immutableReleases = await api.getImmutableReleaseState();
-  if (!immutableReleases || immutableReleases.enabled !== true) fail('publication-immutable-releases-required');
+  // Without the settings token the setting was read locally by the release
+  // actor before the tag; the post-publication readback below still applies.
+  if (immutableSettingReadLocally !== true) {
+    const immutableReleases = await api.getImmutableReleaseState();
+    if (!immutableReleases || immutableReleases.enabled !== true) fail('publication-immutable-releases-required');
+  }
   if (await api.getReleaseByTag(tag)) fail('publication-release-exists');
   const prerelease = version.includes('-');
   const draft = await api.createDraft({
@@ -142,17 +149,42 @@ export async function publishRelease({ api, repository, tag, head, version, asse
     const latest = await api.getLatestRelease();
     if (!latest || latest.id !== draft.id || latest.tag_name !== tag || latest.draft !== false) fail('publication-latest-state');
   }
+  // Detection, not prevention: the release is already public here. Read it
+  // back (bounded retries for GitHub's lag) and require GitHub to report it
+  // as immutable. A failure leaves the published, hash-verified release in
+  // place; a rerun stops at publication-release-exists. The operator checks
+  // the repository's immutable-release setting and ships the next version.
+  let finalRelease = null;
+  for (let attempt = 0; attempt <= immutableReadbackDelaysMs.length; attempt++) {
+    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, immutableReadbackDelaysMs[attempt - 1]));
+    finalRelease = await api.getReleaseByTag(tag);
+    if (finalRelease && finalRelease.immutable === true) break;
+  }
+  if (!finalRelease || finalRelease.id !== draft.id || finalRelease.draft !== false ||
+      finalRelease.immutable !== true) fail('publication-not-immutable');
   return published;
 }
 
-export function githubReleaseApi({ repository, token }) {
+export function githubReleaseApi({ repository, token, settingsToken = '' }) {
   const apiBase = `/repos/${repository}`;
   const client = createGitHubRestClient({ token, userAgent: '1132-fixer-release-publisher' });
+  // The immutable-release setting needs Administration: read, which the
+  // workflow GITHUB_TOKEN cannot hold (measured: 403). Only that one read uses
+  // the separate settings token. With it, a 404 is a permission or scope
+  // fault, not "disabled". Without it, main() does not call this read (local
+  // pre-tag readback mode); the workflow-token fallback below then fails
+  // closed (403) if anything calls it.
+  const settingsClient = settingsToken
+    ? createGitHubRestClient({ token: settingsToken, userAgent: '1132-fixer-release-publisher' })
+    : client;
   async function json(method, url, body, allow404 = false) {
     return client.json(method, url, body, { allow404, errorCode: 'publication-api-failed' });
   }
   return {
-    getImmutableReleaseState: () => json('GET', `${apiBase}/immutable-releases`, null, true),
+    getImmutableReleaseState: () => settingsClient.json('GET', `${apiBase}/immutable-releases`, null,
+      settingsToken
+        ? { allow404: false, errorCode: 'publication-settings-read-failed' }
+        : { allow404: true, errorCode: 'publication-api-failed' }),
     getReleaseByTag: tag => json('GET', `${apiBase}/releases/tags/${encodeURIComponent(tag)}`, null, true),
     createDraft: input => json('POST', `${apiBase}/releases`, {
       tag_name: input.tag,
@@ -265,8 +297,15 @@ async function main() {
     portableSha256: evidence.native.packages.portable.packageSha256
   });
   const assets = exactAssets(dist, candidate);
+  const { settingsToken, immutableSettingReadLocally } = settingsMode(process.env);
+  if (immutableSettingReadLocally) {
+    console.log('[release-publish] WARNING RELEASE_SETTINGS_READ_TOKEN absent: the immutable-release setting ' +
+      'is not read before publication; the post-publication readback still requires immutable=true');
+  }
   const published = await publishRelease({
-    api: githubReleaseApi({ repository, token }), repository, tag, head, version, assets,
+    api: githubReleaseApi({ repository, token, settingsToken }),
+    immutableSettingReadLocally,
+    repository, tag, head, version, assets,
     supportUnavailable: supportIsDeclaredUnavailable(evidence.support),
     changes: readReleaseChanges(version)
   });

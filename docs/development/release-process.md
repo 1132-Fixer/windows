@@ -90,7 +90,50 @@ and all six support journeys. Support issue #2 must be closed or carry the
 explicit durable supersession marker. Preflight fetches every referenced issue
 in a bounded chain and requires the final issue to be closed before it reads
 candidate metadata. Preflight and the publisher also require immutable releases
-to be enabled before either can create a draft.
+to be enabled before either can create a draft. GitHub refuses `GITHUB_TOKEN`
+for that setting (HTTP 403). When the optional repository secret
+`RELEASE_SETTINGS_READ_TOKEN` (Administration: read only) exists, both read the
+setting in CI with it. When it does not exist, CI skips only that read, prints
+a warning, and the release actor must make the **local pre-tag readback**
+below. A settings token that GitHub refuses
+stops them with `release-settings-read-failed` or
+`publication-settings-read-failed`. After publication, the publisher reads the
+release back (up to three reads) and fails with `publication-not-immutable`
+unless GitHub reports it as immutable. That check detects; it cannot prevent:
+the release is already public and its assets were hash-verified before
+publication. Do not delete or re-tag it (a rerun stops at
+`publication-release-exists`). Check the repository's immutable-release
+setting and ship the next version.
+
+**Local pre-tag readback (no settings secret).** After the release commit is on
+`main` and right before tagging, the release actor (who issued the receipts and
+pushes the tag) runs this command under their own existing `gh` login:
+
+```powershell
+gh api repos/1132-Fixer/windows/immutable-releases -i
+```
+
+Precondition, not checked by CI: that account is an administrator of the
+repository (only an administrator gets the `200` answer).
+
+The answer must be HTTP `200` with `"enabled": true`; any other answer stops
+the release. Put exactly one line with the result in the annotated tag message
+(the tag message is the receipt for this check). Never record a token: only
+the four keys below are accepted.
+
+```text
+immutable-releases-readback: status=200 enabled=true account=<login> utc=<UTC time, ISO 8601 with Z>
+```
+
+Preflight fails closed with `immutable-readback-missing`,
+`immutable-readback-invalid` (malformed, an unknown key, not `200`/`true`,
+more than one line, or later than the tag time or the CI clock plus five
+minutes),
+`immutable-readback-account-mismatch` (not the tag pusher) or
+`immutable-readback-stale` (older than the tagged commit). The line is
+self-attested: CI checks its form, account and time, not the setting itself.
+Without the secret, a setting that is off is detected only after publication,
+by the post-publication readback (`publication-not-immutable`).
 
 #### Releasing while the support service is not live
 
