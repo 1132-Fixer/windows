@@ -122,8 +122,10 @@ published, so 6.5.0 also contains every change listed under 6.4.1 below.
   is on. When the optional repository secret `RELEASE_SETTINGS_READ_TOKEN`
   (only that read permission) exists, both checks read the setting with it;
   all other calls still use the workflow token. Without the secret, CI skips
-  only that read and warns, and the release actor records a local readback of
-  the setting in the release receipt before the tag. After publication, the
+  only that read and warns. The release actor then reads the setting locally
+  right before tagging and writes the result into the annotated tag message;
+  preflight refuses a missing, malformed, foreign or stale (older than the
+  tagged commit) readback. After publication, the
   publisher also reads the release back and requires GitHub to report it as
   immutable. That last check can only report a fault: the release is already
   public at that point.

@@ -43,6 +43,29 @@ const REVIEW_THREADS_QUERY = `
   }
 `;
 
+// Local pre-tag readback of the immutable-release setting, carried in the
+// annotated tag message when RELEASE_SETTINGS_READ_TOKEN does not exist:
+//   immutable-releases-readback: status=200 enabled=true account=<login> utc=<ISO 8601 Z>
+const READBACK_LINE = /^immutable-releases-readback:\s*(.*)$/gm;
+const READBACK_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+export function parseImmutableReadback(message) {
+  const lines = [...String(message || '').matchAll(READBACK_LINE)];
+  if (!lines.length) fail('immutable-readback-missing');
+  if (lines.length > 1) fail('immutable-readback-invalid');
+  const fields = {};
+  for (const pair of lines[0][1].trim().split(/\s+/)) {
+    const match = /^([a-z]+)=(\S+)$/.exec(pair);
+    if (!match || Object.hasOwn(fields, match[1])) fail('immutable-readback-invalid');
+    fields[match[1]] = match[2];
+  }
+  if (fields.status !== '200' || fields.enabled !== 'true' ||
+      !/^[A-Za-z0-9-]{1,39}$/.test(fields.account || '') ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(fields.utc || '') ||
+      Number.isNaN(Date.parse(fields.utc))) fail('immutable-readback-invalid');
+  return { account: fields.account.toLowerCase(), utc: fields.utc, time: Date.parse(fields.utc) };
+}
+
 export class ReleasePreflightError extends Error {
   constructor(code) {
     super(code);
@@ -220,9 +243,22 @@ export async function verifyReleasePreflight({
   // settings client carries a separate token with that one read permission.
   // With it, a 404 is a permission or scope fault, not "disabled".
   // Without RELEASE_SETTINGS_READ_TOKEN (immutableSettingReadLocally), CI cannot
-  // read the setting at all. The release actor then reads it locally before the
-  // tag (docs/development/release-process.md, "Immutable-release setting") and
-  // the publisher's post-publication readback still requires immutable=true.
+  // read the setting at all. The release actor reads it locally right before
+  // the tag and records the result in the annotated tag message
+  // (docs/development/release-process.md, "Local pre-tag readback"). Missing,
+  // malformed, foreign or stale (older than the tagged commit) fails closed.
+  // The publisher's post-publication readback still requires immutable=true.
+  let immutableReadback = null;
+  if (immutableSettingReadLocally) {
+    immutableReadback = parseImmutableReadback(tagObject.message);
+    if (immutableReadback.account !== String(tagEvent.pusher).toLowerCase()) fail('immutable-readback-account-mismatch');
+    const taggedCommit = await api.json('GET', `${root}/git/commits/${sha}`);
+    const commitTime = Date.parse(taggedCommit && taggedCommit.committer && taggedCommit.committer.date || '');
+    const tagTime = Date.parse(tagObject.tagger && tagObject.tagger.date || '');
+    if (Number.isNaN(commitTime) || Number.isNaN(tagTime)) fail('immutable-readback-invalid');
+    if (immutableReadback.time < commitTime) fail('immutable-readback-stale');
+    if (immutableReadback.time > tagTime + READBACK_CLOCK_SKEW_MS) fail('immutable-readback-invalid');
+  }
   if (!immutableSettingReadLocally) {
     const immutableReleases = settingsApi
       ? await settingsApi.json('GET', `${root}/immutable-releases`, undefined,
@@ -302,7 +338,7 @@ export async function verifyReleasePreflight({
       !artifact.workflow_run || artifact.workflow_run.id !== runId || artifact.workflow_run.head_sha !== sha) {
     fail('candidate-artifact-invalid');
   }
-  return { evidence, requiredChecks: required, artifact, nativeReceipt, supportReceipt };
+  return { evidence, requiredChecks: required, artifact, nativeReceipt, supportReceipt, immutableReadback };
 }
 
 function envBoolean(name) {
@@ -341,6 +377,9 @@ async function main() {
       pusher: process.env.RELEASE_TAG_PUSHER || ''
     }
   });
+  if (result.immutableReadback) {
+    console.log(`[release-preflight] immutable-release setting: local readback by ${result.immutableReadback.account} at ${result.immutableReadback.utc} (status 200, enabled true)`);
+  }
   const output = process.env.GITHUB_OUTPUT;
   if (!output) fail('github-output-missing');
   const rows = {

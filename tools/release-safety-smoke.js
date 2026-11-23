@@ -766,7 +766,9 @@ function cleanupExactFiles(filePaths, directory) {
     ['/repos/1132-Fixer/windows/git/ref/heads/main', { object: { type: 'commit', sha: sourceHead } }],
     [`/repos/1132-Fixer/windows/git/ref/tags/v${version}`, { object: { type: 'tag', sha: tagObjectSha } }],
     [`/repos/1132-Fixer/windows/git/tags/${tagObjectSha}`, {
-      tag: `v${version}`, object: { type: 'commit', sha: sourceHead }
+      tag: `v${version}`, object: { type: 'commit', sha: sourceHead },
+      tagger: { date: '2026-11-23T12:10:00Z' },
+      message: `1132 Fixer v${version}\n\nimmutable-releases-readback: status=200 enabled=true account=patricktobias86 utc=2026-11-23T12:05:00Z\n`
     }],
     ['/repos/1132-Fixer/windows/immutable-releases', { enabled: true, enforced_by_owner: false }],
     ['/repos/1132-Fixer/windows/actions/artifacts/7001', artifact(
@@ -781,7 +783,9 @@ function cleanupExactFiles(filePaths, directory) {
       state: 'closed', merged: true, merge_commit_sha: sourceHead,
       base: { ref: 'main' }, head: { sha: reviewedHead }, user: { login: 'author' }
     }],
-    [`/repos/1132-Fixer/windows/git/commits/${sourceHead}`, { parents: [{ sha: reviewedBase }] }],
+    [`/repos/1132-Fixer/windows/git/commits/${sourceHead}`, {
+      parents: [{ sha: reviewedBase }], committer: { date: '2026-11-23T12:00:00Z' }
+    }],
     ['/repos/1132-Fixer/support-reporting/issues/2', supportIssue(2)],
     ['/repos/1132-Fixer/windows/actions/runs/1132', {
       id: 1132, head_sha: sourceHead, event: 'push', status: 'completed',
@@ -931,6 +935,32 @@ function cleanupExactFiles(filePaths, directory) {
       await verifyReleasePreflight({ ...preflightInput, api: localApi, immutableSettingReadLocally: true });
       assert.equal(localApi.calls.includes('json /repos/1132-Fixer/windows/immutable-releases'), false,
         'without the settings token the workflow token does not read the setting');
+      const tagPath = `/repos/1132-Fixer/windows/git/tags/${tagObjectSha}`;
+      const baseTag = jsonResponses.get(tagPath);
+      const line = (fields) => `immutable-releases-readback: ${fields}`;
+      for (const [name, change, code] of [
+        ['no readback line', { message: '1132 Fixer\n' }, 'immutable-readback-missing'],
+        ['two readback lines', { message: `${line('status=200 enabled=true account=patricktobias86 utc=2026-11-23T12:05:00Z')}\n${line('status=200 enabled=true account=patricktobias86 utc=2026-11-23T12:06:00Z')}` }, 'immutable-readback-invalid'],
+        ['setting reported off', { message: line('status=200 enabled=false account=patricktobias86 utc=2026-11-23T12:05:00Z') }, 'immutable-readback-invalid'],
+        ['not a 200 answer', { message: line('status=404 enabled=true account=patricktobias86 utc=2026-11-23T12:05:00Z') }, 'immutable-readback-invalid'],
+        ['no UTC time', { message: line('status=200 enabled=true account=patricktobias86') }, 'immutable-readback-invalid'],
+        ['another account', { message: line('status=200 enabled=true account=someone-else utc=2026-11-23T12:05:00Z') }, 'immutable-readback-account-mismatch'],
+        ['older than the tagged commit', { message: line('status=200 enabled=true account=patricktobias86 utc=2026-11-23T11:59:59Z') }, 'immutable-readback-stale'],
+        ['after the tag', { message: line('status=200 enabled=true account=patricktobias86 utc=2026-11-23T12:20:00Z') }, 'immutable-readback-invalid'],
+        ['tag without tagger date', { tagger: undefined }, 'immutable-readback-invalid']
+      ]) {
+        const readbackMap = new Map(jsonResponses);
+        readbackMap.set(tagPath, { ...baseTag, ...change });
+        await assert.rejects(verifyReleasePreflight({
+          ...preflightInput, api: makeApi({ jsonMap: readbackMap }), immutableSettingReadLocally: true
+        }), error => error.code === code, `local readback: ${name} fails closed (${code})`);
+      }
+      {
+        const accepted = await verifyReleasePreflight({ ...preflightInput, api: makeApi(), immutableSettingReadLocally: true });
+        assert.deepEqual(accepted.immutableReadback,
+          { account: 'patricktobias86', utc: '2026-11-23T12:05:00Z', time: Date.parse('2026-11-23T12:05:00Z') },
+          'the accepted local readback is returned for the release log');
+      }
       await assert.rejects(verifyReleasePreflight({
         ...preflightInput, api: makeApi(), settingsApi: makeApi(), immutableSettingReadLocally: true
       }), error => error.code === 'api-unavailable', 'a settings client and a local read together is a wiring fault');

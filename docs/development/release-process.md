@@ -105,17 +105,29 @@ publication. Do not delete or re-tag it (a rerun stops at
 `publication-release-exists`). Check the repository's immutable-release
 setting and ship the next version.
 
-**Local pre-tag readback (no settings secret).** Right before pushing the tag,
-an administrator of the repository runs, under their own existing `gh` login:
+**Local pre-tag readback (no settings secret).** After the release commit is on
+`main` and right before tagging, the release actor (who issued the receipts and
+pushes the tag, and is an administrator of the repository) runs, under their
+own existing `gh` login:
 
 ```powershell
 gh api repos/1132-Fixer/windows/immutable-releases -i
 ```
 
-Record the HTTP status (must be `200`), the `enabled` value (must be `true`),
-the account, and the UTC time in the release receipt. Never record a token.
-Any other answer stops the release. The post-publication readback still
-requires GitHub to report the published release as immutable.
+The answer must be HTTP `200` with `"enabled": true`; any other answer stops
+the release. Put exactly one line with the result in the annotated tag message,
+and the same values in the release receipt. Never record a token.
+
+```text
+immutable-releases-readback: status=200 enabled=true account=<login> utc=<UTC time, ISO 8601 with Z>
+```
+
+Preflight fails closed with `immutable-readback-missing`,
+`immutable-readback-invalid` (malformed, not `200`/`true`, more than one line,
+or later than the tag time plus five minutes),
+`immutable-readback-account-mismatch` (not the tag pusher) or
+`immutable-readback-stale` (older than the tagged commit). The post-publication
+readback still requires GitHub to report the published release as immutable.
 
 #### Releasing while the support service is not live
 
