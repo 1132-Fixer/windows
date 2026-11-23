@@ -176,7 +176,25 @@ function createSingleFlight(run) {
   return call;
 }
 
+/**
+ * The "Helper account" checklist card, from the read-only account probe.
+ * It never changes an account: a legacy administrator user1 is reported as
+ * repairable, and only the user's FIX NOW click rebuilds it.
+ */
+function helperAccountCard({ probeFailed, probeFailMessage, exists, admin, profileExists, user, profileDir, copy }) {
+  const label = 'Helper account';
+  if (probeFailed) return { status: 'warning', label, message: probeFailMessage };
+  if (!exists && !profileExists) return { status: 'ready', label, message: copy.WILL_CREATE(user) };
+  // reason drives the visible warning: the result pane (renderer.js,
+  // readyPaneFor) and the View details explanation (details-view.js).
+  if (exists && admin) return { status: 'repairable', label, message: copy.LEGACY_ADMIN(user), reason: 'legacy_admin' };
+  if (exists && profileExists) return { status: 'ready', label, message: copy.READY(user) };
+  if (exists) return { status: 'repairable', label, message: copy.NO_PROFILE(user) };
+  return { status: 'warning', label, message: copy.STALE_PROFILE(profileDir) };
+}
+
 module.exports = {
+  helperAccountCard,
   KINDS,
   REASONS,
   STEP_LIMITS_MS,

@@ -49,6 +49,20 @@ check(dv.detailsStatusFor('bogus').word === 'Unable to verify', 'unrecognised st
 check(dv.checkView('helperUser', 'x', 'repairable').explain.indexOf('Fix now') !== -1, 'repairable explains that Fix now handles it');
 check(dv.checkView('admin', 'x', 'ready').explain === '', 'a Ready check has no explanation line');
 check(dv.checkView('admin', 'x', 'blocked').explain.length > 0, 'a blocked check explains what to do');
+{
+  const legacy = dv.checkView('helperUser', 'x', 'repairable', 'legacy_admin').explain;
+  check(/administrator rights/.test(legacy) && /If .*may still use a password that was the same on every computer/.test(legacy) && /Fix now/.test(legacy) &&
+    !/user1/i.test(legacy), 'legacy administrator helper account: its own explanation, no account name');
+  check(dv.checkView('helperUser', 'x', 'repairable', 'other').explain === 'Needs a reset. Fix now takes care of this.',
+    'an unknown reason keeps the general explanation');
+  check(dv.checkView('helperUser', 'x', 'ready', 'legacy_admin').explain === '',
+    'a reason never adds text to a Ready check');
+  const order = CHECK_ORDER.filter((c) => c.key === 'helperUser');
+  const model = dv.buildDetailsModel({ helperUser: 'repairable' }, order, { helperUser: 'legacy_admin' });
+  check(model.categories[0].checks[0].explain === legacy, 'the Details model passes the scan reason through');
+  check(dv.buildDetailsModel({ helperUser: 'repairable' }, order).categories[0].checks[0].explain ===
+    'Needs a reset. Fix now takes care of this.', 'no reason map keeps the old behaviour');
+}
 
 console.log('details-view-smoke: model roll-ups');
 const allReady = {};

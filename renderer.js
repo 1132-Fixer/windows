@@ -354,7 +354,7 @@ function plain(text) {
 }
 
 function buildDetailsCategories() {
-  const model = buildDetailsModel(lastScan.statusByKey, CHECK_ORDER);
+  const model = buildDetailsModel(lastScan.statusByKey, CHECK_ORDER, lastScan.reasonByKey);
   const categories = model.categories.slice();
   if (Array.isArray(lastReceiptItems) && lastReceiptItems.length) {
     const checks = lastReceiptItems;
@@ -588,13 +588,15 @@ async function runEnvironmentScan(opts = {}) {
     // from a check that passed.
     const renderedStatuses = [];
     const statusByKey = {};
+    const reasonByKey = {};
     for (const c of CHECK_ORDER) {
       const card = cards[c.key];
       const status  = card ? normalizeCheckStatus(card.status) : 'unknown';
       renderedStatuses.push(status);
       statusByKey[c.key] = status;
+      reasonByKey[c.key] = (card && typeof card.reason === 'string') ? card.reason : '';
     }
-    lastScan = { statusByKey };
+    lastScan = { statusByKey, reasonByKey };
     refreshDetailsIfOpen();
     canRunFix = !!(result && result.canRunFix);
     // Summary is computed from what is ACTUALLY on screen, never from the
@@ -648,6 +650,7 @@ async function runEnvironmentScan(opts = {}) {
       statuses: renderedStatuses,
       repairableLabels,
       blockedLabels: blockedLabels.concat(nonCardBlockers),
+      legacyHelperAdmin: statusByKey.helperUser === 'repairable' && reasonByKey.helperUser === 'legacy_admin',
       quiet
     });
   } catch (err) {
@@ -703,7 +706,7 @@ function withDeadline(promise, ms, operation) {
 // Scan result -> wizard result pane + the one CTA that state allows.
 // Ranking mirrors the summary badge: blocked > unknown > repairable >
 // warning > ready — the pane can never look better than the badge.
-async function presentScanResult({ statuses, repairableLabels, blockedLabels, quiet }) {
+async function presentScanResult({ statuses, repairableLabels, blockedLabels, legacyHelperAdmin, quiet }) {
   // A short beat so the finished check marks are visible before the pane
   // transitions (skipped for quiet refreshes).
   if (!quiet) await new Promise(r => setTimeout(r, 650));
@@ -722,7 +725,11 @@ async function presentScanResult({ statuses, repairableLabels, blockedLabels, qu
     // A clean preflight only means the repair can be attempted. It is not
     // proof that error 1132 is absent. Always offer Fix now — never Open Zoom
     // and never "Everything looks good" — until the repair has actually run.
-    showResultPane('ok', WIZARD.READY_TITLE, WIZARD.READY_SUB);
+    // A helper account left with administrator rights by an older version
+    // gets a warning pane; Fix now stays the one action and nothing changes
+    // until the user presses it.
+    const pane = readyPaneFor(legacyHelperAdmin === true);
+    showResultPane(pane.tone, pane.title, pane.sub);
     setActions({ fix: true, shortcutOption: true, details: true });
     if (pendingFixAfterScan) {
       pendingFixAfterScan = false;

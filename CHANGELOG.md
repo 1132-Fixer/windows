@@ -14,6 +14,16 @@ published, so 6.5.0 also contains every change listed under 6.4.1 below.
 
 ### Changed
 
+- **The startup check reports when the helper account has administrator rights.** 1132
+  Fixer 5.2.0 to 5.5.1 made `user1` an administrator with a password that was
+  the same on every computer where it ran. When `user1` is still in the local
+  Administrators group, the screen after the startup check now says "Run Fix
+  now once to secure the helper account", and **View details** explains why;
+  **FIX NOW** replaces it with a standard account and a new random password.
+  The check only reads; it changes no account until you press FIX NOW. The
+  decision is `helperAccountCard` in `src/main/startup-scan.js` (scan reason
+  `legacy_admin`), the copy is in `messages.js`, with tests for an
+  administrator, a standard and a missing `user1`.
 - **Colours, shadows and fonts come from the design system only.** The page
   styles no longer state a colour, a shadow or a font family of their own.
   Two small things look different. The dimmed background behind the
