@@ -82,6 +82,15 @@ published, so 6.5.0 also contains every change listed under 6.4.1 below.
     update is kept and installs only on **Restart now**. An install that has
     already started cannot be stopped safely, and the app says so.
 
+### Removed
+
+- **`legacy/user.bat`.** The original standalone batch script set a fixed
+  password for the local `user1` helper account. It was never packaged and
+  nothing ran it, but it published a known password, so it is removed. Earlier
+  commits still contain it. A computer that once ran that script keeps the
+  fixed password until **FIX NOW** runs once; FIX NOW deletes and recreates
+  `user1` with a new random password. Installing 6.5.0 alone does not change it.
+
 ### Fixed
 
 - Startup no longer reports every failure as "The startup check did not

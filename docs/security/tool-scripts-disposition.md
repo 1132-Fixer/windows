@@ -42,7 +42,7 @@ way back is either given a rollback or retired.
 | --- | --- |
 | `tools/qa/qa-context.ps1`, `tools/qa/qa-preflight-live.ps1` | Kept. They only read. |
 | `scripts/Zoom Persistence Toolkit/Zoom-Snapshot.ps1`, `Zoom-Diff.ps1`, `Zoom-Monitor.ps1`, `RUN_01` to `RUN_03` runners, `README.txt` | Kept. They read the computer and write report files. |
-| `legacy/user.bat` | Kept as history. `legacy/` is not packaged and nothing runs it. |
+| `legacy/user.bat` | Removed 2026-11-23: it published a fixed `user1` password. It was never packaged and nothing ran it. Earlier commits still contain it. |
 
 ### Not shipped, changed a computer, no rollback: retired
 
