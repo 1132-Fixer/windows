@@ -216,7 +216,7 @@ export async function verifyReleasePreflight({
   api, repository, tag, sha, version, nativeArtifactId, supportArtifactId,
   tagEvent, settingsApi, immutableSettingReadLocally = false, now = Date.now()
 }) {
-  if (typeof immutableSettingReadLocally !== 'boolean') fail('api-unavailable');
+  if (typeof immutableSettingReadLocally !== 'boolean' || !Number.isFinite(now)) fail('api-unavailable');
   if (!api || typeof api.json !== 'function' || typeof api.paginate !== 'function' ||
       typeof api.bytes !== 'function') fail('api-unavailable');
   if (settingsApi !== undefined && (!settingsApi || typeof settingsApi.json !== 'function')) fail('api-unavailable');

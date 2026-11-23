@@ -107,13 +107,14 @@ setting and ship the next version.
 
 **Local pre-tag readback (no settings secret).** After the release commit is on
 `main` and right before tagging, the release actor (who issued the receipts and
-pushes the tag) runs, under their own existing `gh` login. Precondition, not
-checked by CI: that account is an administrator of the repository (only an
-administrator gets the `200` answer).
+pushes the tag) runs this command under their own existing `gh` login:
 
 ```powershell
 gh api repos/1132-Fixer/windows/immutable-releases -i
 ```
+
+Precondition, not checked by CI: that account is an administrator of the
+repository (only an administrator gets the `200` answer).
 
 The answer must be HTTP `200` with `"enabled": true`; any other answer stops
 the release. Put exactly one line with the result in the annotated tag message
@@ -125,8 +126,9 @@ immutable-releases-readback: status=200 enabled=true account=<login> utc=<UTC ti
 ```
 
 Preflight fails closed with `immutable-readback-missing`,
-`immutable-readback-invalid` (malformed, not `200`/`true`, more than one line,
-or later than the tag time plus five minutes),
+`immutable-readback-invalid` (malformed, an unknown key, not `200`/`true`,
+more than one line, or later than the tag time or the CI clock plus five
+minutes),
 `immutable-readback-account-mismatch` (not the tag pusher) or
 `immutable-readback-stale` (older than the tagged commit). The line is
 self-attested: CI checks its form, account and time, not the setting itself.

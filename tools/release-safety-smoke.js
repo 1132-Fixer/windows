@@ -972,6 +972,8 @@ function cleanupExactFiles(filePaths, directory) {
       }), error => error.code === 'immutable-readback-invalid', 'a readback in the future of the CI clock fails');
       await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi(), immutableSettingReadLocally: 'yes' }),
         error => error.code === 'api-unavailable', 'a non-boolean mode fails closed');
+      await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi(), immutableSettingReadLocally: true, now: NaN }),
+        error => error.code === 'api-unavailable', 'a clock that is not a number fails closed');
       {
         const { settingsMode } = await import('../scripts/github-rest.mjs');
         assert.deepEqual(settingsMode({}), { settingsToken: '', immutableSettingReadLocally: true });
@@ -979,7 +981,9 @@ function cleanupExactFiles(filePaths, directory) {
         assert.deepEqual(settingsMode({ RELEASE_SETTINGS_READ_TOKEN: ' t ' }), { settingsToken: 't', immutableSettingReadLocally: false });
         for (const file of ['release-preflight.mjs', 'publish-release.mjs']) {
           const source = fs.readFileSync(path.join(ROOT, 'scripts', file), 'utf8');
-          assert.ok(/settingsMode\(process\.env\)/.test(source) && !/immutableSettingReadLocally:\s*(true|!)/.test(source),
+          assert.ok(source.includes('const { settingsToken, immutableSettingReadLocally } = settingsMode(process.env);') &&
+            !/immutableSettingReadLocally:\s*(true|false|!)/.test(source) &&
+            !/immutableSettingReadLocally\s*=\s*(true|false)\b/.test(source),
             `${file} main() takes the mode only from settingsMode(process.env)`);
         }
       }
