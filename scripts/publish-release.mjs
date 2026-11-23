@@ -145,14 +145,22 @@ export async function publishRelease({ api, repository, tag, head, version, asse
   return published;
 }
 
-export function githubReleaseApi({ repository, token }) {
+export function githubReleaseApi({ repository, token, settingsToken = '' }) {
   const apiBase = `/repos/${repository}`;
   const client = createGitHubRestClient({ token, userAgent: '1132-fixer-release-publisher' });
+  // The immutable-release setting needs Administration: read, which the
+  // workflow GITHUB_TOKEN cannot hold (it gets 404, read as "disabled"). Only
+  // that one read uses the separate settings token; without it the
+  // publication still fails closed.
+  const settingsClient = settingsToken
+    ? createGitHubRestClient({ token: settingsToken, userAgent: '1132-fixer-release-publisher' })
+    : client;
   async function json(method, url, body, allow404 = false) {
     return client.json(method, url, body, { allow404, errorCode: 'publication-api-failed' });
   }
   return {
-    getImmutableReleaseState: () => json('GET', `${apiBase}/immutable-releases`, null, true),
+    getImmutableReleaseState: () => settingsClient.json('GET', `${apiBase}/immutable-releases`, null,
+      { allow404: true, errorCode: 'publication-api-failed' }),
     getReleaseByTag: tag => json('GET', `${apiBase}/releases/tags/${encodeURIComponent(tag)}`, null, true),
     createDraft: input => json('POST', `${apiBase}/releases`, {
       tag_name: input.tag,
@@ -266,7 +274,8 @@ async function main() {
   });
   const assets = exactAssets(dist, candidate);
   const published = await publishRelease({
-    api: githubReleaseApi({ repository, token }), repository, tag, head, version, assets,
+    api: githubReleaseApi({ repository, token, settingsToken: process.env.RELEASE_SETTINGS_READ_TOKEN || '' }),
+    repository, tag, head, version, assets,
     supportUnavailable: supportIsDeclaredUnavailable(evidence.support),
     changes: readReleaseChanges(version)
   });

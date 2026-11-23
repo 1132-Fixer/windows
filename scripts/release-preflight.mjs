@@ -188,10 +188,11 @@ async function assertSupportIssueCleared(api) {
 
 export async function verifyReleasePreflight({
   api, repository, tag, sha, version, nativeArtifactId, supportArtifactId,
-  tagEvent
+  tagEvent, settingsApi
 }) {
   if (!api || typeof api.json !== 'function' || typeof api.paginate !== 'function' ||
       typeof api.bytes !== 'function') fail('api-unavailable');
+  if (settingsApi !== undefined && (!settingsApi || typeof settingsApi.json !== 'function')) fail('api-unavailable');
   assertNewTagEvent(tagEvent);
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository || '')) fail('repository-invalid');
   if (!/^v\d+\.\d+\.\d+(?:-[A-Za-z0-9.]+)?$/.test(tag || '')) fail('tag-invalid');
@@ -214,7 +215,11 @@ export async function verifyReleasePreflight({
   const tagObject = await api.json('GET', `${root}/git/tags/${tagRef.object.sha}`);
   if (!tagObject || tagObject.tag !== tag || !tagObject.object ||
       tagObject.object.type !== 'commit' || tagObject.object.sha !== sha) fail('annotated-tag-identity');
-  const immutableReleases = await api.json('GET', `${root}/immutable-releases`, undefined, { allow404: true });
+  // GitHub serves this setting only to a caller with Administration: read.
+  // The workflow GITHUB_TOKEN cannot hold that permission and gets 404, the
+  // same answer as "disabled". The settings client carries a separate token
+  // with that one read permission; without it this check still fails closed.
+  const immutableReleases = await (settingsApi || api).json('GET', `${root}/immutable-releases`, undefined, { allow404: true });
   if (!immutableReleases || immutableReleases.enabled !== true) fail('immutable-releases-required');
 
   const rules = pageItems(await api.paginate(`${root}/rules/branches/main?per_page=100`), 'ruleset-pagination-incomplete');
@@ -303,8 +308,12 @@ async function main() {
   if (!token) fail('github-token-missing');
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const settingsToken = process.env.RELEASE_SETTINGS_READ_TOKEN || '';
   const result = await verifyReleasePreflight({
     api: createGitHubRestClient({ token, userAgent: '1132-fixer-release-preflight' }),
+    settingsApi: settingsToken
+      ? createGitHubRestClient({ token: settingsToken, userAgent: '1132-fixer-release-preflight' })
+      : undefined,
     repository, tag, sha, version: pkg.version,
     nativeArtifactId: Number(process.env.NATIVE_ACCEPTANCE_ARTIFACT_ID || 0),
     supportArtifactId: Number(process.env.SUPPORT_CLEARANCE_ARTIFACT_ID || 0),

@@ -90,7 +90,10 @@ and all six support journeys. Support issue #2 must be closed or carry the
 explicit durable supersession marker. Preflight fetches every referenced issue
 in a bounded chain and requires the final issue to be closed before it reads
 candidate metadata. Preflight and the publisher also require immutable releases
-to be enabled before either can create a draft.
+to be enabled before either can create a draft. Both read that setting with the
+repository secret `RELEASE_SETTINGS_READ_TOKEN` (Administration: read only),
+because GitHub answers `GITHUB_TOKEN` with "not found" for it. Without the
+secret, both refuse the release.
 
 #### Releasing while the support service is not live
 

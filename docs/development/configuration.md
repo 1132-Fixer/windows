@@ -59,6 +59,7 @@ Names only. Set them in the repository settings, never in a file.
 | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` | secrets | `ci.yml` through `scripts/signing-config.mjs` | The identity for Microsoft Artifact Signing. Pull request builds never receive them. |
 | `DESIGN_SYSTEM_DEPLOY_KEY`, `DESIGN_SYSTEM_TOKEN` | secrets | `ci.yml`, `brand.yml` through `.github/scripts/fetch-design-system.js` | Read access to fetch the pinned `design-system` submodule. |
 | `GITHUB_TOKEN` | built in | all workflows | Supplied by GitHub Actions for each run. |
+| `RELEASE_SETTINGS_READ_TOKEN` | secret | `release.yml` through `scripts/release-preflight.mjs` and `scripts/publish-release.mjs` | Reads only the immutable-release setting. GitHub shows that setting only with the Administration read permission, which `GITHUB_TOKEN` cannot have. Use a fine-grained token for this repository with Administration: read and nothing else. Without it, both checks refuse the release. |
 
 ## Settings for manual tools
 

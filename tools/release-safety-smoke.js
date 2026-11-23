@@ -902,6 +902,31 @@ function cleanupExactFiles(filePaths, directory) {
       `${name} stops before candidate metadata`);
   }
   {
+    // GITHUB_TOKEN gets 404 from the immutable-release endpoint (it cannot
+    // hold Administration: read). The settings client answers instead.
+    const changed = new Map(jsonResponses);
+    changed.set('/repos/1132-Fixer/windows/immutable-releases', null);
+    const tokenApi = makeApi({ jsonMap: changed });
+    const settingsApi = makeApi();
+    await verifyReleasePreflight({ ...preflightInput, api: tokenApi, settingsApi });
+    assert.equal(tokenApi.calls.includes('json /repos/1132-Fixer/windows/immutable-releases'), false,
+      'the immutable-release setting is not read with the workflow token when a settings client exists');
+    assert.deepEqual(settingsApi.calls, ['json /repos/1132-Fixer/windows/immutable-releases'],
+      'the settings client reads only the immutable-release setting');
+    for (const [name, state] of [
+      ['settings token reads disabled', { enabled: false, enforced_by_owner: false }],
+      ['settings token gets 404', null]
+    ]) {
+      const settingsChanged = new Map(jsonResponses);
+      settingsChanged.set('/repos/1132-Fixer/windows/immutable-releases', state);
+      await assert.rejects(verifyReleasePreflight({
+        ...preflightInput, api: makeApi(), settingsApi: makeApi({ jsonMap: settingsChanged })
+      }), error => error.code === 'immutable-releases-required', `${name} fails closed`);
+    }
+    await assert.rejects(verifyReleasePreflight({ ...preflightInput, api: makeApi(), settingsApi: {} }),
+      error => error.code === 'api-unavailable', 'a malformed settings client fails closed');
+  }
+  {
     const changed = new Map(pageResponses);
     const checkState = clone(changed.get(`/repos/1132-Fixer/windows/commits/${sourceHead}/check-runs?filter=latest&per_page=100`));
     checkState.items[0].conclusion = 'failure';
@@ -1222,6 +1247,32 @@ function cleanupExactFiles(filePaths, directory) {
       globalThis.fetch = originalFetch;
     }
   }
+  {
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, authorization: options.headers.Authorization });
+      return url.endsWith('/immutable-releases')
+        ? response({ json: { enabled: true, enforced_by_owner: false } })
+        : response({ status: 404, json: { message: 'Not Found' } });
+    };
+    try {
+      const publication = githubReleaseApi({
+        repository: '1132-Fixer/windows', token: 'fixture-token', settingsToken: 'fixture-settings-token'
+      });
+      const state = await publication.getImmutableReleaseState();
+      assert.equal(state.enabled, true);
+      await publication.getReleaseByTag('v9.9.9');
+      assert.deepEqual(calls, [
+        { url: 'https://api.github.com/repos/1132-Fixer/windows/immutable-releases',
+          authorization: 'Bearer fixture-settings-token' },
+        { url: 'https://api.github.com/repos/1132-Fixer/windows/releases/tags/v9.9.9',
+          authorization: 'Bearer fixture-token' }
+      ], 'only the immutable-release read uses the settings token');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
 
   const receiptOnlyApi = makeApi();
   const fetched = await fetchAuthoritativeReceipt({
@@ -1457,6 +1508,8 @@ function cleanupExactFiles(filePaths, directory) {
     !releaseYml.includes('NATIVE_ACCEPTANCE_MANIFEST') &&
     !releaseYml.includes('SUPPORT_RELEASE_CLEARANCE'),
   'release consumes immutable receipt identifiers, never self-authored JSON variables');
+  assert.equal(releaseYml.split('RELEASE_SETTINGS_READ_TOKEN: ${{ secrets.RELEASE_SETTINGS_READ_TOKEN }}').length - 1, 2,
+    'preflight and publication both read the immutable-release setting with the settings token');
   assert.ok(evidenceYml.includes('workflow_dispatch:') &&
     evidenceYml.includes('node scripts/issue-release-evidence.mjs') &&
     evidenceYml.includes('overwrite: false'),
