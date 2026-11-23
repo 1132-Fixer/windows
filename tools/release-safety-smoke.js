@@ -980,7 +980,11 @@ function cleanupExactFiles(filePaths, directory) {
         assert.deepEqual(settingsMode({ RELEASE_SETTINGS_READ_TOKEN: '  ' }), { settingsToken: '', immutableSettingReadLocally: true });
         assert.deepEqual(settingsMode({ RELEASE_SETTINGS_READ_TOKEN: ' t ' }), { settingsToken: 't', immutableSettingReadLocally: false });
         for (const file of ['release-preflight.mjs', 'publish-release.mjs']) {
-          const source = fs.readFileSync(path.join(ROOT, 'scripts', file), 'utf8');
+          // Only main() is checked: the exported functions keep `= false` as their default parameter.
+          const full = fs.readFileSync(path.join(ROOT, 'scripts', file), 'utf8');
+          const mainStart = full.indexOf('async function main()');
+          assert.ok(mainStart > 0, `${file} has a main() function`);
+          const source = full.slice(mainStart);
           assert.ok(source.includes('const { settingsToken, immutableSettingReadLocally } = settingsMode(process.env);') &&
             !/immutableSettingReadLocally:\s*(true|false|!)/.test(source) &&
             !/immutableSettingReadLocally\s*=\s*(true|false)\b/.test(source),
