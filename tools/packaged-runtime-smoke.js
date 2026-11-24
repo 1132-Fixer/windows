@@ -1053,7 +1053,7 @@ async function run(options = {}) {
   assert.equal((await resolveProfile(exactProfileReceipt, {
     stdout: `${JSON.stringify(exactProfileReceipt)}\n${JSON.stringify(exactProfileReceipt)}`
   })).result.path, null, 'multiple ProfileList receipts fail closed');
-  const cleanupPlanIndex = mainSource.indexOf("profileCleanupPlan = selectSidBoundProfileEntries(entries, preDeleteSid, 'cleanup')");
+  const cleanupPlanIndex = mainSource.indexOf("profileCleanupPlan = selectSidBoundProfileEntries(payload.entries, preDeleteSid, 'cleanup')");
   const accountDeleteIndex = mainSource.indexOf('exactSidLocalUserDeleteScript(preDeleteSid, FIX_USER)');
   const folderDeleteIndex = mainSource.indexOf('Remove-ProfileFolder -Path $quarantinePath -Sid $expectedSid');
   const recoveryReceiptIndex = mainSource.indexOf("New-ItemProperty -LiteralPath $folderKey.PSPath -Name 'FixerProfileQuarantineV1'");
@@ -1067,7 +1067,6 @@ async function run(options = {}) {
   assert.ok(!mainSource.includes('const sourceProfile = `C:\\\\Users\\\\${FIX_USER}`') &&
     !mainSource.includes('$matchByPath') &&
     !mainSource.includes("Get-ChildItem 'C:\\\\Users' -Directory") &&
-    mainSource.includes("selectSidBoundProfileEntries(entries, preDeleteSid, 'cleanup')") &&
     cleanupPlanIndex >= 0 && cleanupPlanIndex < accountDeleteIndex &&
     folderDeleteIndex >= 0 && folderDeleteIndex < residueProofIndex &&
     recoveryReceiptIndex >= 0 && recoveryReceiptIndex < quarantineRenameIndex &&
