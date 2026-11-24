@@ -3669,12 +3669,10 @@ async function runFixFlow(event) {
     if (!profileInventory.timedOut && profileInventory.code === 0) {
       try {
         const payload = JSON.parse(String(profileInventory.stdout || '').trim());
-        const entries = Array.isArray(payload && payload.entries)
-          ? payload.entries
-          : (payload && payload.entries ? [payload.entries] : []);
         if (payload && payload.marker === 'FIXER_PROFILELIST_V1' &&
             String(payload.sid || '').toLowerCase() === preDeleteSid.toLowerCase()) {
-          profileCleanupPlan = selectSidBoundProfileEntries(entries, preDeleteSid, 'cleanup');
+          // The probe always supplies an array, including when it finds no entries.
+          profileCleanupPlan = selectSidBoundProfileEntries(payload.entries, preDeleteSid, 'cleanup');
         }
       } catch (_) { /* fail closed below */ }
     }
