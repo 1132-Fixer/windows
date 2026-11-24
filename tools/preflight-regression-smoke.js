@@ -274,7 +274,7 @@ function repairHarness(options = {}) {
         return options.finalDrainResult || probe('FIXER_HELPER_FINAL_DRAIN_V1=CLEAR');
       }
       if (script.includes("marker = 'FIXER_PROFILELIST_V1'")) {
-        return probe({
+        return options.profileInventoryResult || probe({
           marker: 'FIXER_PROFILELIST_V1',
           sid: OLD_SID,
           entries: state.profileKeyPresent ? [profileEntry()] : []
@@ -531,6 +531,32 @@ async function main() {
       unknown.state.cleanupAttempts === 0 && unknown.state.deleteAttempts === 0 &&
       unknown.state.createAttempts === 0,
     'an uncertain initial local-account inventory blocks every cleanup and recreation mutation');
+  }
+  const inventoryHeader = { marker: 'FIXER_PROFILELIST_V1', sid: OLD_SID };
+  const emptyProfileInventory = { ...inventoryHeader, entries: [] };
+  for (const [label, profileInventoryResult] of [
+    ['access denied', probe('', { code: 5, stderr: 'Access denied' })],
+    ['timed out', probe(emptyProfileInventory, { timedOut: true })],
+    ['missing entries', probe(inventoryHeader)],
+    ['null entries', probe({ ...inventoryHeader, entries: null })],
+    ['non-array entries', probe({ ...inventoryHeader, entries: false })]
+  ]) {
+    const run = repairHarness({ profileInventoryResult });
+    const result = await run.repair();
+    assert.deepEqual(run.state.order, [], `unexpected simulated repair steps for ${label}`);
+    check(result.error === 'profile_cleanup_identity_unresolved' &&
+      run.state.disableAttempts === 0 &&
+      run.state.finalDrainAttempts === 0 && run.state.cleanupAttempts === 0 &&
+      run.state.deleteAttempts === 0 && run.state.createAttempts === 0 &&
+      run.state.accountSid === OLD_SID && run.state.accountEnabled &&
+      run.state.profileFolderPresent && run.state.profileKeyPresent,
+    `a profile inventory with ${label} preserves the helper account, folder and key`);
+  }
+  {
+    const run = repairHarness({ profileInventoryResult: probe(emptyProfileInventory), disableFails: true });
+    const result = await run.repair();
+    check(result.error === 'helper_disable_unproved' && run.state.disableAttempts === 1 &&
+      run.state.cleanupAttempts === 0, 'a verified empty inventory proceeds to the exact-SID disable gate');
   }
   for (const profilePathState of ['blank', 'missing']) {
     const malformed = repairHarness({ profilePathState });

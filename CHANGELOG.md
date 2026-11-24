@@ -106,6 +106,7 @@ published, so 6.5.0 also contains every change listed under 6.4.1 below.
 
 ### Fixed
 
+- The repair stops before account or profile changes if the profile inventory is missing its list of entries. An explicitly empty list remains valid (#252).
 - Startup no longer reports every failure as "The startup check did not
   finish in time", and one failed operation no longer marks all nine checks as
   unverified. In 6.4.0, if any part of the startup check failed, the whole
