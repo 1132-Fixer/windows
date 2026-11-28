@@ -202,6 +202,10 @@ function harness(requestReport) {
       !/navigator\.clipboard\.writeText\(supportTextArea\.value\)/.test(block), 'Copy goes through the controller, never the raw text box');
     check(/supportCopyBtn\.disabled = !enabled/.test(block), 'the controller drives the Copy button state');
     check(/supportReport\.close\(\)/.test(block), 'Close ends the current generation');
+    check(/return supportReport\.open\(\{/.test(block), 'Open hands the request to the controller');
+    check((block.match(/supportTextArea\.value\s*=/g) || []).length === 1 &&
+      /setText: \(value\) => \{ supportTextArea\.value = value; \}/.test(block),
+      'only the controller\'s setText writes the report text box');
     const viewTag = html.indexOf('<script src="support-report-view.js"></script>');
     const messagesTag = html.indexOf('<script src="messages.js"></script>');
     const rendererTag = html.indexOf('<script src="renderer.js"></script>');
