@@ -475,12 +475,18 @@ const FEEDBACK = Object.freeze({
 const FEEDBACK_FALLBACK = FEEDBACK.FAILED;
 const FEEDBACK_NETWORK = FEEDBACK.NETWORK;
 
-// Support-report modal failure.
-function reportBuildFailure(err) {
-  const detail = err && err.message ? String(err.message) : (err ? String(err) : '');
+// Support-report modal copy. The report window is labelled "sanitized", so
+// its failure text is fixed: it takes no argument and never includes an
+// error message, which can hold private paths or a user name (audit A14).
+const SUPPORT_REPORT = Object.freeze({
+  GENERATING: 'Generating sanitized report…',
+  COPIED: 'Copied — paste into your support thread.',
+  COPY_BLOCKED: 'Auto-copy blocked — text is selected, press Ctrl+C.',
+  NOT_READY: 'The report is not ready, so nothing was copied.'
+});
+function reportBuildFailure() {
   return 'Could not build the report. Close this window and try again. If it keeps failing, ' +
-    'describe the problem with Feedback & Report instead.' +
-    (detail ? ` Detail for support: ${detail}` : '');
+    'describe the problem with Feedback & Report instead.';
 }
 
 // ------------------------------------------------------------
@@ -751,6 +757,6 @@ if (typeof module !== 'undefined' && module.exports) {
     ZOOM_RECOVERY, zoomRecoveryTechDetails, zoomInstallerRefusal,
     WIZARD_GROUPS, WIZARD, wizardFixFoundTitle, wizardFixFoundSub, wizardBlockedSub,
     EXPLORE_COPY, EXPLORE_CATEGORIES, EXPLORE_VIEW, DISCLOSURE,
-    FEEDBACK, FEEDBACK_FALLBACK, FEEDBACK_NETWORK, reportBuildFailure
+    FEEDBACK, FEEDBACK_FALLBACK, FEEDBACK_NETWORK, reportBuildFailure, SUPPORT_REPORT
   };
 }
