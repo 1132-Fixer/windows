@@ -2864,42 +2864,41 @@ const supportCopyStat  = document.getElementById('supportCopyStatus');
 
 let releaseSupportTrap = null;
 
-async function openSupportReport() {
+// The rules (stale results, Copy only on a complete report, fixed failure
+// text) live in support-report-view.js; this code only connects the DOM.
+const STATUS_COLOR = { success: 'var(--success)', warning: 'var(--warning)' };
+const supportReport = createSupportReportController({
+  requestReport: (input) => window.electronAPI.supportReport(input),
+  failureText: reportBuildFailure,
+  copy: SUPPORT_REPORT,
+  setText: (value) => { supportTextArea.value = value; },
+  setCopyEnabled: (enabled) => { supportCopyBtn.disabled = !enabled; },
+  setStatus: (message, tone) => {
+    supportCopyStat.textContent = message;
+    supportCopyStat.style.color = STATUS_COLOR[tone] || '';
+  },
+  writeClipboard: (value) => navigator.clipboard.writeText(value),
+  selectText: () => { supportTextArea.focus(); supportTextArea.select(); }
+});
+
+function openSupportReport() {
   supportOverlay.classList.add('show');
-  supportTextArea.value = 'Generating sanitized report…';
-  supportCopyStat.textContent = '';
   releaseSupportTrap = installFocusTrap(supportOverlay);
-  try {
-    const result = await window.electronAPI.supportReport({
-      receipt: lastReceipt,
-      logTail: logBuffer.join('\n'),
-      stage:   lastStageLabel
-    });
-    supportTextArea.value = (result && result.markdown) ? result.markdown : reportBuildFailure(null);
-  } catch (err) {
-    supportTextArea.value = reportBuildFailure(err);
-  }
+  return supportReport.open({
+    receipt: lastReceipt,
+    logTail: logBuffer.join('\n'),
+    stage:   lastStageLabel
+  });
 }
 
 function closeSupportReport() {
+  supportReport.close();
   supportOverlay.classList.remove('show');
   if (releaseSupportTrap) { releaseSupportTrap(); releaseSupportTrap = null; }
 }
 
 supportCloseBtn.addEventListener('click', closeSupportReport);
-supportCopyBtn.addEventListener('click', async () => {
-  try {
-    await navigator.clipboard.writeText(supportTextArea.value);
-    supportCopyStat.textContent = 'Copied — paste into your support thread.';
-    supportCopyStat.style.color = 'var(--success)';
-  } catch (err) {
-    // Fallback: select all so user can manually copy.
-    supportTextArea.focus();
-    supportTextArea.select();
-    supportCopyStat.textContent = 'Auto-copy blocked — text is selected, press Ctrl+C.';
-    supportCopyStat.style.color = 'var(--warning)';
-  }
-});
+supportCopyBtn.addEventListener('click', () => supportReport.copy());
 
 // Esc closes any open modal. With no modal open, Esc is the keyboard way
 // back from the Details view. (This handler used to call a countdown
